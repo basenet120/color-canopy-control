@@ -1,0 +1,150 @@
+/* Color Canopy shared styles. Vendored, no web fonts, no CDN (CLAUDE.md conventions).
+   Phone-first; every tap target is at least 44 px. `body.ops` switches to the plain, legible staff look.
+   Status pills mirror the tracker's states: Ready / Updating / Needs attention. */
+
+:root {
+  /* Brand + natural tones */
+  --orange: #F96302;          /* Home Depot orange */
+  --orange-ink: #B34700;      /* orange text on light backgrounds (AA contrast) */
+  --cream: #F7F1E6;
+  --charcoal: #2E2A26;        /* warm charcoal: body text */
+  --charcoal-soft: #5A534C;
+  --sand: #E8DCC6;
+  --marsh: #6F8F72;           /* Lowcountry green */
+  --pluff: #7A6A58;           /* mud brown */
+  --sky: #9DB8C7;
+  --white: #FFFFFF;
+
+  /* Status */
+  --ok: #2F7D4F;
+  --ok-bg: #E3F1E7;
+  --busy: #8A6200;
+  --busy-bg: #FBF0D2;
+  --bad: #B3261E;
+  --bad-bg: #FBE4E1;
+
+  /* Surfaces */
+  --bg: var(--cream);
+  --surface: var(--white);
+  --text: var(--charcoal);
+  --muted: var(--charcoal-soft);
+  --line: var(--sand);
+  --accent: var(--orange);
+
+  /* Type + spacing */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 12px;
+  --gap: 16px;
+  --tap: 44px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+main, .wrap { max-width: 64rem; margin: 0 auto; padding: var(--gap); }
+
+h1, h2, h3 { line-height: 1.2; margin: 0 0 12px; }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0 0 12px; }
+a { color: var(--orange-ink); }
+code, pre, .mono { font-family: var(--mono); font-size: 0.9em; }
+.muted { color: var(--muted); }
+
+/* ---- controls ------------------------------------------------------------------------------------------ */
+button, .btn, input, select, textarea { font: inherit; color: inherit; }
+
+button, .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: var(--tap); min-width: var(--tap); padding: 0 18px;
+  border: 1px solid transparent; border-radius: var(--radius);
+  background: var(--accent); color: var(--white); font-weight: 600;
+  text-decoration: none; cursor: pointer; touch-action: manipulation;
+}
+button.secondary, .btn.secondary { background: var(--surface); color: var(--text); border-color: var(--line); }
+button.danger, .btn.danger { background: var(--bad); }
+button:disabled, .btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid var(--charcoal); outline-offset: 2px;
+}
+
+input, select, textarea {
+  min-height: var(--tap); padding: 8px 12px; width: 100%;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+label { display: block; font-weight: 600; margin: 0 0 6px; }
+
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.stack > * + * { margin-top: 12px; }
+.grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.error, .notice {
+  border-radius: var(--radius); padding: 12px 16px; margin: 0 0 12px;
+}
+.error { background: var(--bad-bg); color: var(--bad); }
+.notice { background: var(--busy-bg); color: var(--busy); }
+
+/* ---- status pills --------------------------------------------------------------------------------------- */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 28px; padding: 2px 12px; border-radius: 999px;
+  font-size: 0.85rem; font-weight: 600; white-space: nowrap;
+}
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.ready { background: var(--ok-bg); color: var(--ok); }
+.pill.updating { background: var(--busy-bg); color: var(--busy); }
+.pill.attention { background: var(--bad-bg); color: var(--bad); }
+.pill.offline { background: var(--sand); color: var(--charcoal-soft); }
+
+/* ---- the persistent "Simulator" badge (07 §6: every surface, in sim mode) ------------------------------ */
+.sim-badge {
+  position: fixed; z-index: 2147483000;
+  top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 8px);
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--charcoal); color: var(--cream); border: 2px solid var(--orange);
+  font: 700 0.8rem/1.2 var(--font); letter-spacing: 0.06em; text-transform: uppercase;
+  pointer-events: none; user-select: none;
+}
+
+/* ---- live-connection indicator -------------------------------------------------------------------------- */
+.live-status { font-size: 0.85rem; color: var(--muted); }
+.live-status[data-state="open"] { color: var(--ok); }
+.live-status[data-state="reconnecting"], .live-status[data-state="unauthorized"] { color: var(--busy); }
+
+/* ---- ops: plain and legible -------------------------------------------------------------------------------- */
+body.ops {
+  --bg: #F6F6F4;
+  --surface: #FFFFFF;
+  --line: #D9D6D0;
+  --accent: #2E2A26;
+  font-size: 16px;
+}
+body.ops h1 { font-size: 1.35rem; }
+body.ops table { width: 100%; border-collapse: collapse; }
+body.ops th, body.ops td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+body.ops th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+body.ops .brand { border-top: 4px solid var(--orange); }
+
+@media (min-width: 720px) {
+  main, .wrap { padding: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
