@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Bench · Color Canopy</title>
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/ops/bench/bench.css">
+</head>
+<body class="ops bench">
+<div id="sim-banner" class="sim-banner" role="status" hidden>
+  <strong>SIMULATED</strong> — Nothing here touches the real kit.
+</div>
+<main>
+  <header class="bench-head">
+    <h1>Bench</h1>
+    <div class="row">
+      <a class="btn secondary" href="/ops/bench/clock/" target="_blank" rel="noopener">Open the clock page</a>
+      <a class="btn secondary" href="/ops/">Ops home</a>
+    </div>
+    <p class="muted">One job at a time. Each button runs one test on the kit and tells you what to look for.
+      Open the clock page on a second phone and stand it next to the kit when you film.</p>
+    <p id="live" class="live-status" data-state="connecting">Connecting…</p>
+  </header>
+
+  <div id="error" class="error" role="alert" hidden></div>
+
+  <section class="card stack" aria-labelledby="device-h">
+    <h2 id="device-h">Device</h2>
+    <label for="device">Run jobs on</label>
+    <select id="device"></select>
+    <p id="device-status" class="muted"></p>
+  </section>
+
+  <section id="run-panel" class="card stack run-panel" aria-live="polite" hidden>
+    <div class="row run-title">
+      <h2 id="run-title">Run</h2>
+      <span id="run-pill" class="pill updating">Running</span>
+    </div>
+    <p id="run-sim" class="notice" hidden>SIMULATED run: the simulator answered, not the real kit.</p>
+    <ol id="steps" class="steps"></ol>
+    <div id="result" class="result stack" hidden>
+      <div class="verdict-row">
+        <span id="verdict" class="verdict"></span>
+        <span id="confirmed" class="muted"></span>
+      </div>
+      <p id="summary" class="summary"></p>
+      <div id="questions" class="questions stack"></div>
+      <dl id="observations" class="observations"></dl>
+      <details>
+        <summary>All details (JSON)</summary>
+        <pre id="raw" class="raw"></pre>
+      </details>
+      <div class="actions stack">
+        <button id="copy" type="button" class="big">Copy anonymized JSON</button>
+        <p id="copy-status" class="muted" hidden></p>
+        <a id="profile" class="btn secondary big" hidden download="sqhdk03.json">Download profile (sqhdk03.json)</a>
+        <button id="flags" type="button" class="secondary big">Apply flags</button>
+        <p id="flags-why" class="muted"></p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="jobs-h">
+    <h2 id="jobs-h">Jobs, in order</h2>
+    <div id="jobs" class="jobs stack"></div>
+  </section>
+
+  <section class="card stack" aria-labelledby="runs-h">
+    <div class="row run-title">
+      <h2 id="runs-h">Recent runs</h2>
+      <button id="refresh-runs" type="button" class="secondary">Refresh</button>
+    </div>
+    <ul id="runs" class="runs"></ul>
+  </section>
+</main>
+<script type="module" src="/ops/bench/bench.js"></script>
+</body>
+</html>
