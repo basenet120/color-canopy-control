@@ -585,7 +585,7 @@ def test_module_page_is_served_vendored_and_badged(app_client):
     assert "@import" not in css and "@font-face" not in css
     # the Simulator badge, the lease-on-exit beacon, the heartbeat and the live topic are wired up
     for needle in (
-        "simBadge()",
+        "setSimBadge(st.simulated === true)",  # the badge follows the open device (review F4)
         "sendBeacon",
         "pagehide",
         "heartbeat",
@@ -593,3 +593,56 @@ def test_module_page_is_served_vendored_and_badged(app_client):
         "`module:${S.deviceId}`",
     ):
         assert needle in js
+
+
+# ---- cross-site requests (review F5) -----------------------------------------------------------------------------
+def test_cross_site_form_post_cannot_take_a_lock(app_client):
+    """F5: a plain HTML form on another site (text/plain or urlencoded, empty body) must not take a device lock."""
+    services = _services(app_client)
+    url = f"/api/module/{BENCH}/open"
+    form = {"content-type": "application/x-www-form-urlencoded"}
+    assert (
+        app_client.post(url, content=b"", headers={**form, "origin": "https://evil.example"}).status_code
+        == 403
+    )
+    assert app_client.post(url, content=b"", headers=form).status_code == 415
+    assert app_client.post(url, content=b"", headers={"content-type": "text/plain"}).status_code == 415
+    assert app_client.post(url, content=b"").status_code == 415  # no content type at all
+    json_foreign = app_client.post(url, json={}, headers={"origin": "https://evil.example"})
+    assert json_foreign.status_code == 403
+    assert app_client.post(url, json={}, headers={"referer": "https://evil.example/x"}).status_code == 403
+    assert app_client.post(url, json={}, headers={"origin": "null"}).status_code == 403
+    assert not services.locks.is_locked(f"sim-{BENCH}")
+
+    same = app_client.post(url, json={}, headers={"origin": "http://testserver"})
+    assert same.status_code == 200
+    lease = same.json()["lease"]
+    # every other mutating call needs JSON too
+    for endpoint in ("heartbeat", "hold", "paint"):
+        r = app_client.post(
+            f"/api/module/{BENCH}/{endpoint}",
+            content=f'{{"lease": "{lease}", "on": true}}'.encode(),
+            headers={"content-type": "text/plain"},
+        )
+        assert r.status_code == 415, endpoint
+    assert _services(app_client).extras["module_sessions"][BENCH].hold["on"] is False
+
+    # the close beacon may be text/plain (sendBeacon can't send JSON headers) but needs the lease and a same-site
+    # origin; a wrong lease releases nothing
+    close = f"/api/module/{BENCH}/close"
+    beacon = f'{{"lease": "{lease}"}}'.encode()
+    foreign = app_client.post(
+        close, content=beacon, headers={"content-type": "text/plain", "origin": "https://evil.example"}
+    )
+    assert foreign.status_code == 403 and services.locks.is_locked(f"sim-{BENCH}")
+    wrong = app_client.post(close, content=b'{"lease": "nope"}', headers={"content-type": "text/plain"})
+    assert wrong.json()["released"] is False and services.locks.is_locked(f"sim-{BENCH}")
+    ok = app_client.post(
+        close,
+        content=beacon,
+        headers={"content-type": "text/plain;charset=UTF-8", "origin": "http://testserver"},
+    )
+    assert ok.status_code == 200 and ok.json()["released"] is True
+    assert (
+        app_client.get(f"/api/module/{BENCH}", headers={"origin": "https://evil.example"}).status_code == 200
+    )

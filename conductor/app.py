@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from conductor import __version__, redact
 from conductor.auth import BasicAuthMiddleware, check_auth_configuration
@@ -47,6 +48,36 @@ def _resolve_principal(session_id: str):
     return services.roles.principal(session_id) if services is not None else None
 
 
+class AccountsPageHeaders:
+    """07 §3: every response under /ops/accounts/ is no-store and can't be framed — including the files the
+    `/ops` static mount serves there (`index.html` holds the sign-in form, and the static mount would serve it
+    without these headers). Headers a route already set (the form's stricter CSP) are kept."""
+
+    PREFIX = "/ops/accounts"
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        from conductor.routes.accounts import PAGE_HEADERS
+
+        self.headers = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in PAGE_HEADERS.items()]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith(self.PREFIX):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                present = {k.lower() for k, _ in headers}
+                headers += [(k, v) for k, v in self.headers if k not in present]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(AccountsPageHeaders)
 app.add_middleware(BasicAuthMiddleware, principal_resolver=_resolve_principal)
 
 

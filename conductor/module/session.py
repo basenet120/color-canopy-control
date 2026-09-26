@@ -585,6 +585,8 @@ class ModuleSession:
                         continue
                     st.state, st.message = "stopped", e.message
                     break
+                if summary["status"] == CommandStatus.SUPERSEDED and self.hold["on"]:
+                    continue  # Hold withdrew this step before it landed: resume from the same head
                 st.index, st.next_index = i, i + 1
                 st.steps_written += 1
                 if CommandStatus(summary["status"]) in SWEEP_STOP_STATUSES:
@@ -731,6 +733,13 @@ class ModuleSession:
                 self._sweep_wake.set()
             shown = (name or "").strip() or self.look_name()
             self.hold = {"on": True, "name": shown[:80], "since": self.deps.clock.now()}
+            # Commands this page already handed to the executor (queued, or waiting to retry after a 429) must
+            # not land during the photo: withdraw them. A PUT already on the wire can't be recalled.
+            self.target.executor.withdraw(
+                self.address,
+                lease_token=self.lease.token,
+                reason="Withdrawn because Hold went on; nothing more was sent for it.",
+            )
         else:
             self.hold = {"on": False, "name": None, "since": None}
         self.publish("hold")

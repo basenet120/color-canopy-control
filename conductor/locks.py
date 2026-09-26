@@ -4,6 +4,9 @@ While a device is locked, the show engine (executor with Purpose.ENGINE, reconci
 leaves it alone, and only writes that present the lease go through. A lease expires after `idle_timeout_s`
 without use (default 10 min). A lock can never be taken on a device the `lockable` check refuses — in bench/live
 that is the live gate's effective allowlist; on the simulator it is the registry.
+
+Every change is reported to `on_change(LockEvent)`: `acquire`, `steal` (with the lease it replaced), `release`, or
+`expire` (with the wall-clock time it really expired: expiry is noticed lazily, on the next look at the lock).
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Literal
 
 from conductor.clock import Clock, RealClock
 
@@ -19,6 +23,9 @@ IDLE_TIMEOUT_S = 600.0
 
 class LockError(RuntimeError):
     """The lock can't be taken or used. Message is operator-safe."""
+
+
+LockAction = Literal["acquire", "steal", "release", "expire"]
 
 
 @dataclass
@@ -38,20 +45,34 @@ class Lease:
         }
 
 
+@dataclass(frozen=True)
+class LockEvent:
+    """One change to a device's lock, for telemetry."""
+
+    device_id: str
+    action: LockAction
+    lease: Lease  # the lease taken (acquire/steal) or the one that ended (release/expire)
+    previous: Lease | None = None  # steal: the lease that was taken over
+    expired_at: float | None = None  # expire: wall-clock epoch s when the idle timeout actually ran out
+
+
 @dataclass
 class DeviceLockManager:
     lockable: Callable[[str], tuple[bool, str]] = lambda _id: (True, "")
     clock: Clock = field(default_factory=RealClock)
     idle_timeout_s: float = IDLE_TIMEOUT_S
-    on_change: Callable[[str, Lease | None], None] | None = None
+    on_change: Callable[[LockEvent], None] | None = None
     _leases: dict[str, Lease] = field(default_factory=dict)
 
     def holder(self, device_id: str) -> Lease | None:
         lease = self._leases.get(device_id)
-        if lease and self.clock.monotonic() - lease.last_used > self.idle_timeout_s:
-            del self._leases[device_id]
-            self._notify(device_id, None)
-            return None
+        if lease:
+            overdue = self.clock.monotonic() - (lease.last_used + self.idle_timeout_s)
+            if overdue > 0:
+                del self._leases[device_id]
+                expired_at = self.clock.now() - overdue
+                self._notify(LockEvent(device_id, "expire", lease, expired_at=expired_at))
+                return None
         return lease
 
     def is_locked(self, device_id: str) -> bool:
@@ -69,7 +90,7 @@ class DeviceLockManager:
         now = self.clock.monotonic()
         lease = Lease(device_id, owner, secrets.token_urlsafe(18), now, now)
         self._leases[device_id] = lease
-        self._notify(device_id, lease)
+        self._notify(LockEvent(device_id, "steal" if current else "acquire", lease, previous=current))
         return lease
 
     def validate(self, device_id: str, token: str | None) -> Lease:
@@ -87,7 +108,7 @@ class DeviceLockManager:
         lease = self._leases.get(device_id)
         if lease and token and secrets.compare_digest(lease.token, token):
             del self._leases[device_id]
-            self._notify(device_id, None)
+            self._notify(LockEvent(device_id, "release", lease))
             return True
         return False
 
@@ -95,11 +116,11 @@ class DeviceLockManager:
         for device_id, lease in list(self._leases.items()):
             if owner_prefix is None or lease.owner.startswith(owner_prefix):
                 del self._leases[device_id]
-                self._notify(device_id, None)
+                self._notify(LockEvent(device_id, "release", lease))
 
     def snapshot(self) -> list[dict]:
         return [lease.to_json() for d in list(self._leases) if (lease := self.holder(d))]
 
-    def _notify(self, device_id: str, lease: Lease | None) -> None:
+    def _notify(self, event: LockEvent) -> None:
         if self.on_change:
-            self.on_change(device_id, lease)
+            self.on_change(event)

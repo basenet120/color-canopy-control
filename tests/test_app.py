@@ -36,3 +36,32 @@ def test_visualizer_and_version_are_served(monkeypatch):
     monkeypatch.delenv("CONDUCTOR_BASIC_AUTH", raising=False)
     assert "The Color Canopy" in client.get("/visualizer/").text
     assert client.get("/api/version").json()["mode"] == "sim"
+
+
+def test_uvicorn_access_log_never_records_an_enrollment_token(app_client):
+    """F6: uvicorn's access log writes the request line through its own logger; the one-time link's token (a
+    credential for 24 h under D10) must be masked there, with the log line otherwise intact."""
+    import io
+    import logging
+
+    from uvicorn.logging import AccessFormatter
+
+    token = "Zq3-enrollment_token_ABCDEFGHIJ"
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(
+        AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+    )
+    access = logging.getLogger("uvicorn.access")  # the app's lifespan (app_client) has installed the filters
+    access.addHandler(handler)
+    old_level, access.level = access.level, logging.INFO
+    try:
+        for method, path in (("GET", f"/enroll/{token}"), ("POST", f"/enroll/{token}?x=1"), ("GET", "/ops/")):
+            access.info('%s - "%s %s HTTP/%s" %d', "10.0.0.5:5555", method, path, "1.1", 200)
+    finally:
+        access.removeHandler(handler)
+        access.level = old_level
+    text = stream.getvalue()
+    assert token not in text
+    assert '"GET /enroll/*** HTTP/1.1" 200' in text and '"POST /enroll/***?x=1 HTTP/1.1" 200' in text
+    assert '"GET /ops/ HTTP/1.1" 200' in text

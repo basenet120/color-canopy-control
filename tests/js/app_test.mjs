@@ -47,7 +47,7 @@ class FakeWS {
 }
 globalThis.WebSocket = FakeWS;
 
-const { connectLive, backoffDelay, fmtMs, fmtAgo, api, ApiError } = await import(process.argv[2]);
+const { connectLive, backoffDelay, fmtMs, fmtAgo, api, ApiError, setSimBadge } = await import(process.argv[2]);
 const flush = () => new Promise((r) => setImmediate(r));
 
 // Backoff: exponential, jittered, capped at 30 s.
@@ -111,5 +111,27 @@ globalThis.fetch = async () => {
   throw new TypeError("Failed to fetch");
 };
 await assert.rejects(api("/api/x"), /Can't reach the Conductor/);
+
+// setSimBadge: a page whose own target decides the badge (the module page) can show and remove it.
+const body = [];
+globalThis.document.querySelector = (sel) => (sel === ".sim-badge" ? body.find((e) => e.className === "sim-badge") || null : null);
+globalThis.document.createElement = () => ({
+  attrs: {},
+  setAttribute(k, v) {
+    this.attrs[k] = v;
+  },
+  remove() {
+    body.splice(body.indexOf(this), 1);
+  },
+});
+globalThis.document.body = { appendChild: (e) => body.push(e) };
+assert.equal(setSimBadge(false), null);
+assert.equal(body.length, 0);
+const badge = setSimBadge(true);
+assert.equal(badge.textContent, "Simulator");
+assert.equal(setSimBadge(true), badge); // one badge, not two
+assert.equal(body.length, 1);
+assert.equal(setSimBadge(false), null);
+assert.equal(body.length, 0);
 
 console.log("app.js ok");

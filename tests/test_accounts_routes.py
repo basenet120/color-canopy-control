@@ -307,3 +307,13 @@ def test_accounts_need_the_ops_credential(app_client_auth):
         "/api/accounts/login", json={"account": "bench", "email": EMAIL, "password": PASSWORD}, headers=tester
     )
     assert r.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "path", ["/ops/accounts/", "/ops/accounts/index.html", "/ops/accounts/accounts.js", "/ops/accounts/nope"]
+)
+def test_every_accounts_page_url_forbids_framing_and_caching(app_client, path):
+    """F4: the static mount also serves /ops/accounts/index.html; it must carry the same headers (07 §3)."""
+    r = app_client.get(path)
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"], path
+    assert r.headers["x-frame-options"] == "DENY" and r.headers["cache-control"] == "no-store", path

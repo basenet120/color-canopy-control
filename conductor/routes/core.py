@@ -60,7 +60,9 @@ class EnrollmentRequest(BaseModel):
 async def ws_ticket(request: Request) -> JSONResponse:
     principal = principal_of(request)
     tickets = services_of(request).tickets
-    ticket = tickets.issue(principal.role.value, principal.grants)
+    # Principal.session_id is the session's fingerprint (enrolled devices) or None (ops): revoking the session
+    # closes the sockets opened with it.
+    ticket = tickets.issue(principal.role.value, principal.grants, session=principal.session_id)
     return JSONResponse({"ticket": ticket.value, "expires_in": tickets.ttl_s}, headers=NO_STORE)
 
 
