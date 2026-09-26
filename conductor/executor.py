@@ -448,7 +448,7 @@ class CommandExecutor:
                 self._record_readback(cmd, rr, None)
                 continue
             mismatches = compare(expect, rr.rows)
-            self._record_readback(cmd, rr, len(mismatches))
+            self._record_readback(cmd, rr, len(mismatches), sorted({m.function_class for m in mismatches}))
             if not mismatches:
                 job.result.mismatches = []
                 job.result.timings.verified_at = self.clock.now()
@@ -587,7 +587,9 @@ class CommandExecutor:
             "in_flight": slot.current is not None,
         }
 
-    def _record_readback(self, cmd: Command, rr: ReadResult, mismatches: int | None) -> None:
+    def _record_readback(
+        self, cmd: Command, rr: ReadResult, mismatches: int | None, classes: list[str] | None = None
+    ) -> None:
         self.telemetry.record(
             "readback",
             device_id=cmd.device_id,
@@ -596,6 +598,7 @@ class CommandExecutor:
             http_status=rr.http_status,
             elapsed_s=round(rr.elapsed_s, 3),
             mismatches=mismatches,
+            mismatched=classes or [],  # function classes that differ (the engine's early re-assert reads it)
             available=rr.available,
             error=rr.error,
             simulated=rr.simulated,

@@ -96,6 +96,10 @@ class CanopyState:
     modules: dict[str, dict[str, Any]]  # device id → {status, reason, label, module, locked, simulated}
     simulated: bool
     message: str = ""  # operator/guest-safe sentence explaining RESTING / NEEDS_ATTENTION
+    # Set only on the state returned by a refused request_mode (cooldown, paused, resting, unknown mode): the
+    # route answers 429/409 with `message` and a Retry-After of `retry_after_s` (None = no point retrying soon).
+    refused: bool = False
+    retry_after_s: float | None = None
 
     def to_json(self) -> dict:
         return {
@@ -110,6 +114,8 @@ class CanopyState:
             "modules": self.modules,
             "simulated": self.simulated,
             "message": self.message,
+            "refused": self.refused,
+            "retry_after_s": self.retry_after_s,
         }
 
 

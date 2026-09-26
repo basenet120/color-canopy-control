@@ -159,6 +159,80 @@ async def _module_page_paint(env: Env, address: str) -> str:
     return str(result["status"])
 
 
+def _canopy_engine(env: Env, address: str, **kiosk: float):
+    """The canopy engine wired to the live world, with a stand-in compiler whose only module is `address`."""
+    from fake_compiler import FakeCompiler, settings_with
+
+    from conductor.canopy import CanopyEngine, EngineDeps
+    from conductor.state import DeviceStateTracker
+
+    world = env.world
+    device_id = world.registry.logical_for(address).id
+    compiler = FakeCompiler(
+        module_ids=[device_id], frame_length=20
+    )  # the fake devices are 20-segment strings
+    tracker = DeviceStateTracker(world.clock, env.executor.telemetry)
+    tracker.attach(env.executor)
+    deps = EngineDeps(
+        registry=lambda: world.registry,
+        target=lambda d, _purpose: Target(d, world.registry.address(d, "afero"), world.driver, env.executor),
+        tracker=tracker,
+        telemetry=env.executor.telemetry,
+        hub=None,
+        clock=world.clock,
+        settings=settings_with(kiosk=dict(kiosk)),
+        locks=env.locks,
+        compile=compiler.compile,
+        ladder=compiler.ladder,
+        modes=compiler.modes,
+    )
+    return CanopyEngine(deps), device_id
+
+
+async def _canopy_mode_change(env: Env, address: str) -> str:
+    """Kiosk mode request → one ENGINE command per module through the executor's burst."""
+    engine, _ = _canopy_engine(env, address)
+    await engine.request_mode("holiday", source="kiosk")
+    await engine.wait_idle()
+    await engine.stop()
+    return str(engine.last_status[address])
+
+
+async def _canopy_reassert(env: Env, address: str) -> str:
+    """The reconciler's re-assert of a module whose last command failed."""
+    from conductor.executor_api import CommandStatus
+
+    engine, _ = _canopy_engine(env, address)
+    await engine.request_mode("lowcountry-calm", source="ops")
+    await engine.wait_idle()
+    engine.last_status[address] = CommandStatus.FAILED
+    sent = await engine.reconciler.reassert()
+    await engine.wait_idle()
+    await engine.stop()
+    assert sent, "the re-assert didn't try to send"
+    return str(engine.last_status[address])
+
+
+async def _canopy_idle_hold(env: Env, address: str) -> str:
+    """Idle hold: no kiosk change for idle_return_s → the idle mode, from the reconciler loop."""
+    engine, _ = _canopy_engine(env, address, idle_return_s=1)
+    await engine.start(apply_initial=False)
+    await env.world.clock.sleep(2)
+    await engine.wait_idle()
+    plan = engine.current_plan()
+    await engine.stop()
+    assert plan is not None and plan.mode_id == "lowcountry-calm"
+    return str(engine.last_status[address])
+
+
+async def _canopy_commission(env: Env, address: str) -> str:
+    """Commissioning: a T1 slot-object write per module."""
+    engine, device_id = _canopy_engine(env, address)
+    report = await engine.commission(source="ops")
+    await engine.stop()
+    return str(report["modes"]["sunset"]["modules"][device_id]["status"])
+
+
 WriterPath = Callable[[Env, str], Awaitable[str]]
 WRITER_PATHS: dict[str, WriterPath] = {
     "executor.submit (engine)": _executor_engine,
@@ -167,12 +241,18 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "driver.write (anything bypassing the executor)": _driver_direct,
     "bench runner (gate_c)": _bench_runner_gate_c,
     "module page (paint)": _module_page_paint,
+    "canopy engine (mode change)": _canopy_mode_change,
+    "reconciler (re-assert)": _canopy_reassert,
+    "idle hold": _canopy_idle_hold,
+    "slot manager (commission)": _canopy_commission,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
 COVERED_MODULES = {
     "conductor/executor.py": "executor.submit (engine)",
     "conductor/bench/runner.py": "bench runner (gate_c)",
     "conductor/module/session.py": "module page (paint)",
+    "conductor/canopy.py": "canopy engine (mode change)",
+    "conductor/reconciler.py": "reconciler (re-assert)",
 }
 ALLOWED = {"denied", "lock_refused", "locked"}
 
