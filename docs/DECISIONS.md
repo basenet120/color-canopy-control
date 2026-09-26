@@ -69,3 +69,38 @@ which is slightly harsher than the pinned soak conditions. `discover`/`fetch_pro
 **D14 — Local container smoke test.** The sandbox's egress proxy re-signs TLS, so `docker build` here uses a
 wrapper Dockerfile (scratchpad only) that trusts the proxy CA; everything after that is the repo's Dockerfile
 verbatim. CI builds the real Dockerfile unmodified.
+
+## 2026-09-26 — after the P0 adversarial review (26 confirmed findings, all fixed with regression tests)
+
+**D15 — Adapter hardening.** Sim mode with `HUBSPACE_LIVE=1` is on-demand: nothing connects at startup or
+reconnects on its own; a bench call opens the bridge, which closes after 120 s idle (07 §1 "bench jobs only").
+A first 401 on a healthy account is `AUTH_STALE` (retryable once, forces a token refresh); only `InvalidAuth` from
+the refresh means re-sign-in. 503/504 keep their real status and count toward "degraded" (2 in a row) while staying
+retryable throttles; 429/403 don't count as an outage. The outage watchdog needs a real device state readback to
+declare recovery (users/me only when the account has no registered device). Tokens are saved only from the bridge
+in use; after "disconnect" the account stays down until an explicit connect. Accepted race: a refresh in flight on a
+bridge being dropped loses that rotation (the account may need a new sign-in) — the alternative was an 8 s wait on
+every disconnect.
+
+**D16 — Redaction is process-wide.** `redact.install()` wraps the LogRecord factory, so every record is scrubbed at
+creation under plain uvicorn (no root handlers), plus filters on uvicorn's handlers, its access logger and
+`lastResort`. Masks registered secrets, bearer/JWT strings, credential fields, the Afero account id in URLs, and
+`/enroll/<token>` paths.
+
+**D17 — Mutating module-page calls need JSON + a same-host Origin/Referer** (a request with neither header is a
+non-browser client and allowed; the JSON requirement stops cross-site form posts). The close beacon is exempt but
+needs a valid lease. `/ops/accounts/*` gets its security headers from a middleware, whichever route serves it.
+
+**D18 — Executor lifecycle.** `close()` resolves every retrying/verifying command. A lock that is released or taken
+over withdraws that lease's queued and retrying commands (SUPERSEDED with a reason); a PUT already on the wire can't be
+recalled. Before a burst the executor calls the driver's optional `ensure_fresh_token(account)`; a failed check doesn't
+block the burst. Per-device send-time history is pruned. Lock telemetry records expire and steal.
+
+**D19 — Honest bench gates.** Gate C refuses (ERROR, nothing sent) when the target slot already equals the source —
+run the hue ramp into slot 2 first — and its BEFORE look is never the target slot. Latency trials alternate between
+visibly different looks; spacing is clamped to [rate budget, 30 s] with lock refreshes, and a running job can be
+stopped. Flags are bound to the kit that proved them (`flags_proven_on`), and taking back a "yes" un-applies the flags
+that run applied (only if the overlay still holds exactly what it applied).
+
+**D20 — Hold means hold.** Entering photo/hold mode withdraws the page's pending and retrying commands so the lights
+don't change during a photo. The module page shows SIMULATOR from its own target's flag, never the global badge.
