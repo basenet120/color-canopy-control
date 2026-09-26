@@ -153,8 +153,16 @@ class DeviceEntry(_Strict):
     cable_path: Literal["serpentine_rows", "serpentine_cols"] | None = None
     start_corner: Corner | None = None
     flags: DeviceFlags = Field(default_factory=DeviceFlags)
+    flags_proven_on: str | None = None  # the driver address (metadevice id) of the kit that proved `flags`
     slot_hashes: dict[str, str] = Field(default_factory=dict)
     notes: str = ""
+
+    def flags_for(self, address: str | None) -> DeviceFlags:
+        """The bench flags, but only when they were proven on the kit at `address`; else none are proven.
+        A different kit registered under this logical id (or flags saved without a kit) proves nothing."""
+        if address and self.flags_proven_on == address:
+            return self.flags
+        return DeviceFlags()
 
     @field_validator("metadevice_id")
     @classmethod

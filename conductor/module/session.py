@@ -231,7 +231,7 @@ class ModuleSession:
             return False, f"Per-head painting is off: {problem}."
         if self.target.simulated:
             return True, "Simulator: per-head frames (T1) are simulated — no real lights change."
-        if self.entry.flags.t1_frames is True:
+        if self.entry.flags_for(self.target.address).t1_frames is True:  # proven on THIS kit
             return (
                 True,
                 "Bench Gate C passed: frames written by the Conductor (T1) are proven on this device.",
@@ -844,8 +844,12 @@ class ModuleSession:
                 "individual": caps.individual,
             },
             "head_count": self.head_count(),
-            "t1": {"allowed": t1_ok, "reason": t1_why, "flag": entry.flags.t1_frames},
-            "flags": entry.flags.model_dump(),
+            "t1": {
+                "allowed": t1_ok,
+                "reason": t1_why,
+                "flag": entry.flags_for(self.target.address).t1_frames,
+            },
+            "flags": entry.flags_for(self.target.address).model_dump(),
             "heads": heads,
             "diff": [h["index"] for h in heads if not h["match"]],
             "desired_look": render.describe_look(self.desired_state, n, caps),

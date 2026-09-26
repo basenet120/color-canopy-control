@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import colorsys
 import copy
-from collections.abc import Awaitable, Callable, Iterable
+import math
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -32,9 +33,15 @@ UNPLUGGED_SETTLE_S = 3.0  # wait before the GET in the unplugged test
 CALM_CCT = 2700
 CALM_BRIGHTNESS = 50
 PER_HEAD_LENGTHS = (30, 60)  # Gate A: a 30-entry (or fixed 60-entry) frame keeps the per-head path alive
+BEFORE_HOLD_S = 4.0  # Gate C: how long the BEFORE look holds before the replay, so it can be seen and filmed
+MAX_TRIALS = 100
+MAX_SPACING_S = 30.0  # latency trials: well inside the lock's 10-min idle timeout, and a run stays short
 
-Q_GATE_B = "Did the strand switch to slot 2 within about 2 s?"
-Q_GATE_C = "Do the lights now match what slot 1 showed?"
+# Question templates: `{slot}`, `{source}`, `{target}` are filled from the run's params ("custom-2" → "slot 2"),
+# so the question names the slot the job actually used. FLAG_QUESTIONS is keyed by these templates; use
+# `flag_questions(job, params)` / `question(job, params)` for the text a run asks.
+Q_GATE_B = "Did the strand switch to {slot} within about 2 s?"
+Q_GATE_C = "Did the lights change from the BEFORE look to exactly {source}'s pattern?"
 Q_UNPLUGGED = "Was the kit switched off at the wall (lights dark) the whole time this ran?"
 Q_HUE_RAMP = (
     "Did every puck show a different colour, running through the rainbow along the strand? Take a photo."
@@ -49,11 +56,41 @@ FLAG_QUESTIONS: dict[str, dict[str, str]] = {
     "gate_b_unplugged": {"readback_device_level": Q_UNPLUGGED},
 }
 
+# Bounds for numeric job options (inclusive), checked by coerce_params before a run starts.
+PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
+    "latency_trials": {"n": (1, MAX_TRIALS), "spacing_s": (0.0, MAX_SPACING_S)},
+}
+
+
+def _slot_words(value: Any) -> Any:
+    return f"slot {value.split('-', 1)[1]}" if isinstance(value, str) and value in R.SLOTS else value
+
+
+class _Keep(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def fill(template: str, params: Mapping[str, Any]) -> str:
+    """A question template with the run's params filled in (slots as "slot N")."""
+    return template.format_map(_Keep({k: _slot_words(v) for k, v in params.items()}))
+
+
+def flag_questions(job: str, params: Mapping[str, Any]) -> dict[str, str]:
+    """flag → the confirming question this run asks (FLAG_QUESTIONS with the run's params filled in)."""
+    return {flag: fill(q, params) for flag, q in FLAG_QUESTIONS.get(job, {}).items()}
+
+
+def question(job: str, params: Mapping[str, Any]) -> str:
+    """The confirming question a flag-proposing job asks for these params."""
+    return next(iter(flag_questions(job, params).values()))
+
 
 class JobContext(BenchContext, Protocol):
     """BenchContext plus what the runner's context also offers (`conductor/bench/runner.py`)."""
 
     budget_s: float  # the per-device write budget (executor min_write_interval_s)
+    t1_allowed: bool  # per-head frames may be written (simulator, or Gate C proven on this kit)
     artifacts: dict[str, Any]  # big outputs saved with the result (Gate A's scrubbed profile)
 
     async def sim_power(self, on: bool) -> bool:
@@ -208,6 +245,48 @@ def _entry_json(e: R.FrameEntry) -> dict:
     return e.to_json()
 
 
+def slot_header(value: Any) -> dict[str, Any] | None:
+    """A slot object's header and effect fields (the effect-code table), or None when it isn't a slot object."""
+    if not isinstance(value, Mapping):
+        return None
+    inner = value.get(R.FRAME_CLASS, value)
+    if not isinstance(inner, Mapping):
+        return None
+    out = {k: inner.get(k) for k in (*R.HEADER_COPY_FIELDS, *R.EFFECT_FIELDS)}
+    out["frameBuffer.flags"] = (inner.get("frameBuffer") or {}).get("flags")
+    return out
+
+
+def contrast_entries(avoid: list[R.FrameEntry]) -> list[R.FrameEntry]:
+    """A frame of the same length that visibly differs from `avoid`: the hue ramp, reversed if that's `avoid`."""
+    n = len(avoid)
+    ramp = hue_ramp_entries(n)
+    for candidate in (ramp, ramp[::-1], [R.FrameEntry(0, 0, 0, 0, 0, 0)] * n):
+        if candidate != avoid:
+            return candidate
+    return ramp
+
+
+def contrast_look(caps: Capabilities) -> tuple[str, R.Look] | None:
+    """A whole-strand look that isn't a painted pattern: calm white, else HD orange. (name, look) or None."""
+    modes = set(caps.color_modes)
+    if caps.cct_range and "white" in modes:
+        cct = max(caps.cct_range[0], min(CALM_CCT, caps.cct_range[1]))
+        return f"white {cct} K {CALM_BRIGHTNESS}%", R.Look("white", CALM_BRIGHTNESS, cct=cct)
+    if caps.rgb and "color" in modes:
+        return "HD orange", R.Look("rgb", 100, rgb=HD_ORANGE)
+    return None
+
+
+def _showing(rr: ReadResult) -> str | None:
+    """The slot the kit is showing, or None when it isn't in per-head (individual) mode."""
+    return rr.get("color-individual", "custom") if rr.get("color-mode") == "individual" else None
+
+
+def _hashes(rr: ReadResult) -> dict[str, str | None]:
+    return {s: R.slot_hash(rr.get(R.FRAME_CLASS, s)) for s in R.SLOTS}
+
+
 # ---- Gate A ------------------------------------------------------------------------------------------------------
 async def gate_a(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     ctx.step("Reading the device's profile (functions and state). Nothing is written.")
@@ -290,13 +369,21 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         raise JobError(f"{slot!r} isn't a slot; use one of {', '.join(R.SLOTS)}.")
     ctx.step(f"Reading {slot}. Nothing is written.")
     rr = await _read_ok(ctx, f"for {slot}")
-    _, entries = _slot_entries(rr, slot)
+    value, entries = _slot_entries(rr, slot)
     first = entries[:4]
     last = entries[-4:]
     first_names = [colour_name(e) for e in first]
     last_names = [colour_name(e) for e in last]
+    header = slot_header(value)
+    # Every slot's header, so each copy of this result adds a row to the effect-code table (04 Bench gates #2).
+    headers = {s: h for s in R.SLOTS if (h := slot_header(rr.get(R.FRAME_CLASS, s))) is not None}
+    ctx.step(f"{slot} header", **(header or {}))
     obs: dict[str, Any] = {
         "slot": slot,
+        "color_mode": rr.get("color-mode"),
+        "selected_slot": rr.get("color-individual", "custom"),
+        "header": header,
+        "slot_headers": headers,
         "length": len(entries),
         "first_4": [_entry_json(e) for e in first],
         "last_4": [_entry_json(e) for e in last],
@@ -334,15 +421,34 @@ async def gate_b(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     info = await ctx.profile()
     _check_slot(_caps(info), slot)
     before = await _read_ok(ctx, "before the select")
+    hashes = _hashes(before)
+    showing = _showing(before)
     obs: dict[str, Any] = {
         "slot": slot,
         "before": {
             "power": before.get("power"),
             "color_mode": before.get("color-mode"),
             "selected_slot": before.get("color-individual", "custom"),
+            "slot_hash": hashes.get(slot),
+            "showing_hash": hashes.get(showing) if showing else None,
         },
     }
     ctx.step("Recorded the current state", **obs["before"])
+    # The question "did it switch?" can only be answered truthfully if the switch is visible.
+    if showing == slot:
+        return JobResult(
+            Verdict.ERROR,
+            f"{slot} is already showing, so selecting it wouldn't change anything you could see. Pick another "
+            "slot (the slot option), or select a different slot in the Hubspace app first. Nothing was sent.",
+            obs,
+        )
+    if showing and hashes.get(showing) and hashes.get(showing) == hashes.get(slot):
+        return JobResult(
+            Verdict.ERROR,
+            f"{slot} holds the same pattern as {showing}, which is showing now, so a switch wouldn't be visible. "
+            "Pick a slot with a different pattern. Nothing was sent.",
+            obs,
+        )
     rows = _only_declared(ctx, info, [*R.slot_select(slot), R.power(True)])
     res = await ctx.write(rows, label=f"gate_b: select {slot}")
     obs["write"] = write_facts(res)
@@ -355,7 +461,7 @@ async def gate_b(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         f"(ack {obs['write']['ack_ms']} ms, readback match {obs['write']['verified_ms']} ms). "
         "Did the lights switch?",
         obs,
-        [Q_GATE_B],
+        [question("gate_b", params)],
         {"t2_select": True},
     )
 
@@ -366,7 +472,7 @@ async def gate_b_unplugged(ctx: JobContext, params: dict[str, Any]) -> JobResult
         return JobResult(
             Verdict.ERROR,
             "Switch the kit off at the wall first (unplug its power supply) and wait 10 s. Then run this again "
-            "and tick “I've switched the kit off”. Nothing was sent.",
+            "and tick “I've switched the kit off” (in a terminal: --param confirmed=1). Nothing was sent.",
         )
     info = await ctx.profile()
     caps = _caps(info)
@@ -427,26 +533,82 @@ async def gate_b_unplugged(ctx: JobContext, params: dict[str, Any]) -> JobResult
 
 # ---- Gate C ------------------------------------------------------------------------------------------------------
 async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Replay `source` into `target` and select it — in a way whose visual check proves something (F1):
+    - the target must NOT already hold the source's pattern (else a dropped frame still "matches");
+    - the lights are first moved to a BEFORE look that isn't the source's pattern (a third slot, or a whole-strand
+      look), held long enough to see; then the replay changes the target AND selects it (a real select change,
+      so the result doesn't depend on whether rewriting the active slot re-renders — bench edge case 6);
+    - the human is asked whether the lights changed from the BEFORE look to exactly the source's pattern.
+    """
     source, target = str(params["source"]), str(params["target"])
     if source == target:
         return JobResult(Verdict.ERROR, "Pick two different slots: the source is copied INTO the target.")
     info = await ctx.profile()
-    _check_slot(_caps(info), source, target)
-    rr = await _read_ok(ctx, f"for {source}")
+    caps = _caps(info)
+    _check_slot(caps, source, target)
+    rr = await _read_ok(ctx, "before the replay")
     value, entries = _slot_entries(rr, source)
-    src_hash = R.slot_hash(value)
-    ctx.step(f"Read {source}: {len(entries)} entries", hash=src_hash)
-    rows = _only_declared(
-        ctx, info, [R.slot_write(target, copy.deepcopy(value)), *R.slot_select(target), R.power(True)]
-    )
-    res = await ctx.write(rows, label=f"gate_c: copy {source} → {target} + select")
+    _slot_entries(rr, target)  # the target slot must exist too
+    hashes = _hashes(rr)
+    src_hash = hashes[source]
     obs: dict[str, Any] = {
         "source": source,
         "target": target,
         "length": len(entries),
         "source_hash": src_hash,
-        "write": write_facts(res),
+        "target_hash_before": hashes[target],
+        "selected_before": rr.get("color-individual", "custom"),
+        "color_mode_before": rr.get("color-mode"),
     }
+    ctx.step(
+        f"Read {source} ({len(entries)} entries) and {target}",
+        source_hash=src_hash,
+        target_hash=hashes[target],
+        showing=_showing(rr),
+    )
+    if hashes[target] == src_hash:
+        return JobResult(
+            Verdict.ERROR,
+            f"{target} already holds exactly {source}'s pattern, so copying it again would prove nothing: the "
+            f"lights would match even if the kit ignored the write. Put a different pattern in {target} first — "
+            f"run Hue ramp with slot={target} (you'll see the rainbow) or paint it in the Hubspace app — then run "
+            "Gate C again. Nothing was sent.",
+            obs,
+        )
+    # BEFORE: a look that isn't the source's pattern (and isn't the target, so the replay is a real select change).
+    others = [s for s in (caps.slots or list(R.SLOTS)) if s not in (source, target)]
+    before_slot = next((s for s in others if hashes.get(s) and hashes[s] != src_hash), None)
+    if before_slot:
+        before_name = before_slot
+        before_rows = [*R.slot_select(before_slot), R.power(True)]
+    else:
+        look = contrast_look(caps)
+        if look is None:
+            return JobResult(
+                Verdict.ERROR,
+                f"There's no look to show before the replay: every other slot holds {source}'s pattern and this "
+                "device declares no white or colour mode. Put a different pattern in another slot first. "
+                "Nothing was sent.",
+                obs,
+            )
+        before_name, before_look = look
+        before_rows = R.full_state_vector(before_look, cct_range=caps.cct_range)
+    obs["before_look"] = before_name
+    ctx.step(
+        f"BEFORE: switching the lights to {before_name} (not {source}'s pattern). Watch the strand: it holds "
+        f"for about {BEFORE_HOLD_S:g} s, then {target} is rewritten with {source}'s pattern and selected."
+    )
+    res = await ctx.write(_only_declared(ctx, info, before_rows), label=f"gate_c: BEFORE look {before_name}")
+    obs["before_write"] = write_facts(res)
+    if problem := _write_problem(res, f"The BEFORE look ({before_name})"):
+        problem.observations.update(obs)
+        return problem
+    await ctx.sleep(max(BEFORE_HOLD_S, ctx.budget_s))
+    rows = _only_declared(
+        ctx, info, [R.slot_write(target, copy.deepcopy(value)), *R.slot_select(target), R.power(True)]
+    )
+    res = await ctx.write(rows, label=f"gate_c: copy {source} → {target} + select")
+    obs["write"] = write_facts(res)
     if problem := _write_problem(res, f"The replay write into {target}"):
         problem.observations.update(obs)
         if obs["write"]["http_status"] == 400:
@@ -464,9 +626,10 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         )
     return JobResult(
         Verdict.NEEDS_EYES,
-        f"HTTP {obs['write']['http_status']}, and {target} reads back identical to {source}. Do the lights match?",
+        f"HTTP {obs['write']['http_status']}, and {target} reads back identical to {source}. The lights went from "
+        f"the BEFORE look ({before_name}) to {target}: do they now show exactly {source}'s pattern?",
         obs,
-        [Q_GATE_C],
+        [question("gate_c", params)],
         {"t1_frames": True},
     )
 
@@ -505,34 +668,106 @@ async def hue_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
 
 # ---- latency trials ----------------------------------------------------------------------------------------------
 async def latency_trials(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Alternate between two looks that visibly differ (F2), so every trial is a change you can film:
+    - two slots with different patterns (hashes differ), starting with the one that isn't showing;
+    - if the two slots hold the same pattern: write a contrasting frame into one first when per-head frames are
+      allowed (simulator, or Gate C proven on this kit), else alternate one slot with a whole-strand look.
+    """
     n = int(params["n"])
-    if not 1 <= n <= 100:
-        return JobResult(Verdict.ERROR, "Pick between 1 and 100 trials.")
-    spacing = max(float(params["spacing_s"]), ctx.budget_s)
+    if not 1 <= n <= MAX_TRIALS:
+        return JobResult(Verdict.ERROR, f"Pick between 1 and {MAX_TRIALS} trials. Nothing was sent.")
+    requested = float(params["spacing_s"])
+    if not math.isfinite(requested) or not 0 <= requested <= MAX_SPACING_S:
+        return JobResult(
+            Verdict.ERROR, f"Pick a spacing between 0 and {MAX_SPACING_S:g} seconds. Nothing was sent."
+        )
+    spacing = max(requested, ctx.budget_s)
     a, b = str(params["slot_a"]), str(params["slot_b"])
     if a == b:
         return JobResult(Verdict.ERROR, "Pick two different slots to alternate between.")
     info = await ctx.profile()
-    _check_slot(_caps(info), a, b)
+    caps = _caps(info)
+    _check_slot(caps, a, b)
+    rr = await _read_ok(ctx, "before the trials")
+    _, entries_a = _slot_entries(rr, a)
+    _, entries_b = _slot_entries(rr, b)
+    hashes = _hashes(rr)
+    showing = _showing(rr)
+    setup: dict[str, Any] = {"hash_a": hashes[a], "hash_b": hashes[b], "showing_before": showing}
+    last_sent: float | None = None
+
+    def select(slot: str) -> tuple[str, list[StateRow]]:
+        return slot, _only_declared(ctx, info, [*R.slot_select(slot), R.power(True)])
+
+    def not_showing_first(x: str, y: str) -> tuple[str, str]:
+        """(first, second): start with the slot whose pattern isn't the one on the lights now."""
+        if showing == y or (showing and hashes.get(showing) == hashes[y]):
+            return x, y
+        return y, x
+
+    if hashes[a] != hashes[b]:
+        first, second = not_showing_first(a, b)
+        looks = [select(first), select(second)]
+    elif ctx.t1_allowed:
+        into = b if showing != b else a
+        other = a if into == b else b
+        frame = R.frame_value(
+            rr.get(R.FRAME_CLASS, into),
+            contrast_entries(entries_a if other == a else entries_b),
+            expected_length=len(entries_a),
+            cct_range=caps.cct_range,
+        )
+        ctx.step(
+            f"{a} and {b} hold the same pattern, so switching between them wouldn't show. Writing a rainbow into "
+            f"{into} first (it replaces what {into} held)."
+        )
+        res = await ctx.write(
+            _only_declared(ctx, info, [R.slot_write(into, frame)]),
+            label=f"latency: contrast pattern into {into}",
+        )
+        setup["contrast_written_into"] = into
+        setup["contrast_write"] = write_facts(res)
+        if problem := _write_problem(res, f"The contrasting pattern for {into}"):
+            problem.observations.update(setup)
+            return problem
+        last_sent = res.timings.sent_at or ctx.now()
+        looks = [select(into), select(other)]
+    else:
+        look = contrast_look(caps)
+        if look is None:
+            return JobResult(
+                Verdict.ERROR,
+                f"{a} and {b} hold the same pattern and this device has no whole-strand look to alternate with. "
+                "Put a different pattern in one of them first. Nothing was sent.",
+                setup,
+            )
+        name, whole = look
+        ctx.step(
+            f"{a} and {b} hold the same pattern, and frames written by the Conductor aren't proven on this kit "
+            f"yet (Gate C), so the trials alternate {a} with a whole-strand look ({name})."
+        )
+        slot_look = select(a)
+        whole_look = (name, _only_declared(ctx, info, R.full_state_vector(whole, cct_range=caps.cct_range)))
+        looks = [whole_look, slot_look] if showing == a else [slot_look, whole_look]
     ctx.step(
-        f"{n} trials, one select every {spacing:g} s. Start filming with the clock page next to the kit."
+        f"{n} trials, one change every {spacing:g} s ({' ↔ '.join(name for name, _ in looks)}). "
+        "Start filming with the clock page next to the kit."
     )
     trials: list[dict[str, Any]] = []
-    last_sent: float | None = None
     for i in range(n):
-        slot = b if i % 2 == 0 else a
+        name, rows = looks[i % 2]
         await _space(ctx, last_sent, spacing)
-        rows = _only_declared(ctx, info, [*R.slot_select(slot), R.power(True)])
-        res = await ctx.write(rows, label=f"latency trial {i + 1}/{n}: {slot}")
+        res = await ctx.write(rows, label=f"latency trial {i + 1}/{n}: {name}")
         facts = write_facts(res)
         last_sent = res.timings.sent_at or ctx.now()
-        trials.append({"trial": i + 1, "slot": slot, **facts})
+        trials.append({"trial": i + 1, "slot": name, **facts})
     acks = [t["ack_ms"] for t in trials if t["ack_ms"] is not None]
     verified = [t["verified_ms"] for t in trials if t["verified_ms"] is not None]
     failures = [t for t in trials if t["status"] != str(CommandStatus.APPLIED)]
     obs: dict[str, Any] = {
         "n": n,
         "spacing_s": spacing,
+        **setup,
         "ack_ms_p50": _round(percentile(acks, 50)),
         "ack_ms_p95": _round(percentile(acks, 95)),
         "verified_ms_p50": _round(percentile(verified, 50)),
@@ -541,7 +776,7 @@ async def latency_trials(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         "trials": trials,
     }
     summary = (
-        f"{n - len(failures)}/{n} selects applied. Send→ack p50 {obs['ack_ms_p50']} ms, p95 {obs['ack_ms_p95']} ms; "
+        f"{n - len(failures)}/{n} changes applied. Send→ack p50 {obs['ack_ms_p50']} ms, p95 {obs['ack_ms_p95']} ms; "
         f"send→readback match p50 {obs['verified_ms_p50']} ms, p95 {obs['verified_ms_p95']} ms. "
         "Read PUT-to-light from the video against the clock."
     )
@@ -669,9 +904,10 @@ JOBS: dict[str, Job] = {
             JobSpec(
                 "gate_b",
                 "Gate B — select a slot by API",
-                "Switches the kit to slot 2 with one small write and checks the cloud agrees.",
+                "Switches the kit to slot 2 (or the slot option) with one small write and checks the cloud agrees.",
                 writes=True,
-                look_for="The strand should switch to slot 2's pattern within about 2 seconds.",
+                look_for="The strand should switch to that slot's pattern within about 2 seconds. It refuses a "
+                "slot that is already showing (the switch wouldn't be visible).",
                 params={"slot": "custom-2"},
             ),
             gate_b,
@@ -691,9 +927,11 @@ JOBS: dict[str, Job] = {
             JobSpec(
                 "gate_c",
                 "Gate C — replay slot 1 into slot 2",
-                "Copies slot 1's exact pattern into slot 2 and selects it, in one write.",
+                "Shows a BEFORE look that isn't slot 1's pattern, then copies slot 1's exact pattern into slot 2 "
+                "and selects it, in one write.",
                 writes=True,
-                look_for="The strand should show exactly what slot 1 showed.",
+                look_for="Watch the BEFORE look (about 4 s), then the change: the strand should end up showing "
+                "exactly slot 1's pattern. It refuses to run if slot 2 already holds slot 1's pattern.",
                 params={"source": "custom-1", "target": "custom-2"},
             ),
             gate_c,
@@ -713,10 +951,12 @@ JOBS: dict[str, Job] = {
             JobSpec(
                 "latency_trials",
                 "Latency trials — PUT to light",
-                "Alternates between two slots N times, logging send, ack and readback times.",
+                "Alternates between two slots with different patterns N times (up to 100, at most 30 s apart), "
+                "logging send, ack and readback times.",
                 writes=True,
-                look_for="Film the kit with the clock page beside it for every trial.",
-                params={"n": 20, "spacing_s": 3.0, "slot_a": "custom-1", "slot_b": "custom-2"},
+                look_for="Film the kit with the clock page beside it for every trial. Every trial should change "
+                "the lights.",
+                params={"n": 20, "spacing_s": 3.0, "slot_a": "custom-2", "slot_b": "custom-3"},
             ),
             latency_trials,
         ),
@@ -748,6 +988,7 @@ def coerce_params(spec: JobSpec, given: dict[str, Any] | None) -> dict[str, Any]
     """The job's params: defaults overlaid with `given`, each converted to its default's type. ValueError with a
     plain message for unknown names or unusable values."""
     out = dict(spec.params)
+    bounds = PARAM_BOUNDS.get(spec.name, {})
     for name, raw in (given or {}).items():
         if name not in spec.params:
             known = ", ".join(spec.params) or "none"
@@ -757,6 +998,10 @@ def coerce_params(spec: JobSpec, given: dict[str, Any] | None) -> dict[str, Any]
             out[name] = _convert(default, raw)
         except (TypeError, ValueError):
             raise ValueError(f"{name}={raw!r} isn't a valid {type(default).__name__}.") from None
+        if name in bounds:
+            lo, hi = bounds[name]
+            if not lo <= out[name] <= hi:
+                raise ValueError(f"{name} must be between {lo:g} and {hi:g} (got {raw!r}).")
     return out
 
 
@@ -780,7 +1025,10 @@ def _convert(default: Any, raw: Any) -> Any:
     if isinstance(default, float):
         if isinstance(raw, bool):
             raise TypeError(raw)
-        return float(raw)
+        value = float(raw)
+        if not math.isfinite(value):  # inf/nan would make a sleep that never ends
+            raise ValueError(raw)
+        return value
     text = str(raw).strip()
     if len(text) > 80:
         raise ValueError(raw)

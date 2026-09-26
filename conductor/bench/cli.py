@@ -1,9 +1,10 @@
 """`python -m conductor.bench` — bench jobs from a terminal (the same jobs as /ops/bench).
 
-    python -m conductor.bench list                       jobs and devices (which run SIMULATED)
-    python -m conductor.bench run gate_a --device bench-kit [--param k=v ...] [--json]
-    python -m conductor.bench runs                       recent results
-    python -m conductor.bench export <run_id>            the anonymized JSON to paste into a build session
+    python -m conductor.bench --server URL list          jobs and devices (which run SIMULATED)
+    python -m conductor.bench --server URL run gate_a --device bench-kit [--param k=v ...] [--json]
+    python -m conductor.bench --server URL runs          recent results
+    python -m conductor.bench --server URL export <run_id>   the anonymized JSON to paste into a build session
+    python -m conductor.bench --server URL stop <run_id> stop a run that is going (the lock is released)
     python -m conductor.bench run gate_c --local         try a job in-process on the simulator (no server)
 
 It talks to the running Conductor (`--server`, default $CONDUCTOR_URL or http://localhost:8000) with the ops
@@ -104,6 +105,9 @@ class BenchClient:
     def apply_flags(self, run_id: str) -> dict:
         return self.call("POST", f"/api/bench/runs/{run_id}/flags", {})
 
+    def stop(self, run_id: str) -> dict:
+        return self.call("POST", f"/api/bench/runs/{run_id}/stop", {})
+
 
 def _describe(status: int, body: Any) -> str:
     detail = body.get("detail") if isinstance(body, dict) else None
@@ -136,6 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("runs", help="recent results")
     export = sub.add_parser("export", help="print a run's anonymized JSON")
     export.add_argument("run_id")
+    stop = sub.add_parser("stop", help="stop a run that is going")
+    stop.add_argument("run_id")
     return parser
 
 
@@ -247,7 +253,8 @@ def cmd_run(
             sleep(POLL_S)
     except KeyboardInterrupt:
         raise CliError(
-            f"Stopped following. The run continues on the server: `export {run_id}` later."
+            f"Stopped following. The run continues on the server: `stop {run_id}` stops it, "
+            f"`export {run_id}` shows it later."
         ) from None
     p.result(record)
     if ask is not None:
@@ -367,6 +374,11 @@ def main(
             cmd_runs(client, p)
         elif args.command == "export":
             p.data(client.anonymized(args.run_id))
+        elif args.command == "stop":
+            record = client.stop(args.run_id)
+            p.line(f"Stopped. {(record.get('result') or {}).get('summary', '')}")
+            if p.as_json:
+                p.data(record)
     except CliError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
