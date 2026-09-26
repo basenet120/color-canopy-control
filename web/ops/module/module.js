@@ -4,7 +4,7 @@
 // heartbeat every 30 s → POST close with navigator.sendBeacon on pagehide. Live state arrives on the
 // WebSocket topic "module:<id>"; every action also returns the fresh state.
 
-import { api, connectLive, copyJSON, fmtMs, simBadge } from "/static/app.js";
+import { api, connectLive, copyJSON, fmtMs, setSimBadge } from "/static/app.js";
 
 const HEARTBEAT_MS = 30000;
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -200,6 +200,7 @@ async function loadDevices() {
 }
 
 function showPicker(devices, note) {
+  setSimBadge(false); // nothing is driven from the picker; each device says "Simulator" or "Real device"
   $("workspace").hidden = true;
   $("picker").hidden = false;
   $("switch-btn").hidden = true;
@@ -349,6 +350,7 @@ function lost(message) {
 // ---- state ----------------------------------------------------------------------------------------------------
 function applyState(st) {
   S.state = st;
+  setSimBadge(st.simulated === true);
   if (!S.dirty || S.draft.length !== st.heads.length) {
     S.draft = st.heads.map((x) => ({ ...x.paint }));
     S.dirty = false;
@@ -1209,7 +1211,8 @@ function trackTopbar() {
 
 // ---- boot ---------------------------------------------------------------------------------------------------------
 async function main() {
-  simBadge();
+  // No global badge here: /api/version describes the show engine, which stays on the simulator in bench mode
+  // while this page drives the real kit. The badge follows the open device's own `simulated` flag (applyState).
   setupTabs();
   setupMapInput();
   setupPaint();

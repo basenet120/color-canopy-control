@@ -13,7 +13,8 @@ server → client
   {"type": "ping"}                                              every 20 s
   {"type": "error", "message": "..."}                           e.g. a topic the role can't see
 
-Close codes: 1008 for no/bad/expired ticket, bad Origin, or a first message that isn't auth.
+Close codes: 1008 for no/bad/expired ticket, bad Origin, or a first message that isn't auth — and for an open
+socket whose enrolled session was revoked on /ops (it stops receiving events at once, then is closed).
 
 Topics:
   canopy          — canopy mode/tier/module status (kiosk, ops, visualizer)
@@ -54,13 +55,27 @@ def topic_allowed(role: str, grants: frozenset[str], topic: str) -> bool:
     return False
 
 
+_CLOSE = {"type": "__close__"}  # internal: tells the client's send loop to close the socket (never sent)
+
+
 @dataclass(eq=False)  # identity equality/hash: clients live in a set
 class _Client:
     ticket: Ticket
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(QUEUE_MAX))
     topics: set[str] = field(default_factory=set)
+    revoked: bool = False
+
+    def revoke(self) -> None:
+        """Stop everything for this client at once: no topics, nothing queued, then close."""
+        self.revoked = True
+        self.topics.clear()
+        while not self.queue.empty():
+            self.queue.get_nowait()
+        self.queue.put_nowait(_CLOSE)
 
     def offer(self, message: dict) -> None:
+        if self.revoked:
+            return
         if self.queue.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self.queue.get_nowait()
@@ -87,6 +102,14 @@ class WsHub:
     @property
     def client_count(self) -> int:
         return len(self._clients)
+
+    def close_session(self, session: str) -> int:
+        """Close every socket opened with a ticket from enrolled session `session` (its fingerprint), with 1008.
+        Called when the session is revoked. Returns how many sockets were closed."""
+        closing = [c for c in self._clients if c.ticket.session is not None and c.ticket.session == session]
+        for client in closing:
+            client.revoke()
+        return len(closing)
 
     async def serve(self, websocket) -> None:
         """Run one client connection (Starlette/FastAPI WebSocket)."""
@@ -133,6 +156,8 @@ class WsHub:
                 await sender
 
     def _subscribe(self, client: _Client, topics: list) -> None:
+        if client.revoked:
+            return
         for topic in topics:
             if not isinstance(topic, str):
                 continue
@@ -153,4 +178,7 @@ class WsHub:
                 message = await asyncio.wait_for(client.queue.get(), PING_INTERVAL_S)
             except TimeoutError:
                 message = {"type": "ping"}
+            if message is _CLOSE:
+                await websocket.close(code=WS_CLOSE_POLICY)
+                return
             await websocket.send_text(json.dumps(message, default=str))

@@ -11,6 +11,11 @@ Who: ops, or a tester granted the device (`require_device_access`; the auth midd
 - `GET  /api/module/{id}/export`           the anonymized JSON behind "Copy anonymized JSON"
 - `POST /api/module/{id}/paint|whole|card|sweep|slot|effects|calibration|hold`  (each needs `lease`)
 
+Cross-site requests (review F5): every POST here is refused (403) when its Origin — or, without one, its Referer —
+names another host, and every POST except `close` must be `application/json` (415 otherwise), which a page on
+another site can't send without a CORS preflight we never grant. `close` also takes a sendBeacon text body, but
+releases only the lease it names, which another site can't know.
+
 Every mutating call needs the lease from `open` (409 with a plain message when the lock is gone), returns the
 command result (timings, HTTP result, readback) plus the updated state, and says `simulated: true` — with a
 "SIMULATED" notice — whenever the SimDriver did the work.
@@ -28,9 +33,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from conductor.module import ModuleError, ModuleManager, ModuleSession
 from conductor.roles_api import Principal, Role
+from conductor.routes.accounts import same_origin
 from conductor.routes.deps import principal_of, require_device_access, services_of
 
-router = APIRouter()
+
+def _no_cross_site(request: Request) -> None:
+    """Refuse cross-site writes before anything runs (a form on another site could otherwise take a lock)."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    headers = request.headers
+    if ("origin" in headers or "referer" in headers) and not same_origin(headers):
+        raise HTTPException(status_code=403, detail="Refused: this request came from another site.")
+    if request.url.path.endswith("/close"):
+        return  # the sendBeacon release: text/plain, and it can only release the lease it names
+    media_type = (headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(status_code=415, detail="Send JSON (Content-Type: application/json).")
+
+
+router = APIRouter(dependencies=[Depends(_no_cross_site)])
 NO_STORE = {"Cache-Control": "no-store"}
 SIM_NOTICE = "SIMULATED — no real lights were driven."
 

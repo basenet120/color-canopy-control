@@ -161,7 +161,19 @@ class ModuleManager:
                 str(e) if holder is None else f"{device_id} is in use by {holder.owner}.",
                 409,
             ) from None
-        if existing is not None:
+        # Reading the profile awaited the driver; someone may have taken the device over meanwhile. Only the
+        # live lease holder may become the device's session, or the lock would be held by nobody's page.
+        if not session.lease_alive():
+            session.abandon()  # never release: the lock belongs to whoever took it over
+            holder = self.services.locks.holder(target.address)
+            raise ModuleError(
+                f"{device_id} was taken over while it was opening"
+                + (f" (now held by {holder.owner})." if holder else ".")
+                + " Open it again if you still need it.",
+                409,
+            )
+        existing = self.sessions.get(device_id)  # re-read: it may have changed during the await
+        if existing is not None and existing is not session:
             existing.abandon()  # its page notices the new session_id on the next event or heartbeat
         self.sessions[device_id] = session
         session.publish("opened")

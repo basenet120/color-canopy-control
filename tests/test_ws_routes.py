@@ -294,3 +294,37 @@ def test_deps_without_middleware(tmp_path, monkeypatch):
     ):
         with pytest.raises(HTTPException, match=r"Sign in|Only ops|isn't one|still starting"):
             call()
+
+
+def test_revoking_a_session_closes_its_open_socket(app_client_auth):
+    """F8: a tester's socket opened before the revoke stops receiving events and is closed with 1008."""
+    client = app_client_auth
+    ops = ("crew", "canopy")
+    link = client.post(
+        "/api/roles/enrollments",
+        json={"role": "tester", "name": "VWBD phone", "grants": ["bench-kit"]},
+        auth=ops,
+    ).json()
+    assert client.post(link["path"], follow_redirects=False).status_code == 303
+    ticket = client.get("/api/ws-ticket").json()["ticket"]
+    other = client.get("/api/ws-ticket", auth=ops).json()["ticket"]  # an ops socket must stay open
+    fp = client.get("/api/roles/sessions", auth=ops).json()["sessions"][0]["fingerprint"]
+    hub = client.app.state.services.hub
+    assert client.get("/api/module", auth=ops).status_code == 200  # registers the module snapshot
+    with client.websocket_connect("/ws/live") as ws, client.websocket_connect("/ws/live") as ops_ws:
+        ws.send_json({"type": "auth", "ticket": ticket})
+        assert ws.receive_json()["role"] == "tester"
+        ws.send_json({"type": "subscribe", "topics": ["module:bench-kit"]})
+        assert ws.receive_json()["topic"] == "module:bench-kit"
+        ops_ws.send_json({"type": "auth", "ticket": other})
+        assert ops_ws.receive_json()["role"] == "ops"
+        ops_ws.send_json({"type": "subscribe", "topics": ["module:bench-kit"]})
+        assert ops_ws.receive_json()["topic"] == "module:bench-kit"
+
+        assert client.delete(f"/api/roles/sessions/{fp}", auth=ops).status_code == 200
+        hub.publish("module:bench-kit", {"secret": "after revoke"})
+        with pytest.raises(WebSocketDisconnect) as closed:
+            while True:
+                assert "after revoke" not in str(ws.receive_json())
+        assert closed.value.code == 1008
+        assert ops_ws.receive_json()["data"] == {"secret": "after revoke"}

@@ -34,6 +34,8 @@ _PATTERNS = [
     re.compile(r"(?i)(\.afero\.net(?::\d+)?/v1/accounts/)(?!\{aid\}/)[^/\s'\"?&]+"),
 ]
 MASK = "***"
+# One-time enrollment links carry their credential in the path (`/enroll/<token>`, D5/D10).
+_ENROLL = re.compile(r"(/enroll/)[^/?#\s\"']+")
 
 
 def add_secret(value: str | None) -> None:
@@ -48,7 +50,7 @@ def redact(text: str) -> str:
     for s in secrets:
         if s in text:
             text = text.replace(s, MASK)
-    for pattern in _PATTERNS:
+    for pattern in (*_PATTERNS, _ENROLL):
         text = pattern.sub(lambda m: (m.group(1) if m.groups() else "") + MASK, text)
     return text
 
@@ -93,6 +95,22 @@ class RedactingFilter(logging.Filter):
         return True
 
 
+class AccessLogFilter(logging.Filter):
+    """For uvicorn's access logger, which has its own handler (the root filter never sees it) and whose formatter
+    unpacks `record.args` as (client, method, path, http_version, status): redact each text argument in place and
+    keep the tuple's shape. Masks `/enroll/<token>` and anything else `redact` knows."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = redact(record.msg)
+        return True
+
+
+ACCESS_LOGGERS = ("uvicorn.access",)
+
+
 def _redacting_factory(inner: Callable[..., logging.LogRecord]) -> Callable[..., logging.LogRecord]:
     def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = inner(*args, **kwargs)
@@ -120,3 +138,7 @@ def install() -> None:
             _add_filter(handler)
     if logging.lastResort is not None:
         _add_filter(logging.lastResort)
+    for name in ACCESS_LOGGERS:  # uvicorn's access logger doesn't propagate to the root
+        logger = logging.getLogger(name)
+        if not any(isinstance(x, AccessLogFilter) for x in logger.filters):
+            logger.addFilter(AccessLogFilter())

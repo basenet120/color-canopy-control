@@ -276,3 +276,38 @@ def test_bad_overlay_yaml_is_explained(tmp_path):
     (tmp_path / "overrides" / "registry.yaml").write_text("devices:\n  bench-kit: {orientation: [\n")
     with pytest.raises(ConfigError, match="not valid YAML at line"):
         load_registry(data=tmp_path)
+
+
+def test_lock_changes_say_acquire_steal_release_or_expire_with_the_real_expiry_time(tmp_path):
+    """LCK-1: lock telemetry distinguishes a take-over and an idle expiry, and dates the expiry correctly."""
+    from conductor.services import build_services
+
+    clock = ManualClock()
+    services = build_services({"CONDUCTOR_DATA_DIR": str(tmp_path)}, clock=clock)
+    locks, timeout = services.locks, services.locks.idle_timeout_s
+    first = locks.acquire("sim-bench-kit", "bench · gate_b")
+    locks.acquire("sim-bench-kit", "module page · ops", steal=True)
+    clock.t += 5
+    stolen_at = clock.t
+    taken = locks.acquire("sim-bench-kit", "module page · alon", steal=True)
+    assert taken.token != first.token
+    clock.t += timeout + 300  # nobody looks for 5 minutes after it idled out
+    assert locks.holder("sim-bench-kit") is None
+    again = locks.acquire("sim-bench-kit", "bench · gate_c")
+    locks.release("sim-bench-kit", again.token)
+
+    events = [(e["action"], e["owner"]) for e in services.telemetry.recent(kind="lock")]
+    assert events == [
+        ("acquire", "bench · gate_b"),
+        ("steal", "module page · ops"),
+        ("steal", "module page · alon"),
+        ("expire", "module page · alon"),
+        ("acquire", "bench · gate_c"),
+        ("release", "bench · gate_c"),
+    ]
+    lock_events = services.telemetry.recent(kind="lock")
+    assert lock_events[1]["previous_owner"] == "bench · gate_b"
+    assert lock_events[2]["previous_owner"] == "module page · ops"
+    expire = lock_events[3]
+    assert expire["expired_at"] == pytest.approx(stolen_at + timeout)
+    assert expire["t"] > expire["expired_at"]  # noticed later than it happened, but dated when it happened

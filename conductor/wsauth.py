@@ -26,6 +26,9 @@ class Ticket:
     role: str
     grants: frozenset[str] = frozenset()  # e.g. device ids a tester may reach
     expires_at: float = 0.0
+    session: str | None = (
+        None  # the enrolled session's fingerprint (never the cookie), so a revoke can find it
+    )
 
 
 @dataclass
@@ -34,10 +37,14 @@ class TicketBook:
     ttl_s: float = TICKET_TTL_S
     _tickets: dict[str, Ticket] = field(default_factory=dict)
 
-    def issue(self, role: str, grants: Iterable[str] = ()) -> Ticket:
+    def issue(self, role: str, grants: Iterable[str] = (), session: str | None = None) -> Ticket:
         self._sweep()
         ticket = Ticket(
-            secrets.token_urlsafe(24), role, frozenset(grants), self.clock.monotonic() + self.ttl_s
+            secrets.token_urlsafe(24),
+            role,
+            frozenset(grants),
+            self.clock.monotonic() + self.ttl_s,
+            session=session,
         )
         self._tickets[ticket.value] = ticket
         return ticket
