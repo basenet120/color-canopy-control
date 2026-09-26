@@ -156,3 +156,18 @@ def test_a_second_page_sees_who_holds_it_and_ops_can_take_over(context_factory, 
     first.wait_for_selector("#banner:not([hidden])")
     assert "Taken over" in first.inner_text("#banner") or "no longer" in first.inner_text("#banner")
     assert first.inner_text("#status-pill") == "Not holding"
+
+
+def test_lowcountry_preview_card_paints_a_canopy_slice(context_factory, api, screenshots):
+    page = _open_page(context_factory)
+    page.click(".tabs [data-tab='cards']")
+    page.select_option("#lc-mode", "rainbow-row-sunset")
+    page.click("[data-card='lowcountry-preview'] [data-position='r0c1']")
+    page.click("#lc-apply")
+    page.wait_for_function("/painted per head/.test(document.querySelector('.lc-result').textContent)")
+    assert "Kiosk copy" in page.inner_text(".lc-result")
+    state = api(f"/api/module/{BENCH}")["state"]
+    assert "Rainbow Row Sunset" in state["look_name"]
+    assert all(h["reported"] != {"r": 0, "g": 0, "b": 0} for h in state["heads"])
+    page.locator("[data-card='lowcountry-preview']").scroll_into_view_if_needed()
+    page.screenshot(path=str(screenshots / "module-phone-lowcountry.png"))

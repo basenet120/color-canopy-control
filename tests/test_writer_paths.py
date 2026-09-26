@@ -159,6 +159,49 @@ async def _module_page_paint(env: Env, address: str) -> str:
     return str(result["status"])
 
 
+async def _module_page_lowcountry_preview(env: Env, address: str) -> str:
+    """/ops/module "Preview a Lowcountry Mode": a compiled T1 canvas slice written + selected through the page."""
+    import json
+    import tempfile
+
+    from fake_afero import raw_device_from_fixture
+
+    from conductor.config import ConductorSettings, DeviceFlags, load_recipes
+    from conductor.geometry import load_canopy_config
+    from conductor.looks import load_modes
+    from conductor.module import ModuleSession, SessionDeps
+    from conductor.sim.profiles import load_profile
+
+    world = env.world
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = Path(tmp) / "sqhdk03.json"
+        fixture.write_text(json.dumps(load_profile("sqhdk03-sim")))
+        world.fake.devices[address] = raw_device_from_fixture(address, fixture)
+    device_id = world.registry.logical_for(address).id
+    entry = world.registry.get(device_id).model_copy(
+        update={"flags": DeviceFlags(t1_frames=True), "flags_proven_on": address}
+    )
+    deps = SessionDeps(
+        clock=world.clock,
+        locks=env.locks,
+        telemetry=Telemetry(None, world.clock),
+        settings=ConductorSettings(),
+        recipes=load_recipes(),
+        canopy=load_canopy_config(),
+        entry=lambda _id: entry,
+        modes=load_modes(),
+    )
+    try:
+        session = await ModuleSession.open(
+            deps, Target(device_id, address, world.driver, env.executor), owner="module page · test"
+        )
+    except LockError:
+        return "lock_refused"
+    result = await session.card("lowcountry-preview", {"mode": "rainbow-row-sunset", "position": "r0c1"})
+    await session.close()
+    return str(result["status"])
+
+
 WriterPath = Callable[[Env, str], Awaitable[str]]
 WRITER_PATHS: dict[str, WriterPath] = {
     "executor.submit (engine)": _executor_engine,
@@ -167,6 +210,7 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "driver.write (anything bypassing the executor)": _driver_direct,
     "bench runner (gate_c)": _bench_runner_gate_c,
     "module page (paint)": _module_page_paint,
+    "module page (lowcountry preview)": _module_page_lowcountry_preview,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
 COVERED_MODULES = {

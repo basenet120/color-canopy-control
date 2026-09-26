@@ -15,6 +15,10 @@ Rules implemented (BUILD_PLAN P0b, 04, 07 §1/§5/§6, D8):
 - **Index sweep**: one frame write per step, never faster than the per-device rate budget (the step is at least
   the executor's `min_write_interval_s`, and the executor enforces the budget as well).
 - **Hold (photo mode)**: no writes from this page until it is released; a running sweep pauses.
+- **Lowcountry preview**: a mode's slice for a chosen canopy position, compiled by `conductor.looks` for THIS
+  device (its capabilities, calibration and readback header) placed at that position. T1 when the page may paint
+  (one frame write + select into the page's scratch slot, the same path as painting), else the mode's strand or
+  module-level (T3) look as one whole-module write. The result carries the tier and the feature sentence used.
 - Updates go out on WebSocket topic `module:<device_id>`: `{"event", "state", "result"?}`.
 """
 
@@ -34,9 +38,12 @@ from conductor.capabilities import Capabilities, detect
 from conductor.clock import Clock
 from conductor.config import ConductorSettings, ConfigError, DeviceEntry, RecipesFile
 from conductor.drivers.base import TELEMETRY_CLASSES, Outcome, ReadResult, StateRow
+from conductor.engine_api import PlanError, Tier
 from conductor.executor_api import Command, CommandResult, CommandStatus
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager, Lease, LockError
+from conductor.looks import CompileContext, compile_mode, ladder
+from conductor.looks.composer import parse_position
 from conductor.module import cards as C
 from conductor.module._anonymize import anonymize
 from conductor.module.layout import (
@@ -90,6 +97,7 @@ class SessionDeps:
     publish: Callable[[str, dict], None] = lambda _topic, _data: None
     save_calibration: Callable[[str, Mapping[str, Any]], Any] | None = None  # Services.update_registry
     tracker: Any = None  # DeviceStateTracker (optional)
+    modes: Any = None  # looks.ModesFile for the Lowcountry preview card (None: the card is unavailable)
 
 
 @dataclass
@@ -376,8 +384,10 @@ class ModuleSession:
         *,
         select: bool = True,
         effects: Mapping[str, int] | None = None,
+        extra: Sequence[StateRow] = (),
     ) -> dict:
-        """T1: one frame into `slot` (header + length from the device's readback), selected in the same PUT."""
+        """T1: one frame into `slot` (header + length from the device's readback), selected in the same PUT
+        (plus `extra` rows, e.g. a mode's brightness — still one PUT)."""
         self._check_can_write()
         self._require_t1()
         header = self._slot_value(slot)
@@ -393,7 +403,7 @@ class ModuleSession:
             )
             rows = [R.slot_write(slot, value)]
             if select:
-                rows += [*R.slot_select(slot), R.power(True)]
+                rows += [*R.slot_select(slot), R.power(True), *extra]
         except R.PayloadError as e:
             raise ModuleError(str(e), 400) from None
         self.paint = list(frame)
@@ -481,6 +491,10 @@ class ModuleSession:
     async def card(self, card: str, params: Mapping[str, Any] | None = None) -> dict:
         params = dict(params or {})
         self._check_can_write()
+        if card == "lowcountry-preview":
+            return await self.preview_mode(
+                params.get("mode"), params.get("position"), slot=params.get("slot")
+            )
         try:
             compiled = C.compile_card(
                 card,
@@ -509,6 +523,81 @@ class ModuleSession:
             out = await self._send(rows, f"card: {compiled.label}")
         out["notes"] = compiled.notes or []
         out["name"] = compiled.label
+        return out
+
+    async def preview_mode(self, mode_id: Any, position: Any, *, slot: Any = None) -> dict:
+        """Show one Lowcountry Mode's slice for canopy `position` on this module (see the module docstring)."""
+        self._check_can_write()
+        modes = self.deps.modes
+        if modes is None:
+            raise ModuleError("The Lowcountry Modes couldn't be loaded, so there's nothing to preview.", 503)
+        if not isinstance(mode_id, str) or mode_id not in modes.modes:
+            raise ModuleError(f"Choose one of the modes: {', '.join(modes.modes)}.", 400)
+        try:
+            parse_position(position, self.deps.canopy)
+        except PlanError as e:
+            raise ModuleError(str(e), 400) from None
+        mode = modes.modes[mode_id]
+        # This device, as it hangs (its own orientation and calibration), placed at the chosen position.
+        entry = self.entry.model_copy(update={"module": position, "orientation": self.cal.orientation})
+        ctx = CompileContext(
+            registry=[entry],
+            capabilities={self.device_id: self.caps},
+            slot_readback={self.device_id: {s: self._slot_value(s) for s in self.caps.slots}},
+            effects_enabled=self.effects_enabled(),
+            recorded_hashes={},
+            modes=modes,
+            recipes=self.deps.recipes,
+            canopy=self.deps.canopy,
+        )
+        tiers = ladder(mode_id, modes)
+        t1_ok, t1_why = self.t1_status()
+        notes: list[str] = []
+        # T2 is never previewed: the hand-painted show slot isn't this page's to select for a mode preview.
+        candidates = [t for t in (Tier.T1, Tier.STRAND, Tier.T3) if t in tiers]
+        if Tier.T1 in candidates and not t1_ok:
+            candidates.remove(Tier.T1)
+            notes.append(f"Per-head frames aren't allowed here ({t1_why}) — showing the module-level look.")
+        if not candidates:
+            raise ModuleError(
+                f"{mode.label} can't be previewed on this module (its ladder is {mode.ladder})."
+            )
+        plan, problems = None, []
+        for candidate in candidates:
+            try:
+                plan = compile_mode(mode_id, candidate, ctx)
+                break
+            except PlanError as e:
+                problems.append(f"{candidate}: {e}")
+        if plan is None:
+            raise ModuleError(f"{mode.label} can't be previewed here — {'; '.join(problems)}", 400)
+        notes += [f"Not at tier {p}" for p in problems]
+        tier = plan.tier
+        target = plan.modules[self.device_id]
+        label = f"preview: {mode.label} at {position} ({tier})"
+        self._stop_sweep_for("Stopped: you previewed a Lowcountry Mode.")
+        if tier is Tier.T1:
+            scratch = self._require_slot(slot or self.paint_slot)
+            inner = (target.slot_value or {}).get(R.FRAME_CLASS, {})
+            effects = {
+                k: int(inner[k]) for k in ("motionEffect", "motionSpeed", "brightnessEffect") if k in inner
+            }
+            level = [r for r in target.rows if r.key == ("brightness", None)]
+            frame = R.frame_entries(target.slot_value) or []
+            notes.append(
+                f"Written into {scratch} (this page's scratch slot), not the show slot {target.slot}."
+            )
+            out = await self._write_frame(scratch, frame, label, effects=effects, extra=level)
+        else:
+            out = await self._send(target.rows, label)
+        out["notes"] = [*plan.notes, *notes]
+        out["name"] = f"{mode.label} · {position}"
+        out["mode"] = mode_id
+        out["position"] = position
+        out["tier"] = str(tier)
+        out["feature"] = plan.feature
+        out["motion"] = plan.motion
+        self.last_label = f"card: {mode.label} ({position})"
         return out
 
     async def sweep(self, action: str, *, step_s: float | None = None, from_index: int | None = None) -> dict:
@@ -868,7 +957,7 @@ class ModuleSession:
             "hold": dict(self.hold),
             "look_name": self.look_name(),
             "telemetry": self.telemetry_json(),
-            "cards": C.catalog(self.deps.recipes),
+            "cards": C.catalog(self.deps.recipes, self.deps.modes, self.deps.canopy),
             "recipes": {
                 name: {
                     "label": r.label,
