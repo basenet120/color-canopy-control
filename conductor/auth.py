@@ -128,3 +128,9 @@ def _authorized(scope, expected: bytes) -> bool:
     except binascii.Error:
         return False
     return secrets.compare_digest(supplied, expected)
+
+
+if __name__ == "__main__":
+    from conductor.auth_cli import main
+
+    main()
