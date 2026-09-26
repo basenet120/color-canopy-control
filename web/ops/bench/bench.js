@@ -97,6 +97,11 @@ function paramInput(job, name, value) {
   if (type === "checkbox") input.checked = value;
   else input.value = String(value);
   if (type === "number") input.step = "any";
+  const bounds = (job.bounds || {})[name];
+  if (bounds) {
+    input.min = String(bounds[0]);
+    input.max = String(bounds[1]);
+  }
   return el("div", { class: "param" }, el("label", { for: id, text: name }), input);
 }
 
@@ -191,6 +196,7 @@ function renderRun(record) {
   const pill = $("run-pill");
   pill.className = `pill ${running ? "updating" : record.status === "finished" ? "ready" : "attention"}`;
   pill.textContent = running ? "Running" : record.status === "finished" ? "Finished" : "Interrupted";
+  $("stop").hidden = !running;
   $("steps").replaceChildren(...(record.steps || []).map(stepItem));
   const list = $("steps");
   list.scrollTop = list.scrollHeight;
@@ -266,7 +272,8 @@ function renderFlags(record) {
   let reason = "";
   if (!names.length) reason = "This job doesn't propose any flags.";
   else if (record.simulated) reason = "Disabled: this was a simulated run, so it proves nothing about the real kit.";
-  else if (record.flags_applied) reason = `Applied: ${JSON.stringify(record.flags_applied.flags)}.`;
+  else if (record.flags_applied)
+    reason = `Applied: ${JSON.stringify(record.flags_applied.flags)}. Changing your answer to No puts them back.`;
   else {
     const needed = record.flag_questions || {};
     const missing = names.filter((f) => (record.answers || {})[needed[f]] !== "yes");
@@ -274,7 +281,13 @@ function renderFlags(record) {
   }
   button.textContent = names.length ? `Apply flags ${JSON.stringify(flags)}` : "Apply flags";
   button.disabled = Boolean(reason);
-  why.textContent = reason || "Saves these flags to the device's registry overlay.";
+  const revoked = record.flags_revoked;
+  const undone =
+    revoked && Object.keys(revoked.flags || {}).length
+      ? ` Undone after your answer changed: ${JSON.stringify(revoked.flags)} (back to what they were before).`
+      : "";
+  why.textContent =
+    (reason || "Saves these flags to the device's registry overlay, for this kit only.") + undone;
 }
 
 async function answer(question, value) {
@@ -371,6 +384,18 @@ $("copy").addEventListener("click", async () => {
     status.textContent = err.message;
   }
   status.hidden = false;
+});
+$("stop").addEventListener("click", async () => {
+  showError("");
+  const button = $("stop");
+  button.disabled = true;
+  try {
+    renderRun(await api(`/api/bench/runs/${encodeURIComponent(state.runId)}/stop`, { method: "POST", body: {} }));
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 $("flags").addEventListener("click", async () => {
   showError("");

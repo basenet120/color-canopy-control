@@ -8,7 +8,9 @@ import time
 from pathlib import Path
 
 from conductor.anonymize import check_clean
-from conductor.bench.jobs import Q_GATE_B
+from conductor.bench.jobs import question
+
+Q_GATE_B = question("gate_b", {"slot": "custom-2"})
 
 ROOT = Path(__file__).resolve().parent.parent
 BENCH_WEB = ROOT / "web" / "ops" / "bench"

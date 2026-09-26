@@ -32,9 +32,9 @@ Railway redeploys when you save. Wait for it, then open the staging URL and sign
 
 Either way works. Hubspace may email a 6-digit code — have the bench account's inbox open.
 
-- **Terminal (preferred):** `python -m conductor.auth login` against the staging URL. It asks for the email,
-  the password (never shown) and the code if one is needed. It talks to the running server; nothing is stored on
-  your laptop.
+- **Terminal (preferred):** `python -m conductor.auth login --server https://<staging URL>`. Without
+  `--server` it talks to `http://127.0.0.1:8000` (your laptop), not staging. It asks for the email, the password
+  (never shown) and the code if one is needed. It talks to the running server; nothing is stored on your laptop.
 - **Phone:** set `CONDUCTOR_ACCOUNT_CONNECT=1` on Railway, wait for the redeploy, open `/ops/accounts`, sign in.
   The form turns itself off after a successful connect; remove the variable afterwards.
 
@@ -72,32 +72,58 @@ into the build session (see section 7).
    anything dim), and save. Then Run. It reads slot 1 (nothing written) and says whether the red puck is
    index 0 or the last entry. Answer whether the red puck is the one nearest the controller.
    While you're in the app: switch slot 1 through each effect and a few speeds, run Index order after each, and
-   copy the JSON each time — that builds the effect-code table.
+   copy the JSON each time — that builds the effect-code table. Each result carries the slot's `header`
+   (`motionEffect`, `motionSpeed`, `brightnessEffect`, `brightnessSpeed`, `brightnessDepth`, `id`, `version`,
+   `headerFlags`, `sequenceFlags`, `frameBuffer.flags`) and `slot_headers` for all three slots, so say which
+   effect and speed you picked in the app when you paste it.
 3. **Gate B — select a slot.** Film it. Pass = the strand switches to slot 2 within about 2 s.
-   Answer "Did the strand switch…?". Yes proves T2 (store-and-select).
+   Answer "Did the strand switch to slot 2…?" (the question names whichever slot you picked). Yes proves T2
+   (store-and-select). It refuses to run — nothing sent — when that slot is already showing, or holds the same
+   pattern as the slot that is showing, because you couldn't see a switch; pick another slot under Options.
 4. **Gate B — unplugged.** Switch the kit off at the wall (unplug the power supply), wait 10 s, tick
-   **I've switched the kit off**, Run. It selects another slot and reads it back. Answer whether the kit was off
-   the whole time, then **plug it back in**. The result says whether readback shows what the cloud stored or
-   what the device did.
-5. **Gate C — replay slot 1 into slot 2.** Film it. Pass = HTTP 200, slot 2 reads back identical to slot 1, and
-   the lights show exactly slot 1's pattern. Answer "Do the lights now match…?". Yes proves T1 (frames by API).
+   **I've switched the kit off** (in a terminal: `--param confirmed=1`), Run. It selects another slot and reads
+   it back. Answer whether the kit was off the whole time, then **plug it back in**. The result says whether
+   readback shows what the cloud stored or what the device did.
+5. **Gate C — replay slot 1 into slot 2.** Film it. First it checks that slot 2 does *not* already hold slot 1's
+   pattern (if it does, it stops with nothing sent: run **Hue ramp** with `slot=custom-2`, or paint slot 2 in
+   the app, then run Gate C again — otherwise the lights would "match" even if the kit ignored the write).
+   Then it switches the lights to a **BEFORE** look that isn't slot 1's pattern (slot 3, or plain warm white if
+   slot 3 matches slot 1) and holds it about 4 s. Then one write copies slot 1 into slot 2 and selects it.
+   Pass = HTTP 200, slot 2 reads back identical to slot 1, and you saw the lights **change** from the BEFORE
+   look to exactly slot 1's pattern. Answer "Did the lights change from the BEFORE look to exactly slot 1's
+   pattern?". Yes proves T1 (frames by API). If the lights never left the BEFORE look, answer No.
 6. **Hue ramp.** Every puck a different colour, running through the rainbow. **Take a clear photo of the whole
    strand** (it becomes the index map) and answer the question.
-7. **Latency trials.** 20 selects, one every 3 s. Film the whole run with the clock in frame. The result gives
+7. **Latency trials.** 20 changes, one every 3 s, between slot 2 and slot 3 (after Gate C and the hue ramp they
+   hold slot 1's pattern and the rainbow, so every trial is a visible change). It starts with whichever of the
+   two isn't showing. If the two slots hold the same pattern, it first writes a rainbow into one of them (only
+   once Gate C is proven on this kit), otherwise it alternates a slot with plain warm white — the steps say
+   which. At most 100 trials and 30 s spacing. Film the whole run with the clock in frame. The result gives
    send→ack and send→readback times; PUT-to-light comes from the video (the flash marks each send).
+   **Stop this run** (next to the Running pill) stops any job that is going and frees the kit.
 8. **Whole-strand looks.** Warmest and coolest white, 10% and 1%, HD orange, and a preset at slowest / middle /
    fastest. Each holds about 2 s. Film it and answer one question per look.
 9. **Restore.** Puts the kit back to calm warm white 2700 K at 50%. Run it at the end of every session.
 
-A job that says **ERROR** didn't run (device busy, not connected, not allowed). Nothing was changed; read the
-message, fix that, and run it again. Only one job runs on a device at a time; `/ops/module` and a bench job
-can't hold the kit at the same moment.
+A job that says **ERROR** stopped without a verdict: the device was busy, not connected or not allowed, a
+check before the first write refused (the message says why), a read failed, or the run was stopped. **Read the
+end of the message:** "Nothing was sent" means the kit wasn't touched; "N write(s) had already gone out" means
+the kit may have changed (for example Gate C may already have rewritten slot 2) — look at the steps before you
+run it again. Only one job runs on a device at a time; `/ops/module` and a bench job can't hold the kit at the
+same moment.
 
 ## 6. Apply flags (after Gates B and C)
 
 When Gate B or C passes and you've answered its question **Yes**, the result card enables **Apply flags**
-(`t2_select`, `t1_frames`, `readback_device_level`). Tapping it records what the kit proved in the ops overlay.
-It stays disabled — with the reason shown — for simulated runs and until the matching answer is Yes.
+(`t2_select`, `t1_frames`, `readback_device_level`). Tapping it records what the kit proved in the ops overlay,
+together with **which kit** proved it (its Hubspace id, `flags_proven_on`). It stays disabled — with the reason
+shown — for simulated runs and until the matching answer is Yes.
+
+- **Changed your mind?** Tapping **No** on that question after applying puts the flags back to what they were
+  before (the card says "Undone…"), so `/ops/module` locks per-puck painting again. Tap Yes and Apply to redo it.
+- **Swapped kits?** Flags only count for the kit that proved them. If a different kit is registered as
+  `bench-kit`, its old flags don't carry over, and Apply flags on a run from the old kit is refused — run the
+  gates again on the new kit.
 
 ## 7. Getting results back to the build session
 
@@ -106,8 +132,9 @@ into the session as a message. Ids, MACs, network names, emails, names and locat
 placeholders, so it's safe to paste. Send the Gate A profile download and your photos/videos the same way
 (say which job each belongs to). The **Recent runs** list at the bottom reopens any earlier result.
 
-From a terminal instead: `python -m conductor.bench runs` lists results, and
-`python -m conductor.bench export <run id>` prints the same anonymized JSON.
+From a terminal instead: `python -m conductor.bench --server https://<staging URL> runs` lists results, and
+`python -m conductor.bench --server https://<staging URL> export <run id>` prints the same anonymized JSON.
+(Without `--server`, or `CONDUCTOR_URL` in the environment, the commands talk to `http://localhost:8000`.)
 
 ## 8. From a terminal (optional)
 
@@ -116,7 +143,10 @@ With `CONDUCTOR_BASIC_AUTH=user:password` in the environment (or `--user NAME`, 
 - `python -m conductor.bench --server <staging URL> list` — jobs, and whether the kit runs SIMULATED
 - `python -m conductor.bench --server <staging URL> run gate_b --device bench-kit` — follows the steps live,
   asks the questions and posts your answers
-- `--param k=v` sets a job option, e.g. `run latency_trials --param n=10 --param spacing_s=5`
+- `--param k=v` sets a job option, e.g. `run latency_trials --param n=10 --param spacing_s=5` (n ≤ 100,
+  spacing ≤ 30 s); the unplugged test needs `run gate_b_unplugged --param confirmed=1`
+- `python -m conductor.bench --server <staging URL> stop <run id>` — stops a run that is going (Ctrl-C only
+  stops following it)
 - `python -m conductor.bench run gate_c --local` — tries any job on the simulator on your laptop, no server
 
 ## 9. `/ops/module` — hands-on single-module testing (after the P0b pull requests)

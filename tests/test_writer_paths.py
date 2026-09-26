@@ -136,7 +136,9 @@ async def _module_page_paint(env: Env, address: str) -> str:
         world.fake.devices[address] = raw_device_from_fixture(address, fixture)
     device_id = world.registry.logical_for(address).id
     # Gate C recorded for the device, so the page may paint: only the gate/lock can stop the spare
-    entry = world.registry.get(device_id).model_copy(update={"flags": DeviceFlags(t1_frames=True)})
+    entry = world.registry.get(device_id).model_copy(
+        update={"flags": DeviceFlags(t1_frames=True), "flags_proven_on": address}
+    )
     deps = SessionDeps(
         clock=world.clock,
         locks=env.locks,

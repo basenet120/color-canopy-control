@@ -6,7 +6,9 @@
 - `GET  /api/bench/runs`, `GET /api/bench/runs/{id}` — saved results.
 - `GET  /api/bench/runs/{id}/anonymized` — the copyable JSON for a build session.
 - `GET  /api/bench/runs/{id}/profile.json` — Gate A's scrubbed profile (candidate simulator fixture).
-- `POST /api/bench/runs/{id}/answers` `{answers: {question: "yes"|"no"|note}}`.
+- `POST /api/bench/runs/{id}/stop` — stop a run that is going (verdict ERROR, lock released). 409 if it isn't.
+- `POST /api/bench/runs/{id}/answers` `{answers: {question: "yes"|"no"|note}}`. Taking back a "yes" after its flags
+  were applied puts those flags back to what they were (the response's `flags_revoked` says what changed).
 - `POST /api/bench/runs/{id}/flags` — apply the proposed DeviceFlags to the ops overlay. Refused (409) for simulated
   runs and until the matching question is answered "yes".
 - `GET  /api/bench/time` — the server's clock in epoch ms (the clock page estimates its offset from it).
@@ -111,6 +113,16 @@ async def run_profile(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
     )
 
 
+@router.post("/runs/{run_id}/stop")
+async def run_stop(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
+    _get(request, run_id)
+    try:
+        record = await _runner(request).stop(run_id)
+    except BenchRefused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    return _json(record)
+
+
 @router.post("/runs/{run_id}/answers")
 async def run_answers(request: Request, run_id: str, body: AnswersRequest, _ops: Ops) -> JSONResponse:
     _get(request, run_id)
@@ -118,6 +130,8 @@ async def run_answers(request: Request, run_id: str, body: AnswersRequest, _ops:
         record = _runner(request).answer(run_id, body.answers)
     except BenchRefused as e:
         raise HTTPException(status_code=409, detail=str(e)) from None
+    except ConfigError as e:  # undoing applied flags couldn't be saved: the answer isn't saved either
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except BenchError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     return _json(record)

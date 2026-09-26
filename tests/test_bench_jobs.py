@@ -16,11 +16,10 @@ from conductor.bench.jobs import (
     FLAG_QUESTIONS,
     JOBS,
     LOOK_SPACING_S,
-    Q_GATE_B,
-    Q_GATE_C,
     coerce_params,
     colour_name,
     hue_ramp_entries,
+    question,
 )
 from conductor.bench.runner import BenchBusy, BenchError, BenchRefused, runner_of
 from conductor.clock import VirtualClock, run_virtual
@@ -195,8 +194,12 @@ def test_gate_b_selects_slot_2_and_proposes_t2(tmp_path):
     record, device = bench(tmp_path, body)
     result = record["result"]
     assert result["verdict"] == "needs_eyes"
-    assert result["flags"] == {"t2_select": True} and result["ask_human"] == [Q_GATE_B]
-    assert record["flag_questions"] == FLAG_QUESTIONS["gate_b"]
+    q_gate_b = question("gate_b", {"slot": "custom-2"})
+    assert q_gate_b == "Did the strand switch to slot 2 within about 2 s?"
+    assert result["flags"] == {"t2_select": True} and result["ask_human"] == [q_gate_b]
+    assert record["flag_questions"] == {"t2_select": q_gate_b} and set(FLAG_QUESTIONS["gate_b"]) == {
+        "t2_select"
+    }
     obs = result["observations"]
     assert obs["before"]["selected_slot"] == "custom-1"
     assert obs["write"]["status"] == "applied" and obs["write"]["http_status"] == 200
@@ -249,7 +252,8 @@ def test_gate_c_replays_slot_1_into_slot_2_with_equal_hashes(tmp_path):
     result = record["result"]
     obs = result["observations"]
     assert result["verdict"] == "needs_eyes" and result["flags"] == {"t1_frames": True}
-    assert result["ask_human"] == [Q_GATE_C]
+    assert result["ask_human"] == [question("gate_c", {"source": "custom-1", "target": "custom-2"})]
+    assert obs["before_look"] == "custom-3" and obs["target_hash_before"] != obs["source_hash"]
     assert obs["hashes_match"] and obs["source_hash"] == obs["target_hash"]
     assert obs["write"]["http_status"] == 200 and obs["length"] == 30
     slot1 = stored[(R.FRAME_CLASS, "custom-1")]  # painted in the app: in the cloud
@@ -307,7 +311,7 @@ def test_latency_trials_alternate_and_respect_the_spacing(tmp_path):
     obs = record["result"]["observations"]
     assert record["result"]["verdict"] == "needs_eyes" and obs["failures"] == 0
     assert obs["spacing_s"] == 1.0  # never below the per-device budget
-    assert [t["slot"] for t in obs["trials"]] == ["custom-2", "custom-1"] * 3
+    assert [t["slot"] for t in obs["trials"]] == ["custom-3", "custom-2"] * 3
     assert all(t["ack_ms"] is not None and t["verified_ms"] is not None for t in obs["trials"])
     assert obs["ack_ms_p50"] <= obs["ack_ms_p95"] and obs["verified_ms_p50"] <= obs["verified_ms_p95"]
     sends = write_sends(record)
@@ -435,11 +439,12 @@ def test_answers_and_flag_gating(tmp_path):
         path.write_text(json.dumps(saved))
         with pytest.raises(BenchRefused, match="Yes first"):
             runner.apply_flags(run_id)
-        answered = runner.answer(run_id, {Q_GATE_B: "No"})
+        q_gate_b = record["result"]["ask_human"][0]
+        answered = runner.answer(run_id, {q_gate_b: "No"})
         no_verdict = answered["confirmed_verdict"]
         with pytest.raises(BenchRefused):
             runner.apply_flags(run_id)
-        runner.answer(run_id, {Q_GATE_B: "yes"})
+        runner.answer(run_id, {q_gate_b: "yes"})
         applied = runner.apply_flags(run_id)
         return no_verdict, applied, services.registry.get("bench-kit").flags
 

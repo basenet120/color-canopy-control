@@ -199,8 +199,11 @@ def test_t1_is_refused_without_gate_c_on_a_real_driver_but_slot_select_still_wor
     assert selected.status_code == 200 and selected.json()["result"]["status"] == "applied"
     whole = _post(app_client, "card", lease, card="white", params={"kelvin": 3000})
     assert whole.json()["result"]["status"] == "applied"
-    # once bench Gate C is recorded for the device, painting is allowed
-    services.update_registry(BENCH, {"flags": {"t1_frames": True}})
+    # a Gate C flag proven on another kit doesn't unlock painting on this one
+    services.update_registry(BENCH, {"flags": {"t1_frames": True}, "flags_proven_on": "some-other-kit"})
+    assert _post(app_client, "paint", lease, heads=THREE).status_code == 409
+    # once bench Gate C is recorded for this kit, painting is allowed
+    services.update_registry(BENCH, {"flags_proven_on": "sim-bench-kit"})
     assert _post(app_client, "paint", lease, heads=THREE).json()["result"]["status"] == "applied"
 
 
