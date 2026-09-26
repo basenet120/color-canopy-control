@@ -18,6 +18,11 @@ Session settings (07 §4): `TCPConnector(limit_per_host=20, keepalive_timeout=60
 `ClientTimeout(total=8, sock_connect=3)`, and a trace hook that logs every attempt's method, host, path (query
 string dropped, account id masked), status and elapsed time — never headers, bodies or tokens.
 
+**Per-call capture** (`capture_exchange()`): the adapter wraps each operation in it and reads back what the choke
+point saw — the status of the last response for that URL (aioafero turns 429/503/504 into an exception that
+carries no status) and a short one-way fingerprint of the bearer that went out (so a 401 can be tied to the token
+it refused without keeping the token). Nothing else is recorded.
+
 Test seam: `GatedClientSession(gate, fake_transport=fn)`. After the gate check, `fn(method, url, kwargs)` is called
 instead of the network and returns (or awaits to) a response object that behaves like aiohttp's (see
 `tests/fake_afero.py`). The gate, counters, logging and listeners behave exactly as they do live.
@@ -28,6 +33,7 @@ This module imports aiohttp and never aioafero; `conductor/drivers/afero.py` is 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import inspect
 import logging
 import re
@@ -60,6 +66,18 @@ TIMEOUT_CONNECT_S = 3
 
 current_purpose: ContextVar[Purpose] = ContextVar("afero_purpose", default=Purpose.ENGINE)
 
+
+@dataclass
+class Exchange:
+    """What the choke point saw for the requests made inside one `capture_exchange()` block."""
+
+    last_path: str | None = None  # URL path of the last request that got an answer
+    last_status: int | None = None  # its HTTP status
+    bearer: str | None = None  # token_fingerprint() of the last bearer sent
+
+
+current_exchange: ContextVar[Exchange | None] = ContextVar("afero_exchange", default=None)
+
 FakeTransport = Callable[[str, URL, dict[str, Any]], Any]
 
 
@@ -71,6 +89,34 @@ def purpose_scope(purpose: Purpose) -> Iterator[None]:
         yield
     finally:
         current_purpose.reset(token)
+
+
+@contextlib.contextmanager
+def capture_exchange() -> Iterator[Exchange]:
+    """Record status and bearer fingerprint for the requests made inside the block (see the module docstring)."""
+    exchange = Exchange()
+    token = current_exchange.set(exchange)
+    try:
+        yield exchange
+    finally:
+        current_exchange.reset(token)
+
+
+def token_fingerprint(token: str | None) -> str | None:
+    """A short one-way fingerprint of a bearer token: enough to tell two tokens apart, useless to an attacker."""
+    if not token:
+        return None
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def _bearer_of(headers: Any) -> str | None:
+    if not headers:
+        return None
+    items = headers.items() if isinstance(headers, Mapping) else headers
+    for key, value in items:
+        if str(key).lower() == "authorization" and str(value).lower().startswith("bearer "):
+            return token_fingerprint(str(value)[7:].strip())
+    return None
 
 
 def host_allowed(host: str) -> bool:
@@ -214,6 +260,9 @@ with warnings.catch_warnings():
             # Never follow redirects: the gate checked this URL, not wherever a 3xx points.
             kwargs["allow_redirects"] = False
             self.stats["sent"] += 1
+            exchange = current_exchange.get()
+            if exchange is not None and (bearer := _bearer_of(kwargs.get("headers"))) is not None:
+                exchange.bearer = bearer
             if self._fake_transport is None:
                 return await super()._request(method, str_or_url, **kwargs)
             return await self._fake_request(method, url, kwargs)
@@ -241,6 +290,9 @@ with warnings.catch_warnings():
             purpose = str(current_purpose.get())
             if status is not None:
                 self.stats[f"status_{status}"] += 1
+                exchange = current_exchange.get()
+                if exchange is not None:
+                    exchange.last_path, exchange.last_status = url.path, status
             else:
                 self.stats["transport_errors"] += 1
             level = logging.DEBUG if method == "GET" and status is not None and status < 300 else logging.INFO
