@@ -1,0 +1,359 @@
+/* The Color Canopy kiosk. A House Beautiful space, not a dashboard: cream, natural tones, Home Depot orange.
+   Landscape, tablet (1024 × 768) to 1080p. System fonts only: a serif display stack, the system sans for body.
+   Every target is at least 80 px; nothing selects, drags or pinch-zooms. Sizes scale with the viewport so the
+   page reads from three feet away at every size. */
+
+.kiosk {
+  /* ui-serif first would pick DejaVu Serif on Linux; the named book faces come first, ui-serif/Georgia after */
+  --serif: "Iowan Old Style", "Bitstream Charter", Charter, "Palatino Linotype", Palatino, "Book Antiqua",
+    ui-serif, Georgia, "Noto Serif", "Liberation Serif", serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  --paper: #F7F1E6;          /* cream */
+  --paper-hi: #FFFBF3;       /* tile face */
+  --linen: #EFE4D2;
+  --ink: #2E2A26;            /* warm charcoal */
+  --ink-soft: #6A6158;
+  --orange: #F96302;         /* Home Depot orange */
+  --orange-ink: #B34700;
+  --marsh: #5F7F62;          /* Lowcountry green: "Ready" */
+  --dusk: #231A14;           /* the illustration's evening ceiling */
+  --dusk-panel: #2E241C;
+  --shadow: 0 1px 0 rgba(46, 42, 38, 0.05), 0 18px 40px -26px rgba(92, 58, 24, 0.45);
+  --u: min(1vw, 1.78vh);     /* one "unit": 1 % of the width, capped by height on squat screens */
+
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(120vmax 80vmax at 12% -10%, #FFF8EC 0%, rgba(255, 248, 236, 0) 60%),
+    radial-gradient(90vmax 70vmax at 110% 120%, #F1E2CB 0%, rgba(241, 226, 203, 0) 55%),
+    var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: calc(var(--u) * 1.45);
+  line-height: 1.4;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  cursor: default;
+}
+html:has(body.kiosk) { height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: manipulation; }
+.kiosk img, .kiosk svg { -webkit-user-drag: none; user-select: none; }
+
+/* ---- the stage: preview on the left, the six choices on the right ------------------------------------- */
+.stage {
+  box-sizing: border-box;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: calc(var(--u) * 3.4) calc(var(--u) * 3.8);
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+  gap: calc(var(--u) * 3.6);
+}
+
+.eyebrow {
+  margin: 0;
+  font: 600 calc(var(--u) * 1.05) / 1.2 var(--sans);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--orange-ink);
+}
+.title {
+  margin: calc(var(--u) * 0.6) 0 0;
+  font: 400 calc(var(--u) * 5.1) / 1.02 var(--serif);
+  letter-spacing: -0.012em;
+  color: var(--ink);
+}
+.prompt {
+  margin: calc(var(--u) * 1.1) 0 0;
+  font: 400 calc(var(--u) * 1.9) / 1.3 var(--sans);
+  color: var(--ink-soft);
+}
+
+/* ---- hero ------------------------------------------------------------------------------------------------ */
+.hero {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 2.2);
+}
+
+.canopy {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: calc(var(--u) * 2.2);
+  background: radial-gradient(120% 90% at 50% 0%, #33271E 0%, var(--dusk) 70%);
+  box-shadow: inset 0 0 0 1px rgba(255, 240, 220, 0.05), 0 30px 60px -40px rgba(60, 35, 15, 0.8);
+  overflow: hidden;
+  isolation: isolate;
+}
+.canopy::after { /* the light falling from the canopy onto the room below */
+  content: "";
+  position: absolute; inset: auto 0 0 0; height: 55%;
+  background: linear-gradient(to top, var(--wash, rgba(255, 210, 160, 0.14)), transparent);
+  pointer-events: none;
+  transition: background 900ms ease;
+  z-index: 0;
+}
+.canopy-art {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: calc(var(--u) * 2) calc(var(--u) * 2.2) calc(var(--u) * 0.6);
+  z-index: 1;
+}
+#canopy-svg { display: block; width: 100%; height: 100%; }
+.canopy .panel { fill: rgba(255, 244, 228, 0.035); stroke: rgba(255, 238, 214, 0.1); stroke-width: 0.3; }
+.canopy .panel-wash { transition: fill 800ms ease; }
+.canopy .bloom circle, .canopy .halo circle { transition: fill 700ms ease, opacity 700ms ease; }
+.canopy .core circle { transition: fill 700ms ease; }
+
+.now {
+  position: relative;
+  z-index: 2;
+  display: flex; flex-direction: column; align-items: flex-start; gap: calc(var(--u) * 0.9);
+  padding: calc(var(--u) * 0.4) calc(var(--u) * 2.6) calc(var(--u) * 2.2);
+}
+.now-label {
+  font: italic 400 calc(var(--u) * 3.1) / 1.08 var(--serif);
+  color: #FFF4E6;
+}
+
+/* ---- status: honest Updating → Ready (the server's phase), on the canopy card ------------------------- */
+.status-line {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: calc(var(--u) * 0.9);
+  padding: calc(var(--u) * 0.6) calc(var(--u) * 1.4) calc(var(--u) * 0.6) calc(var(--u) * 1);
+  border-radius: 999px;
+  background: rgba(255, 244, 228, 0.1);
+  font: 600 calc(var(--u) * 1.45) / 1.2 var(--sans);
+  color: #FFF4E6;
+  white-space: nowrap;
+  transition: background 300ms ease;
+}
+.status-line[data-state="idle"] { visibility: hidden; }
+.status-dot {
+  width: calc(var(--u) * 1.1); height: calc(var(--u) * 1.1); border-radius: 50%;
+  background: rgba(255, 244, 228, 0.4);
+  flex: 0 0 auto;
+}
+.status-line[data-state="updating"] .status-dot,
+.status-line[data-state="sending"] .status-dot {
+  background: var(--orange);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.status-line[data-state="ready"] .status-dot { background: #8FBF8F; box-shadow: 0 0 calc(var(--u) * 0.8) rgba(143, 191, 143, 0.7); }
+.status-line[data-state="settling"] .status-dot { background: #E0B85A; }
+@keyframes breathe {
+  0% { box-shadow: 0 0 0 0 rgba(249, 99, 2, 0.6); }
+  70% { box-shadow: 0 0 0 calc(var(--u) * 1.1) rgba(249, 99, 2, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(249, 99, 2, 0); }
+}
+
+/* ---- the Hubspace feature sentence (always the server's) ---------------------------------------------- */
+.feature {
+  margin: 0;
+  min-height: calc(var(--u) * 7.4);
+  display: flex; flex-direction: column; gap: calc(var(--u) * 0.45);
+  padding-left: calc(var(--u) * 1.6);
+  border-left: calc(var(--u) * 0.3) solid var(--orange);
+}
+.feature[hidden] { display: flex; visibility: hidden; }
+.feature-kicker {
+  font: 600 calc(var(--u) * 0.95) / 1.2 var(--sans);
+  letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-soft);
+}
+.feature-text {
+  font: 400 calc(var(--u) * 1.7) / 1.36 var(--serif);
+  color: var(--ink);
+}
+
+/* ---- the six choices ---------------------------------------------------------------------------------- */
+.choices {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 1.6);
+}
+.choices-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--u) * 2);
+  min-height: calc(var(--u) * 4);
+  padding-right: calc(var(--u) * 10); /* room for the Simulator badge */
+}
+.tagline {
+  margin: 0;
+  font: italic 400 calc(var(--u) * 3) / 1.1 var(--serif);
+  color: var(--orange-ink);
+}
+.hint {
+  margin: 0;
+  min-height: 1.3em;
+  font: 500 calc(var(--u) * 1.35) / 1.3 var(--sans);
+  color: var(--orange-ink);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+.hint.shown { opacity: 1; }
+
+.tiles {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--u) * 1.8);
+}
+
+.tile {
+  /* reset the shared button look */
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  min-height: 80px;
+  min-width: 80px;
+  display: grid;
+  grid-template-rows: minmax(38%, 1fr) auto;
+  border-radius: calc(var(--u) * 1.6);
+  background: var(--paper-hi);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 160ms ease, box-shadow 200ms ease, opacity 300ms ease;
+}
+.tile:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.tile.pressed { transform: scale(0.975); }
+.tile::after { /* the selection ring, drawn inside so it never shifts the grid */
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(46, 42, 38, 0.06);
+  pointer-events: none;
+  transition: box-shadow 250ms ease;
+}
+.tile.current::after, .tile.chosen::after { box-shadow: inset 0 0 0 calc(var(--u) * 0.35) var(--orange); }
+
+.swatch {
+  position: relative;
+  min-height: 0;
+  background: var(--swatch, linear-gradient(120deg, #FFE4BC, #F7C98B));
+}
+.swatch::before { /* a soft light-on-paint sheen */
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(70% 120% at 18% 0%, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0) 60%),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0) 55%, rgba(46, 26, 10, 0.12));
+}
+.tile-text {
+  padding: calc(var(--u) * 1) calc(var(--u) * 1.4) calc(var(--u) * 1.2);
+  display: flex; flex-direction: column; gap: calc(var(--u) * 0.3);
+}
+.tile-label {
+  font: 400 calc(var(--u) * 1.9) / 1.1 var(--serif);
+  color: var(--ink);
+}
+.tile-blurb {
+  font: 400 calc(var(--u) * 1.15) / 1.35 var(--sans);
+  color: var(--ink-soft);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.chip {
+  position: absolute; left: calc(var(--u) * 1.1); top: calc(var(--u) * 1.1);
+  display: none; align-items: center; gap: calc(var(--u) * 0.55);
+  padding: calc(var(--u) * 0.45) calc(var(--u) * 1) calc(var(--u) * 0.45) calc(var(--u) * 0.8);
+  border-radius: 999px;
+  background: rgba(255, 251, 243, 0.92);
+  font: 700 calc(var(--u) * 0.9) / 1 var(--sans);
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--orange-ink);
+  box-shadow: 0 4px 14px -8px rgba(60, 35, 15, 0.6);
+}
+.chip::before {
+  content: ""; width: calc(var(--u) * 0.75); height: calc(var(--u) * 0.75); border-radius: 50%;
+  background: var(--orange);
+}
+.tile.current .chip, .tile.chosen .chip { display: inline-flex; }
+
+/* the 8 s cooldown: a gentle ring that fills back up; the tiles rest, then wake */
+.ring {
+  position: absolute; right: calc(var(--u) * 1.1); top: calc(var(--u) * 1.1);
+  width: calc(var(--u) * 3.4); height: calc(var(--u) * 3.4);
+  border-radius: 50%;
+  background: conic-gradient(var(--orange) calc(var(--cool, 0) * 360deg), rgba(255, 251, 243, 0.55) 0);
+  -webkit-mask: radial-gradient(circle, transparent 55%, #000 57%);
+  mask: radial-gradient(circle, transparent 55%, #000 57%);
+  opacity: 0;
+  transition: opacity 400ms ease;
+}
+body.cooling .tile:not(.current):not(.chosen) .ring { opacity: 1; }
+body.cooling .tile:not(.current):not(.chosen) { opacity: 0.72; }
+body.cooling .tile:not(.current):not(.chosen) .swatch { filter: saturate(0.7); }
+.tile.nudge { animation: nudge 420ms ease; }
+@keyframes nudge {
+  0%, 100% { transform: scale(1); }
+  40% { transform: scale(0.985); }
+}
+
+/* ---- loading and resting ------------------------------------------------------------------------------- */
+body[data-view="loading"] .feature, body[data-view="loading"] .now { visibility: hidden; }
+
+.resting {
+  position: fixed; inset: 0; z-index: 1000;
+  display: grid; place-items: center;
+  background:
+    radial-gradient(80vmax 60vmax at 50% 38%, #FFF6E6 0%, rgba(255, 246, 230, 0) 70%),
+    var(--paper);
+  opacity: 0;
+  transition: opacity 700ms ease;
+}
+.resting[hidden] { display: none; }
+body[data-view="resting"] .resting { opacity: 1; }
+.resting-glow {
+  position: absolute; left: 50%; top: 38%;
+  width: 56vmin; height: 56vmin; margin: -28vmin 0 0 -28vmin;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 217, 168, 0.85) 0%, rgba(247, 201, 139, 0.35) 40%, rgba(247, 201, 139, 0) 70%);
+  filter: blur(8px);
+  animation: rest 7s ease-in-out infinite;
+}
+@keyframes rest {
+  0%, 100% { transform: scale(0.94); opacity: 0.75; }
+  50% { transform: scale(1.04); opacity: 1; }
+}
+.resting-copy { position: relative; text-align: center; padding: 0 8vw; }
+.resting-copy .title { font-size: calc(var(--u) * 6.4); margin-top: calc(var(--u) * 1); }
+.resting-text {
+  margin: calc(var(--u) * 2.2) auto 0;
+  max-width: 28em;
+  font: 400 calc(var(--u) * 2.3) / 1.4 var(--serif);
+  color: var(--ink-soft);
+}
+.resting-copy .tagline { margin-top: calc(var(--u) * 3.2); font-size: calc(var(--u) * 2.6); }
+
+/* ---- the Simulator badge sits in the corner the tagline row leaves free ------------------------------- */
+.kiosk .sim-badge { top: calc(var(--u) * 3.4); right: calc(var(--u) * 3.8); font-size: max(12px, calc(var(--u) * 0.95)); }
+
+/* ---- narrower landscape tablets: keep the title and tiles readable ------------------------------------ */
+@media (max-aspect-ratio: 4/3) {
+  .kiosk { --u: min(1.08vw, 1.9vh); }
+  .stage { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: calc(var(--u) * 2.6); }
+}
+/* portrait (not the target, but never broken): stack the preview over the choices */
+@media (orientation: portrait) {
+  .kiosk { --u: min(1.6vw, 1vh); }
+  .stage { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1.1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resting-glow, .status-dot { animation: none !important; }
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="format-detection" content="telephone=no">
+  <title>The Color Canopy</title>
+  <!--
+    The guest canopy touchscreen (P3 /kiosk). A single page that never navigates away: every fetch and socket
+    failure is caught and becomes the calm "canopy is resting" screen. Copy anchors come from the signage plan
+    (config/modes.yaml `kiosk:`); the Hubspace feature sentence is always the server's (state.feature), never ours.
+  -->
+  <link rel="stylesheet" href="/static/base.css">
+  <link rel="stylesheet" href="/kiosk/kiosk.css">
+  <script type="module" src="/kiosk/kiosk.js"></script>
+</head>
+<body class="kiosk" data-view="loading">
+  <main class="stage" id="stage">
+    <section class="hero" aria-labelledby="title">
+      <header class="masthead">
+        <p class="eyebrow">Six Lowcountry Modes</p>
+        <h1 id="title" class="title">The Color Canopy</h1>
+        <p class="prompt">Choose a mood. Watch the light change.</p>
+      </header>
+
+      <figure class="canopy" id="canopy">
+        <div class="canopy-art">
+          <svg id="canopy-svg" viewBox="-5 -5 235 130" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+        </div>
+        <figcaption class="now">
+          <span class="status-line" id="status-line" data-state="idle" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="status-text">&nbsp;</span></span>
+          <span class="now-label" id="now-label">&nbsp;</span>
+        </figcaption>
+      </figure>
+
+      <p class="feature" id="feature" hidden><span class="feature-kicker">Hubspace feature</span><span class="feature-text" id="feature-text"></span></p>
+    </section>
+
+    <section class="choices" aria-label="Choose a mood">
+      <header class="choices-head">
+        <p class="tagline">Make it your mood.</p>
+      </header>
+      <div class="tiles" id="tiles"></div>
+      <p class="hint" id="hint" aria-live="polite">&nbsp;</p>
+    </section>
+  </main>
+
+  <section class="resting" id="resting" aria-live="polite" hidden>
+    <div class="resting-glow" aria-hidden="true"></div>
+    <div class="resting-copy">
+      <p class="eyebrow">Six Lowcountry Modes</p>
+      <h2 class="title">The Color Canopy</h2>
+      <p class="resting-text" id="resting-text">The canopy is resting. It will be back shortly.</p>
+      <p class="tagline">Make it your mood.</p>
+    </div>
+  </section>
+</body>
+</html>

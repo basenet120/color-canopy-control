@@ -72,6 +72,28 @@ class PlanError(ValueError):
     """The mode can't compile at this tier (missing capability, slot hash unknown, ...). Operator-safe message."""
 
 
+class RefusalReason(StrEnum):
+    """Why `request_mode` declined a guest request (the kiosk route maps each to a plain HTTP refusal)."""
+
+    COOLDOWN = "cooldown"  # inside the post-selection cooldown → 429 with retry_after_s
+    PAUSED = "paused"  # ops paused guest input → 423
+    UNKNOWN_MODE = "unknown_mode"  # no such mode → 404
+    RESTING = "resting"  # the engine is stopped / outage → 503 "The canopy is resting"
+
+
+class ModeRefused(Exception):
+    """Raised by `request_mode` when a kiosk request is declined. `message` is guest-safe; `retry_after_s` is set
+    for COOLDOWN (seconds until the next selection is accepted, on the engine's clock)."""
+
+    def __init__(
+        self, reason: RefusalReason | str, message: str = "", *, retry_after_s: float | None = None
+    ) -> None:
+        super().__init__(message or str(reason))
+        self.reason = RefusalReason(reason)
+        self.message = message
+        self.retry_after_s = retry_after_s
+
+
 class CanopyPhase(StrEnum):
     READY = "ready"  # every module's readback matches the current mode
     UPDATING = "updating"  # a mode change or re-assert is in flight
@@ -124,7 +146,8 @@ class CanopyEngineAPI(Protocol):
 
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
         """Guest/ops mode request. Kiosk requests honour the cooldown and paused guest input (refused with a
-        plain message); latest wins; returns immediately after the burst is queued (status via state()/WS)."""
+        plain message: raise `ModeRefused`); latest wins; returns immediately after the burst is queued (status
+        via state()/WS)."""
 
     async def reassert_all(self, *, source: str) -> CanopyState: ...
 

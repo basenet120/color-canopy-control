@@ -16,7 +16,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from conductor import __version__, redact
 from conductor.auth import BasicAuthMiddleware, check_auth_configuration
 from conductor.geometry import build_layout, load_canopy_config, pitch_violations
-from conductor.routes import accounts, bench, core, devices, module
+from conductor.routes import accounts, bench, core, devices, kiosk, module
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 log = logging.getLogger("conductor")
@@ -141,7 +141,9 @@ app.include_router(devices.router)
 app.include_router(accounts.router)
 app.include_router(bench.router)
 app.include_router(module.router)
+app.include_router(kiosk.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 app.mount("/ops", StaticFiles(directory=WEB_DIR / "ops", html=True), name="ops")
+app.mount("/kiosk", StaticFiles(directory=WEB_DIR / "kiosk", html=True), name="kiosk")
 app.mount("/visualizer", StaticFiles(directory=WEB_DIR / "visualizer", html=True), name="visualizer")
