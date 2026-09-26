@@ -16,13 +16,13 @@ Binding rules for the build, written after an adversarial review of the plan aga
 - `HUBSPACE_ACCOUNT_ALLOWLIST` (emails) is checked **before** a password is sent anywhere, so a show account can't be connected to staging even by accident.
 - `HUBSPACE_LIVE_UNTIL=<date>` (staging: `2026-10-19`) — after it, the runtime refuses writes. Staging can't touch anything during the show window.
 - If a connected account can see devices that aren't allowlisted, stay read-only for those and alert on /ops (catches kits that were shared or moved).
-- Bench jobs take an exclusive per-device lock that pauses the reconciler and idle hold for that device.
+- Bench jobs and the single-module test page (`/ops/module`) take an exclusive per-device lock that pauses the reconciler and idle hold for that device. The page releases it on exit or after 10 min idle; a lock can never be held on a device outside the allowlist.
 - A test enumerates every writer path (executor, reconciler, idle hold, slot manager, bench, vignettes) and proves each is denied for a non-allowlisted id. A grep test proves nothing outside the adapter imports aioafero or calls aiohttp write methods.
 
 ## 2. Auth and surfaces
 - Implemented: `conductor/auth.py` — Basic auth on every HTTP **and** WebSocket request except `/healthz`; the process refuses to start without `CONDUCTOR_BASIC_AUTH` on Railway, with `HUBSPACE_LIVE=1`, or outside sim (local-only opt-out `CONDUCTOR_AUTH=off`).
 - **WebSockets:** iOS Safari is unreliable with Basic auth on WebSocket upgrades, and every vignette iPad is WebKit. Browser sockets authenticate with a single-use ticket from an authenticated `GET /api/ws-ticket`, sent as the **first message** (never in the URL — URLs land in logs). Reject foreign `Origin` at the handshake. Tests: no ticket → close 1008; bad Origin → rejected.
-- **Roles:** the kiosk and vignette tablets are enrolled once via a one-time link that sets an HttpOnly cookie for their role; `/ops/*` needs the ops credential. A kiosk escape must not reach account connect or bench.
+- **Roles:** the kiosk and vignette tablets are enrolled once via a one-time link that sets an HttpOnly cookie for their role; `/ops/*` needs the ops credential. A kiosk escape must not reach account connect or bench. A **tester** role (for VWBD's crew during Prototype 01) reaches only `/ops/module` for the devices it's granted — never account connect, the bench gates, other devices or show accounts.
 - `/healthz` stays content-free and dependency-free. Startup never waits on Afero or on decrypting tokens; problems show as "Needs attention" on /ops.
 - Uvicorn trusts forwarded headers only when `FORWARDED_ALLOW_IPS` says so (set to `*` on Railway staging only).
 

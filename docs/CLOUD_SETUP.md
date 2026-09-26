@@ -25,6 +25,7 @@ Everything below works from a phone or a browser; the laptop is only needed if y
 3. Connect the bench account: from the laptop with `python -m conductor.auth login`, or on your phone at `/ops/accounts` (enable it with `CONDUCTOR_ACCOUNT_CONNECT=1`; it may ask for a code Hubspace emails you).
 4. Copy the kit's metadevice id from the ops page into `HUBSPACE_DEVICE_ALLOWLIST`.
 5. Open `/ops/bench/clock` on a second screen next to the kit, then run Gates A, B and C from `/ops/bench` while filming both. Use "copy anonymized JSON" and paste the results into the session.
-6. Don't merge pull requests during a bench session — a redeploy restarts staging mid-test.
+6. For hands-on testing — and for VWBD's Prototype 01 lighting tests — open `/ops/module` (once the P0b pull requests have merged). VWBD's crew can use it from their shop with a **tester** login, which reaches only that page and only the devices you grant.
+7. Don't merge pull requests during a bench session — a redeploy restarts staging mid-test.
 
 **Never connect the show accounts (canopy + vignettes) to staging or to a cloud session — they live only on the venue box.** Keep MFA off on show and bench accounts, and don't open the Hubspace app on show accounts during public hours.

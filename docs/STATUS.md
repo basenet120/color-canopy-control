@@ -6,7 +6,7 @@ _Last updated: 2026-09-26 — walking skeleton, before the cloud build session._
 None yet.
 
 ## Next step
-Launch the cloud build session (`docs/CLOUD_SETUP.md`) with `docs/ULTRACODE_BUILD_PROMPT.md`. It starts with P0: the live gate and the bench.
+Launch the cloud build session (`docs/CLOUD_SETUP.md`) with `docs/ULTRACODE_BUILD_PROMPT.md`. It starts with P0 (the live gate and the bench gates, target Oct 1), then P0b (the single-module test interface for Prototype 01, target Oct 3).
 
 ## Done and verified
 - **Context docs** `docs/context/01–07`: project, canopy design, Hubspace platform, strand device model, architecture decisions, open questions (each with a default), and binding engineering contracts written after an adversarial review against aioafero 9.3.0's source. Research evidence is in `research/`; read `research/ERRATA.md` first.
