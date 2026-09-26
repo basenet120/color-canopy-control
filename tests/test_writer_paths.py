@@ -21,7 +21,7 @@ from conductor import rows as R
 from conductor.clock import run_virtual
 from conductor.config import ExecutorSettings
 from conductor.executor import CommandExecutor
-from conductor.executor_api import Command, CommandStatus
+from conductor.executor_api import Command
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager, LockError
 from conductor.telemetry import Telemetry
@@ -48,7 +48,9 @@ class Env:
 
 async def _executor_engine(env: Env, address: str) -> str:
     result = await env.executor.submit(
-        Command(address, R.full_state_vector(R.Look("white", brightness=50, cct=2700)), Purpose.ENGINE, "engine")
+        Command(
+            address, R.full_state_vector(R.Look("white", brightness=50, cct=2700)), Purpose.ENGINE, "engine"
+        )
     )
     return str(result.status)
 

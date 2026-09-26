@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from conductor import __version__, redact
 from conductor.auth import BasicAuthMiddleware, check_auth_configuration
 from conductor.geometry import build_layout, load_canopy_config, pitch_violations
-from conductor.routes import core
+from conductor.routes import accounts, bench, core, devices, module
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 log = logging.getLogger("conductor")
@@ -106,6 +106,11 @@ def root() -> RedirectResponse:
 
 
 app.include_router(core.router)
+app.include_router(devices.router)
+app.include_router(accounts.router)
+app.include_router(bench.router)
+app.include_router(module.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+app.mount("/ops", StaticFiles(directory=WEB_DIR / "ops", html=True), name="ops")
 app.mount("/visualizer", StaticFiles(directory=WEB_DIR / "visualizer", html=True), name="visualizer")
