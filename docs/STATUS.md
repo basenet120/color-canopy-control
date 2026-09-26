@@ -1,37 +1,36 @@
 # Status
 
-_Last updated: 2026-09-26 — walking skeleton, before the cloud build session._
+_Last updated: 2026-09-26 — P0 in progress in the cloud build session._
+
+## ⚠ Blocked: this session can't push
+The cloud session's git proxy refuses `basenet120/color-canopy-control` ("not in this session's authorized
+repository set"), and no GitHub CLI or repo-attach tool is available here. Everything is committed locally on
+stacked `claude/*` branches and will be pushed the moment access exists. **Alon: add the repo to this session's
+sources** (claude.ai/code → the session → Sources / re-attach the repo with push access), then say "push".
 
 ## PR stack (merge order)
-None yet.
+Each PR is a `claude/*` branch stacked on the previous one. Please use **merge commits**, not squash.
+1. `claude/p0-contracts` — build plan, decisions log, and the contract modules every P0 agent builds against
+   (clock, live gate, token store, redaction, WS tickets + hub, driver interface, rows/compare/slot hash,
+   capabilities, locks, telemetry, config + registry overlay, executor/accounts/roles/bench contract types). _Local only._
 
 ## Next step
-Launch the cloud build session (`docs/CLOUD_SETUP.md`) with `docs/ULTRACODE_BUILD_PROMPT.md`. It starts with P0 (the live gate and the bench gates, target Oct 1), then P0b (the single-module test interface for Prototype 01, target Oct 3).
+P0 wave 1 (running now): SimDriver, Afero adapter + choke point, executor + tracker, roles/enrollment/WebSocket
+routes + shared web assets. Then the services container and wiring, then wave 2: account connect (CLI + page),
+bench Gates A–C + hue ramp + clock page + runbook, and `/ops/module` (P0b).
 
-## Done and verified
-- **Context docs** `docs/context/01–07`: project, canopy design, Hubspace platform, strand device model, architecture decisions, open questions (each with a default), and binding engineering contracts written after an adversarial review against aioafero 9.3.0's source. Research evidence is in `research/`; read `research/ERRATA.md` first.
-- **Canopy geometry** (`conductor/geometry.py`, `config/canopy.yaml`): 9 modules × 30 heads, staggered 8/7/8/7 at 10″ pitch, A/B orientation (B = A rotated 180°), a default serpentine wire order, and an optional calibrated `wire_order`. Tested:
-  - The p14 scheme keeps the 10″ pitch and the stagger across every seam. The p18 appendix scheme breaks it in 24 places, so VWBD must confirm which one they're building.
-  - Every wire hop must fit the fixed 19.7″ puck spacing. Same-x heads in this lattice are 20″ apart, so they can never be neighbours on the wire.
-- **Auth** (`conductor/auth.py`): Basic auth on every HTTP and WebSocket request except `/healthz`. The app refuses to start without credentials on Railway, with `HUBSPACE_LIVE=1`, or outside sim mode. Tested.
-- **App**: `/healthz`, `/api/version` (reports mode and live flag), `/api/canopy/layout?scheme=`, and `/visualizer/`, which renders all 270 heads, the wire order, index numbers, and pitch breaks per scheme. Checked in a browser.
-- **Tests**: 23 passing (`make test`); ruff clean.
-- **Simulator fixture**: `conductor/sim/profiles/hampton-bay-string-20seg.json`, taken from aioafero's tests at commit 58864da1 (MIT).
-- **Deploy**:
-  - `Dockerfile` with the `live` extra (aioafero) installed, one worker.
-  - `railway.json` with the health check, one replica, and watch paths.
-  - Railway staging runs in sim mode behind the password, with a `/data` volume. Verified: `/healthz` returns 200 open; everything else returns 401 without credentials and 200 with them.
-- **CI** (`.github/workflows/ci.yml`): ruff, pytest, a gitleaks secret scan, a Docker build, and a container smoke test.
-- **Cloud sessions**: a SessionStart hook runs `scripts/cloud_setup.sh`. It does nothing locally. In the cloud it installs the locked dependencies, including `aioafero==9.3.0`, on Python 3.12; verified by simulating `CLAUDE_CODE_REMOTE=true`.
-- **Research harness**: `research/permanent-lights/offline_put_harness.py` re-proves offline that one PUT per module carries a full 30-head frame plus the select.
+## Verified (and how)
+- `make test`: 57 passed (contract tests: the 07 §1 truth table, allowlist intersection, `HUBSPACE_LIVE_UNTIL`,
+  account allowlist before any password, the per-request choke-point rule, token store round trip / rotation /
+  0600 / environment binding / bad key, redaction, ticket single-use + expiry, Origin check, frame header copy +
+  length refusal, full state vectors, compare with missing rows, slot hash, capability detection on the fixture,
+  lock exclusivity + idle expiry + allowlist, registry overlay validation + history).
+- `make lint`: clean.
+- The virtual-time loop runs an hour of timers in milliseconds (`tests/test_contracts.py`).
 
-## Not built yet (the cloud build session's job)
-Everything in the build order of `docs/ULTRACODE_BUILD_PROMPT.md`.
-
-## Needs real hardware
-The bench gates in `docs/context/04-device-model-permanent-lights.md`. Start with Gate A (a read-only profile dump) on one kit.
+## UNVERIFIED / needs real hardware
+Everything in `docs/context/04` bench gates. Nothing has touched Afero from this session (it can't reach it, by design).
 
 ## Decisions needed
-See `docs/context/06-open-questions.md`. The dated ones:
-- Vignette surface, by Oct 1
-- Golden Hour technique and kiosk look, by Oct 5
+See `docs/DECISIONS.md` (D1–D9) for calls made; `docs/context/06-open-questions.md` for dated decisions
+(vignette surface by Oct 1, Golden Hour technique and kiosk look by Oct 5).
