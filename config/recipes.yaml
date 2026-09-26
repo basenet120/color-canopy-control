@@ -1,0 +1,46 @@
+# Colour recipes (06 #7): how each named show colour is made on a puck. Starting points only — every value here
+# is UNVERIFIED until Prototype 01's colour study (clear + frosted Mylar, show brightness, photographed at equal
+# exposure). Tune here, not in code.
+#
+# Each colour has:
+#   rgb_only: a frame entry that uses only the RGB die (cct 0, whiteBrightness 0)
+#   blend:    RGB plus the warm-white LEDs in the same puck (cct + whiteBrightness) — needs per-puck white to be
+#             honoured by the device (bench gate 6, "per-puck white"); if it isn't, blend == rgb_only visually
+#   strand:   the whole-strand fallback (T3): a `color-rgb` value or a white `cct`
+colors:
+  hd-orange:
+    label: Home Depot orange
+    hex: "#F96302"
+    rgb_only: {r: 249, g: 99, b: 2, colorBrightness: 100}
+    blend: {r: 249, g: 80, b: 0, colorBrightness: 100, cct: 2700, whiteBrightness: 25}
+    strand: {rgb: [249, 99, 2]}
+  amber:
+    label: Amber
+    hex: "#FF8C1A"
+    rgb_only: {r: 255, g: 126, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 100, b: 0, colorBrightness: 100, cct: 2700, whiteBrightness: 40}
+    strand: {rgb: [255, 126, 0]}
+  deep-amber:
+    label: Deep amber
+    hex: "#E0600A"
+    rgb_only: {r: 255, g: 90, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 70, b: 0, colorBrightness: 100, cct: 2700, whiteBrightness: 20}
+    strand: {rgb: [255, 90, 0]}
+  peach:
+    label: Peach
+    hex: "#FFB08A"
+    rgb_only: {r: 255, g: 160, b: 110, colorBrightness: 100}
+    blend: {r: 255, g: 120, b: 70, colorBrightness: 100, cct: 2700, whiteBrightness: 45}
+    strand: {rgb: [255, 160, 110]}
+  warm-ivory:
+    label: Warm ivory
+    hex: "#FFE4BC"
+    rgb_only: {r: 255, g: 214, b: 160, colorBrightness: 100}
+    blend: {r: 255, g: 170, b: 90, colorBrightness: 40, cct: 2700, whiteBrightness: 100}
+    strand: {cct: 2700}
+  warm-white:
+    label: Warm white
+    hex: "#FFD9A8"
+    rgb_only: {r: 255, g: 200, b: 140, colorBrightness: 100}
+    blend: {r: 0, g: 0, b: 0, colorBrightness: 0, cct: 2700, whiteBrightness: 100}
+    strand: {cct: 2700}
