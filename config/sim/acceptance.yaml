@@ -1,0 +1,19 @@
+# Pinned simulator conditions for the acceptance soak (docs/context/07-engineering-contracts.md §7).
+# Changing these needs Alon's sign-off in a PR description — never tune them to make a test pass.
+latency:
+  put_ack_ms: {distribution: lognormal, min: 150, max: 800}
+  device_apply_extra_s: {min: 0.3, max: 1.5}
+  start_skew_max_s: 1.5
+faults:
+  throttle_429_rate: 0.05
+  silent_drop_rate: 0.01
+  http_500_window_minutes: 43  # one window per soak
+soak:
+  simulated_hours: 8
+  mode_changes: 100
+  internet_outage_minutes: 30
+targets:
+  all_modules_correct_p95_s: 5
+  self_heal_max_s: 10
+  recovery_after_outage_max_s: 60
+  tier_downgrades_at_5pct_throttle: 0

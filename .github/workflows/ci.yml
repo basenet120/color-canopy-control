@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.32"
+      - name: Install
+        run: uv sync --frozen --all-extras
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Test
+        run: uv run pytest -q
+      - name: Secret scan
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*'
+          zricethezav/gitleaks:latest git /repo --no-banner --redact
+      - name: Build image
+        run: docker build -t conductor:ci .
+      - name: Smoke test image
+        run: |
+          docker run -d --name conductor -p 8000:8000 -e CONDUCTOR_BASIC_AUTH=ci:ci conductor:ci
+          for i in $(seq 1 30); do curl -fsS localhost:8000/healthz && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/canopy/layout)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -u ci:ci localhost:8000/api/canopy/layout)" = 200
+          docker exec conductor python -c "import aioafero"
+          docker logs conductor

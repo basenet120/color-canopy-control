@@ -2,39 +2,30 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import os
-import secrets
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from conductor import __version__
+from conductor.auth import BasicAuthMiddleware, check_auth_configuration
 from conductor.geometry import build_layout, load_canopy_config, pitch_violations
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-OPEN_PATHS = {"/healthz"}  # the platform health check must pass without credentials
-
-app = FastAPI(title="Color Canopy Conductor", version=__version__)
 
 
-@app.middleware("http")
-async def basic_auth(request: Request, call_next):
-    """If CONDUCTOR_BASIC_AUTH ("user:password") is set, every path except /healthz requires it."""
-    expected = os.environ.get("CONDUCTOR_BASIC_AUTH")
-    if expected and request.url.path not in OPEN_PATHS:
-        header = request.headers.get("authorization", "")
-        try:
-            supplied = base64.b64decode(header.removeprefix("Basic "), validate=True)
-        except binascii.Error:
-            supplied = b""
-        if not (header.startswith("Basic ") and secrets.compare_digest(supplied, expected.encode())):
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Color Canopy"'})
-    return await call_next(request)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    check_auth_configuration()
+    yield
+
+
+app = FastAPI(title="Color Canopy Conductor", version=__version__, lifespan=lifespan)
+app.add_middleware(BasicAuthMiddleware)
 
 
 @app.get("/healthz")
@@ -47,6 +38,7 @@ def version() -> dict:
     return {
         "version": __version__,
         "mode": os.environ.get("CONDUCTOR_MODE", "sim"),
+        "live": os.environ.get("HUBSPACE_LIVE") == "1",
         "commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA", "local"),
     }
 

@@ -20,7 +20,7 @@ Evidence and sources: `research/permanent-lights/` (start with `_synthesis.md`, 
 | 2 | `brightness` | 1–100 (whole strand) |
 | 3 | `color-temperature` | 2700–6500 step 100 on the sibling string (hardware goes to 2200 — check SQHDK's API range) |
 | 4 | `color-rgb` | `{"color-rgb": {"r","g","b"}}` 0–255 (whole strand) |
-| 5 | `color-mode` | white=0, color=1, sequence=2, mixed=3, **individual=4**, night-light=5, music-sync=6, circadian-rhythm=10 |
+| 5 | `color-mode` | the sibling string exposes white=0, color=1, sequence=2, **individual=4**; other devices add mixed=3, night-light=5, music-sync=6, circadian-rhythm=10 — read the list from each device |
 | 6 | `color-sequence` / `preset` | firmware presets, e.g. christmas, rainbow, snowfall, mistletoe, prism, cross-faded, effervescent, fade-3/7, jump-3/7, custom (full list per device) |
 | 11 | `speed` / `color-sequence` | −10…+10 (−10 slowest); **resets after power-off** |
 | 12 | `color-individual` / `custom` | selects a slot: `custom-1` → 351, `custom-2` → 352, `custom-3` → 353; value hints carry geometry, e.g. `"20-segment"`, `"no-white"` |
@@ -55,15 +55,15 @@ Host: semantics2.afero.net      Content-Type: application/json; charset=utf-8
   {"functionClass": "power", "functionInstance": null, "value": "on", "lastUpdateTime": <ms>}]}
 ```
 **Slot select only** (show-time, < 1 KB): the `color-individual` + `color-mode` rows (+ `power`).
-**Whole-strand looks** are first-class aioafero calls: `set_state(on, temperature, brightness, color_mode, color, effect, numbers={("speed","color-sequence"): n})`, `set_rgb`, `set_effect("rainbow-roll")`, `set_effect("nightlight")`.
+**Whole-strand looks** use the same explicit-rows path. aioafero's `set_state` / `set_rgb` / `set_effect` show the wire encodings (color-temperature as a string, `{"color-rgb": {r,g,b}}`, programs as preset `custom` + color-sequence/custom `<name>`) but return nothing and silently adjust or drop values — see `07` §4.
 
 ### Gotchas (each one is a real bug someone hit)
-- aioafero 9.3.0 has **no API for frames or slot select** (PR #61 is stale — assume it never lands). Build the states by hand and send with `bridge.lights.update(id, states=[...])` (returns the response; `None` on HTTP 400 / exhausted retries), or through the adapter's own raw request if aioafero doesn't classify the device as a Light.
-- `lastUpdateTime` must be **epoch milliseconds** — seconds return HTTP 200 and are silently dropped (aioafero #65).
-- `set_state`/`set_effect` skip fields that match the cached state → for re-asserts send the **full state vector** via `update(states=...)`.
+- aioafero 9.3.0 has **no API for frames or slot select** (PR #61 is stale — assume it never lands). Build the rows by hand and send them through `bridge.request("put", …)` per `07` §4. `bridge.lights.update(id, states=[...])` also emits the right PUT, but its return value is ambiguous (`None` = HTTP 400 *or* exhausted retries *or* unknown device; other errors come back as response objects or exceptions).
+- `lastUpdateTime` must be **epoch milliseconds** — seconds return HTTP 200 and are silently dropped (aioafero #65). `update()` stamps it for you; the `bridge.request` path doesn't.
+- For re-asserts send the **full state vector** (defined in `07` §5) — `set_state`/`set_effect` skip fields that match aioafero's cache.
 - Copy the header (`id`, `version`, `headerFlags`, `sequenceFlags`, `frameBuffer.flags`) and the framebuffer length **from the device's own readback**; change only colors and bench-verified effect fields.
-- HTTP 2xx ≠ lights changed. Confirm by REST readback (`fetch_device_states`) — aioafero's Conclave path stores attr-351 pushes as raw undecoded values, so don't trust the push cache for frames.
-- aioafero's default session is `limit_per_host=3` → 9 module PUTs go out in 3 waves. Pass your own session with ≥ 9.
+- HTTP 2xx ≠ lights changed, and REST readback only proves the cloud stored the value (device-level application is UNVERIFIED — `07` §5). aioafero's Conclave path stores attr-351 pushes raw, so never trust the push cache for frames.
+- aioafero's default session is `limit_per_host=3` → 9 module PUTs go out in 3 waves. Pass your own session (settings in `07` §4).
 - aioafero does **not** split addressable strings into per-zone clones (only a `…-light-party-mode` switch clone); writes go to the parent metadevice id.
 - A raw Afero attribute write exists (`POST /v1/accounts/{aid}/devices/{deviceId}/actions {"type":"attribute_write","attrId":351,"data":"<hex LE>"}`) — document it, don't build it; use only if the semantic PUT is rejected and only after a bench proof.
 
@@ -87,14 +87,14 @@ Golden Hour only reads as one wash if on-device motion runs the same direction i
 ## Bench gates — one kit, now (don't wait for Prototype 01)
 1. **Gate A — read-only profile dump**: `fetch_metadevice` with expansions; commit the anonymized JSON as the SimDriver fixture. Record segment hint + framebuffer length, slot count, color-mode values (is `individual` present?), CCT range, preset + program lists, speed range, restore-values, party-mode.
 2. App-paint an index-coded pattern (puck 1 red, 2 green, 3 blue, 4 white) into slot 1 → read back → confirm order and which end is index 0. Tabulate effect fields while switching effects/speeds in the app.
-3. **Gate B — slot select** by API (color-individual + color-mode): visible switch ≤ 2 s, readback matches → proves T2.
+3. **Gate B — slot select** by API (color-individual + color-mode): visible switch ≤ 2 s, readback matches → proves T2. Then switch the kit off at the wall, PUT another select and GET: if the GET shows the new value, readback can't detect device-level misses.
 4. **Gate C — replay write**: PUT the exact object read from slot 1 into slot 2 + select → HTTP 200, readback unchanged, lights match → proves T1.
 5. Synthetic hue ramp (hue = 12°·i) → photograph for the index map; film all 30 changing in one frame; 20 trials of PUT-to-light latency.
-6. Edge cases: 29/31/60-entry frames; per-puck white (cct 2700, whiteBrightness 100, colorBrightness 0); rewrite the active slot without reselecting; cut vs fade.
+6. Edge cases: 29/31/60-entry frames; per-puck white (cct 2700, whiteBrightness 100, colorBrightness 0); rewrite the active slot without reselecting; cut vs fade; order of rows within one PUT; a combined PUT starting from power-off; a PUT with lastUpdateTime = now − 10 min (does a lagging clock get writes dropped?).
 7. Whole-strand + presets via API: CCT floor/ceiling, 1–10% dimming smoothness, HD orange, presets at speed −10/0/+10, programs.
 8. On-device proof: start an animation, cut the WAN for 10–30 min — it must keep running.
 9. Motion enumeration: sweep motionEffect/brightnessEffect codes; find a directional scroll, its slowest period, whether re-select restarts phase.
-10. Power: pull mains in each mode × restore setting; 10 cold boots must report 30 heads.
+10. Power: pull mains in each mode × restore setting. Boot with strings 2–3 unplugged and dump the hints and all three framebuffer lengths — whether the cloud profile reflects the detected puck count at all is UNVERIFIED (the segment hint may be a per-model constant); if it doesn't, the 12-puck fault can only be caught visually.
 11. Single-device rate: 50 frame writes at 5 s / 2 s / 1 s spacing; compare readback to sent to catch silent drops; stop at first 429/403.
 12. With 2–3 kits: start skew (9-way-style parallel PUTs, 120 fps video, 20 trials) and drift at 10/30/60 min; chaining test (60 pucks on one controller: 60 independent entries or 30 repeated?).
 13. On Prototype 01 with Mylar: color recipes (RGB-only vs RGB + warm-white blend) for amber, HD orange, peach, ivory at show brightness; 4 h thermal run; calibration in A and B orientation.

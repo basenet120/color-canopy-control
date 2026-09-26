@@ -1,0 +1,87 @@
+# 07 — Engineering contracts
+
+Binding rules for the build, written after an adversarial review of the plan against installed aioafero 9.3.0 (Sep 26 2026). Where these conflict with older text in `research/`, these win. Anything marked **UNVERIFIED** gets a bench test, not an assumption.
+
+## 1. Runtime modes and the live gate
+`CONDUCTOR_MODE` picks what the canopy engine drives; `HUBSPACE_LIVE=1` is the only thing that permits any Afero network call.
+
+| CONDUCTOR_MODE | Engine drives | Afero calls allowed | Typical host |
+|---|---|---|---|
+| `sim` (default) | SimDriver | none — unless `HUBSPACE_LIVE=1`, then **bench jobs only** | dev, CI, cloud sessions, Railway staging |
+| `bench` | SimDriver | bench jobs + account connect, allowlisted devices only | Railway staging with the bench kit |
+| `live` | AferoDriver | everything, allowlisted devices only | the venue box — the only runtime that ever holds show accounts |
+
+- `live` or `bench` without `HUBSPACE_LIVE=1` refuses to start with a plain-English error. `/api/version` reports both values.
+- **One choke point.** The adapter's own aiohttp session refuses every non-GET request except token/login/conclaveAccess unless live is permitted **and** the metadevice id parsed from the URL path is in the effective allowlist. An empty or unset `HUBSPACE_DEVICE_ALLOWLIST` denies all writes. `HUBSPACE_DEVICE_ALLOWLIST=registry` (venue box only) means "every device in the registry marked writable". Effective allowlist = env allowlist ∩ registry devices marked writable.
+- `HUBSPACE_ACCOUNT_ALLOWLIST` (emails) is checked **before** a password is sent anywhere, so a show account can't be connected to staging even by accident.
+- `HUBSPACE_LIVE_UNTIL=<date>` (staging: `2026-10-19`) — after it, the runtime refuses writes. Staging can't touch anything during the show window.
+- If a connected account can see devices that aren't allowlisted, stay read-only for those and alert on /ops (catches kits that were shared or moved).
+- Bench jobs take an exclusive per-device lock that pauses the reconciler and idle hold for that device.
+- A test enumerates every writer path (executor, reconciler, idle hold, slot manager, bench, vignettes) and proves each is denied for a non-allowlisted id. A grep test proves nothing outside the adapter imports aioafero or calls aiohttp write methods.
+
+## 2. Auth and surfaces
+- Implemented: `conductor/auth.py` — Basic auth on every HTTP **and** WebSocket request except `/healthz`; the process refuses to start without `CONDUCTOR_BASIC_AUTH` on Railway, with `HUBSPACE_LIVE=1`, or outside sim (local-only opt-out `CONDUCTOR_AUTH=off`).
+- **WebSockets:** iOS Safari is unreliable with Basic auth on WebSocket upgrades, and every vignette iPad is WebKit. Browser sockets authenticate with a single-use ticket from an authenticated `GET /api/ws-ticket`, sent as the **first message** (never in the URL — URLs land in logs). Reject foreign `Origin` at the handshake. Tests: no ticket → close 1008; bad Origin → rejected.
+- **Roles:** the kiosk and vignette tablets are enrolled once via a one-time link that sets an HttpOnly cookie for their role; `/ops/*` needs the ops credential. A kiosk escape must not reach account connect or bench.
+- `/healthz` stays content-free and dependency-free. Startup never waits on Afero or on decrypting tokens; problems show as "Needs attention" on /ops.
+- Uvicorn trusts forwarded headers only when `FORWARDED_ALLOW_IPS` says so (set to `*` on Railway staging only).
+
+## 3. Hubspace credentials
+- **Two ways to connect an account.** (a) CLI `python -m conductor.auth login` (email, password, emailed code if asked) — preferred. (b) `/ops/accounts`, only when `CONDUCTOR_ACCOUNT_CONNECT=1`, turning itself off after a successful connect; POST only with a same-origin check; attempt limit; `Cache-Control: no-store`; `frame-ancestors 'none'`; validation errors never echo submitted fields.
+- **Emailed code (OTP):** aioafero keeps the PKCE challenge and Keycloak form state inside the `AferoAuth.for_login(session, email, password)` instance and its session cookie jar; `submit_otp` works only on that same instance. Keep the pending object in memory under a nonce with a ~5–10 min TTL (single worker). Re-prompt on `InvalidOTP`. A redeploy in between kills the login — say so on the page.
+- **Only refresh tokens are stored**, encrypted with Fernet using `CONDUCTOR_SECRET_KEY` (a Fernet key; validate at startup — if missing or invalid, disable live features, don't crash). Bind ciphertext to environment name + account, so a staging token file can't load on the venue box. Encryption only protects the volume and backups (the key lives beside it) — say so in docs.
+- **Rotation:** aioafero swaps in a new refresh token on every refresh (~every 118 s). Persist `bridge.refresh_token` whenever it changes and on shutdown — atomically (temp file, fsync, `os.replace`, mode 0600), keeping the previous generation. One process owns a given account's token; the CLI talks to the running server rather than opening its own session. Token store keyed by account. Each runtime mints its own tokens; never copy tokens between runtimes.
+- A dead token raises `InvalidAuth` / emits `INVALID_AUTH`: surface "re-sign-in required" on /ops. Never loop logins.
+- A canary test logs in against a stub Keycloak with sentinel password/OTP/token values and proves none appear in logs, responses or files under the data dir (aioafero's securelogging only redacts its own loggers).
+
+## 4. Afero adapter semantics (verified against aioafero 9.3.0 source)
+- **`LightController.update()` results:** `None` means one of three indistinguishable things — HTTP 400, three 429/503/504 attempts, or an untracked device id. Every other status (401, 404, 500, …) comes back as a response object — check `resp.status`, never truthiness. It **raises** `aiohttp.web_exceptions.HTTPForbidden` on 403 (not a `ClientError` subclass), `ContentTypeError` on a non-JSON error body, `AttributeError` on an empty 2xx, `TimeoutError`/`ClientError` on transport failures.
+- **Send writes through `bridge.request("put", url, json=…, headers={"host": "semantics2.afero.net", "content-type": "application/json; charset=utf-8"})`** so throttling is distinguishable (`ExceededMaximumRetries`); on this path you stamp `lastUpdateTime` in epoch ms yourself (`update()` does it for you). Attach an `aiohttp.TraceConfig` (`on_request_end`) to log every attempt's status.
+- Set `aioafero.v1.v1_const.MAX_RETRIES = 1` inside the adapter (read at call time) so aioafero's own ~3 attempts in ~1.25 s don't blow the ≤ 1 write/s/device budget. The executor owns retries. (aioafero makes 3 attempts with waits of 0.5 s and 0.75 s.)
+- **Session:** `ClientSession(connector=TCPConnector(limit_per_host=20, keepalive_timeout=60), timeout=ClientTimeout(total=8, sock_connect=3))`; wrap each send in `asyncio.wait_for`; close the session yourself (`bridge.close()` won't close one you passed in). The pool is shared with polling, discovery and readbacks.
+- **`AferoBridgeV1.open()` blocks** until the first discovery succeeds and retries at `min(attempt × polling_interval, 600)` s; its state-poll loop swallows errors without emitting DISCONNECTED. So: wrap `open()` in `wait_for` with the adapter's own retry (~15 s cap); keep `polling_interval` 30–60 s; pass `poll_version=False`; the adapter owns an outage watchdog (readback every ~10 s while degraded) that triggers re-assert on recovery. Never use aioafero's DISCONNECTED/RECONNECTED as the outage signal.
+- aioafero authenticates API calls with the OIDC **id_token** (not the access token). Any raw path must go through `bridge.request`, which injects the right bearer, user agent and host.
+- `set_state` / `set_effect` / `set_rgb` return nothing, snap color temperature to the nearest supported value (2200 → 2700 on the sibling string), send nothing for unknown effect names, and drop unknown speed keys. Use them only as a reference for wire encodings: color-temperature as a string (`"2700"`), `{"color-rgb": {r, g, b}}`, programs as preset `custom` + color-sequence/custom `<name>`. Check CCT against the device's range before sending.
+- aioafero does not split addressable strings (only a `…-light-party-mode` switch clone) — but re-run `light_callback` on the real SQHDK03 dump: with more than one extra brightness instance it would split the device and drop the parent from `bridge.lights`.
+
+## 5. State semantics
+- **REST readback proves the cloud stored a value. Whether the device applied it is UNVERIFIED.** Gate B adds a test: switch the kit off at the wall, PUT a select, GET — if the GET shows the new value, readback can't detect device-level misses and the reconciler must also use `available`, Conclave events or the camera. The SimDriver models both behaviours behind a flag.
+- Reported state comes from REST readback (per-change GETs plus a periodic true-up). **Conclave is optional (P4), a change trigger only**: its cache is trustworthy for power, color-mode, brightness, preset names and the slot selector; it stores color-rgb, speed and slot objects (351–353) raw.
+- `fetch_device_states` silently drops malformed rows and can return `[]` on a 200. Every expected (functionClass, functionInstance) row must be present — plus the slot object for painted looks — or it counts as a **mismatch**, never a match. The cloud may echo rows you didn't send; tolerate extras.
+- **Full state vector** (what a re-assert sends) = the writable rows that define the look: `power`, `color-mode`, the look selector (slot via `color-individual`, or `color-sequence` preset (+ `custom` program), or `color-temperature` / `color-rgb`), `brightness`, `speed`, `toggle/party-mode = off`. Never include telemetry rows (`available`, `visible`, `direct`, `wifi-*`, `ble-mac-address`, `geo-coordinates`, `scheduler-flags`). Include a slot object only when rewriting that one slot.
+
+## 6. Executor, reconciler and looks
+- **Never split one module's update across PUTs** (a stepped sweep or dim-down is several updates, each one PUT). A mode change bursts the 9 module PUTs concurrently over a warm session with a token that has ≥ 15 s left (to force a refresh: `bridge.set_token_data(bridge.token_data._replace(expiration=0))` then one cheap GET).
+- **Re-assert only modules whose readback differs.** For motion looks (Golden Hour), re-trigger all nine as one burst or not at all — a single re-select may restart that module's phase.
+- **Downgrade with hysteresis:** retry first; downgrade a mode's tier only if a module stays wrong > 10 s, or on ≥ 3 throttles in 60 s per account; upgrade back after 5 clean minutes. 5% random throttling must not downgrade. "Correct" means the requested mode at its current tier.
+- **Slot hashes** use a canonical projection of the **readback** (framebuffer entries in order; fields r, g, b, cct, colorBrightness, whiteBrightness). Record the hash from readback right after commissioning. Rewrite a drifted slot at most once per 10 min, then alert — never loop 3.4 KB writes at show hardware.
+- **Head count:** frame length is whatever the device's framebuffer length is; `expected_heads` comes from the registry (canopy = 30). Whether the 12-puck fault changes the cloud profile at all is UNVERIFIED (the segment hint may be a per-model constant) — bench it (boot with strings 2–3 unplugged, dump hints and all three framebuffer lengths); if the profile doesn't change, the daily startup check is visual.
+- **Tier defaults before the bench:** sim runs T1; live runs T3 until Gate B/C flags are set; every effect code starts disabled. Sim-only motion semantics live in `config/sim/` and are labelled SIMULATED. Every surface shows a persistent "Simulator" badge in sim mode, so staging demos stay honest.
+- Kiosk constants (config): 8 s cooldown after a selection; after 3 min idle, return to Lowcountry Calm.
+- `SupplementalDriver`: interface stub only.
+- Naming: `DeviceDriver` is the interface (lights, plugs, locks, fans); `AferoDriver` in `conductor/drivers/afero.py` is the only aioafero importer.
+
+## 7. Time and simulation
+- All timing goes through an injectable `Clock`; `make soak` runs 8 simulated hours in under 2 minutes.
+- Sim acceptance parameters are pinned in `config/sim/acceptance.yaml` (the agent may not tune them to pass): PUT ack 150–800 ms lognormal; device apply +0.3–1.5 s; start skew ≤ 1.5 s; 5% of PUTs → 429 plus 1% silent drops; one 43-min window of 500s per soak. Results written to `docs/reports/sim-acceptance.md` (p50/p95/max).
+- SimDriver scope for v1: latency, 429s and silent drops, 5xx windows, disconnects, token expiry, readback semantics flag. Animation clocks/drift, speed reset on power loss and the 12-puck fault are seams until the bench says they matter.
+
+## 8. Persistence
+`CONDUCTOR_DATA_DIR` (default `./var`, gitignored; `/data` volume on Railway; a named volume with nightly backup on the venue box) holds tokens, telemetry, bench results, and an **overlay** for ops edits (registry, index maps, slot hashes) under `overrides/*.yaml` — validated, versioned, downloadable as a diff to commit back to git. Git YAML holds the defaults. All writes atomic.
+
+## 9. Delivery
+- A cloud session pushes only to its working `claude/*` branch. **Never merge, approve, or enable auto-merge** — Alon merges. PRs come one at a time in sequence; after Alon merges, merge `origin/main` into the working branch before continuing. Ask Alon (in the PR body) for merge commits, not squash. Keep "PR stack in merge order" and "Next step" at the top of `docs/STATUS.md`.
+- **Never edit `.github/workflows/`** (cloud sessions can't push it; CI is maintained from the laptop). CI runs ruff, pytest, a gitleaks scan, a Docker build and a container smoke test.
+- If a sandbox capability is missing (Playwright browser download, Docker daemon, a network host), rely on CI for that check and mark it UNVERIFIED in STATUS — never skip silently. Playwright is its own target (`make e2e`), not part of `make test`. Use system font stacks.
+- Screenshots only in sim, with fixture identities (e.g. `bench@example.invalid`). Playwright traces off. Fixtures and docs pass an anonymizer test (no MACs, emails, real UUIDs, SSIDs).
+- Unknowns: take the default in `06-open-questions.md`, write the bench test that settles it, record judgment calls in `docs/DECISIONS.md`, continue elsewhere. Never stop to ask.
+- No routines, cron jobs or CI jobs that write to real devices.
+
+## 10. Show-day readiness (built before P4)
+- **Venue box by ~Oct 8:** Ubuntu 24.04 mini PC, image built from a tagged commit, Docker Compose + systemd (`Restart=always`, watchdog), Chromium kiosk via a systemd user unit, BIOS power-on after AC loss, UPS, NTP synced (a lagging clock may get writes 200-and-dropped — UNVERIFIED; bench a PUT with lastUpdateTime = now − 10 min), Tailscale for remote access. Oct 12 freeze = a tag + pinned image; hotfix path = PR → CI → tag → manual pull, rollback documented.
+- **Kiosk resilience:** a single-page app served from the box that never navigates away and reconnects with backoff; a "canopy is resting" state; guests never see a browser error page.
+- **7 am checklist on /ops:** clock synced, token age, 9/9 modules online, head counts, slot hashes, rate budget, one test mode change, pause/resume guest input.
+- **Manual fallback:** lights hold their last look if the Conductor or the internet dies. Break-glass = a staff phone with the frozen Hubspace app and a 9-module app Group (pause the Conductor first; app edits will be undone by the reconciler otherwise).
+- **Restart matrix** in the runbook: who restarts what and how long it takes. Re-login needs the password and the account inbox (for the emailed code) — name a second person. "Sign out of all other devices" in the app kills the Conductor within ~2 min.
+- Cold spare: a second box or laptop with the pinned image and a `/data` backup.
+- Bench results route back to a cloud session via a "copy anonymized JSON" button on /ops/bench (the session can't reach staging).
