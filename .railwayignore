@@ -1,0 +1,8 @@
+# Keep client material and secrets out of any `railway up` upload (GitHub deploys only see committed files)
+Ref Docs/
+*.pdf
+*.docx
+secrets/
+.env
+.env.*
+research/_raw_workflow_output.json

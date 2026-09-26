@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canopy Layout</title>
+<style>
+  :root {
+    --ground: #14100c;
+    --plane: #211a14;
+    --seam: rgba(255, 236, 214, 0.22);
+    --ink: #efe4d6;
+    --muted: #a89886;
+    --amber: #ff9a3c;
+    --core: #ffd9a0;
+    --alert: #ff5a3c;
+    --wire: rgba(255, 190, 120, 0.55);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 28px 16px 48px;
+  }
+  main { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
+  h1 { font: 600 clamp(26px, 4vw, 38px)/1.1 ui-serif, Georgia, serif; margin: 0; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  .group { display: flex; gap: 6px; align-items: center; }
+  .label { font: 600 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  button {
+    font: 600 13px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink);
+    background: var(--plane); border: 1px solid var(--seam); border-radius: 6px; padding: 9px 12px; cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: var(--amber); color: var(--ground); border-color: var(--amber); }
+  button:focus-visible { outline: 2px solid var(--core); outline-offset: 2px; }
+  .stats { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted); }
+  .stats b { color: var(--ink); font-weight: 600; }
+  .stats .bad { color: var(--alert); }
+  canvas { width: 100%; height: auto; display: block; border-radius: 10px; background: var(--plane); }
+  .note { color: var(--muted); font-size: 13px; max-width: 78ch; margin: 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>The Color Canopy</h1>
+    <p class="sub">Layout, reflected-ceiling view (looking up). 9 modules, 30 Hubspace heads each.</p>
+  </header>
+  <div class="bar">
+    <div class="group" role="group" aria-label="Orientation scheme">
+      <span class="label">Scheme</span>
+      <span id="schemes" class="group"></span>
+    </div>
+    <div class="group">
+      <span class="label">Show</span>
+      <button id="wire" aria-pressed="false">Wire order</button>
+      <button id="nums" aria-pressed="false">Index numbers</button>
+    </div>
+    <div id="stats" class="stats" aria-live="polite"></div>
+  </div>
+  <canvas id="canopy" width="1180" height="640" aria-label="Canopy head layout"></canvas>
+  <p class="note">Head positions are derived from VWBD's reflected ceiling plan (10″ pitch, staggered 8/7/8/7). Scheme p14 is deck page 14 (A/B/A across); p18 is the appendix plan (AAA/BBB/AAA) — red marks show where it breaks the 10″ pitch. Wire order is a placeholder until the real routing is calibrated.</p>
+</main>
+<script>
+const state = { scheme: null, wire: false, nums: false, data: null };
+const canvas = document.getElementById("canopy");
+const ctx = canvas.getContext("2d");
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+async function load(scheme) {
+  const res = await fetch("/api/canopy/layout" + (scheme ? "?scheme=" + encodeURIComponent(scheme) : ""));
+  if (!res.ok) throw new Error("Layout request failed: " + res.status);
+  state.data = await res.json();
+  state.scheme = state.data.scheme;
+  renderControls();
+  draw();
+}
+
+function renderControls() {
+  const box = document.getElementById("schemes");
+  box.replaceChildren(...state.data.schemes.map(s => {
+    const b = document.createElement("button");
+    b.textContent = s;
+    b.setAttribute("aria-pressed", String(s === state.scheme));
+    b.onclick = () => load(s);
+    return b;
+  }));
+  const d = state.data, bad = d.pitch_violations.length;
+  document.getElementById("stats").innerHTML =
+    `<b>${d.heads.length}</b> heads · <b>${d.modules.length}</b> modules · pitch <b>${d.canopy.pitch_in}″</b> · ` +
+    (bad ? `<span class="bad">${bad} pitch breaks</span>` : `<b>0</b> pitch breaks`);
+}
+
+function draw() {
+  const d = state.data; if (!d) return;
+  const c = d.canopy, dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth, pad = 28, scale = (cssW - 2 * pad) / c.width_in;
+  const cssH = c.height_in * scale + 2 * pad;
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr; canvas.style.height = cssH + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const X = x => pad + x * scale, Y = y => pad + y * scale;
+
+  ctx.font = "600 11px ui-monospace, Menlo, monospace";
+  for (const m of d.modules) {
+    ctx.strokeStyle = css("--seam"); ctx.lineWidth = 1;
+    ctx.strokeRect(X(m.col * c.module_width_in), Y(m.row * c.module_height_in),
+                   c.module_width_in * scale, c.module_height_in * scale);
+  }
+
+  if (state.wire) {
+    const byModule = {};
+    for (const h of d.heads) (byModule[h.module] ||= []).push(h);
+    ctx.strokeStyle = css("--wire"); ctx.lineWidth = 1.2;
+    for (const hs of Object.values(byModule)) {
+      hs.sort((a, b) => a.index - b.index);
+      ctx.beginPath();
+      hs.forEach((h, i) => i ? ctx.lineTo(X(h.x), Y(h.y)) : ctx.moveTo(X(h.x), Y(h.y)));
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(X(hs[0].x), Y(hs[0].y), 7, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  const glow = scale * c.pitch_in * 0.32;
+  for (const h of d.heads) {
+    const g = ctx.createRadialGradient(X(h.x), Y(h.y), 0, X(h.x), Y(h.y), glow);
+    g.addColorStop(0, css("--core")); g.addColorStop(0.3, css("--amber")); g.addColorStop(1, "rgba(255,154,60,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(X(h.x), Y(h.y), glow, 0, Math.PI * 2); ctx.fill();
+    if (state.nums) { ctx.fillStyle = css("--ink"); ctx.fillText(String(h.index), X(h.x) + glow * 0.45, Y(h.y) - glow * 0.45); }
+  }
+
+  ctx.strokeStyle = css("--alert"); ctx.lineWidth = 2;
+  for (const v of d.pitch_violations) {
+    ctx.beginPath(); ctx.moveTo(X(v.x_left), Y(v.y)); ctx.lineTo(X(v.x_right), Y(v.y)); ctx.stroke();
+  }
+
+  for (const m of d.modules) {
+    const text = `${m.id} · ${m.orientation}`, x = X(m.col * c.module_width_in) + 4, y = Y(m.row * c.module_height_in) + 4;
+    ctx.fillStyle = css("--ground"); ctx.fillRect(x, y, ctx.measureText(text).width + 10, 18);
+    ctx.fillStyle = css("--muted"); ctx.fillText(text, x + 5, y + 13);
+  }
+}
+
+for (const id of ["wire", "nums"]) {
+  const b = document.getElementById(id);
+  b.onclick = () => { state[id] = !state[id]; b.setAttribute("aria-pressed", String(state[id])); draw(); };
+}
+window.addEventListener("resize", draw);
+load().catch(e => { document.getElementById("stats").textContent = e.message; });
+</script>
+</body>
+</html>

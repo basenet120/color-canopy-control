@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "conductor",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "conductor.app:app", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}
