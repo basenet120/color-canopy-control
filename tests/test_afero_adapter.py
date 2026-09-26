@@ -103,15 +103,15 @@ def test_max_retries_is_forced_to_one_before_every_send(tmp_path):
         (FakeResponse(200, {"metadeviceId": BENCH_MD, "values": []}), Outcome.OK, 200),
         (FakeResponse(204, b""), Outcome.OK, 204),
         (FakeResponse(400, {"error": "bad"}), Outcome.CLIENT_ERROR, 400),
-        (FakeResponse(401, {"error": "unauthorized"}), Outcome.AUTH, 401),
-        (FakeResponse(403, {"error": "forbidden"}), Outcome.THROTTLED, None),  # aioafero raises HTTPForbidden
+        (FakeResponse(401, {"error": "unauthorized"}), Outcome.AUTH_STALE, 401),  # refreshed, then retryable
+        (FakeResponse(403, {"error": "forbidden"}), Outcome.THROTTLED, 403),  # aioafero raises HTTPForbidden
         (FakeResponse(404, {"error": "nope"}), Outcome.NOT_FOUND, 404),
         (FakeResponse(409, {"error": "conflict"}), Outcome.CLIENT_ERROR, 409),
-        (FakeResponse(429), Outcome.THROTTLED, None),  # ExceededMaximumRetries
+        (FakeResponse(429), Outcome.THROTTLED, 429),  # ExceededMaximumRetries; the transport saw the status
         (FakeResponse(500, "oops"), Outcome.SERVER_ERROR, 500),
         (FakeResponse(502, "bad gateway"), Outcome.SERVER_ERROR, 502),
-        (FakeResponse(503), Outcome.THROTTLED, None),
-        (FakeResponse(504), Outcome.THROTTLED, None),
+        (FakeResponse(503), Outcome.THROTTLED, 503),
+        (FakeResponse(504), Outcome.THROTTLED, 504),
         (TimeoutError(), Outcome.TIMEOUT, None),
         (HANG, Outcome.TIMEOUT, None),  # the adapter's own 8 s wait_for
         (aiohttp.ClientConnectionError("reset"), Outcome.CONNECTION, None),
@@ -152,7 +152,7 @@ def test_a_401_forces_a_refresh_next_time_but_is_not_a_dead_token(tmp_path):
         return first, second, refreshes, status
 
     first, second, refreshes, status = run(main)
-    assert first.outcome is Outcome.AUTH and second.outcome is Outcome.OK
+    assert first.outcome is Outcome.AUTH_STALE and second.outcome is Outcome.OK
     assert refreshes == 1 and not status.needs_reauth
 
 
@@ -426,7 +426,7 @@ def test_outage_marks_degraded_and_recovery_notifies_subscribers(tmp_path):
         w.driver.on_recovery.append(async_sub)
         down = aiohttp.ClientConnectionError("down")
         w.fake.script("PUT", STATE_PATH, down, down)
-        w.fake.script("GET", "/users/me", down)  # the first watchdog probe fails too
+        w.fake.script("GET", STATE_PATH, down)  # the first watchdog probe (a state readback) fails too
         one = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
         after_one = w.driver.health()["accounts"]["bench"]["degraded"]
         await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
@@ -458,3 +458,207 @@ def test_health_is_json_and_has_no_secrets(tmp_path):
     w, text = run(main)
     for secret in [*w.fake.issued, w.fake.account_id]:
         assert secret not in text
+
+
+# ---- review fixes: regression tests --------------------------------------------------------------------------------
+def _always(world, method, path_part, respond, n=2000):
+    """Queue `respond(req)` for every matching request (aioafero's own polling included)."""
+    world.fake.script(method, path_part, *([respond] * n))
+
+
+def test_a_disconnect_racing_an_in_flight_request_stays_disconnected(tmp_path):
+    """F2: the in-flight request must not re-save the deleted token, nor trigger a reconnect."""
+
+    async def main():
+        w = await make_world(tmp_path)
+
+        async def slow_put(req):
+            await asyncio.sleep(0.5)
+            return FakeResponse(200, {"metadeviceId": BENCH_MD, "values": []}, url=req.url)
+
+        w.fake.script("PUT", STATE_PATH, slow_put)
+        bridge = w.driver._links["bench"].bridge
+        bridge.set_token_data(bridge.token_data._replace(expiration=0))  # the PUT rotates the token first
+        inflight = asyncio.ensure_future(w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE))
+        await asyncio.sleep(0.1)
+        await w.driver.disconnect("bench")
+        right_after = w.store.status("bench")
+        await inflight
+        after_request = w.store.status("bench")
+        sent = len(w.fake.requests)
+        later = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
+        await asyncio.sleep(60)  # nothing reconnects in the background
+        status = w.driver.account_status("bench")
+        requests = len(w.fake.requests) - sent
+        await w.driver.close()
+        return right_after, after_request, later, status, requests, w.store.status("bench")
+
+    right_after, after_request, later, status, requests, final = run(main)
+    assert right_after is None and after_request is None and final is None
+    assert later.outcome is Outcome.AUTH and "Sign in again" in later.error
+    assert not status.connected and not status.needs_reauth and status.token_generation is None
+    assert requests == 0
+
+
+def test_a_stale_bearer_401_is_retryable_and_never_a_sign_in_problem(tmp_path):
+    """AF-1: one 401 refreshes the bearer and is retried; only a refresh that fails (InvalidAuth) needs sign-in."""
+
+    async def main():
+        w = await make_world(tmp_path)
+        w.fake.script("PUT", STATE_PATH, FakeResponse(401))
+        first = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
+        second = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
+        # A freshly refreshed bearer that is still refused is not "stale" any more: stop retrying.
+        w.fake.script("PUT", STATE_PATH, FakeResponse(401), FakeResponse(401))
+        third = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
+        fourth = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE)
+        status = w.driver.account_status("bench")
+        await w.driver.close()
+        return first, second, third, fourth, status
+
+    first, second, third, fourth, status = run(main)
+    assert first.outcome is Outcome.AUTH_STALE and first.outcome.retryable and first.http_status == 401
+    assert "re-sign-in" not in first.error
+    assert second.outcome is Outcome.OK
+    assert third.outcome is Outcome.AUTH_STALE
+    assert fourth.outcome is Outcome.AUTH and not fourth.outcome.retryable
+    assert status.connected and not status.needs_reauth
+
+
+def test_the_executor_retries_a_stale_bearer_and_the_device_is_not_flagged(tmp_path):
+    """AF-1 end to end: the real executor + tracker over the adapter, one 401 on the PUT."""
+    from conductor.config import ExecutorSettings
+    from conductor.executor import CommandExecutor
+    from conductor.executor_api import Command, CommandStatus
+    from conductor.locks import DeviceLockManager
+    from conductor.state import DeviceStateTracker
+
+    async def main():
+        w = await make_world(tmp_path)
+        executor = CommandExecutor(
+            w.driver,
+            locks=DeviceLockManager(clock=w.clock),
+            telemetry=w.telemetry,
+            clock=w.clock,
+            policy=ExecutorSettings(),
+        )
+        tracker = DeviceStateTracker(w.clock, w.telemetry)
+        tracker.attach(executor)
+        w.fake.script("PUT", STATE_PATH, FakeResponse(401))
+        result = await executor.submit(
+            Command(device_id=BENCH_MD, rows=select_rows(), purpose=Purpose.ENGINE)
+        )
+        await asyncio.sleep(0)
+        auth_problem = tracker._devices[BENCH_MD].auth_problem
+        await w.driver.close()
+        return w, result, auth_problem
+
+    w, result, auth_problem = run(main)
+    assert result.status is CommandStatus.APPLIED, result
+    assert not auth_problem  # /ops never says "re-sign-in required" for a stale bearer
+    assert [a.outcome for a in result.attempts] == [Outcome.AUTH_STALE, Outcome.OK]
+    assert len(puts(w)) == 2
+
+
+@pytest.mark.parametrize("status", [503, 504])
+def test_a_503_504_outage_is_visible_and_marks_the_account_degraded(tmp_path, status):
+    """AF-2: the real status reaches WriteResult, and consecutive 503/504s count as an outage."""
+
+    async def main():
+        w = await make_world(tmp_path)
+        w.fake.script("PUT", STATE_PATH, *[FakeResponse(status) for _ in range(3)])
+        results = [await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE) for _ in range(3)]
+        health = w.driver.health()["accounts"]["bench"]
+        watchdog = w.driver._links["bench"].watchdog
+        await w.driver.close()
+        return results, health, watchdog
+
+    results, health, watchdog = run(main)
+    assert [(r.outcome, r.http_status) for r in results] == [(Outcome.THROTTLED, status)] * 3
+    assert all(f"HTTP {status}" in r.error for r in results)
+    assert health["degraded"] and watchdog is not None
+
+
+def test_429s_stay_throttling_not_an_outage(tmp_path):
+    async def main():
+        w = await make_world(tmp_path)
+        w.fake.script("PUT", STATE_PATH, *[FakeResponse(429) for _ in range(5)])
+        results = [await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.ENGINE) for _ in range(5)]
+        health = w.driver.health()["accounts"]["bench"]
+        await w.driver.close()
+        return results, health
+
+    results, health = run(main)
+    assert {(r.outcome, r.http_status) for r in results} == {(Outcome.THROTTLED, 429)}
+    assert not health["degraded"]
+
+
+def test_the_watchdog_needs_a_real_readback_to_declare_recovery(tmp_path):
+    """AF-3: users/me answering 200 while every state call fails is not a recovery."""
+
+    async def main():
+        w = await make_world(tmp_path)
+        recovered: list[str] = []
+        w.driver.on_recovery.append(recovered.append)
+        outage = {"on": True}
+
+        def state(req):
+            if outage["on"]:
+                return FakeResponse(500, "backend down", url=req.url)
+            return w.fake._api(req)
+
+        _always(w, "GET", "/state", state)
+        _always(w, "PUT", "/state", state)
+        for _ in range(2):
+            await w.driver.read_state(BENCH_MD)
+        degraded = w.driver.health()["accounts"]["bench"]["degraded"]
+        me_ok = await w.driver.ensure_fresh_token("bench", min_left_s=10_000)  # a users/me 200
+        await asyncio.sleep(60)
+        during = (w.driver.health()["accounts"]["bench"]["degraded"], list(recovered))
+        probes = [r for r in w.fake.requests if r.method == "GET" and r.path.endswith(STATE_PATH)]
+        alerts = [e["message"] for e in w.telemetry.recent(kind="alert")]
+        outage["on"] = False
+        await asyncio.sleep(11)
+        after = (w.driver.health()["accounts"]["bench"]["degraded"], list(recovered))
+        await w.driver.close()
+        return degraded, me_ok, during, probes, alerts, after
+
+    degraded, me_ok, during, probes, alerts, after = run(main)
+    assert degraded and me_ok is Outcome.OK
+    assert during == (True, [])
+    assert len(probes) >= 2 + 5  # the watchdog probes the device's state, every ~10 s
+    assert not any("reachable again" in a for a in alerts)
+    assert after == (False, ["bench"])
+
+
+def test_sim_mode_reaches_hubspace_only_for_bench_calls(tmp_path):
+    """F3: CONDUCTOR_MODE=sim + HUBSPACE_LIVE=1 opens the account only when a bench call needs it, and closes it
+    again after an idle period; nothing polls in the background."""
+    from conductor.drivers.afero import ON_DEMAND_IDLE_S
+    from conductor.gate import RuntimeMode
+
+    async def main():
+        w = await make_world(tmp_path, connect=False, mode=RuntimeMode.SIM, live=True)
+        await w.driver.start()
+        await asyncio.sleep(300)
+        idle = len(w.fake.requests)
+        engine = await w.driver.read_state(BENCH_MD)
+        bench = await w.driver.read_state(BENCH_MD, purpose=Purpose.BENCH)
+        write = await w.driver.write(BENCH_MD, select_rows(), purpose=Purpose.BENCH)
+        connected = w.driver.account_status("bench").connected
+        await asyncio.sleep(ON_DEMAND_IDLE_S + 30)
+        closed = w.driver.account_status("bench")
+        n = len(w.fake.requests)
+        await asyncio.sleep(600)
+        quiet = len(w.fake.requests) - n
+        again = await w.driver.read_state(BENCH_MD, purpose=Purpose.BENCH)
+        await w.driver.close()
+        return idle, engine, bench, write, connected, closed, quiet, again
+
+    idle, engine, bench, write, connected, closed, quiet, again = run(main)
+    assert idle == 0
+    assert engine.outcome is Outcome.DENIED
+    assert bench.ok and write.ok and connected
+    assert not closed.connected and not closed.needs_reauth and closed.last_error is None
+    assert quiet == 0
+    assert again.ok

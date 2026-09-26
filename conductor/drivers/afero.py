@@ -14,18 +14,29 @@ Rules implemented here:
   (aioafero reads it at call time); the executor owns retries.
 - **Nothing raises for HTTP or transport problems.** Results are classified into `Outcome`: gate refusal →
   DENIED; `ExceededMaximumRetries`, 403 (`HTTPForbidden`, the observed throttling signature), 429/503/504 →
-  THROTTLED; 401 or `InvalidAuth` → AUTH; 404 → NOT_FOUND; other 4xx → CLIENT_ERROR; 5xx → SERVER_ERROR;
-  timeouts → TIMEOUT; `aiohttp.ClientError`/`OSError` → CONNECTION; a 2xx readback that isn't a list of rows →
-  MALFORMED.
+  THROTTLED, with the real status on `http_status`; `InvalidAuth` → AUTH; 404 → NOT_FOUND; other 4xx →
+  CLIENT_ERROR; 5xx → SERVER_ERROR; timeouts → TIMEOUT; `aiohttp.ClientError`/`OSError` → CONNECTION; a 2xx
+  readback that isn't a list of rows → MALFORMED.
+- **A 401 is a stale bearer, not a dead account.** aioafero refreshes only at its own expiry stamp (~2 s margin),
+  so a request can carry a bearer that expires in flight. The first 401 forces a refresh on the next call and
+  comes back AUTH_STALE (retryable). Only a refresh that fails (`InvalidAuth`) marks the account `needs_reauth`;
+  a 401 on a bearer minted *after* that forced refresh is AUTH (not retried) but still not `needs_reauth`.
 - **Startup never waits on Afero.** `start()` schedules background connects (the `open()` equivalent — account
   id, first discovery — under a 15 s `wait_for`, retried with backoff) and returns at once; problems show in
   `health()` / `AferoAccounts.status()`.
+- **`CONDUCTOR_MODE=sim` is on demand** (07 §1: "bench jobs only"). `start()` connects nothing and nothing
+  reconnects on its own; a Purpose.BENCH call opens the account's bridge (one attempt) and it is closed again after
+  `ON_DEMAND_IDLE_S` without a bench call, which also stops aioafero's polling.
 - **Tokens.** Only refresh tokens are stored (TokenStore). aioafero rotates the refresh token on every refresh
   with no callback, so the adapter compares `bridge.refresh_token` with the last persisted value after every
-  operation, every few seconds in the background, and on close, and saves any change. A dead token
+  operation, every few seconds in the background, and on close, and saves any change — but only from the bridge
+  the account is using now: a request still in flight on a dropped bridge never writes the store. A dead token
   (`InvalidAuth`) marks the account `needs_reauth` and the adapter stops using it — it never loops logins.
-- **Outages.** Consecutive CONNECTION/TIMEOUT/SERVER_ERROR outcomes on an account mark it degraded; a watchdog
-  probes every ~10 s and, on the first OK, calls the `on_recovery` subscribers (the reconciler re-asserts).
+  `disconnect()` deletes the stored token and the account stays disconnected until an explicit `connect()`.
+- **Outages.** Consecutive CONNECTION/TIMEOUT/SERVER_ERROR outcomes (and 503/504, which stay THROTTLED for retry
+  purposes) on an account mark it degraded; a watchdog reads back a registered device's state every ~10 s and,
+  on the first well-formed 2xx readback, calls the `on_recovery` subscribers (the reconciler re-asserts). Only
+  device-state calls prove recovery: users/me or discovery answering 200 while state calls fail is not one.
   aioafero's DISCONNECTED/RECONNECTED events are never used as the outage signal.
 - **Sign-in** (`AferoAccounts`): `LiveGate.check_account(email)` runs before anything touches the network; an
   emailed-code challenge keeps the same `AferoAuth` object (and its session's cookie jar) in memory under a
@@ -52,14 +63,20 @@ from aioafero.types import EventType
 from aioafero.v1 import AferoBridgeV1, v1_const
 from aioafero.v1.auth import AferoAuth, TokenData
 from aiohttp import web_exceptions
+from yarl import URL
 
 from conductor import redact
 from conductor.accounts_api import PENDING_TTL_S, AccountStatus, LoginOutcome, LoginState
 from conductor.clock import Clock
 from conductor.config import Registry, unknown_devices
-from conductor.drivers.afero_transport import GatedClientSession, purpose_scope
+from conductor.drivers.afero_transport import (
+    GatedClientSession,
+    capture_exchange,
+    purpose_scope,
+    token_fingerprint,
+)
 from conductor.drivers.base import DeviceInfo, Outcome, ReadResult, StateRow, WriteResult
-from conductor.gate import GateDenied, LiveGate, Purpose
+from conductor.gate import GateDenied, LiveGate, Purpose, RuntimeMode
 from conductor.rows import payload_bytes
 from conductor.telemetry import Telemetry
 from conductor.tokens import TokenStore, TokenStoreUnavailable
@@ -82,9 +99,11 @@ DEGRADED_AFTER = 2  # consecutive outage outcomes on one account
 OUTAGE_PROBE_INTERVAL_S = 10.0
 TOKEN_CHECK_INTERVAL_S = 5.0
 FRESH_TOKEN_MIN_LEFT_S = 15.0
+ON_DEMAND_IDLE_S = 120.0  # sim mode: close an account's bridge after this long without a bench call
 MAX_OTP_ATTEMPTS = 5
 
 OUTAGE_OUTCOMES = frozenset({Outcome.CONNECTION, Outcome.TIMEOUT, Outcome.SERVER_ERROR})
+OUTAGE_STATUSES = frozenset({503, 504})  # THROTTLED for retries, but an outage signature when they persist
 # Everything aioafero, aiohttp or the gate can raise on a request path; the adapter classifies these instead of
 # raising. (HTTPForbidden is an aiohttp *web* exception, not a ClientError; GateDenied is an OSError.)
 REQUEST_ERRORS: tuple[type[BaseException], ...] = (
@@ -130,7 +149,7 @@ def classify_status(status: int) -> tuple[Outcome, str | None]:
     if status == 403:
         return Outcome.THROTTLED, "Hubspace answered HTTP 403, its usual throttling signature."
     if status == 401:
-        return Outcome.AUTH, "Hubspace rejected the sign-in token (HTTP 401)."
+        return Outcome.AUTH_STALE, "Hubspace refused the sign-in token (HTTP 401); it is being refreshed."
     if status == 404:
         return Outcome.NOT_FOUND, "Hubspace doesn't know that device on this account (HTTP 404)."
     if 400 <= status < 500:
@@ -224,6 +243,7 @@ class _Reply:
     body: bytes = b""
     error: str | None = None
     elapsed_s: float = 0.0
+    stale: bool = False  # answered on a bridge the account no longer uses; must not change the link's state
 
 
 @dataclass
@@ -247,6 +267,13 @@ class _Link:
     task: asyncio.Task | None = None
     watchdog: asyncio.Task | None = None
     attempted: asyncio.Event | None = None
+    connecting_bridge: AferoBridgeV1 | None = None  # the bridge a connect attempt is opening right now
+    forgotten: bool = False  # disconnected with its token deleted: stays down until an explicit connect()
+    rejected_bearer: str | None = None  # fingerprint of the bearer a 401 refused since the last 2xx
+    probe_device: str | None = None  # the device whose state call last failed (the watchdog reads it back)
+    last_used: float = 0.0  # monotonic time of the last caller operation (sim mode's idle close)
+    idle_task: asyncio.Task | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 RegistrySource = Registry | Callable[[], Registry]
@@ -338,8 +365,14 @@ class AferoDriver:
             self.telemetry.record(kind, source="afero", **fields)
 
     # ---- lifecycle -------------------------------------------------------------------------------------------
+    @property
+    def on_demand(self) -> bool:
+        """CONDUCTOR_MODE=sim: Afero is reachable for bench jobs only, so bridges open per bench call (07 §1)."""
+        return self.gate.settings.mode is RuntimeMode.SIM
+
     async def start(self) -> None:
-        """Schedule background connects for accounts with stored tokens and return immediately."""
+        """Schedule background connects for accounts with stored tokens and return immediately. In sim mode
+        nothing connects here: a bench call opens its account's bridge when it needs it."""
         if self._closed:
             return
         purpose = self.connect_purpose()
@@ -348,7 +381,7 @@ class AferoDriver:
             if purpose is None:
                 link.last_error = self.gate.purpose_allowed(Purpose.ENGINE)[1]
                 continue
-            if self._has_token(link):
+            if not self.on_demand and self._has_token(link):
                 self._ensure_connecting(link)
         if self._keeper is None or self._keeper.done():
             self._keeper = self._spawn(self._token_keeper())
@@ -364,7 +397,7 @@ class AferoDriver:
             return False
 
     def _ensure_connecting(self, link: _Link, token_data: TokenData | None = None) -> None:
-        if self._closed or (link.task is not None and not link.task.done()):
+        if self._closed or link.forgotten or (link.task is not None and not link.task.done()):
             return
         link.attempted = asyncio.Event()
         link.task = self._spawn(self._connect_loop(link, token_data))
@@ -373,15 +406,18 @@ class AferoDriver:
         """(Re)connect one account from its stored token and wait for the first attempt (≤ ~15 s).
 
         `token_data` (fresh from a sign-in) lets the bridge skip an immediate refresh. Returns whether the link is
-        connected; on False, `account_status(account).last_error` says why and retries continue in the background.
+        connected; on False, `account_status(account).last_error` says why and retries continue in the background
+        (except in sim mode, where nothing retries on its own).
         """
         link = self._link(account)
         await self._drop_link(link)
         link.needs_reauth = False
+        link.forgotten = False
         link.last_error = None
         if self.connect_purpose() is None:
             link.last_error = self.gate.purpose_allowed(Purpose.ENGINE)[1]
             return False
+        link.last_used = self.clock.monotonic()
         self._ensure_connecting(link, token_data)
         if link.attempted is not None:
             with contextlib.suppress(TimeoutError):
@@ -389,25 +425,35 @@ class AferoDriver:
         return link.connected
 
     async def disconnect(self, account: str, *, forget: bool = True) -> None:
-        """Stop using an account. With `forget`, its stored token is deleted too (a new sign-in is needed)."""
+        """Stop using an account. With `forget`, its stored token is deleted too (a new sign-in is needed), and
+        nothing — not a request still in flight, not a background reconnect — brings it back until `connect()`."""
         link = self._link(account)
-        await self._drop_link(link)
+        if forget:
+            link.forgotten = (
+                True  # first, so nothing that finishes while we drop the link can re-save a token
+            )
+        await self._drop_link(link, persist=not forget)
         if forget:
             self.token_store.delete(account)
             link.persisted_token = None
+            link.needs_reauth = False
             link.last_error = "Disconnected on /ops. Sign in again to reconnect."
 
-    async def _drop_link(self, link: _Link) -> None:
-        for task in (link.task, link.watchdog):
-            if task is not None and not task.done():
+    async def _drop_link(self, link: _Link, *, persist: bool = True) -> None:
+        me = asyncio.current_task()
+        for task in (link.task, link.watchdog, link.idle_task):
+            if task is not None and task is not me and not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)  # our own cancellation still propagates
-        link.task = link.watchdog = None
-        bridge, link.bridge = link.bridge, None
+        link.task = link.watchdog = link.idle_task = None
+        bridge = link.bridge
+        if bridge is not None and persist:
+            self._persist_rotation(link, bridge)  # while it is still the link's bridge
+        link.bridge = None
         link.connected = link.degraded = False
         link.failures = 0
+        link.rejected_bearer = None
         if bridge is not None:
-            self._persist_rotation(link, bridge)
             await self._close_bridge(bridge)
 
     async def close(self) -> None:
@@ -428,7 +474,7 @@ class AferoDriver:
     async def _connect_loop(self, link: _Link, token_data: TokenData | None) -> None:
         attempt = 0
         try:
-            while not self._closed and not link.needs_reauth:
+            while not self._closed and not link.needs_reauth and not link.forgotten:
                 purpose = self.connect_purpose()
                 if purpose is None:
                     link.last_error = self.gate.purpose_allowed(Purpose.ENGINE)[1]
@@ -437,14 +483,24 @@ class AferoDriver:
                 token_data = None
                 if link.attempted is not None:
                     link.attempted.set()
-                if ok or link.needs_reauth or link.persisted_token is None:
-                    return
+                if ok or link.needs_reauth or link.persisted_token is None or self.on_demand:
+                    return  # sim mode never retries on its own: the next bench call tries again
                 delay = CONNECT_BACKOFF_S[min(attempt, len(CONNECT_BACKOFF_S) - 1)]
                 attempt += 1
                 await self.clock.sleep(delay)
         finally:
             if link.attempted is not None:
                 link.attempted.set()
+
+    async def _connect_on_demand(self, link: _Link) -> bool:
+        """Sim mode: one connect attempt for a bench call (concurrent calls share it)."""
+        async with link.lock:
+            if link.bridge is not None and link.connected:
+                return True
+            if link.task is not None and not link.task.done():
+                await asyncio.gather(link.task, return_exceptions=True)
+                return link.bridge is not None and link.connected
+            return await self._connect_once(link, Purpose.BENCH, None)
 
     async def _connect_once(self, link: _Link, purpose: Purpose, token_data: TokenData | None) -> bool:
         """The `AferoBridgeV1.open()` equivalent: account id + first discovery, under a 15 s cap."""
@@ -478,17 +534,20 @@ class AferoDriver:
         )
         link.persisted_token = token
         link.connecting = True
+        link.connecting_bridge = bridge
         link.purpose = purpose
         ok = False
         try:
             force_single_attempt()
             with purpose_scope(purpose):
                 await asyncio.wait_for(self._open(bridge), CONNECT_TIMEOUT_S)
-            ok = not link.needs_reauth
+            ok = not link.needs_reauth and not link.forgotten and not self._closed
         except REQUEST_ERRORS as exc:
             outcome, error = classify_exception(exc)
             if isinstance(exc, TimeoutError):
                 error = "Hubspace didn't finish the first discovery within 15 s; retrying in the background."
+                if self.on_demand:
+                    error = "Hubspace didn't finish the first discovery within 15 s."
             if outcome is Outcome.AUTH:
                 self._mark_reauth(link, error)
             else:
@@ -497,6 +556,7 @@ class AferoDriver:
         finally:
             link.connecting = False
             self._persist_rotation(link, bridge)
+            link.connecting_bridge = None
             if not ok:
                 await self._close_bridge(bridge)
         if not ok:
@@ -509,12 +569,26 @@ class AferoDriver:
         link.last_error = None
         link.failures = 0
         link.degraded = False
+        link.rejected_bearer = None
         link.device_ids = {
             d for d in bridge.known_afero_device_ids if bridge.get_afero_device(d).split is None
         }
         self._check_unknown(link)
+        if self.on_demand:
+            link.last_used = self.clock.monotonic()
+            link.idle_task = self._spawn(self._idle_closer(link, bridge))
         log.info("afero account %s connected (%d devices visible)", link.account, len(link.device_ids))
         return True
+
+    async def _idle_closer(self, link: _Link, bridge: AferoBridgeV1) -> None:
+        """Sim mode: close the bridge (and with it aioafero's polling) once no bench call has used it for a while."""
+        while link.bridge is bridge and not self._closed:
+            idle_for = self.clock.monotonic() - link.last_used
+            if idle_for >= ON_DEMAND_IDLE_S:
+                log.info("afero account %s closed after %.0f s without a bench call", link.account, idle_for)
+                await self._drop_link(link)
+                return
+            await self.clock.sleep(ON_DEMAND_IDLE_S - idle_for)
 
     @staticmethod
     async def _open(bridge: AferoBridgeV1) -> None:
@@ -530,15 +604,18 @@ class AferoDriver:
 
     def _mark_reauth(self, link: _Link, message: str, bridge: AferoBridgeV1 | None = None) -> None:
         """A dead token: stop using the account (never loop logins) and say so on /ops."""
-        if bridge is not None and link.bridge is not None and bridge is not link.bridge:
+        if bridge is not None and bridge is not link.bridge and bridge is not link.connecting_bridge:
             return  # an old bridge's late event
+        if link.forgotten:
+            return  # disconnected on purpose; a late failure isn't a sign-in problem
         first = not link.needs_reauth
         link.needs_reauth = True
         link.connected = False
         link.last_error = message
-        old, link.bridge = link.bridge, None
+        old = link.bridge
         if old is not None:
             self._persist_rotation(link, old)
+            link.bridge = None
             self._spawn(self._close_bridge(old))
         if first:
             log.warning("afero account %s needs a fresh sign-in", link.account)
@@ -557,9 +634,13 @@ class AferoDriver:
 
     # ---- tokens ----------------------------------------------------------------------------------------------
     def _persist_rotation(self, link: _Link, bridge: AferoBridgeV1 | None = None) -> None:
+        """Save the bridge's refresh token if it rotated — only for the bridge the account is using (or opening)
+        now, and never after `disconnect()` deleted the token."""
         bridge = bridge or link.bridge
-        if bridge is None or not self.token_store.available:
+        if bridge is None or link.forgotten or not self.token_store.available:
             return
+        if bridge is not link.bridge and bridge is not link.connecting_bridge:
+            return  # a dropped bridge: its late rotation must not resurrect or overwrite the stored token
         current = bridge.refresh_token
         if not current or current == link.persisted_token:
             return
@@ -593,7 +674,7 @@ class AferoDriver:
         If it expires sooner, force aioafero to refresh (`expiration=0`) and send one cheap GET (users/me).
         Returns OK when the bearer is fresh, else the outcome that stopped it.
         """
-        link = self._ready_link(account)
+        link = await self._ready_link(account, purpose)
         if isinstance(link, _Reply):
             return link.outcome
         bridge = link.bridge
@@ -612,13 +693,17 @@ class AferoDriver:
         return reply.outcome
 
     # ---- the request path ------------------------------------------------------------------------------------
-    def _ready_link(self, account: str) -> _Link | _Reply:
+    async def _ready_link(self, account: str, purpose: Purpose | None = None) -> _Link | _Reply:
+        """The account's connected link, or why there isn't one. In sim mode a BENCH call opens it on demand."""
         link = self._link(account)
         if link.needs_reauth:
             return _Reply(
                 Outcome.AUTH, error=link.last_error or "Hubspace needs a fresh sign-in for this account."
             )
+        if link.forgotten:
+            return _Reply(Outcome.AUTH, error=link.last_error or "Disconnected on /ops. Sign in again.")
         if link.bridge is not None and link.connected:
+            link.last_used = self.clock.monotonic()
             return link
         if not self._has_token(link):
             return _Reply(
@@ -628,35 +713,91 @@ class AferoDriver:
             )
         if self.connect_purpose() is None:
             return _Reply(Outcome.DENIED, error=self.gate.purpose_allowed(Purpose.ENGINE)[1])
+        if self.on_demand:
+            if purpose is not Purpose.BENCH:
+                return _Reply(Outcome.DENIED, error=self.gate.purpose_allowed(Purpose.ENGINE)[1])
+            link.last_used = self.clock.monotonic()
+            if await self._connect_on_demand(link):
+                link.last_used = self.clock.monotonic()
+                return link
+            if link.needs_reauth:
+                return _Reply(Outcome.AUTH, error=link.last_error)
+            why = f": {link.last_error}" if link.last_error else "."
+            return _Reply(Outcome.CONNECTION, error=f"Couldn't open Hubspace for this bench call{why}")
         self._ensure_connecting(link)
         why = f" (last error: {link.last_error})" if link.last_error else ""
         return _Reply(Outcome.CONNECTION, error=f"Not connected to Hubspace for this account yet{why}.")
 
-    async def _send(self, link: _Link, purpose: Purpose, method: str, url: str, **kwargs: Any) -> _Reply:
+    async def _send(
+        self,
+        link: _Link,
+        purpose: Purpose,
+        method: str,
+        url: str,
+        *,
+        state_of: str | None = None,
+        proves: bool | None = None,
+        note: bool = True,
+        **kwargs: Any,
+    ) -> _Reply:
+        """One request on the link's bridge, classified. `state_of` names the device when this is a device-state
+        call; only those `prove` an outage is over (default: whether `state_of` is set). `note=False` leaves the
+        outage bookkeeping to the caller."""
+        if proves is None:
+            proves = state_of is not None
         bridge = link.bridge
         force_single_attempt()
         start = self.clock.monotonic()
         invalid_auth = False
-        try:
-            with purpose_scope(purpose):
-                response = await asyncio.wait_for(bridge.request(method, url, **kwargs), SEND_TIMEOUT_S)
-                body = await response.read()
-        except REQUEST_ERRORS as exc:
-            outcome, error = classify_exception(exc)
-            invalid_auth = isinstance(exc, InvalidAuth)
-            reply = _Reply(outcome, None, b"", error, self.clock.monotonic() - start)
-        else:
-            outcome, error = classify_status(response.status)
-            reply = _Reply(outcome, response.status, body or b"", error, self.clock.monotonic() - start)
-        finally:
-            self._persist_rotation(link, bridge)
+        with capture_exchange() as seen:
+            try:
+                with purpose_scope(purpose):
+                    response = await asyncio.wait_for(bridge.request(method, url, **kwargs), SEND_TIMEOUT_S)
+                    body = await response.read()
+            except REQUEST_ERRORS as exc:
+                outcome, error = classify_exception(exc)
+                invalid_auth = isinstance(exc, InvalidAuth)
+                status = None
+                if outcome is Outcome.THROTTLED and seen.last_path == URL(url).path:
+                    status = seen.last_status  # the 429/503/504/403 aioafero turned into an exception
+                    if status is not None:
+                        error = classify_status(status)[1] or error
+                reply = _Reply(outcome, status, b"", error, self.clock.monotonic() - start)
+            else:
+                outcome, error = classify_status(response.status)
+                reply = _Reply(outcome, response.status, body or b"", error, self.clock.monotonic() - start)
+            finally:
+                self._persist_rotation(link, bridge)
+        if bridge is not link.bridge:
+            reply.stale = True  # dropped or replaced meanwhile (e.g. disconnect): leave the link alone
+            return reply
         if invalid_auth:
             self._mark_reauth(link, reply.error or "re-sign-in required", bridge)
-        elif reply.status == 401 and bridge.token_data is not None:
-            # A stale bearer: make the next call refresh it. A dead refresh token then shows up as InvalidAuth.
-            bridge.set_token_data(bridge.token_data._replace(expiration=0))
-        self._note_outcome(link, reply.outcome)
+        elif reply.status == 401:
+            self._on_401(link, bridge, seen.bearer, reply)
+        elif reply.outcome is Outcome.OK:
+            link.rejected_bearer = None
+        if state_of is not None and self._is_outage(reply.outcome, reply.status):
+            link.probe_device = state_of
+        if note:
+            self._note_outcome(link, reply.outcome, reply.status, proves=proves)
         return reply
+
+    def _on_401(self, link: _Link, bridge: AferoBridgeV1, bearer: str | None, reply: _Reply) -> None:
+        """A stale bearer is refreshed and retried once; a fresh bearer that is refused too is AUTH (07 §3)."""
+        data = bridge.token_data
+        if link.rejected_bearer is None or bearer is None or bearer == link.rejected_bearer:
+            link.rejected_bearer = link.rejected_bearer or bearer
+            reply.outcome = Outcome.AUTH_STALE
+            if data is not None and (bearer is None or token_fingerprint(data.token) == bearer):
+                # Make the next call refresh. A dead refresh token then shows up as InvalidAuth.
+                bridge.set_token_data(data._replace(expiration=0))
+            return
+        reply.outcome = Outcome.AUTH
+        reply.error = (
+            "Hubspace refused a freshly refreshed sign-in token too (HTTP 401). If this keeps happening, "
+            "sign in again on /ops/accounts."
+        )
 
     def _state_url(self, link: _Link, device_id: str) -> str:
         return f"{API_BASE}/v1/accounts/{link.account_id}/metadevices/{device_id}/state"
@@ -666,8 +807,15 @@ class AferoDriver:
         self._record("gate_denied", device_id=device_id, reason=reason, purpose=str(purpose))
 
     # ---- outages ---------------------------------------------------------------------------------------------
-    def _note_outcome(self, link: _Link, outcome: Outcome) -> None:
-        if outcome in OUTAGE_OUTCOMES:
+    @staticmethod
+    def _is_outage(outcome: Outcome, status: int | None) -> bool:
+        return outcome in OUTAGE_OUTCOMES or (outcome is Outcome.THROTTLED and status in OUTAGE_STATUSES)
+
+    def _note_outcome(
+        self, link: _Link, outcome: Outcome, status: int | None = None, *, proves: bool = False
+    ) -> None:
+        """Outage bookkeeping. `proves`: this was a device-state call, so a 2xx shows Hubspace really works."""
+        if self._is_outage(outcome, status):
             link.failures += 1
             if link.failures >= DEGRADED_AFTER and not link.degraded:
                 link.degraded = True
@@ -681,6 +829,8 @@ class AferoDriver:
                 if link.watchdog is None or link.watchdog.done():
                     link.watchdog = self._spawn(self._watchdog(link))
         elif outcome is Outcome.OK:
+            if not proves:
+                return  # users/me or discovery answering says nothing about device state
             link.failures = 0
             if link.degraded:
                 link.degraded = False
@@ -692,18 +842,32 @@ class AferoDriver:
         elif outcome is not Outcome.DENIED:
             link.failures = 0  # the cloud answered: not an outage, even if it didn't like the request
 
+    def _probe_target(self, link: _Link) -> str | None:
+        """The device the watchdog reads back: the one that last failed, else a registered device on the account
+        (allowlisted ones first). None when the account has no registered device."""
+        ids = sorted(
+            {d.metadevice_id for d in self.registry.devices if d.account == link.account and d.metadevice_id}
+        )
+        if link.probe_device in ids:
+            return link.probe_device
+        allowlisted = self.gate.effective_allowlist()
+        return next((i for i in ids if i in allowlisted), ids[0] if ids else None)
+
     async def _watchdog(self, link: _Link) -> None:
-        while link.degraded and not self._closed and link.bridge is not None:
+        """While degraded: a real state readback every ~10 s; only a well-formed 2xx readback ends the outage."""
+        bridge = link.bridge
+        while link.degraded and not self._closed and bridge is not None and link.bridge is bridge:
             await self.clock.sleep(OUTAGE_PROBE_INTERVAL_S)
-            if not link.degraded or link.bridge is None:
+            if not link.degraded or link.bridge is not bridge:
                 return
-            await self._send(
-                link,
-                link.purpose or Purpose.ENGINE,
-                "get",
-                f"{API_BASE}/v1/users/me",
-                headers={"host": API_HOST},
-            )
+            purpose = link.purpose or Purpose.ENGINE
+            device_id = self._probe_target(link)
+            if device_id is None:  # nothing registered to read back: the account endpoint is all there is
+                await self._send(
+                    link, purpose, "get", f"{API_BASE}/v1/users/me", headers={"host": API_HOST}, proves=True
+                )
+                continue
+            await self._read(link, device_id, purpose, ReadResult(device_id, Outcome.OK))
 
     def _fire_recovery(self, account: str) -> None:
         for callback in list(self.on_recovery):
@@ -730,15 +894,23 @@ class AferoDriver:
             self._denied(device_id, purpose, denied.reason)
             result.outcome, result.error = Outcome.DENIED, denied.reason
             return result
-        link = self._ready_link(account)
+        link = await self._ready_link(account, purpose)
         if isinstance(link, _Reply):
             result.outcome, result.error = link.outcome, link.error
             return result
+        if self.on_demand:  # the on-demand connect took time: stamp what is actually sent
+            sent_at = result.sent_at = self.clock.now()
         stamp_ms = round(sent_at * 1000)
         body = {"metadeviceId": device_id, "values": [row.to_wire(stamp_ms) for row in rows]}
         result.bytes_sent = payload_bytes(device_id, rows, stamp_ms)
         reply = await self._send(
-            link, purpose, "put", self._state_url(link, device_id), json=body, headers=dict(_WRITE_HEADERS)
+            link,
+            purpose,
+            "put",
+            self._state_url(link, device_id),
+            state_of=device_id,
+            json=body,
+            headers=dict(_WRITE_HEADERS),
         )
         result.outcome, result.http_status, result.error = reply.outcome, reply.status, reply.error
         result.elapsed_s = reply.elapsed_s
@@ -766,29 +938,41 @@ class AferoDriver:
             self._denied(device_id, purpose, why)
             result.outcome, result.error = Outcome.DENIED, why
             return result
-        link = self._ready_link(account)
+        link = await self._ready_link(account, purpose)
         if isinstance(link, _Reply):
             result.outcome, result.error = link.outcome, link.error
             return result
+        return await self._read(link, device_id, purpose, result)
+
+    async def _read(self, link: _Link, device_id: str, purpose: Purpose, result: ReadResult) -> ReadResult:
+        """The state GET itself. Outage bookkeeping runs after the body is checked, so only a well-formed
+        readback counts as Hubspace working."""
         reply = await self._send(
-            link, purpose, "get", self._state_url(link, device_id), headers={"host": DATA_HOST}
+            link,
+            purpose,
+            "get",
+            self._state_url(link, device_id),
+            state_of=device_id,
+            note=False,
+            headers={"host": DATA_HOST},
         )
         result.outcome, result.http_status, result.error = reply.outcome, reply.status, reply.error
         result.elapsed_s = reply.elapsed_s
         result.fetched_at = self.clock.now()
         if reply.outcome is Outcome.DENIED:
             self._denied(device_id, purpose, reply.error or "")
-        if reply.outcome is not Outcome.OK:
-            return result
-        rows, skipped, error = parse_state_body(reply.body, device_id)
-        if rows is None:
-            self.stats["malformed_reads"] += 1
-            result.outcome, result.error = Outcome.MALFORMED, error
-            return result
-        if skipped:
-            self.stats["rows_skipped"] += skipped
-            log.warning("afero readback for %s skipped %d malformed row(s)", device_id, skipped)
-        result.rows = rows
+        if reply.outcome is Outcome.OK:
+            rows, skipped, error = parse_state_body(reply.body, device_id)
+            if rows is None:
+                self.stats["malformed_reads"] += 1
+                result.outcome, result.error = Outcome.MALFORMED, error
+            else:
+                if skipped:
+                    self.stats["rows_skipped"] += skipped
+                    log.warning("afero readback for %s skipped %d malformed row(s)", device_id, skipped)
+                result.rows = rows
+        if not reply.stale:
+            self._note_outcome(link, result.outcome, result.http_status, proves=True)
         return result
 
     async def fetch_profile(self, device_id: str, *, purpose: Purpose = Purpose.ENGINE) -> DeviceInfo:
@@ -799,7 +983,7 @@ class AferoDriver:
         if not allowed:
             self._denied(device_id, purpose, why)
             raise GateDenied(why)
-        link = self._ready_link(account)
+        link = await self._ready_link(account, purpose)
         if isinstance(link, _Reply):
             raise AferoRequestFailed(link.outcome, link.error or "Hubspace is not connected.")
         url = f"{API_BASE}/v1/accounts/{link.account_id}/metadevices/{device_id}"
@@ -831,8 +1015,9 @@ class AferoDriver:
         else:
             accounts = [a for a in self.accounts() if a in self._links and self._links[a].connected]
         found: list[DeviceInfo] = []
+        purpose = self.connect_purpose()
         for name in accounts:
-            link = self._ready_link(name)
+            link = await self._ready_link(name, purpose)
             if isinstance(link, _Reply):
                 if account is not None:
                     raise AferoRequestFailed(link.outcome, link.error or "Hubspace is not connected.")
@@ -911,6 +1096,7 @@ class AferoDriver:
             "driver": self.name,
             "simulated": False,
             "purpose": str(purpose) if purpose else None,
+            "on_demand": self.on_demand,
             "token_store": "ready" if self.token_store.available else self.token_store.problem,
             "requests": dict(self._session.stats) if self._session is not None else {},
             "denied": self.stats["denied"],
