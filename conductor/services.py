@@ -119,9 +119,15 @@ class Services:
         self.registry = save_overlay_patch(
             self.registry, device_id, patch, config_dir=self.config_dir, now=self.clock.now()
         )
-        for driver in (self.sim, self.afero):
-            if driver is not None and hasattr(driver, "set_registry"):
-                driver.set_registry(self.registry)
+        known = set(self.sim.addresses())
+        for entry in self.registry.devices:
+            if entry.sim_address not in known:  # a spare or new device added through the overlay
+                self.sim.add_device(
+                    entry.sim_address,
+                    account=entry.account,
+                    profile=entry.profile or "sqhdk03-sim",
+                    label=entry.label,
+                )
         return self.registry
 
     def version(self) -> dict:
@@ -141,6 +147,8 @@ class Services:
     async def close(self) -> None:
         for executor in self.executors.values():
             await executor.close()
+        if hasattr(self.accounts, "close"):
+            await self.accounts.close()
         for driver in (self.afero, self.sim):
             if driver is not None:
                 await driver.close()
@@ -172,16 +180,19 @@ def build_services(
     roles = RoleStore(data, clock)
     tracker = DeviceStateTracker(clock, telemetry)
 
-    sim = SimDriver(registry, clock=clock, settings=sim_settings)
+    from conductor.sim.settings import SimSettings
+
+    sim = SimDriver(registry, clock=clock, settings=sim_settings or SimSettings.dev())
     afero = None
-    accounts: Any = SimAccounts(registry, clock)
+    registry_now = lambda: holder["registry"]
+    accounts: Any = SimAccounts(lambda: registry_now(), clock)
     if gate_settings.live:
         if not token_store.available:
             problems.append(token_store.problem)
         else:
             from conductor.drivers.afero import AferoAccounts, AferoDriver
 
-            afero = AferoDriver(registry, gate, token_store, clock=clock, telemetry=telemetry)
+            afero = AferoDriver(lambda: registry_now(), gate, token_store, clock=clock, telemetry=telemetry)
             accounts = AferoAccounts(afero)
 
     services = Services(
@@ -205,7 +216,8 @@ def build_services(
         problems=problems,
     )
 
-    # The registry can change at runtime (ops edits); the gate reads it through the services object.
+    # The registry can change at runtime (ops edits); everything reads it through the services object.
+    registry_now = lambda: services.registry
     gate.writable_devices = lambda: services.registry.writable_metadevice_ids()
     services.locks = DeviceLockManager(
         services.lockable,
@@ -225,6 +237,6 @@ def build_services(
         executor = CommandExecutor(
             driver, locks=services.locks, telemetry=telemetry, clock=clock, policy=settings.executor
         )
-        executor.add_listener(tracker.note_command)
+        tracker.attach(executor)
         services.executors[id(driver)] = executor
     return services
