@@ -182,7 +182,15 @@ def build_services(
 
     from conductor.sim.settings import SimSettings
 
-    sim = SimDriver(registry, clock=clock, settings=sim_settings or SimSettings.dev())
+    if sim_settings is None:
+        sim_settings = SimSettings.dev()
+        if (
+            env.get("CONDUCTOR_SIM_SPEED") == "fast"
+        ):  # tests and quick demos: same behaviour, ~20x less latency
+            sim_settings = sim_settings.with_(
+                ack_ms_min=5, ack_ms_max=40, device_apply_extra_s_min=0.01, device_apply_extra_s_max=0.08
+            )
+    sim = SimDriver(registry, clock=clock, settings=sim_settings)
     afero = None
     registry_now = lambda: holder["registry"]
     accounts: Any = SimAccounts(lambda: registry_now(), clock)
