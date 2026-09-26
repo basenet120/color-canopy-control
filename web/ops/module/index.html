@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#2E2A26">
+<title>Single module · Color Canopy</title>
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/ops/module/module.css">
+</head>
+<body class="ops module-page">
+
+<header class="topbar">
+  <div class="topbar-title">
+    <h1>Single module</h1>
+    <div class="device-line"><span id="device-name">Connecting…</span> <span id="status-pill" class="pill" hidden></span></div>
+  </div>
+  <div class="topbar-actions">
+    <button type="button" id="hold-btn" class="secondary" disabled>Hold</button>
+    <button type="button" id="switch-btn" class="secondary" hidden>Done</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" role="alert" hidden></div>
+
+<!-- Device picker / "in use" view -->
+<section id="picker" class="picker" hidden>
+  <h2>Choose a module</h2>
+  <p class="muted" id="picker-note">The page holds the module while it's open, so nothing else changes its lights.</p>
+  <div id="device-list" class="device-list"></div>
+</section>
+
+<main id="workspace" class="workspace" hidden>
+  <!-- Map + telemetry -->
+  <section class="map-panel" aria-label="Module map">
+    <div class="map-toolbar">
+      <span id="selection-count" class="muted">Tap heads to select · drag to select an area</span>
+      <div class="map-toolbar-buttons">
+        <button type="button" class="chip" data-select="all">All</button>
+        <button type="button" class="chip" data-select="none">None</button>
+        <button type="button" class="chip" data-select="invert">Invert</button>
+        <button type="button" class="chip" id="wire-toggle" aria-pressed="true">Wire order</button>
+      </div>
+    </div>
+    <div class="map-wrap"><svg id="map" role="img" aria-label="The module's heads"></svg></div>
+    <p class="legend">
+      <span><span class="key key-reported"></span>centre: what Hubspace reports</span>
+      <span><span class="key key-desired"></span>ring: what we sent</span>
+      <span><span class="key key-draft"></span>dashed: not applied yet</span>
+    </p>
+    <div class="look-line">
+      <div><strong>Lights show:</strong> <span id="reported-look">–</span></div>
+      <div id="diff-line" class="muted"></div>
+    </div>
+
+    <div class="telemetry" id="telemetry" aria-live="polite">
+      <div class="tele-last" id="tele-last">No commands sent yet.</div>
+      <div class="tele-session muted" id="tele-session"></div>
+      <div class="tele-actions">
+        <button type="button" class="chip" id="tele-details-btn" aria-expanded="false">Details</button>
+        <button type="button" class="chip" id="copy-json-btn">Copy anonymized JSON</button>
+      </div>
+      <div id="tele-details" class="tele-details" hidden></div>
+    </div>
+  </section>
+
+  <!-- Controls -->
+  <section class="sheet" aria-label="Controls">
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="paint" aria-selected="true">Paint</button>
+      <button type="button" role="tab" data-tab="module" aria-selected="false">Module</button>
+      <button type="button" role="tab" data-tab="cards" aria-selected="false">Tests</button>
+      <button type="button" role="tab" data-tab="slots" aria-selected="false">Slots</button>
+      <button type="button" role="tab" data-tab="effects" aria-selected="false">Effects</button>
+      <button type="button" role="tab" data-tab="calibrate" aria-selected="false">Calibrate</button>
+    </nav>
+
+    <!-- Paint -->
+    <div class="tab-body" id="tab-paint" role="tabpanel">
+      <div id="t1-note" class="notice" hidden></div>
+      <div class="field">
+        <span class="field-label">Show colours</span>
+        <div id="recipe-swatches" class="swatches"></div>
+        <div class="seg" id="recipe-kind" role="group" aria-label="Recipe">
+          <button type="button" data-kind="rgb_only" aria-pressed="false">RGB only</button>
+          <button type="button" data-kind="blend" aria-pressed="true">RGB + warm white</button>
+        </div>
+      </div>
+      <div class="brush-row">
+        <label class="color-pick">Colour <input type="color" id="brush-color" value="#f96302"></label>
+        <span class="brush-preview" id="brush-preview" aria-hidden="true"></span>
+      </div>
+      <label class="slider"><span>Colour brightness <output id="cb-out">100%</output></span>
+        <input type="range" id="brush-cb" min="0" max="100" value="100"></label>
+      <div class="field">
+        <span class="field-label">White LEDs in the head</span>
+        <div class="seg" id="white-mode" role="group" aria-label="White LEDs">
+          <button type="button" data-white="off" aria-pressed="true">Off</button>
+          <button type="button" data-white="warm" aria-pressed="false">Warm</button>
+          <button type="button" data-white="cool" aria-pressed="false">Cool</button>
+        </div>
+      </div>
+      <div id="white-controls" hidden>
+        <label class="slider"><span>White temperature <output id="cct-out">2700 K</output></span>
+          <input type="range" id="brush-cct" min="2700" max="6500" step="100" value="2700"></label>
+        <label class="slider"><span>White brightness <output id="wb-out">100%</output></span>
+          <input type="range" id="brush-wb" min="0" max="100" value="100"></label>
+      </div>
+      <div class="button-grid">
+        <button type="button" id="paint-selected" class="secondary big">Paint selected</button>
+        <button type="button" id="paint-all" class="secondary big">Paint all</button>
+      </div>
+      <details class="gradient-box">
+        <summary>Two-colour gradient</summary>
+        <div class="brush-row">
+          <label class="color-pick">To colour <input type="color" id="brush-to" value="#ffd9a8"></label>
+          <span class="muted small">from the colour above</span>
+        </div>
+        <div class="button-grid">
+          <button type="button" class="secondary" data-gradient="x">Left → right</button>
+          <button type="button" class="secondary" data-gradient="y">Top → bottom</button>
+        </div>
+        <p class="muted small">Across the selected heads (all heads if none are selected).</p>
+      </details>
+      <div class="button-grid">
+        <button type="button" id="draft-off" class="secondary">All heads off</button>
+        <button type="button" id="draft-reset" class="secondary">Undo changes</button>
+      </div>
+      <div class="field">
+        <span class="field-label">Paint into slot</span>
+        <div class="seg" id="paint-slot" role="group" aria-label="Paint into slot"></div>
+        <p class="muted small">Custom 1 and 2 usually hold patterns painted in the Hubspace app, so custom 3 is the safe default.</p>
+      </div>
+      <div class="apply-bar">
+        <button type="button" id="apply-btn" class="apply">Apply</button>
+      </div>
+    </div>
+
+    <!-- Whole module -->
+    <div class="tab-body" id="tab-module" role="tabpanel" hidden>
+      <p class="muted">The whole module at once, like the Hubspace app.</p>
+      <div class="button-grid">
+        <button type="button" class="big" data-power="on">Power on</button>
+        <button type="button" class="big secondary" data-power="off">Power off</button>
+      </div>
+      <label class="slider"><span>Brightness <output id="m-bri-out">60%</output></span>
+        <input type="range" id="m-bri" min="1" max="100" value="60"></label>
+      <button type="button" id="m-bri-btn" class="secondary wide">Set brightness only</button>
+      <div class="group">
+        <h3>White</h3>
+        <label class="slider"><span>Temperature <output id="m-cct-out">2700 K</output></span>
+          <input type="range" id="m-cct" min="2700" max="6500" step="100" value="2700"></label>
+        <button type="button" id="m-white-btn" class="wide">Set white</button>
+      </div>
+      <div class="group">
+        <h3>Colour</h3>
+        <label class="color-pick">Colour <input type="color" id="m-rgb" value="#f96302"></label>
+        <button type="button" id="m-rgb-btn" class="wide">Set colour</button>
+      </div>
+      <div class="group">
+        <h3>Preset</h3>
+        <label>Preset <select id="m-preset"></select></label>
+        <label class="slider"><span>Speed <output id="m-speed-out">0</output></span>
+          <input type="range" id="m-speed" min="-10" max="10" value="0"></label>
+        <button type="button" id="m-preset-btn" class="wide">Play preset</button>
+      </div>
+      <div class="group">
+        <h3>Program</h3>
+        <label>Program <select id="m-program"></select></label>
+        <button type="button" id="m-program-btn" class="wide">Run program</button>
+      </div>
+    </div>
+
+    <!-- Test cards -->
+    <div class="tab-body" id="tab-cards" role="tabpanel" hidden>
+      <div id="cards" class="cards"></div>
+    </div>
+
+    <!-- Slots -->
+    <div class="tab-body" id="tab-slots" role="tabpanel" hidden>
+      <p class="muted">The three saved patterns on the controller, as Hubspace reports them.</p>
+      <div id="slots" class="slots"></div>
+    </div>
+
+    <!-- Effects -->
+    <div class="tab-body" id="tab-effects" role="tabpanel" hidden>
+      <div id="effects-note" class="notice" hidden></div>
+      <label>Slot <select id="fx-slot"></select></label>
+      <label>Motion effect <select id="fx-motion"></select></label>
+      <label>Brightness effect <select id="fx-bright"></select></label>
+      <label class="slider"><span>Motion speed <output id="fx-ms-out">50</output></span>
+        <input type="range" id="fx-ms" min="0" max="100" value="50"></label>
+      <label class="slider"><span>Brightness speed <output id="fx-bs-out">50</output></span>
+        <input type="range" id="fx-bs" min="0" max="100" value="50"></label>
+      <label class="slider"><span>Brightness depth <output id="fx-bd-out">100</output></span>
+        <input type="range" id="fx-bd" min="0" max="100" value="100"></label>
+      <div class="button-grid">
+        <button type="button" id="fx-start" class="big">Start</button>
+        <button type="button" id="fx-restart" class="big secondary">Restart</button>
+      </div>
+      <p class="muted small">Restart rewrites the slot's header and selects it again, which restarts its animation.</p>
+    </div>
+
+    <!-- Calibration -->
+    <div class="tab-body" id="tab-calibrate" role="tabpanel" hidden>
+      <p>Run the <strong>index sweep</strong> (Tests tab) or photograph the <strong>hue ramp</strong>, then make the
+        numbers on the map match where each head really is.</p>
+      <div class="field">
+        <span class="field-label">How the panel hangs</span>
+        <div class="seg" id="cal-orientation" role="group" aria-label="Orientation">
+          <button type="button" data-value="A" aria-pressed="true">A</button>
+          <button type="button" data-value="B" aria-pressed="false">B (turned 180°)</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">The cable runs along</span>
+        <div class="seg" id="cal-path" role="group" aria-label="Cable path">
+          <button type="button" data-value="serpentine_rows" aria-pressed="true">Rows</button>
+          <button type="button" data-value="serpentine_cols" aria-pressed="false">Columns</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">Head 0 (first on the cable) is at the…</span>
+        <div class="corner-grid" id="cal-corner" role="group" aria-label="Start corner, as the map shows it">
+          <button type="button" data-value="top-left">Top left</button>
+          <button type="button" data-value="top-right">Top right</button>
+          <button type="button" data-value="bottom-left">Bottom left</button>
+          <button type="button" data-value="bottom-right">Bottom right</button>
+        </div>
+        <p class="muted small">Corners as the map shows the panel.</p>
+      </div>
+      <p id="cal-status" class="cal-status"></p>
+      <div class="button-grid">
+        <button type="button" id="cal-save" class="big">Save</button>
+        <button type="button" id="cal-flip" class="big secondary">Flip wire order</button>
+      </div>
+      <p class="muted small">Flip puts head 0 at the other end of the cable. Saved for this module only.</p>
+    </div>
+  </section>
+</main>
+
+<!-- Hold / photo mode -->
+<div id="hold-overlay" class="hold-overlay" hidden>
+  <div class="hold-kicker">Hold · the lights won't change until you release it</div>
+  <div class="hold-name" id="hold-name"></div>
+  <div class="hold-device" id="hold-device"></div>
+  <button type="button" id="hold-release" class="hold-release">Release hold</button>
+</div>
+
+<dialog id="hold-dialog" class="hold-dialog">
+  <form method="dialog" id="hold-form">
+    <h2>Hold for photos</h2>
+    <p class="muted">Freezes the lights and shows this name in big type.</p>
+    <label>Name <input type="text" id="hold-input" maxlength="80" autocomplete="off"></label>
+    <div class="button-grid">
+      <button type="submit" value="hold">Start hold</button>
+      <button type="submit" value="cancel" class="secondary">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="module" src="/ops/module/module.js"></script>
+</body>
+</html>
