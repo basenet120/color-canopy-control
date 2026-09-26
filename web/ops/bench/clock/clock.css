@@ -1,0 +1,35 @@
+/* The filming clock: maximum contrast, huge fixed-width digits, readable on camera. */
+
+body.clock-page {
+  background: #000; color: #fff; min-height: 100vh; min-height: 100dvh; overflow: hidden;
+}
+.clock-main {
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  min-height: 100vh; min-height: 100dvh; max-width: none; padding: 12px; gap: 18px; text-align: center;
+}
+.digits {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700;
+  font-size: min(12.5vw, 34vh); line-height: 1; letter-spacing: -0.02em; white-space: nowrap;
+  color: #fff;
+}
+.put {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700;
+  font-size: min(6vw, 9vh); color: #FFD166; min-height: 1.2em;
+}
+.put.fresh { color: #000; background: #FFD166; border-radius: 12px; padding: 0 16px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: center; color: #BBB; font-size: 0.95rem; }
+.controls { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.controls .secondary { background: #222; color: #fff; border-color: #444; }
+
+.flash {
+  position: fixed; inset: 0; background: #F96302; opacity: 0; pointer-events: none; z-index: 1;
+}
+.flash.on { opacity: 1; }
+.clock-main { position: relative; z-index: 2; }
+
+[hidden] { display: none !important; }
+.sim-badge { z-index: 3; }
+
+@media (orientation: landscape) {
+  .digits { font-size: min(12.5vw, 40vh); }
+}

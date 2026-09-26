@@ -1,0 +1,67 @@
+/* /ops/bench — phone-first, one-handed at a bench. Uses /static/base.css tokens. */
+
+.sim-banner {
+  position: sticky; top: 0; z-index: 10;
+  padding: 14px 16px; padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+  background: var(--orange); color: #fff; text-align: center;
+  font-size: 1.05rem; line-height: 1.3;
+}
+.sim-banner strong { letter-spacing: 0.08em; }
+/* the banner already says SIMULATED at the top; keep the shared badge out of its way */
+body.bench .sim-badge { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); }
+
+/* `.btn` sets display, which would otherwise beat the hidden attribute */
+[hidden] { display: none !important; }
+
+.bench-head .row { margin-bottom: 12px; }
+
+button.big, .btn.big { width: 100%; min-height: 56px; font-size: 1.05rem; }
+
+.jobs .card h3 { margin-bottom: 6px; }
+.job-card .look { background: var(--busy-bg); color: var(--busy); border-radius: 10px; padding: 8px 12px; }
+.job-card .read-only { color: var(--ok); font-weight: 600; font-size: 0.9rem; }
+.job-card details summary { min-height: var(--tap); display: flex; align-items: center; cursor: pointer; }
+.job-card .confirm { display: flex; gap: 12px; align-items: center; font-weight: 600; min-height: var(--tap); }
+.job-card .confirm input { width: 28px; height: 28px; min-height: 0; flex: none; }
+.param { margin-top: 8px; }
+
+.run-title { justify-content: space-between; }
+.run-title h2 { margin: 0; }
+
+.steps { margin: 0; padding-left: 1.4rem; max-height: 40vh; overflow-y: auto; font-size: 0.95rem; }
+.steps li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.steps .t { color: var(--muted); font-family: var(--mono); font-size: 0.85em; margin-right: 6px; }
+.steps li.write { font-weight: 600; }
+
+.verdict-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.verdict {
+  display: inline-block; padding: 8px 18px; border-radius: 999px;
+  font-size: 1.2rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  background: var(--sand); color: var(--charcoal);
+}
+.verdict.pass { background: var(--ok-bg); color: var(--ok); }
+.verdict.fail, .verdict.error { background: var(--bad-bg); color: var(--bad); }
+.verdict.needs_eyes { background: var(--busy-bg); color: var(--busy); }
+.summary { font-size: 1.05rem; }
+
+.question { border: 2px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.question p { font-weight: 600; margin-bottom: 10px; }
+.question .answers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.question .answers button { min-height: 64px; font-size: 1.2rem; }
+.question .answers button.yes { background: var(--ok); }
+.question .answers button.no { background: var(--bad); }
+.question .answers button[aria-pressed="false"].answered { opacity: 0.35; }
+.question .given { margin: 8px 0 0; color: var(--muted); }
+
+.observations { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 0.92rem; }
+.observations dt { color: var(--muted); }
+.observations dd { margin: 0; overflow-wrap: anywhere; }
+.raw { max-height: 50vh; overflow: auto; background: #F1EFEA; padding: 12px; border-radius: 10px; font-size: 0.8rem; }
+
+.runs { list-style: none; margin: 0; padding: 0; }
+.runs li { border-bottom: 1px solid var(--line); }
+.runs button {
+  width: 100%; justify-content: space-between; background: none; color: var(--text);
+  border-radius: 0; padding: 10px 4px; text-align: left; font-weight: 500;
+}
+.runs .when { color: var(--muted); font-size: 0.85rem; }
