@@ -167,6 +167,12 @@ class ModuleManager:
         session.publish("opened")
         return session
 
+    async def close_all(self) -> None:
+        """Shutdown: stop sweeps and release every page lock."""
+        for session in list(self.sessions.values()):
+            await session.close()
+        self.sessions.clear()
+
     async def close(self, device_id: str, lease: str | None) -> bool:
         session = self.sessions.get(device_id)
         if session is None or not lease or not secrets.compare_digest(session.lease.token, lease):

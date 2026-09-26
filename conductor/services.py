@@ -145,6 +145,12 @@ class Services:
             await self.afero.start()  # schedules background connects; never waits on Afero
 
     async def close(self) -> None:
+        # Stop page sessions and bench runs first so their locks are released and nothing is left pending.
+        for key in ("module_manager", "bench"):
+            owner = self.extras.get(key)
+            closer = getattr(owner, "close_all", None) or getattr(owner, "close", None)
+            if closer is not None:
+                await closer()
         for executor in self.executors.values():
             await executor.close()
         if hasattr(self.accounts, "close"):
