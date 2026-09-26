@@ -54,7 +54,7 @@ def topic_allowed(role: str, grants: frozenset[str], topic: str) -> bool:
     return False
 
 
-@dataclass
+@dataclass(eq=False)  # identity equality/hash: clients live in a set
 class _Client:
     ticket: Ticket
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(QUEUE_MAX))
