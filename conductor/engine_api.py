@@ -114,9 +114,13 @@ class CanopyState:
 
 
 class CanopyEngineAPI(Protocol):
-    """What routes (kiosk, ops) call. Implemented by conductor/canopy.py CanopyEngine."""
+    """What routes (kiosk, ops) call. Implemented by conductor/canopy.py CanopyEngine and reached as
+    `services.extras["canopy"]` (routes: 503 with a plain message when it's missing)."""
 
     def state(self) -> CanopyState: ...
+
+    def current_plan(self) -> ModePlan | None:
+        """The plan for the mode now showing (per-module rows + per-head `preview`), for /visualizer and /ops."""
 
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
         """Guest/ops mode request. Kiosk requests honour the cooldown and paused guest input (refused with a
