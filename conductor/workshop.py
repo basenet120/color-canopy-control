@@ -29,7 +29,8 @@ USER = "workshop"
 DEFAULT_UNTIL = "2026-10-19"
 
 
-def read_env(path: Path = ENV_FILE) -> dict[str, str]:
+def read_env(path: Path | None = None) -> dict[str, str]:
+    path = path or ENV_FILE
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -41,7 +42,8 @@ def read_env(path: Path = ENV_FILE) -> dict[str, str]:
     return values
 
 
-def write_env(values: dict[str, str], path: Path = ENV_FILE) -> None:
+def write_env(values: dict[str, str], path: Path | None = None) -> None:
+    path = path or ENV_FILE
     lines = [
         "# Color Canopy workshop settings. Keep this file private: it holds the page password and the key that",
         "# encrypts the Hubspace sign-in. Created by `python -m conductor.workshop setup`.",
