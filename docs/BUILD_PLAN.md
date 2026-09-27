@@ -141,8 +141,5 @@ leaves room for; none has code beyond what's named. Building one is its own PR, 
 ## Delivery
 
 PRs in order, each from its own `claude/*` branch stacked on the previous one, each asking for a merge commit:
-1. `claude/p0-contracts` — this plan, DECISIONS, contract modules and their tests.
-2. `claude/p0-gate-drivers` — SimDriver, Afero adapter + choke point, executor, tracker, roles/ws, services.
-3. `claude/p0-bench` — accounts (CLI + page), bench jobs + pages + clock + CLI, runbook.
-4. `claude/p0b-module` — `/ops/module`.
-5. `claude/p1-engine`, 6. `claude/p2-looks`, 7. `claude/p3-surfaces`, 8. `claude/p35-venue`, 9. `claude/p4-vignettes`.
+1. `claude/p0-contracts`, 2. `claude/p0-gate-drivers`, 3. `claude/p0-bench`, 4. `claude/p0b-module`,
+5. `claude/p1-engine-looks`, 6. `claude/p3-surfaces`, 7. `claude/p35-p4-venue-vignettes` (see docs/STATUS.md).

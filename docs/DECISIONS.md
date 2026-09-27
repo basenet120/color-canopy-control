@@ -246,3 +246,32 @@ copy names the value actually sent. Goodnight's copy names no value, so its 2200
 loop, the commissioning gate, overlay records and the real ladder. `config/sim/soak.yaml` enables motionEffect 1 for
 Golden Hour in the soak only (nothing benched; the report labels it SIMULATED) so the all-or-none re-trigger is
 measured. The pinned acceptance conditions are unchanged. `run_soak(compiler=…)` still runs the bare engine.
+
+## 2026-09-27 — final verify round (15 confirmed findings + 8 completeness gaps, all addressed)
+
+**D44 — Self-heal covers changes made outside the Conductor.** The reconciler reads each canopy module once every
+5 s on a rolling schedule (≈ 1.8 GET/s on the canopy account; reads never count against the write budget), so a
+module changed in the Hubspace app or one that lost its look is back within 10 s (soak: p95 6.1 s over 12 injected
+out-of-band changes). Slot hashes are re-checked only when a slot changed or every 60 s. The read load on real Afero
+is UNVERIFIED — if the bench rate test or the venue shows read throttling, raise `reconciler.true_up_interval_s`.
+
+**D45 — Guest-input pause survives restarts** (atomic file under `<data>/state/`); an unreadable file counts as paused.
+
+**D46 — Unenrolled kiosk screens never show a sign-in dialog.** `/kiosk` and `/kiosk/*` without a principal get a
+calm "This screen isn't set up yet" page (401, no Basic challenge); every other path keeps the challenge. While the
+Conductor is down the kiosk unit shows a local resting page that polls `/healthz`, never the desktop.
+
+**D47 — Releases are amd64 and tags switch last.** `release.sh` builds `--platform linux/amd64`; `install.sh` checks
+the image's commit and architecture and writes `CONDUCTOR_TAG` only after the image is verified, recording the
+previous tag for rollback. The cold spare installs with `--spare` (held and stopped until takeover).
+
+**D48 — Overlay export.** `GET /api/ops/overlay` (ops only) downloads the ops overlay YAML (with real ids, for
+restoring on a box) plus a diff against `config/devices.yaml` with real ids replaced (for committing to git).
+
+**D49 — Four more bench jobs settle the remaining UNVERIFIED behaviours:** `stale_clock_put` (lastUpdateTime
+now − 10 min), `active_slot_rewrite` (rewrite the showing slot without reselecting), `rate_ramp` (5 → 2 → 1 s frame
+writes, silent-drop count, stop at the first failure) and `head_count_boot` (the 12-puck fault). A bench-only stamp
+override on a command is the one way to send a chosen lastUpdateTime, and it still passes the gate.
+
+**D50 — Vignette pages see only look rows.** Tablets and the `vignette:<room>` topic never get telemetry rows (SSID,
+MACs, geo). A revoked enrolled session's sockets are closed, including tickets issued before the revoke.

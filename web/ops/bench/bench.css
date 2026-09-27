@@ -9,6 +9,7 @@
 .sim-banner strong { letter-spacing: 0.08em; }
 /* the banner already says SIMULATED at the top; keep the shared badge out of its way */
 body.bench .sim-badge { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); }
+body.bench { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 64px); } /* keep the last answer buttons clear of the badge */
 
 /* `.btn` sets display, which would otherwise beat the hidden attribute */
 [hidden] { display: none !important; }
