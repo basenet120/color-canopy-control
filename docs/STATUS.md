@@ -3,13 +3,17 @@
 _Last updated: 2026-09-27 — P0 through P4 built on the simulator, three adversarial review rounds fixed, ready for the
 bench kit. Nothing has touched real Hubspace hardware yet._
 
-## ⚠ Blocked: this session can't push
-The cloud session's git proxy refuses `basenet120/color-canopy-control` ("not in this session's authorized repository
-set"), and there is no GitHub CLI or repo-attach tool here. All work is committed locally on the stacked branches
-below. **Alon: attach the repo to this session with push access** (claude.ai/code → the session → Sources), then say
-"push" — the branches go up and the PRs open in order. Until then CI (incl. the gitleaks scan) has not run.
+## Merged
+The whole stack is on `main` as of 2026-09-27: PRs #1–#9, merged in order with merge commits, each after green CI.
+Railway staging redeploys from `main` and runs in sim mode only.
+- **CI secret scan:** PR #1's gitleaks step failed at first. It flagged the three fake `PW-SENTINEL-…` passwords that
+  the credential-canary tests plant. Those exact fingerprints are now in `.gitleaksignore`, and a gitleaks run over
+  all refs finds no leaks.
+- **Possible flaky test:** PR #9's first CI run failed in the Test step, and the log could not be downloaded from
+  this session. The same commit passed a re-run. It also passed 960/960 locally in a clean clone, both as root and as
+  a non-root user. Which test failed is unknown; if CI fails again, check the job log first.
 
-## PR stack (merge order — please use merge commits, not squash)
+## PR stack (merged, in this order)
 Each branch is stacked on the previous one; every cut point was verified green locally (ruff + pytest).
 1. `claude/p0-contracts` — build plan, decisions log, the contract modules.
 2. `claude/p0-gate-drivers` — SimDriver, Afero adapter + choke point, executor + tracker, roles/enrollment/WS tickets,
