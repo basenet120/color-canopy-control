@@ -17,6 +17,7 @@ Rules being implemented:
 - **Cloud vs device (07 §5).** The cloud stores accepted rows when it acks; the device applies them
   `device_apply_extra_s` later — and only if it's powered (`faults.set_available`). Readback shows the cloud's rows
   or the device's rows per `readback_semantics`, so the reconciler can be tested against both possibilities.
+- **Devices that settle** (`DEVICE_SETTLES`): a lock applies `locking`, then reports `locked` to the cloud.
 - All timing comes from the injected Clock; all randomness from seeded `random.Random` streams, so a run on
   `VirtualTimeLoop` is reproducible. Device application is evaluated lazily from the clock (no background tasks).
 
@@ -54,6 +55,10 @@ from conductor.telemetry import percentile
 Key = tuple[str, str | None]
 
 SECONDS_TIMESTAMP_LIMIT = 1e11  # below this, a lastUpdateTime is seconds, not ms (aioafero #65)
+# Values a device replaces with its own settled state once it has applied them, and reports back to the cloud:
+# aioafero's LockController writes `locking` / `unlocking`; the lock then reports `locked` / `unlocked`
+# (CurrentPositionEnum). UNVERIFIED on a real Defiant lock: how long the bolt takes and what readback shows meanwhile.
+DEVICE_SETTLES: dict[str, dict[str, str]] = {"lock-control": {"locking": "locked", "unlocking": "unlocked"}}
 MAX_ENTRY_CCT = 10000
 ANIMATED_MODES = frozenset({"sequence", "individual"})
 _ACK_HISTORY = 20000
@@ -284,6 +289,16 @@ class SimCloud:
             for key, value in rows:
                 device.applied[key] = value
             device.applied_at = self.clock.now() - (now - at)
+            for key, value in rows:
+                settled = DEVICE_SETTLES.get(key[0], {}).get(value) if isinstance(value, str) else None
+                if settled is None:
+                    continue
+                device.applied[key] = settled
+                if (
+                    device.cloud.get(key) == value
+                ):  # the device reports back, unless a newer write is in the cloud
+                    device.cloud[key] = settled
+                    device.cloud_times[key] = round(device.applied_at * 1000)
             if device.applied.get(("color-mode", None)) in ANIMATED_MODES:
                 device.animation_origin = device.applied_at + self.settings.sample_start_skew_s(self.rng)
 

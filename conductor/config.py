@@ -122,6 +122,7 @@ def load_settings(config_dir: Path = CONFIG_DIR) -> ConductorSettings:
 
 # ---- registry ----------------------------------------------------------------------------------------------------
 Role = Literal["bench", "canopy_module", "vignette", "spare"]
+VIGNETTE_KINDS = ("bulb", "plug", "lock", "fan", "string", "path")
 Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]
 
 
@@ -199,6 +200,13 @@ class RegistryFile(_Strict):
                     raise ValueError(f"two enabled devices claim canopy position {d.module}")
                 if d.enabled:
                     modules.add(d.module)
+            if d.role == "vignette":
+                if not d.vignette:
+                    raise ValueError(f"vignette device {d.id!r} needs `vignette:` (the room id, e.g. living)")
+                if d.kind not in VIGNETTE_KINDS:
+                    raise ValueError(
+                        f"vignette device {d.id!r} needs `kind:` set to one of {', '.join(VIGNETTE_KINDS)}"
+                    )
         ids = [d.metadevice_id for d in self.devices if d.metadevice_id]
         if len(ids) != len(set(ids)):
             raise ValueError("the same metadevice_id is assigned to two devices")

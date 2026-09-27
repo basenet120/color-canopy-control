@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="format-detection" content="telephone=no">
+  <title>Vignette</title>
+  <!--
+    A vignette's staff tablet (P4, /vignette/<room>/): one shared page for the four rooms, on an iPad in Guided
+    Access. It never navigates away (no links), reconnects its live feed with backoff, and shows each device's
+    honest status from the Conductor's state tracker: Updating while a change is on its way, Ready once Hubspace
+    reads back what was sent. Controls are the stock Hubspace app's for that device — nothing more (01 scope).
+    Locks take two taps. Room titles and scenes come from config/vignettes.yaml.
+  -->
+  <link rel="stylesheet" href="/static/base.css">
+  <link rel="stylesheet" href="vignette.css">
+  <script type="module" src="vignette.js"></script>
+</head>
+<body class="vignette" data-view="loading">
+  <header class="masthead">
+    <div class="masthead-text">
+      <p class="eyebrow" id="space">&nbsp;</p>
+      <h1 class="title" id="title">&nbsp;</h1>
+    </div>
+    <p class="live" id="live" data-state="connecting" aria-live="polite"><span class="live-dot" aria-hidden="true"></span><span id="live-text">Connecting…</span></p>
+  </header>
+
+  <nav class="scenes" id="scenes" aria-label="Scenes" hidden></nav>
+
+  <main class="room" id="room" aria-live="polite">
+    <p class="loading" id="loading">Loading the room…</p>
+  </main>
+
+  <section class="sheet-backdrop" id="sheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <header class="sheet-head">
+        <h2 id="sheet-title">&nbsp;</h2>
+        <button type="button" class="done" id="sheet-done">Done</button>
+      </header>
+      <div class="sheet-body" id="sheet-body"></div>
+    </div>
+  </section>
+
+  <p class="toast" id="toast" role="status" hidden></p>
+</body>
+</html>

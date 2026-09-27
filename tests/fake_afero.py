@@ -144,7 +144,12 @@ class FakeRequest:
 
 def raw_device_from_fixture(metadevice_id: str, fixture: Path = FIXTURE, *, name: str | None = None) -> dict:
     """The sim fixture (aioafero's post-processed AferoDevice shape) rewrapped in Afero's raw API shape."""
-    dev = json.loads(fixture.read_text())
+    return raw_device_from_dump(metadevice_id, json.loads(fixture.read_text()), name=name)
+
+
+def raw_device_from_dump(metadevice_id: str, dump: dict, *, name: str | None = None) -> dict:
+    """A dump in aioafero's AferoDevice shape (a fixture or a simulator profile) in Afero's raw API shape."""
+    dev = copy.deepcopy(dump)
     capabilities = []
     for cap in dev.get("capabilities", []):
         flat = {k: v for k, v in cap.items() if k != "_opts"}
@@ -414,15 +419,17 @@ async def make_world(
     seed_token: bool = True,
     connect: bool = True,
     secret_key: str | None = None,
+    registry: Registry | None = None,
     **gate_kw: Any,
 ) -> World:
-    """Must be awaited on a running loop (run_virtual). Seeds a stored refresh token and connects by default."""
+    """Must be awaited on a running loop (run_virtual). Seeds a stored refresh token and connects by default.
+    `registry` replaces the default bench/spare registry (its devices must be on the `bench` account)."""
     fake = fake or FakeAfero()
     for md in (BENCH_MD, SPARE_MD, STRANGER_MD):
         if md not in fake.devices:
             fake.add_device(md)
     clock = VirtualClock()
-    registry = make_registry()
+    registry = registry or make_registry()
     gate = make_gate(registry, clock, **gate_kw)
     store = TokenStore(data_dir, "test", secret_key or Fernet.generate_key().decode(), clock)
     telemetry = Telemetry(data_dir, clock)
