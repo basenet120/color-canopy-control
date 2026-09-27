@@ -131,6 +131,8 @@ def _from_looks() -> dict[str, Any] | None:
     except ImportError:
         return None
     loaded = load_modes()
+    if not isinstance(loaded, Mapping) and isinstance(getattr(loaded, "modes", None), Mapping):
+        loaded = loaded.modes  # conductor.looks.schema.ModesFile
     if isinstance(loaded, Mapping) and "modes" in loaded and isinstance(loaded["modes"], Mapping | list):
         loaded = loaded["modes"]
     if isinstance(loaded, Mapping):

@@ -143,9 +143,9 @@ def _settle_fonts(page):
 
 
 # ---- design group --------------------------------------------------------------------------------------------
-def test_kiosk_design_ready_updating_cooldown(context_factory, screenshots):
+def test_kiosk_design_ready_updating_cooldown(design_context_factory, screenshots):
     stub = StubCanopy(mode="lowcountry-calm")
-    _ctx, page, errors = _open(context_factory, KIOSK, stub)
+    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
     page.wait_for_selector("body[data-view='live']")
     assert page.locator(".tile").count() == 6
     assert page.eval_on_selector_all("#canopy-svg .core circle", "els => els.length") == 270
@@ -190,9 +190,9 @@ def test_kiosk_design_ready_updating_cooldown(context_factory, screenshots):
     ("viewport", "mode", "name"),
     [(HD, "golden-hour", "kiosk-1920x1080.png"), (TABLET, "garden-gathering", "kiosk-1024x768.png")],
 )
-def test_kiosk_design_sizes(context_factory, screenshots, viewport, mode, name):
+def test_kiosk_design_sizes(design_context_factory, screenshots, viewport, mode, name):
     stub = StubCanopy(mode=mode)
-    _ctx, page, errors = _open(context_factory, viewport, stub)
+    _ctx, page, errors = _open(design_context_factory, viewport, stub)
     page.wait_for_selector("body[data-view='live']")
     page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
     # nothing overflows the screen: the kiosk never scrolls
@@ -209,11 +209,11 @@ def test_kiosk_design_sizes(context_factory, screenshots, viewport, mode, name):
     assert errors == []
 
 
-def test_kiosk_resting_when_paused_and_when_disconnected(context_factory, screenshots):
+def test_kiosk_resting_when_paused_and_when_disconnected(design_context_factory, screenshots):
     stub = StubCanopy(mode="goodnight-glow")
     stub.guest_input = False
     stub.phase = "resting"
-    _ctx, page, errors = _open(context_factory, KIOSK, stub)
+    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
     page.wait_for_selector("body[data-view='resting']", state="attached")
     assert page.locator("#resting").is_visible()
     assert page.text_content("#resting-text") == "The canopy is resting. It will be back shortly."
@@ -241,9 +241,9 @@ def test_kiosk_resting_when_paused_and_when_disconnected(context_factory, screen
     assert errors == []
 
 
-def test_kiosk_resting_when_engine_missing(context_factory):
+def test_kiosk_resting_when_engine_missing(design_context_factory):
     """No stub: without the engine the real API answers 503, and the page rests calmly."""
-    _ctx, page, errors = _open(context_factory, KIOSK)
+    _ctx, page, errors = _open(design_context_factory, KIOSK)
     page.wait_for_selector("body[data-view='resting']", state="attached")
     assert page.locator("#resting").is_visible()
     assert "503" not in page.inner_text("body")

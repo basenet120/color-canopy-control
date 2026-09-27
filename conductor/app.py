@@ -34,6 +34,13 @@ async def lifespan(app: FastAPI):
     for problem in services.problems:
         log.warning("Needs attention: %s", problem)
     await services.start()
+    from conductor import logring
+    from conductor.show import ShowWiring
+
+    services.extras["logring"] = logring.install()
+    if os.environ.get("CONDUCTOR_ENGINE") != "off":  # tests only: run the app without the canopy engine
+        services.extras["show"] = ShowWiring(services)
+        await services.extras["show"].start()
     try:
         yield
     finally:

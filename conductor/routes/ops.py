@@ -1067,8 +1067,7 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
 # ---- log tail ------------------------------------------------------------------------------------------------
 @router.get("/api/ops/logs")
 async def logs(request: Request, _ops: Ops, since: int | None = None, limit: int = 200) -> JSONResponse:
-    services = services_of(request)
-    ring = services.extras.get(LOGRING_KEY) or installed_logring()
+    ring = installed_logring()  # the process-wide ring (extras may hold one that was uninstalled)
     if ring is None:
         raise HTTPException(status_code=503, detail=NO_LOGRING)
     limit = max(1, min(LOG_LIMIT_MAX, limit))
