@@ -318,3 +318,44 @@ def unknown_devices(registry: Registry, seen_addresses: Iterable[str]) -> list[s
     """Metadevice ids an account can see that the registry doesn't list (stay read-only + alert, 07 §1)."""
     known = {d.metadevice_id for d in registry.file.devices if d.metadevice_id}
     return sorted(a for a in seen_addresses if a not in known)
+
+
+# ---- colour recipes ------------------------------------------------------------------------------------------------
+class RecipeEntry(_Strict):
+    r: int = Field(0, ge=0, le=255)
+    g: int = Field(0, ge=0, le=255)
+    b: int = Field(0, ge=0, le=255)
+    cct: int = Field(0, ge=0, le=10000)
+    colorBrightness: int = Field(100, ge=0, le=100)
+    whiteBrightness: int = Field(0, ge=0, le=100)
+
+
+class StrandRecipe(_Strict):
+    rgb: tuple[int, int, int] | None = None
+    cct: int | None = None
+
+    @model_validator(mode="after")
+    def _one(self) -> StrandRecipe:
+        if (self.rgb is None) == (self.cct is None):
+            raise ValueError("a strand recipe needs exactly one of rgb or cct")
+        return self
+
+
+class ColorRecipe(_Strict):
+    label: str
+    hex: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    rgb_only: RecipeEntry
+    blend: RecipeEntry
+    strand: StrandRecipe
+
+
+class RecipesFile(_Strict):
+    colors: dict[str, ColorRecipe]
+
+
+def load_recipes(config_dir: Path = CONFIG_DIR) -> RecipesFile:
+    path = config_dir / "recipes.yaml"
+    try:
+        return RecipesFile.model_validate(_read_yaml(path))
+    except ValidationError as e:
+        raise ConfigError(_explain(path, e)) from None

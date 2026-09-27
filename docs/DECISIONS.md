@@ -45,3 +45,27 @@ bug can't bypass it. ENGINE writes to a locked device resolve LOCKED (nothing se
 The repo isn't in the cloud session's authorized sources (proxy: "not in this session's authorized repository
 set"). Work is committed locally on stacked `claude/*` branches and pushed as soon as access is granted. Alon:
 add `basenet120/color-canopy-control` to the session's sources (claude.ai/code → session → Sources / GitHub app).
+
+**D10 — Enrollment links: `GET /enroll/<token>` shows a confirm page; `POST` uses the link.**
+Link previews (Messages, Slack, mail scanners) fetch pasted links on their own and would burn a GET-redeemed
+token. The confirm button also makes the redirect same-origin, so the SameSite=Strict cookie arrives on the next
+request. Cost: one tap. (07 §2 says "one-time link"; this keeps it one-time.)
+
+**D11 — Afero adapter details.** Background connects and aioafero's own polling run under Purpose.ENGINE when the
+gate allows it, else BENCH. Writes are pre-checked with `check_write` in the driver as well as at the transport,
+so a refused write can't trigger a token refresh. An account is "degraded" after 2 consecutive transport/5xx
+failures. `disconnect` deletes the stored token. A refresh token rotated by aioafero's background polling is
+persisted within 5 s (a keeper task) and on every operation and shutdown. aioafero stamps token expiry with real
+wall time, so `ensure_fresh_token` reads real time, not the injected clock.
+
+**D12 — The executor's verification is part of a command.** A newer command for the same device supersedes a
+command that is still verifying (its readback no longer matters). Per-account writes are shown as a gauge; only
+concurrency is enforced per account (05 #6 gives no per-account write figure).
+
+**D13 — Simulator defaults.** Readback semantics default to "cloud" (the pessimistic case, 06 #3). A device that
+comes back online keeps what it last applied (real behaviour: Gate 10). Reads see the same throttle rate as writes,
+which is slightly harsher than the pinned soak conditions. `discover`/`fetch_profile` never fault.
+
+**D14 — Local container smoke test.** The sandbox's egress proxy re-signs TLS, so `docker build` here uses a
+wrapper Dockerfile (scratchpad only) that trusts the proxy CA; everything after that is the repo's Dockerfile
+verbatim. CI builds the real Dockerfile unmodified.

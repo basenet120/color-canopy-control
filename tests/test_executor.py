@@ -1,0 +1,433 @@
+"""CommandExecutor semantics on virtual time: coalescing, rate budget, concurrency, retries, readback, locks."""
+
+from __future__ import annotations
+
+import asyncio
+from itertools import pairwise
+
+import pytest
+
+from conductor.clock import VirtualClock, run_virtual
+from conductor.config import ExecutorSettings
+from conductor.drivers.base import Outcome, StateRow
+from conductor.executor import CommandExecutor
+from conductor.executor_api import Command, CommandStatus
+from conductor.gate import Purpose
+from conductor.locks import DeviceLockManager
+from conductor.rows import brightness, color_mode, power
+from conductor.telemetry import Telemetry
+from tests.fake_driver import FakeDriver, Step
+
+EPS = 1e-6
+
+
+class World:
+    def __init__(self, **policy):
+        self.clock = VirtualClock()
+        self.driver = FakeDriver(self.clock)
+        self.locks = DeviceLockManager(clock=self.clock)
+        self.telemetry = Telemetry(None, self.clock)
+        self.policy = ExecutorSettings(**policy)
+        self.executor = CommandExecutor(
+            self.driver, locks=self.locks, telemetry=self.telemetry, clock=self.clock, policy=self.policy
+        )
+
+
+def look(pct: int) -> list[StateRow]:
+    return [power(True), color_mode("white"), brightness(pct)]
+
+
+def cmd(device: str = "sim-a", pct: int = 50, **kw) -> Command:
+    return Command(
+        device_id=device, rows=kw.pop("rows", look(pct)), purpose=kw.pop("purpose", Purpose.ENGINE), **kw
+    )
+
+
+def gaps(records) -> list[float]:
+    times = [r.sent_mono for r in records]
+    return [b - a for a, b in pairwise(times)]
+
+
+# ---- coalescing and the rate budget -----------------------------------------------------------------------------
+def test_button_mashing_never_grows_a_queue():
+    w = World()
+
+    async def main():
+        tasks, depths = [], []
+        for i in range(200):  # 200 taps in 10 s, one device
+            tasks.append(asyncio.create_task(w.executor.submit(cmd(pct=1 + i % 100))))
+            await asyncio.sleep(0.05)
+            depths.append(w.executor.queue_depth())
+        results = await asyncio.gather(*tasks)
+        return depths, results
+
+    depths, results = run_virtual(main)
+    assert max(depths) <= 2
+    writes = w.driver.writes_to("sim-a")
+    assert len(writes) <= 12  # ~1 write/s over 10 s, not 200
+    assert all(g >= 1.0 - EPS for g in gaps(writes))
+    statuses = [r.status for r in results]
+    assert statuses[-1] is CommandStatus.APPLIED
+    assert statuses.count(CommandStatus.APPLIED) + statuses.count(CommandStatus.SUPERSEDED) == 200
+    assert statuses.count(CommandStatus.SUPERSEDED) >= 180
+    # The last tap's look is what the device ends up showing.
+    assert w.driver.state["sim-a"][("brightness", None)].value == 1 + 199 % 100
+    assert w.executor.queue_depth() == 0
+    assert not w.executor.in_flight("sim-a")
+
+
+def test_write_sends_are_spaced_by_the_min_interval_including_retries():
+    w = World(backoff_s=[0.1, 0.1, 0.1], max_attempts=4)
+    w.driver.latency_s = 0.05
+    w.driver.script_write("sim-a", Outcome.THROTTLED, Outcome.SERVER_ERROR, Outcome.OK, Outcome.TIMEOUT)
+
+    async def main():
+        first = await w.executor.submit(cmd(pct=10))
+        results = [first]
+        for pct in (20, 30, 40):
+            results.append(await w.executor.submit(cmd(pct=pct, verify=False)))
+        return results
+
+    results = run_virtual(main)
+    assert [r.status for r in results] == [CommandStatus.APPLIED] * 4
+    assert len(results[0].attempts) == 3
+    assert len(results[1].attempts) == 2  # TIMEOUT then OK
+    writes = w.driver.writes_to("sim-a")
+    assert len(writes) == 7
+    assert min(gaps(writes)) >= 1.0 - EPS
+
+
+def test_nine_device_burst_goes_out_in_one_wave():
+    w = World()
+    devices = [f"sim-r{r}c{c}" for r in range(3) for c in range(3)]
+
+    async def main():
+        start = asyncio.get_running_loop().time()
+        results = await w.executor.burst([cmd(d, 60, label="mode: calm") for d in devices])
+        return start, results
+
+    start, results = run_virtual(main)
+    assert [r.status for r in results] == [CommandStatus.APPLIED] * 9
+    assert [r.command.device_id for r in results] == devices
+    sends = [w.driver.writes_to(d)[0].sent_mono for d in devices]
+    assert max(sends) - min(sends) < 0.005
+    assert min(sends) - start < 0.005
+    assert w.driver.max_active["acct"] == 9
+
+
+def test_account_concurrency_cap_is_respected_for_writes_and_reads():
+    w = World(account_concurrency=2)
+    w.driver.latency_s = 0.5
+    devices = [f"sim-a{i}" for i in range(6)] + [f"sim-b{i}" for i in range(3)]
+    for d in devices:
+        w.driver.accounts[d] = "account-a" if d.startswith("sim-a") else "account-b"
+
+    async def main():
+        return await w.executor.burst([cmd(d) for d in devices])
+
+    results = run_virtual(main)
+    assert all(r.status is CommandStatus.APPLIED for r in results)
+    assert w.driver.max_active["account-a"] == 2
+    assert w.driver.max_active["account-b"] == 2
+    assert len(w.driver.reads) == 9
+
+
+# ---- retries ----------------------------------------------------------------------------------------------------
+def test_throttled_then_ok_is_applied_after_two_attempts():
+    w = World()
+    w.driver.script_write("sim-a", Outcome.THROTTLED, Outcome.OK)
+
+    result = run_virtual(lambda: w.executor.submit(cmd()))
+    assert result.status is CommandStatus.APPLIED
+    assert [a.outcome for a in result.attempts] == [Outcome.THROTTLED, Outcome.OK]
+    first, second = w.driver.writes_to("sim-a")
+    assert second.sent_mono - first.acked_mono >= w.policy.backoff_s[0] - EPS
+    assert result.timings.sent_at is not None and result.timings.acked_at is not None
+    assert result.timings.verified_at is not None
+
+
+def test_retries_give_up_after_max_attempts():
+    w = World()
+    w.driver.script_write("sim-a", Outcome.THROTTLED, Outcome.SERVER_ERROR, Outcome.CONNECTION, Outcome.OK)
+
+    result = run_virtual(lambda: w.executor.submit(cmd()))
+    assert result.status is CommandStatus.FAILED
+    assert len(result.attempts) == 3
+    assert "Gave up after 3 attempts" in result.error
+    assert len(w.driver.writes) == 3
+
+
+@pytest.mark.parametrize("outcome", [Outcome.CLIENT_ERROR, Outcome.NOT_FOUND, Outcome.AUTH])
+def test_non_retryable_outcomes_fail_at_once(outcome):
+    w = World()
+    w.driver.script_write("sim-a", outcome, Outcome.OK)
+
+    result = run_virtual(lambda: w.executor.submit(cmd()))
+    assert result.status is CommandStatus.FAILED
+    assert len(result.attempts) == 1
+    assert len(w.driver.writes) == 1
+    assert result.error
+    assert w.driver.reads == []
+
+
+def test_denied_resolves_immediately_with_gate_telemetry():
+    w = World()
+    w.driver.script_write(
+        "sim-a", Step(Outcome.DENIED, error="Device sim-a is not in the effective allowlist.")
+    )
+
+    result = run_virtual(lambda: w.executor.submit(cmd(purpose=Purpose.ENGINE)))
+    assert result.status is CommandStatus.DENIED
+    assert len(result.attempts) == 1
+    assert "allowlist" in result.error
+    denied = w.telemetry.recent(kind="gate_denied")
+    assert len(denied) == 1
+    assert denied[0]["device_id"] == "sim-a" and denied[0]["purpose"] == "engine"
+    # Nothing left the process, so the device's rate budget is untouched.
+    assert w.executor.budget("sim-a")["writes_60s"] == 0
+
+
+def test_newer_command_during_backoff_supersedes_the_retrying_one():
+    w = World(backoff_s=[4.0])
+    w.driver.script_write("sim-a", Outcome.THROTTLED)
+
+    async def main():
+        older = asyncio.create_task(w.executor.submit(cmd(pct=10)))
+        await asyncio.sleep(1.5)  # inside the 4 s backoff
+        newer = await w.executor.submit(cmd(pct=90))
+        return await older, newer
+
+    older, newer = run_virtual(main)
+    assert older.status is CommandStatus.SUPERSEDED
+    assert len(older.attempts) == 1
+    assert newer.status is CommandStatus.APPLIED
+    writes = w.driver.writes_to("sim-a")
+    assert len(writes) == 2
+    assert writes[1].rows == look(90)
+    assert writes[1].sent_mono == pytest.approx(1.5)
+
+
+def test_newer_command_replaces_pending_without_sending_it():
+    w = World()
+
+    async def main():
+        first = asyncio.create_task(w.executor.submit(cmd(pct=10)))
+        await asyncio.sleep(0.01)  # first is in flight
+        second = asyncio.create_task(w.executor.submit(cmd(pct=20)))
+        await asyncio.sleep(0)
+        third = asyncio.create_task(w.executor.submit(cmd(pct=30)))
+        await asyncio.sleep(0)
+        assert w.executor.queue_depth() == 2
+        return await first, await second, await third
+
+    first, second, third = run_virtual(main)
+    assert second.status is CommandStatus.SUPERSEDED and second.attempts == []
+    assert second.timings.sent_at is None
+    assert third.status is CommandStatus.APPLIED
+    assert first.status is CommandStatus.SUPERSEDED  # its verification gave way to the newer command
+    assert [w.rows for w in w.driver.writes] == [look(10), look(30)]
+
+
+# ---- readback -----------------------------------------------------------------------------------------------------
+def test_readback_missing_rows_is_a_mismatch():
+    w = World()
+    drop = frozenset({("brightness", None)})
+    w.driver.script_read("sim-a", Step(drop=drop), Step(drop=drop), Step(drop=drop))
+
+    result = run_virtual(lambda: w.executor.submit(cmd()))
+    assert result.status is CommandStatus.MISMATCH
+    assert len(w.driver.reads) == 3
+    assert [(m.function_class, m.missing) for m in result.mismatches] == [("brightness", True)]
+    assert result.timings.verified_at is None
+    assert "brightness" in result.error
+
+
+def test_empty_readback_on_a_200_is_never_a_match():
+    w = World()
+    w.driver.script_read("sim-a", Step(rows=[]), Step(rows=[]), Step(rows=[]))
+
+    result = run_virtual(lambda: w.executor.submit(cmd()))
+    assert result.status is CommandStatus.MISMATCH
+    assert len(result.mismatches) == 3
+
+
+def test_readback_that_catches_up_within_the_window_is_applied():
+    w = World()
+    w.driver.script_write("sim-a", Step(apply=False))  # cloud accepted but hasn't stored it yet
+    stale = [power(True), color_mode("white"), brightness(5)]
+    w.driver.script_read("sim-a", Step(rows=stale), Step(rows=look(50)))
+
+    result = run_virtual(lambda: w.executor.submit(cmd(pct=50)))
+    assert result.status is CommandStatus.APPLIED
+    assert result.mismatches == []
+    assert len(w.driver.reads) == 2
+    t = result.timings
+    assert t.verified_at is not None
+    # ack (0.2) + delay (1.0) + first GET (0.1) + interval (1.0) + second GET (0.1)
+    assert t.verified_at - t.acked_at == pytest.approx(2.2)
+    assert w.driver.reads[0].sent_mono - w.driver.writes[0].acked_mono == pytest.approx(1.0)
+
+
+def test_readback_uses_expect_when_given():
+    w = World()
+    rows = look(50)
+    result = run_virtual(lambda: w.executor.submit(cmd(rows=rows, expect=[power(True)])))
+    assert result.status is CommandStatus.APPLIED
+
+
+def test_failed_readbacks_resolve_mismatch_with_an_honest_error():
+    w = World()
+    w.driver.script_read("sim-a", Outcome.TIMEOUT, Outcome.TIMEOUT, Outcome.TIMEOUT)
+    result = run_virtual(lambda: w.executor.submit(cmd()))
+    assert result.status is CommandStatus.MISMATCH
+    assert "not verified" in result.error
+
+
+def test_verify_false_skips_readback():
+    w = World()
+    result = run_virtual(lambda: w.executor.submit(cmd(verify=False)))
+    assert result.status is CommandStatus.APPLIED
+    assert result.timings.verified_at is None
+    assert w.driver.reads == []
+
+
+# ---- locks and validation -------------------------------------------------------------------------------------------
+def test_engine_command_to_a_locked_device_is_locked_and_not_sent():
+    w = World()
+
+    async def main():
+        w.locks.acquire("sim-a", "module page · tester")
+        return await w.executor.submit(cmd(purpose=Purpose.ENGINE))
+
+    result = run_virtual(main)
+    assert result.status is CommandStatus.LOCKED
+    assert "module page" in result.error
+    assert w.driver.writes == []
+
+
+def test_bench_commands_need_a_current_lease():
+    w = World()
+
+    async def main():
+        unlocked = await w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token="anything"))
+        lease = w.locks.acquire("sim-a", "bench · gate_b")
+        no_token = await w.executor.submit(cmd(purpose=Purpose.BENCH))
+        wrong = await w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token="not-the-lease"))
+        good = await w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token=lease.token))
+        await asyncio.sleep(w.locks.idle_timeout_s + 1)  # the lease goes stale
+        stale = await w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token=lease.token))
+        lease2 = w.locks.acquire("sim-a", "bench · gate_c")
+        w.locks.release("sim-a", lease2.token)
+        released = await w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token=lease2.token))
+        return unlocked, no_token, wrong, good, stale, released
+
+    unlocked, no_token, wrong, good, stale, released = run_virtual(main)
+    for r in (unlocked, no_token, wrong, stale, released):
+        assert r.status is CommandStatus.LOCKED
+        assert r.attempts == []
+    assert good.status is CommandStatus.APPLIED
+    assert len(w.driver.writes) == 1 and w.driver.writes[0].purpose is Purpose.BENCH
+
+
+def test_lock_taken_while_a_command_waits_stops_it():
+    w = World()
+
+    async def main():
+        first = asyncio.create_task(w.executor.submit(cmd(pct=10, verify=False)))
+        await asyncio.sleep(0.3)
+        second = asyncio.create_task(w.executor.submit(cmd(pct=20)))  # waits for the rate budget
+        await asyncio.sleep(0.1)
+        w.locks.acquire("sim-a", "module page · alon")
+        return await first, await second
+
+    first, second = run_virtual(main)
+    assert first.status is CommandStatus.APPLIED
+    assert second.status is CommandStatus.LOCKED
+    assert len(w.driver.writes) == 1
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [[], [power(True), StateRow("available", None, True)], ["not a row"]],
+)
+def test_invalid_rows_are_refused_before_sending(rows):
+    w = World()
+    result = run_virtual(lambda: w.executor.submit(cmd(rows=rows)))
+    assert result.status is CommandStatus.INVALID
+    assert result.error
+    assert w.driver.writes == []
+
+
+# ---- observability ------------------------------------------------------------------------------------------------
+def test_telemetry_records_attempts_readbacks_and_one_command_event():
+    w = World()
+    w.driver.script_write("sim-a", Outcome.THROTTLED, Outcome.OK)
+
+    result = run_virtual(lambda: w.executor.submit(cmd(label="mode: calm", source="kiosk")))
+    assert result.simulated is True
+    attempts = w.telemetry.recent(kind="attempt")
+    assert [(a["n"], a["outcome"], a["http_status"]) for a in attempts] == [
+        (1, "throttled", 429),
+        (2, "ok", 200),
+    ]
+    readbacks = w.telemetry.recent(kind="readback")
+    assert len(readbacks) == 1 and readbacks[0]["mismatches"] == 0 and readbacks[0]["available"] is True
+    (event,) = w.telemetry.recent(kind="command")
+    assert event["status"] == "applied"
+    assert event["label"] == "mode: calm" and event["source"] == "kiosk" and event["purpose"] == "engine"
+    assert (
+        event["rows"] == 3 and event["attempts"] == 2 and event["mismatches"] == 0 and event["bytes"] == 300
+    )
+    t = event["timings"]
+    assert t["queued_at"] == pytest.approx(w.clock.epoch)
+    assert t["queued_at"] <= t["sent_at"] < t["acked_at"] < t["verified_at"]
+    stats = w.telemetry.command_stats()
+    assert stats["count"] == 1 and stats["failures"] == 0
+
+
+def test_listeners_budget_and_in_flight():
+    w = World()
+    seen, submitted, during = [], [], []
+    w.executor.add_listener(seen.append)
+    w.executor.add_submit_listener(submitted.append)
+
+    async def main():
+        task = asyncio.create_task(w.executor.submit(cmd()))
+        await asyncio.sleep(0.1)
+        during.append((w.executor.in_flight("sim-a"), w.executor.budget("sim-a")))
+        result = await task
+        return result, w.executor.budget("sim-a"), w.executor.budget()
+
+    result, after, overall = run_virtual(main)
+    assert seen == [result] and [c.device_id for c in submitted] == ["sim-a"]
+    busy, gauge = during[0]
+    assert busy is True
+    assert gauge["writes_60s"] == 1 and gauge["account"] == "acct"
+    assert gauge["next_write_in_s"] == pytest.approx(0.9)
+    assert gauge["in_flight"] is True
+    assert after["next_write_in_s"] == 0.0 and after["in_flight"] is False
+    assert overall["accounts"]["acct"]["writes_60s"] == 1
+    assert overall["devices"]["sim-a"]["writes_60s"] == 1
+    assert overall["queue_depth"] == 0
+    assert w.executor.budget("sim-unknown")["writes_60s"] == 0
+
+
+def test_close_resolves_unfinished_commands_and_refuses_new_ones():
+    w = World()
+    w.driver.latency_s = 5.0
+
+    async def main():
+        first = asyncio.create_task(w.executor.submit(cmd(pct=10)))
+        await asyncio.sleep(0.1)
+        second = asyncio.create_task(w.executor.submit(cmd(pct=20)))
+        await asyncio.sleep(0)
+        await w.executor.close()
+        late = await w.executor.submit(cmd(pct=30))
+        return await first, await second, late
+
+    first, second, late = run_virtual(main)
+    assert first.status is CommandStatus.FAILED and "shut down" in first.error
+    assert second.status is CommandStatus.FAILED and second.attempts == []
+    assert late.status is CommandStatus.FAILED
+    assert len(w.driver.writes) == 1
+    assert w.executor.queue_depth() == 0
