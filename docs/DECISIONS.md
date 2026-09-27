@@ -104,3 +104,44 @@ that run applied (only if the overlay still holds exactly what it applied).
 
 **D20 — Hold means hold.** Entering photo/hold mode withdraws the page's pending and retrying commands so the lights
 don't change during a photo. The module page shows SIMULATOR from its own target's flag, never the global badge.
+
+## 2026-09-27 — P1–P4
+
+**D21 — Engine behaviour (P1).** Kiosk requests are refused (never raised) during the 8 s cooldown, while guest input
+is paused, while resting (outage) and while slots are being commissioned; ops/idle/reconciler requests bypass the
+cooldown. Only a command still throttled after the executor's retries counts toward the "≥ 3 throttles in 60 s"
+downgrade — counting each 429 would downgrade at kiosk pace under the pinned 5 % rate. When a verification readback
+already differs, the module is re-sent at once (≤ 3 per module per change; motion modes re-send all nine once) —
+without this the p95 target missed, because ~9 % of changes contain a silent drop. Locked modules (bench/module page)
+don't block READY. The canopy rests when ≥ 3 modules fail with transport/5xx errors and nothing succeeds in between.
+
+**D22 — Show wiring.** On the simulator the slots are commissioned automatically at startup, so demos run T1 as the
+show will after install day; on hardware commissioning is an explicit /ops action. A T1 mode is shown only once every
+module's slot has a recorded hash. Mode requests during commissioning are refused with "Writing the saved patterns…".
+
+**D23 — Looks.** Canvas looks are composed over the 270 heads in canopy inches through each module's calibrated wire
+order; the head-count guard refuses a frame whose length differs from the module's expected heads. Colour temperature
+outside a device's range is clamped with a note (Goodnight 2200 → 2700 K on the sibling profile) — never silently.
+Holiday uses the first listed preset the device actually has. Golden Hour is a static amber glow, and says so, until
+a directional motionEffect code is bench-enabled.
+
+**D24 — Venue box (P3.5).** Secrets live only in `/etc/canopy/conductor.env` (root, 0600); non-secret box settings
+in `/etc/canopy/box.env`. The data volume is external so no compose command can delete it. Break-glass means stopping
+the Conductor (`canopy-stop`, held through reboots until `canopy-start`), because merely pausing guest input lets the
+reconciler undo app edits. Three spare kits are registry entries on the canopy account; registering a spare's device
+as a module moves it off the spare and carries only bench flags that same kit proved. The cold spare restores
+`/data` with `--skip-tokens` and signs in fresh (07 §3: never copy tokens between runtimes). The venue env example sets
+`HUBSPACE_LIVE_UNTIL=2026-11-02` (end of Home Depot's authorization window, pending the letter).
+
+**D25 — Gates on every module.** T1/T2 are used only when every module's own kit passed (flags are bound to the kit,
+D19). Install day runs Gates B and C on all nine modules (~5 min each), not just one.
+
+**D26 — Vignettes (P4).** Device profiles for the A19 bulb, the plugs, the deadbolt, the fan and the path lights are
+synthesized from aioafero 9.3.0's controller source (UNVERIFIED until real dumps). Every action sends the device's
+full rows (an outlet toggle restates the other outlet). Locks are never part of scenes and need a two-step confirm.
+The bedroom fan is disabled until the census confirms it. A broken `config/vignettes.yaml` turns the vignette pages
+off with a "Needs attention" line instead of stopping the app. **Oct 12 fallback criteria (06 #11):** switch a room's
+iPad to the stock Hubspace app (Guided Access, that room's account) unless by Oct 12 (1) each device kind has been
+dumped at the bench and matches its profile, (2) from the venue box a tap reads back Ready within ~5 s p95 and a scene
+within ~10 s with no throttling pattern, (3) the real deadbolt locks and unlocks with a readback, (4) the pages run
+all day on the real iPads in Guided Access, and (5) the authorization letter covers the vignette accounts.
