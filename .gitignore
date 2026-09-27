@@ -36,3 +36,6 @@ test-results/
 playwright-report/
 blob-report/
 *.trace.zip
+workshop.env
+workshop-data/
+workshop-data-sim/
