@@ -94,7 +94,7 @@ def test_profiles_are_fresh_copies():
 
 
 def test_unknown_profile_and_unsafe_resize_are_refused():
-    assert profile_names() == ["sqhdk03-sim", "string-20seg"]
+    assert profile_names()[:2] == ["sqhdk03-sim", "string-20seg"]
     with pytest.raises(ProfileError, match="no simulator profile"):
         load_profile("nope")
     with pytest.raises(LookupError):

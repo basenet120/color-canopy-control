@@ -16,7 +16,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from conductor import __version__, redact
 from conductor.auth import BasicAuthMiddleware, check_auth_configuration
 from conductor.geometry import build_layout, load_canopy_config, pitch_violations
-from conductor.routes import accounts, bench, core, devices, kiosk, module, ops
+from conductor.routes import accounts, bench, core, devices, kiosk, module, ops, vignette
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 log = logging.getLogger("conductor")
@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
     from conductor.show import ShowWiring
 
     services.extras["logring"] = logring.install()
+    _start_vignettes(services)
     if os.environ.get("CONDUCTOR_ENGINE") != "off":  # tests only: run the app without the canopy engine
         services.extras["show"] = ShowWiring(services)
         await services.extras["show"].start()
@@ -45,6 +46,20 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await services.close()
+
+
+def _start_vignettes(services) -> None:
+    """The vignette tablets' service (P4): registers its WebSocket snapshot and tracker push now, so a tablet that
+    reconnects before anyone opened a room page still gets its room. A bad config/vignettes.yaml never stops the
+    canopy: it becomes a "Needs attention" line and the vignette pages answer 503 with a plain message."""
+    from conductor.config import ConfigError
+    from conductor.vignettes import VignetteService
+
+    try:
+        VignetteService.of(services)
+    except ConfigError as exc:
+        services.problems.append(f"Vignette pages are off: {exc}")
+        log.error("Needs attention: vignette pages are off: %s", exc)
 
 
 app = FastAPI(title="Color Canopy Conductor", version=__version__, lifespan=lifespan)
@@ -150,6 +165,7 @@ app.include_router(bench.router)
 app.include_router(module.router)
 app.include_router(kiosk.router)
 app.include_router(ops.router)
+app.include_router(vignette.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 app.mount("/ops", StaticFiles(directory=WEB_DIR / "ops", html=True), name="ops")

@@ -35,8 +35,12 @@ class Capabilities:
     party_mode: bool = False
     restore_values: list[str] = field(default_factory=list)
     lock: bool = False
+    lock_values: list[str] = field(default_factory=list)  # lock-control values the device lists
     outlets: list[str] = field(default_factory=list)  # power instances on multi-outlet plugs
     fan: bool = False
+    fan_speeds: list[str] = field(
+        default_factory=list
+    )  # fan-speed steps, slowest first, without the "-000" off step
 
     @property
     def individual(self) -> bool:
@@ -134,8 +138,11 @@ def detect(functions: Iterable[Mapping[str, Any]], states: Iterable[StateRow] = 
             caps.restore_values = _names(fn)
         elif cls == "lock-control":
             caps.lock = True
+            caps.lock_values = _names(fn)
         elif cls == "fan-speed":
             caps.fan = True
+            # aioafero's FanController: every value except the "…-000" step, sorted (slowest first)
+            caps.fan_speeds = sorted(n for n in _names(fn) if not n.endswith("-000"))
     caps.slots = sorted(set(caps.slots))
     for row in states:
         if row.function_class == FRAME_CLASS and row.function_instance in SLOTS:
