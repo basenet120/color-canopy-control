@@ -10,69 +10,168 @@
 <script type="module" src="/ops/ops.js"></script>
 </head>
 <body class="ops">
-<main class="narrow">
+<main class="dash">
   <header class="page-head brand">
     <h1>Canopy Ops</h1>
     <span class="mode" id="mode">Loading…</span>
+    <span class="live-status" id="live" data-state="connecting">Connecting…</span>
   </header>
   <p class="error" id="load-error" hidden></p>
 
-  <section class="card" aria-labelledby="attention-h">
-    <h2 id="attention-h">Needs attention</h2>
-    <ul class="list attention" id="attention"><li class="muted">Loading…</li></ul>
-  </section>
+  <div class="dash-cols">
+    <div class="dash-col col-a">
+      <!-- The canopy: what's showing, and every module at a glance -->
+      <section class="card canopy-card" id="canopy-card" aria-labelledby="canopy-h">
+        <h2 id="canopy-h" class="bar">The canopy <span id="canopy-phase"></span></h2>
+        <p class="error" id="engine-error" hidden></p>
+        <div class="now" id="canopy-now">
+          <div class="now-mode" id="canopy-mode">—</div>
+          <div class="now-meta"><span class="chip" id="canopy-tier" hidden></span>
+            <span class="chip" id="canopy-guest" hidden></span></div>
+          <p class="feature" id="canopy-feature" hidden></p>
+          <p class="notice" id="canopy-message" hidden></p>
+        </div>
+        <div class="canopy-grid" id="canopy-grid" aria-label="The nine modules, as the plan shows them"></div>
+        <ul class="list module-issues" id="module-issues"></ul>
+        <p class="muted small" id="heads-note"></p>
+      </section>
 
-  <section class="card" aria-labelledby="accounts-h">
-    <h2 id="accounts-h">Hubspace accounts</h2>
-    <ul class="list" id="accounts"></ul>
-    <div class="actions"><a class="btn secondary" href="/ops/accounts/">Manage accounts</a></div>
-  </section>
+      <!-- Big controls -->
+      <section class="card" id="controls-card" aria-labelledby="controls-h">
+        <h2 id="controls-h">Controls</h2>
+        <div class="big-buttons">
+          <button type="button" class="big" id="pause-btn">Pause guest input</button>
+          <button type="button" class="big secondary" id="reassert-btn">Re-assert all</button>
+          <button type="button" class="big secondary" id="safe-btn">Safe look</button>
+          <button type="button" class="big secondary" id="commission-btn">Commission slots…</button>
+        </div>
+        <div class="mode-picker">
+          <label for="mode-select">Change the mode (ops: no guest cooldown)</label>
+          <div class="copy-row">
+            <select id="mode-select"></select>
+            <button type="button" id="mode-btn">Change</button>
+          </div>
+        </div>
+        <p class="notice" id="control-result" role="status" hidden></p>
+        <p class="muted small">Safe look = Lowcountry Calm (warm white) on all nine modules, now. Re-assert resends
+          the look only to modules whose readback differs.</p>
+      </section>
 
-  <section class="card" aria-labelledby="devices-h">
-    <h2 id="devices-h" class="bar">Devices <button type="button" class="secondary" id="refresh">Refresh</button></h2>
-    <p class="muted" id="devices-note"></p>
-    <ul class="list" id="devices"><li class="muted">Loading…</li></ul>
-  </section>
+      <!-- 7 am checklist (07 §10) -->
+      <section class="card" id="checklist-card" aria-labelledby="checklist-h">
+        <h2 id="checklist-h" class="bar">7 am checklist
+          <button type="button" class="secondary" id="checklist-run">Run</button></h2>
+        <p class="muted" id="checklist-summary">Not run yet.</p>
+        <ul class="list checklist" id="checklist"></ul>
+        <div class="actions">
+          <button type="button" class="secondary" id="test-mode-btn">Run test mode change</button>
+        </div>
+        <p class="notice" id="test-result" role="status" hidden></p>
+      </section>
 
-  <section class="card" aria-labelledby="testers-h">
-    <h2 id="testers-h">Testers</h2>
-    <p>Give a tester's phone the single-module page for chosen devices only — no ops password, no accounts, no
-      bench. The link works once, on the phone that opens it.</p>
-    <form id="tester-form" class="stack">
-      <div>
-        <label for="tester-name">Who is it for?</label>
-        <input id="tester-name" name="name" maxlength="80" placeholder="e.g. VWBD shop phone" required>
-      </div>
-      <fieldset class="checks" id="tester-devices">
-        <legend>Devices they may test</legend>
-      </fieldset>
-      <button type="submit">Create setup link</button>
-    </form>
-    <div id="tester-link" class="stack" hidden>
-      <p class="notice" id="tester-link-note"></p>
-      <div class="copy-row">
-        <input id="tester-url" readonly aria-label="Setup link">
-        <button type="button" id="tester-copy">Copy</button>
-      </div>
+      <!-- Rate budget -->
+      <section class="card" id="budget-card" aria-labelledby="budget-h">
+        <h2 id="budget-h">Rate budget</h2>
+        <p class="muted small" id="budget-note">Writes per device in the last 60 s.</p>
+        <ul class="list gauges" id="budget"></ul>
+        <p class="muted small" id="budget-accounts"></p>
+      </section>
     </div>
-    <p class="error" id="tester-error" hidden></p>
 
-    <h3>Set-up phones and tablets</h3>
-    <ul class="list" id="sessions"><li class="muted">Loading…</li></ul>
-    <h3>Unused setup links</h3>
-    <ul class="list" id="enrollments"></ul>
-  </section>
+    <div class="dash-col col-b">
+      <section class="card" id="attention-card" aria-labelledby="attention-h">
+        <h2 id="attention-h">Needs attention</h2>
+        <ul class="list attention" id="attention"><li class="muted">Loading…</li></ul>
+      </section>
 
-  <section class="card" aria-labelledby="links-h">
-    <h2 id="links-h">Pages</h2>
-    <div class="links">
-      <a class="btn secondary" href="/visualizer/">Visualizer</a>
-      <a class="btn secondary" href="/ops/bench/">Bench</a>
-      <a class="btn secondary" href="/ops/module/">Single module</a>
-      <a class="btn secondary" href="/ops/accounts/">Accounts</a>
+      <section class="card" id="accounts-card" aria-labelledby="accounts-h">
+        <h2 id="accounts-h">Hubspace accounts</h2>
+        <ul class="list" id="accounts"></ul>
+        <div class="actions"><a class="btn secondary" href="/ops/accounts/">Manage accounts</a></div>
+      </section>
+
+      <section class="card" id="logs-card" aria-labelledby="logs-h">
+        <h2 id="logs-h" class="bar">Log <button type="button" class="secondary" id="logs-toggle"
+          aria-pressed="false">Pause</button></h2>
+        <ol class="logs" id="logs"><li class="muted">Loading…</li></ol>
+        <p class="muted small">Newest last, refreshed every 5 s. Secrets are masked (***) before anything is kept.</p>
+      </section>
+
+      <section class="card" id="enroll-card" aria-labelledby="enroll-h">
+        <h2 id="enroll-h">Set up a device</h2>
+        <p>Give the kiosk, a vignette tablet or a tester's phone its own access — no ops password. The link works
+          once, on the device that opens it.</p>
+        <form id="enroll-form" class="stack">
+          <fieldset class="seg-field">
+            <legend>What is it?</legend>
+            <div class="seg" id="enroll-role">
+              <label><input type="radio" name="role" value="kiosk" checked> Kiosk</label>
+              <label><input type="radio" name="role" value="vignette"> Vignette</label>
+              <label><input type="radio" name="role" value="tester"> Tester</label>
+            </div>
+          </fieldset>
+          <div>
+            <label for="enroll-name">Name</label>
+            <input id="enroll-name" name="name" maxlength="80" placeholder="e.g. Canopy kiosk" required>
+          </div>
+          <p class="muted small" id="enroll-kiosk-note">The kiosk only ever drives the canopy's six modes.</p>
+          <div id="enroll-vignette" hidden>
+            <label for="enroll-vignettes">Vignette ids</label>
+            <input id="enroll-vignettes" placeholder="e.g. living-room, bedroom" autocomplete="off">
+          </div>
+          <fieldset class="checks" id="enroll-devices" hidden>
+            <legend>Devices they may test</legend>
+          </fieldset>
+          <button type="submit">Create setup link</button>
+        </form>
+        <div id="enroll-link" class="stack" hidden>
+          <p class="notice" id="enroll-link-note"></p>
+          <div class="copy-row">
+            <input id="enroll-url" readonly aria-label="Setup link">
+            <button type="button" id="enroll-copy">Copy</button>
+          </div>
+        </div>
+        <p class="error" id="enroll-error" hidden></p>
+
+        <h3>Set-up devices</h3>
+        <ul class="list" id="sessions"><li class="muted">Loading…</li></ul>
+        <h3>Unused setup links</h3>
+        <ul class="list" id="enrollments"></ul>
+      </section>
+
+      <section class="card" id="devices-card" aria-labelledby="devices-h">
+        <h2 id="devices-h" class="bar">Devices <button type="button" class="secondary" id="refresh">Refresh</button></h2>
+        <p class="muted" id="devices-note"></p>
+        <ul class="list" id="devices"><li class="muted">Loading…</li></ul>
+      </section>
+
+      <section class="card" id="links-card" aria-labelledby="links-h">
+        <h2 id="links-h">Pages</h2>
+        <div class="links">
+          <a class="btn secondary" href="/visualizer/">Visualizer</a>
+          <a class="btn secondary" href="/ops/calibrate/">Calibration</a>
+          <a class="btn secondary" href="/ops/bench/">Bench</a>
+          <a class="btn secondary" href="/ops/module/">Single module</a>
+          <a class="btn secondary" href="/ops/accounts/">Accounts</a>
+        </div>
+        <p class="muted" id="version"></p>
+      </section>
     </div>
-    <p class="muted" id="version"></p>
-  </section>
+  </div>
 </main>
+
+<dialog id="commission-dialog" class="confirm">
+  <form method="dialog">
+    <h2>Commission slots?</h2>
+    <p>This writes the painted looks — Rainbow Row Sunset, Garden Gathering and Golden Hour — into slots
+      custom-1…3 on all nine modules and records their readback hashes. Each slot is written at most once per
+      10 minutes.</p>
+    <p>Lights may change while it writes. Do it before doors open, with guest input paused.</p>
+    <div class="actions">
+      <button type="submit" value="cancel" class="secondary">Cancel</button>
+      <button type="submit" value="go">Commission</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>
