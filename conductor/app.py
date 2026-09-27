@@ -26,18 +26,21 @@ log = logging.getLogger("conductor")
 async def lifespan(app: FastAPI):
     check_auth_configuration()
     redact.install()
+    from conductor import logring
+    from conductor.alerts import AlertBoard
     from conductor.services import build_services
 
+    ring = logring.install()  # before anything is logged, so the /ops log tail has the startup lines too
     # Bad mode/gate settings or config refuse to start with a plain-English error (07 §1, §8).
     services = build_services()
     app.state.services = services
+    services.extras["logring"] = ring
+    AlertBoard.of(services)  # engine/reconciler alerts → /ops "Needs attention" and the log
     for problem in services.problems:
         log.warning("Needs attention: %s", problem)
     await services.start()
-    from conductor import logring
     from conductor.show import ShowWiring
 
-    services.extras["logring"] = logring.install()
     _start_vignettes(services)
     if os.environ.get("CONDUCTOR_ENGINE") != "off":  # tests only: run the app without the canopy engine
         services.extras["show"] = ShowWiring(services)

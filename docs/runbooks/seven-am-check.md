@@ -14,8 +14,9 @@ Work top to bottom: a failure near the top often explains the ones below it.
     `sudo systemctl restart chrony`, check the internet, wait 2 min, **Run** again. (A lagging clock may get
     Hubspace writes accepted and silently dropped — unverified, so don't ignore it.)
   - *WARN, phone differs:* your phone's clock is off; set it to automatic time. Harmless for the show.
-  - *WARN, "NTP status isn't visible":* the box isn't passing its clock state to the Conductor (the watchdog does
-    that every 30 s). Check `sudo canopy-status` → Box → NTP synchronized. If it says yes, carry on.
+  - *WARN, "can't see whether the box's clock is synced":* the Conductor can't read the box's clock state (on the
+    venue box the watchdog passes it along every 30 s). Check `sudo canopy-status` → Box → NTP synchronized. If it
+    says yes, carry on; if not, treat it as the FAIL above.
 
 - [ ] **Sign-in: Canopy account** (and one line per vignette account) — the box is signed in to Hubspace and the
       sign-in refreshed in the last few minutes.
@@ -53,6 +54,14 @@ Work top to bottom: a failure near the top often explains the ones below it.
 
 - [ ] **Guest input** — the kiosk can change the canopy.
   - *WARN "paused":* press **Resume guest input** just before doors open.
+  - *FAIL "the canopy is resting":* guest input is on but the kiosk can't change anything. Hubspace down → it comes
+    back by itself (`outages.md`). Otherwise press **Safe look**; if that is refused too (the result line turns red
+    with the reason), restart the Conductor (`restart-matrix.md`) and read the log tail.
+
+**Needs attention** (top of `/ops`) also lists the engine's own alerts: a slot someone repainted in the app, a rewrite
+that didn't take, a mode running at a lower tier, a commissioning run with problems. Each one links to its module;
+press **Acknowledge** once it's handled (it comes back if it happens again). A mode back at its normal tier, a
+successful rewrite or Hubspace answering again clears its line by itself.
 
 **Also, by eye (2 min):**
 - [ ] The kiosk shows the canopy page (not "resting"); tap one mood, the canopy changes, the kiosk says Ready.

@@ -55,6 +55,9 @@ class StubCanopy:
         self.settle_s = settle_s
         self.settle_at: float | None = None
         self.selects: list[str] = []
+        self.refuse: tuple[int, dict] | None = None  # answer every select with this (a refused choice)
+        self.tier: str | None = None  # default: the mode's primary technique
+        self.module_colours: list[str] | None = None
 
     def feature(self) -> str:
         spec = self.modes[self.mode]
@@ -69,7 +72,7 @@ class StubCanopy:
         return {
             "mode": self.mode,
             "label": self.modes[self.mode]["label"],
-            "tier": self.modes[self.mode]["ladder"][0],
+            "tier": self.tier or self.modes[self.mode]["ladder"][0],
             "feature": self.feature(),
             "phase": self.phase,
             "guest_input": self.guest_input,
@@ -80,11 +83,14 @@ class StubCanopy:
             "message": "",
             "server_now": now,
             "cooldown_remaining_s": round(remaining, 3),
+            "module_colours": self.module_colours,
         }
 
     def select(self, mode: str) -> tuple[int, dict]:
         self.selects.append(mode)
         now = time.time()
+        if self.refuse is not None:
+            return self.refuse
         if not self.guest_input:
             return 423, {"detail": "The canopy is resting for a moment. It will be back shortly."}
         if self.cooldown_until and now < self.cooldown_until:
@@ -186,6 +192,79 @@ def test_kiosk_design_ready_updating_cooldown(design_context_factory, screenshot
     assert errors == []
 
 
+# Test instrumentation only: every text the status line ever showed.
+WATCH_STATUS = """
+(() => {
+  window.__statusSeen = [];
+  const el = document.querySelector('#status-text');
+  window.__statusSeen.push(el.textContent);
+  new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, {
+    childList: true, characterData: true, subtree: true,
+  });
+})();
+"""
+
+
+@pytest.mark.parametrize(
+    ("status", "detail", "hint"),
+    [
+        (409, "That mood isn't available right now. Choose another.", "isn't available"),
+        (503, "The canopy is being set up. It will be back shortly.", "needs a moment"),
+    ],
+)
+def test_kiosk_refused_choice_never_says_changing(design_context_factory, status, detail, hint):
+    """Review F2: a refused choice keeps the mode now showing and says so gently — never "Changing the light…"."""
+    stub = StubCanopy(mode="lowcountry-calm")
+    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
+    page.wait_for_selector("body[data-view='live']")
+    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
+    page.evaluate(WATCH_STATUS)
+    stub.refuse = (status, {"detail": detail, "retry_after_s": 30.0} if status == 503 else {"detail": detail})
+    page.tap(".tile[data-mode='rainbow-row-sunset']")
+    page.wait_for_function(
+        f"document.querySelector('#hint').textContent.includes({json.dumps(hint)})", timeout=10000
+    )
+    assert stub.selects == ["rainbow-row-sunset"]
+    assert page.text_content("#now-label") == "Lowcountry Calm"
+    assert page.get_attribute(".tile.current", "data-mode") == "lowcountry-calm"
+    assert page.locator(".tile.chosen").count() == 0
+    assert not page.evaluate("document.body.classList.contains('cooling')")
+    seen = page.evaluate("window.__statusSeen")
+    assert "Changing the light…" not in seen, seen
+    page.wait_for_timeout(1500)
+    assert page.text_content("#status-text") == "Ready"
+    assert "Changing the light…" not in page.evaluate("window.__statusSeen")
+    assert errors == []
+
+
+def test_kiosk_draws_one_colour_per_module_at_module_level(design_context_factory, screenshots):
+    """Review F8: at T3 the ceiling shows one colour per module, so the illustration does too."""
+    stub = StubCanopy(mode="rainbow-row-sunset")
+    stub.tier = "modules"
+    stub.module_colours = ["#F96302"] * 3 + ["#FFA06E"] * 3 + ["#FFD9A8"] * 3
+    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
+    page.wait_for_selector("body[data-view='live']")
+    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
+    fills = page.eval_on_selector_all(
+        "#canopy-svg .halo circle", "els => els.map((e) => e.getAttribute('fill'))"
+    )
+    assert len(fills) == 270
+    per_module = [set(fills[m * 30 : (m + 1) * 30]) for m in range(9)]
+    assert all(len(colours) == 1 for colours in per_module), "every head of a module has the module's colour"
+    assert per_module[0] == {"rgb(249,99,2)"} and per_module[8] == {"rgb(255,217,168)"}
+    # the same mode above T3 draws its per-head gradient again
+    stub.tier = None
+    stub.module_colours = None
+    page.reload()
+    page.wait_for_selector("body[data-view='live']")
+    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
+    fills = page.eval_on_selector_all(
+        "#canopy-svg .halo circle", "els => els.map((e) => e.getAttribute('fill'))"
+    )
+    assert len(set(fills[:30])) > 1
+    assert errors == []
+
+
 @pytest.mark.parametrize(
     ("viewport", "mode", "name"),
     [(HD, "golden-hour", "kiosk-1920x1080.png"), (TABLET, "garden-gathering", "kiosk-1024x768.png")],
@@ -264,6 +343,8 @@ def test_kiosk_selection_reaches_the_simulator(context_factory, api, screenshots
         pytest.skip(
             "The canopy engine isn't wired yet (GET /api/kiosk/state is 503); the lead runs this after P1."
         )
+    # startup commissioning (sim) reads as "resting" on the kiosk; wait for the canopy to be ready and cool
+    _wait(lambda: api("/api/kiosk/state")["phase"] == "ready", timeout=60)
     _wait(lambda: api("/api/kiosk/state")["cooldown_remaining_s"] == 0, timeout=15)
     before = api("/api/kiosk/state")
     modules = sorted(before["modules"])

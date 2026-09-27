@@ -3,7 +3,12 @@
 // Honesty rules (05 #12, 07 §6):
 //   - "Changing the light…" only while the server says the canopy phase is `updating`; "Ready" only when it says
 //     `ready`. The Hubspace feature sentence is always `state.feature` from the server — never written here.
-//   - The illustrated canopy is a preview drawn from the mode's own preview colours (config/modes.yaml).
+//   - The illustrated canopy is a preview drawn from the mode's own preview colours (config/modes.yaml), laid out
+//     for the tier actually in use: at module level (T3) it is one flat colour per module, from the plan the server
+//     reports (`module_colours`), because that is all the ceiling shows.
+//   - A refused choice (any non-2xx) never shows "Changing the light…": the tile falls back to the mode now
+//     showing and a gentle hint explains. Live events only trigger a re-read of /api/kiosk/state, so the page always
+//     shows the kiosk's view of the engine (e.g. slot commissioning reads as "resting", not "changing").
 //   - The 8 s cooldown and the 3 min return to Lowcountry Calm are the server's; this page only reflects them.
 //     The cooldown counts down in server-relative time (`cooldown_remaining_s`), so the kiosk clock can't skew it.
 // Resilience (07 §10): the page never navigates away and never shows a browser error. Every fetch and socket
@@ -19,6 +24,7 @@ const COPY = {
   cooldown: "Enjoy the light — you can choose again in a moment.",
   busy: "The light is still changing. Choose again in a moment.",
   unavailable: "That mood isn't available right now. Choose another.",
+  later: "The canopy needs a moment. Choose again shortly.",
   nowShowing: "Now showing",
   yourChoice: "Your choice",
 };
@@ -30,6 +36,8 @@ const MODES_RETRY_MS = 5000;
 const SELECT_TIMEOUT_MS = 8000;
 const CHOSEN_WAIT_MS = 10000; // an accepted choice the state hasn't shown yet stays previewed this long
 const MAX_COOLDOWN_S = 60;
+const LIVE_REFRESH_MS = 120; // a burst of live events becomes one state read
+const MODES_RELOAD_MS = 30000; // at most this often when the tier in use differs from the listing's
 const HEX = /^#[0-9a-f]{6}$/i;
 
 // ---- canopy geometry (config/canopy.yaml; 02): 3 × 3 modules of 75″ × 40″, heads staggered 8/7/8/7 ---------
@@ -92,17 +100,23 @@ function hash01(i) {
   return s - Math.floor(s);
 }
 
-/** Per-head colours for a mode's illustration. `pattern` comes from the server (how the mode's technique lays out). */
+/** Per-head colours for a mode's illustration. `pattern` comes from the server (how the mode's technique lays out
+ * at the tier in use); "modules" paints every head of a module in that module's colour (`module_colours`, r0c0…r2c2). */
 export function headColours(mode, heads) {
   const palette = (mode.preview || []).filter((c) => HEX.test(c)).map(rgbOf);
   if (!palette.length) palette.push([255, 228, 188]);
   const [p0, p1 = p0, p2 = p1] = palette;
   const W = MODULE_W * 3;
   const H = MODULE_H * 3;
+  const flat = Array.isArray(mode.module_colours) ? mode.module_colours : [];
   return heads.map((h) => {
     const u = h.x / W;
     const v = h.y / H;
     switch (mode.pattern) {
+      case "modules": {
+        const c = flat[h.module];
+        return typeof c === "string" && HEX.test(c) ? rgbOf(c) : ramp(palette, h.module / 8);
+      }
       case "gradient":
         return ramp(palette, v + 0.03 * Math.sin(u * 9));
       case "pathway": {
@@ -196,9 +210,29 @@ function buildCanopy() {
   svg.append(panels, bloom, halo, core);
 }
 
+/** The picture for `mode`: its listing (the tier the engine would use), or — when it is the mode now showing — the
+ * tier the server says is in use, with the plan's own module colours at module level. */
+function pictureOf(mode, s) {
+  if (!mode) return null;
+  if (!s || s.mode !== mode.id || typeof s.tier !== "string") return mode;
+  if (s.tier === "modules" && Array.isArray(s.module_colours)) {
+    return { ...mode, pattern: "modules", module_colours: s.module_colours };
+  }
+  if (s.tier !== "modules" && mode.pattern === "modules") {
+    return { ...mode, pattern: mode.pattern_primary || "wash", module_colours: null };
+  }
+  return mode;
+}
+
+function pictureKey(p) {
+  return `${p.id}|${p.pattern}|${Array.isArray(p.module_colours) ? p.module_colours.join(",") : ""}`;
+}
+
 function paintCanopy(mode) {
-  if (!mode || view.painted === mode.id) return;
-  view.painted = mode.id;
+  if (!mode) return;
+  const key = pictureKey(mode);
+  if (view.painted === key) return;
+  view.painted = key;
   const colours = headColours(mode, view.heads);
   const white = [255, 250, 240];
   colours.forEach((c, i) => {
@@ -241,6 +275,7 @@ const st = {
   hintUntil: 0,
   hintText: "",
   modesFailed: false,
+  modesLoadedAt: 0,
 };
 
 function contact() {
@@ -269,6 +304,11 @@ function applyState(data, { http = false } = {}) {
   if (typeof s.phase !== "string") return;
   st.server = s;
   if (st.chosen !== null && !st.inflight && s.mode === st.chosen) st.chosen = null;
+  const listed = s.mode ? st.byId.get(s.mode) : null;
+  if (listed && listed.tier && s.tier && listed.tier !== s.tier && performance.now() - st.modesLoadedAt > MODES_RELOAD_MS) {
+    st.modesLoadedAt = performance.now(); // the tier changed (a downgrade, or flags set): re-read the pictures
+    loadModes();
+  }
   st.engineMissing = false;
   st.unauthorized = false;
   contact();
@@ -323,7 +363,7 @@ function render() {
   if (st.chosen !== null && !st.inflight && now > st.chosenUntil) st.chosen = null; // the server never showed it
   const shownId = st.chosen ?? s?.mode ?? null;
   const shown = shownId ? st.byId.get(shownId) : null;
-  if (shown) paintCanopy(shown);
+  if (shown) paintCanopy(pictureOf(shown, s));
 
   const pending = st.chosen !== null && st.chosen !== s?.mode;
   $("now-label").textContent = shown?.label ?? s?.label ?? "\u00a0";
@@ -392,6 +432,27 @@ async function refresh() {
   }
 }
 
+// A live event says "something changed"; the kiosk re-reads its own view of it (/api/kiosk/state), which is what
+// guests should see (the raw engine state says "updating" while slots are commissioned, for example).
+let liveTimer = 0;
+let liveBusy = false;
+function liveRefresh() {
+  if (liveTimer) return;
+  liveTimer = setTimeout(async () => {
+    liveTimer = 0;
+    if (liveBusy) {
+      liveRefresh();
+      return;
+    }
+    liveBusy = true;
+    try {
+      await refresh();
+    } finally {
+      liveBusy = false;
+    }
+  }, LIVE_REFRESH_MS);
+}
+
 let pollTimer = 0;
 function schedulePoll() {
   clearTimeout(pollTimer);
@@ -411,6 +472,7 @@ async function loadModes() {
     st.modes = list.filter((m) => m && typeof m.id === "string");
     st.byId = new Map(st.modes.map((m) => [m.id, m]));
     st.modesFailed = false;
+    st.modesLoadedAt = performance.now();
     view.painted = null;
     contact();
     buildTiles();
@@ -512,7 +574,8 @@ async function choose(modeId, tile) {
       } else if (status === 404 || status === 409) {
         hint(COPY.unavailable);
       } else if (status === 423 || status === 503) {
-        await refresh();
+        await refresh(); // paused, resting or being set up: the resting screen says so
+        if (!resting()) hint(COPY.later);
       } else if (status === 401 || status === 403) {
         st.unauthorized = true;
       } else {
@@ -578,8 +641,8 @@ function start() {
   refresh().finally(schedulePoll);
   connectLive({
     topics: ["canopy"],
-    onEvent: (topic, data) => {
-      if (topic === "canopy") applyState(data);
+    onEvent: (topic) => {
+      if (topic === "canopy") liveRefresh();
     },
     onStatus: (state) => {
       const was = st.liveOpen;

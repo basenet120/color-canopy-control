@@ -145,3 +145,46 @@ iPad to the stock Hubspace app (Guided Access, that room's account) unless by Oc
 dumped at the bench and matches its profile, (2) from the venue box a tap reads back Ready within ~5 s p95 and a scene
 within ~10 s with no throttling pattern, (3) the real deadbolt locks and unlocks with a readback, (4) the pages run
 all day on the real iPads in Guided Access, and (5) the authorization letter covers the vignette accounts.
+
+## 2026-09-27 — after the P1–P3 adversarial review: surfaces (kiosk, /ops, log tail)
+
+**D27 — Refusals are never a 200.** The real engine reports a refusal as a `CanopyState` with `refused=True`; the
+kiosk route maps it from the engine's own flags (stopped / commissioning / outage → 503 + Retry-After, paused → 423,
+cooldown → 429, anything else — no tier compiles — → 409) and logs the engine's sentence; guests only ever see the
+kiosk's calm copy. Ops controls answer 409 with the engine's sentence; a commissioning run that never started is a
+409, one that ran with problems is `ok: false`. Success lines are built from the state the engine returned (look,
+tier, "N of 9 modules", held modules, outage), never a fixed sentence.
+
+**D28 — Commissioning reads as "resting" on the kiosk.** Writing slot contents changes no look, so the kiosk's view
+of the state (`/api/kiosk/state`) turns an engine UPDATING-while-commissioning into RESTING "being set up". The kiosk
+now treats a WebSocket "canopy" event only as a trigger to re-read `/api/kiosk/state` (debounced 120 ms), so there
+is one view of the truth; the engine's own phase is unchanged (canopy.py wasn't this fix's to edit).
+
+**D29 — The log ring keeps stderr.** Adding the ring to the root logger switched off `logging.lastResort`, so
+`logring.install()` also adds a redacted WARNING+ stderr handler (resolving `sys.stderr` at write time, like
+lastResort) unless the root already writes to the console. The ring is installed first thing in the lifespan.
+
+**D30 — Engine alerts on /ops.** `conductor/alerts.py` subscribes to telemetry and keeps warn/error `alert`s and
+`tier` downgrades as one line per problem (keyed: tier per mode, slot per device+slot, outage, commissioning, the
+7 am test), with a count, until resolved by the matching event (upgrade, "rewrote it (applied)", Hubspace answering,
+an all-good info alert) or acknowledged (`POST /api/ops/alerts/ack`, hidden until it happens again). Info alerts
+are logged at INFO, warn/error at WARNING. No tracker `flag_problem` for drift (the tracker's problems have other
+owners); the checklist's Slot hashes item still catches it.
+
+**D31 — The checklist fails Guest input while the canopy rests** (not paused), and "Needs attention" says so.
+Re-assert with no look answers 409 "nothing to re-assert"; during commissioning, 409 "wait"; during an outage it
+says a module was probed. A refused test mode change is a failed test with its own fix text.
+
+**D32 — Clock check on the venue box.** The flag's folder mounted but no `synchronized` file = **not synced** (the
+watchdog removes the flag when chrony isn't synced). The FAIL says plainly the box's clock is not synced to internet
+time and the fix is the network + chrony (`chronyc tracking`, `systemctl restart chrony`); "can't tell" (staging)
+never asks for a mount.
+
+**D33 — The kiosk draws the tier in use.** `/api/kiosk/state` carries `module_colours` (nine, r0c0…r2c2, the mean of
+each module's plan preview) when the plan is T3, and `/api/kiosk/modes` gives each mode the tier the engine would
+pick now (`compile_best`, ~15 ms per mode) with pattern "modules" at T3. The kiosk re-reads the list when the tier in
+use differs from it (at most every 30 s).
+
+**D34 — /ops device list by role and room.** `/api/devices` adds `vignette`, `kind` and `groups` (canopy, bench,
+spares, then rooms in vignettes.yaml order). Module page / Bench / head count only for strands; vignette devices get
+their room page.

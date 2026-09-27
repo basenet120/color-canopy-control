@@ -20,6 +20,19 @@ body.ops main.narrow { padding-top: 52px; }
 .attention li::before { content: "!"; flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px;
   border-radius: 50%; background: var(--bad-bg); color: var(--bad); font-weight: 700; }
 .all-clear { color: var(--ok); font-weight: 600; }
+/* engine/reconciler alerts: the sentence, then its time and an Acknowledge button under it */
+.attention li.alert { flex-wrap: wrap; }
+.attention li.alert > span { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.attention .alert-foot { flex: 1 0 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding-left: 34px; font-size: 0.85rem; }
+.attention .alert-foot .ack { min-height: 36px; padding: 4px 14px; }
+
+/* the device list, one section per role / room */
+.dev-group + .dev-group { margin-top: 18px; }
+.group-title { display: flex; align-items: baseline; gap: 8px; margin: 0 0 2px; font-size: 1rem;
+  padding-bottom: 6px; border-bottom: 2px solid var(--line); }
+.group-title .count { font-weight: 400; font-size: 0.85rem; }
+.group-title .group-link { margin-left: auto; font-weight: 600; font-size: 0.9rem; }
 
 .tag { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;
   letter-spacing: 0.04em; text-transform: uppercase; vertical-align: middle; }
