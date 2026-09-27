@@ -11,7 +11,7 @@ def _device(body: dict, device_id: str) -> dict:
 def test_devices_list_registry_targets_and_capabilities(app_client):
     body = app_client.get("/api/devices").json()
     assert body["simulated"] is True and body["mode"] == "sim"
-    assert len(body["devices"]) == 10
+    assert len(body["devices"]) == 13  # bench kit, nine modules, three spares
     kit = _device(body, "bench-kit")
     assert (
         kit["label"] and kit["role"] == "bench" and kit["account"] == "bench" and kit["expected_heads"] == 30
@@ -45,14 +45,14 @@ def test_capabilities_are_cached_until_refresh(app_client, monkeypatch):
 
     monkeypatch.setattr(services.sim, "fetch_profile", counting)
     app_client.get("/api/devices")
-    assert len(calls) == 10 and all(p == "bench" for _, p in calls)
+    assert len(calls) == 13 and all(p == "bench" for _, p in calls)
     app_client.get("/api/devices")
     app_client.get("/api/devices/bench-kit")
-    assert len(calls) == 10
+    assert len(calls) == 13
     app_client.get("/api/devices/bench-kit?refresh=1")
-    assert len(calls) == 11
+    assert len(calls) == 14
     app_client.get("/api/devices?refresh=1")
-    assert len(calls) == 21
+    assert len(calls) == 27
 
 
 def test_a_failing_profile_read_is_reported_not_raised(app_client, monkeypatch):

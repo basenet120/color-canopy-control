@@ -1,0 +1,11 @@
+# Run by canopy-backup.timer every night. Installed to /etc/systemd/system/. Run by hand: sudo canopy-backup
+[Unit]
+Description=Color Canopy backup of the canopy-data volume
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/canopy/bin/canopy-backup --nightly
+Nice=10
+IOSchedulingClass=idle

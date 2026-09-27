@@ -1,0 +1,28 @@
+# The Color Canopy Conductor: one container under Docker Compose (07 §10). Installed to /etc/systemd/system/.
+#   sudo canopy-status · sudo canopy-restart · sudo canopy-logs      (never plain `docker compose` on show days)
+[Unit]
+Description=Color Canopy Conductor (Docker Compose)
+Documentation=file:///opt/canopy/docs/venue-box.md
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target time-sync.target
+# Keep trying for ever: a show box never gives up on its one service.
+StartLimitIntervalSec=0
+# Break-glass (canopy-stop) sets this flag so nothing starts the Conductor behind the staff's back: not the watchdog,
+# not a reboot. canopy-start removes it.
+ConditionPathExists=!/var/lib/canopy/hold
+
+[Service]
+Type=simple
+Environment=CANOPY_ENV_FILE=/etc/canopy/conductor.env
+# Refuses (and retries every RestartSec) while conductor.env is missing, not 0600, or wrong; waits for the LAN address.
+ExecStartPre=/opt/canopy/lib/preflight.sh
+ExecStart=/usr/bin/docker compose --project-name canopy --env-file /etc/canopy/box.env --file /opt/canopy/docker-compose.yml up --no-build --remove-orphans
+ExecStop=/usr/bin/docker compose --project-name canopy --env-file /etc/canopy/box.env --file /opt/canopy/docker-compose.yml down --timeout 30
+Restart=always
+RestartSec=10
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

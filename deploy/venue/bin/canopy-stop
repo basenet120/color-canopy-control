@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# canopy-stop — break-glass: stop the Conductor and keep it stopped.
+set -uo pipefail
+# shellcheck source=../lib/common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/common.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: sudo canopy-stop [--yes]
+
+Break-glass (docs/runbooks/break-glass.md): stops the Conductor and keeps it stopped until canopy-start, so staff
+can drive the canopy from the Hubspace app without the Conductor undoing their changes. Neither the watchdog nor a
+reboot will start it again while it's held.
+
+While it's stopped: the lights keep their current look; the kiosk shows "the canopy is resting"; /ops doesn't load.
+
+  --yes      don't ask first
+  -h, --help this help
+USAGE
+}
+
+yes=0
+for arg in "$@"; do
+	case $arg in
+	-h | --help) usage && exit 0 ;;
+	--yes) yes=1 ;;
+	*) usage >&2 && exit 2 ;;
+	esac
+done
+need_root "$@"
+
+if [ "$yes" -ne 1 ]; then
+	read -r -p "Stop the Conductor until someone runs canopy-start? Type stop: " answer
+	[ "$answer" = "stop" ] || die "Nothing changed."
+fi
+mkdir -p "$CANOPY_STATE"
+touch "$CANOPY_HOLD"
+systemctl stop "$CANOPY_UNIT"
+say "The Conductor is stopped and held. The lights keep their look; the kiosk shows the canopy is resting."
+say "You can now use the Hubspace app (the 9-module group). To hand the canopy back: sudo canopy-start"

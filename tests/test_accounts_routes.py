@@ -190,6 +190,49 @@ def test_register_writes_the_overlay_and_refuses_mismatches_and_duplicates(app_c
     assert r.status_code == 200 and r.json()["replaced"] == "md-test-0001"
 
 
+def test_a_spare_kit_swaps_in_for_a_module_and_brings_its_bench_flags(app_client, tmp_path):
+    """Controller swap (docs/runbooks/controller-swap.md): the spare's Hubspace device moves off the spare entry onto
+    the dead module's entry, replacing the dead kit's id, and the flags that kit proved come with it."""
+    services = app_client.app.state.services
+
+    def register(md: str, device_id: str):
+        return app_client.post(
+            "/api/accounts/canopy/register", json={"metadevice_id": md, "device_id": device_id}
+        )
+
+    assert register("md-dead-0005", "canopy-r1c1").status_code == 200
+    assert register("md-spare-0001", "spare-1").status_code == 200
+    services.update_registry(
+        "spare-1", {"flags": {"t1_frames": True, "t2_select": True}, "flags_proven_on": "md-spare-0001"}
+    )
+
+    r = register("md-spare-0001", "canopy-r1c1")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["moved_from"] == "spare-1" and body["replaced"] == "md-dead-0005" and body["flags_carried"]
+    assert body["message"].startswith("Moved from spare-1 to canopy-r1c1")
+    module, spare = services.registry.get("canopy-r1c1"), services.registry.get("spare-1")
+    assert module.metadevice_id == "md-spare-0001" and spare.metadevice_id is None
+    assert module.flags_for("md-spare-0001").t1_frames is True
+    overlay = yaml.safe_load((tmp_path / "data" / "overrides" / "registry.yaml").read_text())
+    assert overlay["devices"]["canopy-r1c1"]["flags_proven_on"] == "md-spare-0001"
+
+    # a spare that proved nothing moves without flags; the module's old flags stay bound to the old kit
+    assert register("md-spare-0002", "spare-2").status_code == 200
+    r = register("md-spare-0002", "canopy-r0c0")
+    assert r.status_code == 200 and r.json()["moved_from"] == "spare-2" and not r.json()["flags_carried"]
+    assert services.registry.get("canopy-r0c0").flags_for("md-spare-0002").t1_frames is None
+
+    # only spares give their device away: a module's id is never taken by another module or by a spare entry
+    r = register("md-spare-0001", "canopy-r2c2")
+    assert r.status_code == 409 and "already registered as canopy-r1c1" in r.json()["detail"]
+    r = register("md-spare-0001", "spare-3")
+    assert r.status_code == 409 and "already registered as canopy-r1c1" in r.json()["detail"]
+    assert register("md-spare-0003", "spare-3").status_code == 200
+    r = register("md-spare-0003", "spare-1")
+    assert r.status_code == 409 and "already registered as spare-3" in r.json()["detail"]
+
+
 # ---- the /ops/accounts form --------------------------------------------------------------------------------------
 def test_form_is_off_without_the_flag(app_client):
     r = _form(app_client, {"account": "bench", "email": EMAIL, "password": PASSWORD})

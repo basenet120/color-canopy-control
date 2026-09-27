@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# canopy-kiosk-enroll — sign the kiosk touchscreen in with a one-time setup link.
+set -uo pipefail
+# shellcheck source=../lib/common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/common.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: sudo canopy-kiosk-enroll
+
+Signs the kiosk browser on this box in as the canopy kiosk, once (the sign-in lasts 30 days and survives
+restarts). Before you start: on /ops, "Set up a device", role Kiosk, name "Canopy kiosk", Create setup link, Copy.
+
+  1. Run this and paste the link when asked (it isn't shown, and nothing keeps it once it's used).
+  2. The touchscreen opens the link: tap "Set up this device" on the touchscreen.
+  3. When the touchscreen shows the canopy page, press Enter here.
+
+The link can come from any address of the box (…/enroll/…); the kiosk always uses http://localhost:8000.
+  -h, --help  this help
+USAGE
+}
+
+for arg in "$@"; do
+	case $arg in
+	-h | --help) usage && exit 0 ;;
+	*) usage >&2 && exit 2 ;;
+	esac
+done
+need_root "$@"
+
+read -r -s -p "Paste the setup link and press Enter: " link
+echo
+token=${link##*/enroll/}
+token=${token%%[/?#]*}
+[[ $link == */enroll/* && $token =~ ^[A-Za-z0-9_-]{20,}$ ]] ||
+	die "That doesn't look like a setup link (http://…/enroll/…). Create one on /ops: Set up a device → Kiosk."
+
+user=$(kiosk_user)
+home=$(getent passwd "$user" | cut -d: -f6)
+[ -n "$home" ] || die "There's no user $user on this box (CANOPY_KIOSK_USER in $CANOPY_BOX_FILE)."
+dir=$home/.config/canopy
+install -d -o "$user" -g "$(id -gn "$user")" -m 0700 "$dir"
+override=$dir/kiosk.env
+cleanup() { rm -f "$override"; }
+trap cleanup EXIT
+(umask 077 && printf 'CANOPY_KIOSK_URL=http://localhost:8000/enroll/%s\n' "$token" >"$override")
+chown "$user:" "$override"
+
+kiosk_systemctl restart "$CANOPY_KIOSK_UNIT" ||
+	die "Couldn't restart the kiosk browser. Is $user logged in on the touchscreen?"
+say "On the touchscreen: tap \"Set up this device\". It then shows the canopy page."
+read -r -p "Press Enter once the touchscreen shows the canopy page… " _
+cleanup
+kiosk_systemctl restart "$CANOPY_KIOSK_UNIT"
+say "Done. The kiosk is signed in; it appears under \"Set-up devices\" on /ops (revoke it there if it's ever lost)."

@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# canopy-status — everything about the venue box on one screen.
+set -uo pipefail
+# shellcheck source=../lib/common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/common.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: sudo canopy-status [--no-checklist]
+
+Shows, in plain words: whether the Conductor is running and healthy, which release it runs, the watchdog's
+recent restarts, the kiosk browser, the box's clock (NTP), the latest backup, free disk space, and the /ops
+7 am checklist (each item PASS / WARN / FAIL with its fix).
+
+  --no-checklist   skip the checklist (it asks the Conductor, which takes a few seconds)
+  -h, --help       this help
+
+Read-only: it changes nothing. See docs/runbooks/venue-box.md and restart-matrix.md.
+USAGE
+}
+
+checklist=1
+for arg in "$@"; do
+	case $arg in
+	-h | --help) usage && exit 0 ;;
+	--no-checklist) checklist=0 ;;
+	*) usage >&2 && exit 2 ;;
+	esac
+done
+need_root "$@"
+
+section() { printf '\n== %s ==\n' "$1"; }
+
+section "Box"
+say "Host: $(hostname)   Up: $(uptime -p 2>/dev/null || true)"
+say "Time: $(date '+%a %d %b %Y %H:%M:%S %Z')   NTP synchronized: $(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo unknown)"
+if command -v chronyc >/dev/null 2>&1; then
+	chronyc -n tracking 2>/dev/null | grep -E '^(Reference ID|System time|Leap status)' | sed 's/^/  /'
+fi
+say "Disk free: $(df -h --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -d ' ') for Docker, $(df -h --output=avail "$CANOPY_BACKUP_DIR" 2>/dev/null | tail -1 | tr -d ' ') for backups"
+
+section "Conductor"
+tag=$(env_value "$CANOPY_BOX_FILE" CONDUCTOR_TAG)
+say "Release (box.env): ${tag:-not set}   Show-LAN address: $(env_value "$CANOPY_BOX_FILE" CONDUCTOR_LAN_IP)"
+if held; then
+	say "BREAK-GLASS HOLD: the Conductor is stopped on purpose (since $(date -r "$CANOPY_HOLD" '+%a %H:%M')). Hand the canopy back with: sudo canopy-start"
+fi
+say "Service: $(systemctl is-active "$CANOPY_UNIT" 2>/dev/null) (enabled: $(systemctl is-enabled "$CANOPY_UNIT" 2>/dev/null))"
+if docker inspect "$CANOPY_CONTAINER" >/dev/null 2>&1; then
+	docker inspect --format 'Container: {{ .State.Status }}, health {{ if .State.Health }}{{ .State.Health.Status }}{{ else }}n/a{{ end }}, started {{ .State.StartedAt }}, Docker restarts {{ .RestartCount }}' "$CANOPY_CONTAINER"
+	docker image inspect --format 'Image: {{ index .RepoTags 0 }} (commit {{ index .Config.Labels "org.opencontainers.image.revision" }})' \
+		"$(docker inspect --format '{{ .Image }}' "$CANOPY_CONTAINER")" 2>/dev/null
+else
+	say "Container: not running"
+fi
+if healthy; then say "/healthz: answering"; else say "/healthz: NOT answering"; fi
+
+section "Watchdog"
+say "Timer: $(systemctl is-active canopy-watchdog.timer 2>/dev/null)   Failed checks in a row: $(cat "$CANOPY_STATE/watchdog.failures" 2>/dev/null || echo 0)"
+if [ -s "$CANOPY_WATCHDOG_LOG" ]; then
+	say "Latest automatic restarts:"
+	tail -3 "$CANOPY_WATCHDOG_LOG" | sed 's/^/  /'
+else
+	say "No automatic restarts so far."
+fi
+
+section "Kiosk"
+say "Kiosk browser ($(kiosk_user)): $(kiosk_systemctl is-active "$CANOPY_KIOSK_UNIT" 2>/dev/null || echo 'not running (is the kiosk user logged in?)')"
+
+section "Backups"
+say "Nightly timer: $(systemctl is-active canopy-backup.timer 2>/dev/null)"
+latest=$(ls -1t "$CANOPY_BACKUP_DIR"/canopy-data-*.tar.gz 2>/dev/null | head -1)
+if [ -n "$latest" ]; then
+	say "Latest: $(basename "$latest") ($(du -h "$latest" | cut -f1), $(date -r "$latest" '+%a %d %b %H:%M'))"
+else
+	say "No backups yet: run sudo canopy-backup"
+fi
+usb=$(env_value "$CANOPY_BOX_FILE" CANOPY_BACKUP_USB)
+if [ -n "$usb" ]; then
+	if mountpoint -q "$usb"; then say "USB copy: $usb (mounted)"; else say "USB copy: $usb is NOT mounted"; fi
+fi
+
+if [ "$checklist" -eq 1 ]; then
+	section "7 am checklist (/ops)"
+	if ! healthy; then
+		say "Skipped: the Conductor isn't answering."
+	else
+		docker exec -i "$CANOPY_CONTAINER" python - <<'PY' || say "Couldn't read the checklist (see: sudo canopy-logs)."
+import base64, json, os, urllib.request
+
+request = urllib.request.Request("http://127.0.0.1:8000/api/ops/checklist")
+credential = os.environ.get("CONDUCTOR_BASIC_AUTH", "")
+if credential:
+    request.add_header("Authorization", "Basic " + base64.b64encode(credential.encode()).decode())
+body = json.load(urllib.request.urlopen(request, timeout=30))
+print(f"Overall: {body['overall'].upper()}" + ("  (SIMULATOR)" if body.get("simulated") else ""))
+for item in body["items"]:
+    print(f"  [{item['status'].upper():4}] {item['title']}: {item['detail']}")
+    if item["status"] != "pass" and item.get("fix"):
+        print(f"         Fix: {item['fix']}")
+PY
+	fi
+fi
