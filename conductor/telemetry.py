@@ -8,7 +8,8 @@ Event kinds (field `kind`), all with `t` (wall epoch s) and usually `device_id`:
 - `command`        label, purpose, rows (count), bytes, status (final CommandStatus), timings
                     {queued_at, sent_at, acked_at, verified_at}, attempts, mismatches (count), simulated
 - `attempt`        attempt n, outcome, http_status, elapsed_s, error
-- `readback`       outcome, http_status, elapsed_s, mismatches, available
+- `readback`       outcome, http_status, elapsed_s, mismatches, available (executor verification: + mismatched,
+                    the function classes that differ)
 - `gate_denied`    reason, purpose
 - `lock`           action (acquire/release/expire/steal), owner (steal: previous_owner; expire: expired_at)
 - `token`          account, action (ensure_fresh: the pre-burst check, 07 §6), outcome, elapsed_s, error
