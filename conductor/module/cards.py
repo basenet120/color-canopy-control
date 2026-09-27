@@ -14,7 +14,10 @@ Cards (ids are stable; the page renders each one):
 - `hue-ramp`       head i at hue 12°·i, for photographing the index map (T1).
 - `index-sweep`    lights head i in sequence — run through the sweep endpoint, one frame write per step (T1).
 - `single-head`    one head on, the rest off (T1).
-- `lowcountry-preview`  placeholder: arrives with the Lowcountry Modes (P2).
+- `lowcountry-preview`  one Lowcountry Mode's slice for a chosen canopy position (r0c0 … r2c2), shown on THIS
+                   module: the mode's T1 canvas frame for that position (one frame write + select into the page's
+                   scratch slot), or its whole-strand / module-level (T3) look when T1 isn't allowed here. The
+                   session runs it (`ModuleSession.preview_mode`): it needs the compiler, not just recipes.
 """
 
 from __future__ import annotations
@@ -48,8 +51,11 @@ class Compiled:
 
 
 # ---- the catalogue ---------------------------------------------------------------------------------------------
-def catalog(recipes: RecipesFile) -> list[dict]:
-    """Every card with its title, plain-English description, whether it needs T1, and default params."""
+def catalog(recipes: RecipesFile, modes: Any = None, canopy: Mapping[str, Any] | None = None) -> list[dict]:
+    """Every card with its title, plain-English description, whether it needs T1, and default params.
+
+    `modes` (a `looks.ModesFile`) and `canopy` feed the Lowcountry preview card; without them it is shown as
+    unavailable."""
     colors = [{"id": k, "label": v.label, "hex": v.hex} for k, v in recipes.colors.items()]
     show = [c for c in colors if c["id"] in SHOW_COLORS]
     return [
@@ -118,16 +124,48 @@ def catalog(recipes: RecipesFile) -> list[dict]:
             "options": {},
             "defaults": {"index": 0},
         },
-        {
-            "id": "lowcountry-preview",
-            "title": "Preview a Lowcountry Mode",
-            "description": "Arrives with the Lowcountry Modes (a later tier).",
-            "needs_t1": False,
+        lowcountry_card(modes, canopy),
+    ]
+
+
+def lowcountry_card(modes: Any, canopy: Mapping[str, Any] | None) -> dict:
+    """The "Preview a Lowcountry Mode" card: the six modes and the nine canopy positions to choose from."""
+    card: dict[str, Any] = {
+        "id": "lowcountry-preview",
+        "title": "Preview a Lowcountry Mode",
+        "needs_t1": False,
+    }
+    if modes is None or canopy is None:
+        return {
+            **card,
+            "description": "The Lowcountry Modes couldn't be loaded (see the Conductor log).",
             "placeholder": True,
             "options": {},
             "defaults": {},
+        }
+    grid = canopy["orientations"][canopy["orientation_scheme"]]
+    return {
+        **card,
+        "description": "Choose a mode and where on the canopy this module would hang: it shows that "
+        "module's slice of the look — painted per head (T1) where allowed, else the module-level look.",
+        "options": {
+            "modes": [
+                {
+                    "id": k,
+                    "label": m.label,
+                    "blurb": m.blurb,
+                    "preview": list(m.preview),
+                    "ladder": list(m.ladder),
+                }
+                for k, m in modes.modes.items()
+            ],
+            "positions": [
+                [{"id": f"r{r}c{c}", "orientation": str(o)} for c, o in enumerate(row)]
+                for r, row in enumerate(grid)
+            ],
         },
-    ]
+        "defaults": {"mode": next(iter(modes.modes)), "position": f"r{len(grid) // 2}c{len(grid[0]) // 2}"},
+    }
 
 
 # ---- helpers ---------------------------------------------------------------------------------------------------
@@ -397,7 +435,7 @@ def compile_card(
     if card == "index-sweep":
         return Compiled("index sweep", sweep={"step_s": p.get("step_s")})
     if card == "lowcountry-preview":
-        raise PayloadError("Lowcountry Mode previews arrive with the modes (a later tier).")
+        raise PayloadError("The Lowcountry Mode preview runs on an open module page (it needs the modes).")
     raise PayloadError(f"unknown card {card!r}")
 
 

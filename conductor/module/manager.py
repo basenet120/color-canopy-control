@@ -8,19 +8,22 @@ state at once.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from pathlib import Path
 from typing import Any
 
-from conductor.config import load_recipes
+from conductor.config import ConfigError, load_recipes
 from conductor.gate import Purpose
 from conductor.geometry import CONFIG_PATH, load_canopy_config
 from conductor.locks import LockError
+from conductor.looks import load_modes
 from conductor.module.layout import calibration_for, module_map
 from conductor.module.session import SESSIONS_KEY, ModuleError, ModuleSession, SessionDeps
 from conductor.roles_api import Principal, Role
 
 MANAGER_KEY = "module_manager"
+log = logging.getLogger(__name__)
 
 
 def owner_label(principal: Principal) -> str:
@@ -39,6 +42,11 @@ class ModuleManager:
         canopy_path = Path(services.config_dir) / "canopy.yaml"
         self.canopy = load_canopy_config(canopy_path if canopy_path.exists() else CONFIG_PATH)
         self.recipes = load_recipes(services.config_dir)
+        self.modes: Any = None
+        try:
+            self.modes = load_modes(Path(services.config_dir))
+        except ConfigError as e:  # the module page still works; only the Lowcountry preview is unavailable
+            log.warning("module page: the Lowcountry Modes couldn't be loaded:\n%s", e)
         services.hub.register_snapshot("module", self.topic_snapshot)
 
     @classmethod
@@ -61,6 +69,7 @@ class ModuleManager:
             publish=s.hub.publish,
             save_calibration=s.update_registry,
             tracker=s.tracker,
+            modes=self.modes,
         )
 
     # ---- lookups -----------------------------------------------------------------------------------------------

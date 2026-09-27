@@ -980,10 +980,80 @@ function buildCards(st) {
           ),
         ),
       );
+    } else if (card.id === "lowcountry-preview" && !card.placeholder) {
+      root.append(lowcountryCard(card));
     } else if (card.placeholder) {
       root.append(cardShell(card, h("button", { type: "button", class: "wide secondary", disabled: true, text: "Arrives with the Lowcountry Modes" })));
     }
   }
+}
+
+/** "Preview a Lowcountry Mode": choose a mode and a canopy position; the server compiles that position's slice
+ * (T1 frame into the scratch slot where painting is allowed, else the strand / module-level look). */
+function lowcountryCard(card) {
+  let mode = card.defaults.mode;
+  let position = card.defaults.position;
+  const byId = Object.fromEntries(card.options.modes.map((m) => [m.id, m]));
+  const blurb = h("p", { class: "lc-blurb" });
+  const result = h("p", { class: "lc-result", "aria-live": "polite" });
+  const modeSel = h(
+    "select",
+    { id: "lc-mode", "aria-label": "Lowcountry Mode" },
+    card.options.modes.map((m) => h("option", { value: m.id, text: m.label, selected: m.id === mode })),
+  );
+  const swatches = h("div", { class: "lc-swatches", "aria-hidden": "true" });
+  const showMode = () => {
+    const m = byId[mode];
+    blurb.textContent = m.blurb;
+    swatches.replaceChildren(...m.preview.map((hex) => h("i", { style: `background:${hex}` })));
+  };
+  modeSel.addEventListener("change", () => {
+    mode = modeSel.value;
+    showMode();
+  });
+  const grid = h(
+    "div",
+    { class: "lc-grid", role: "group", "aria-label": "Canopy position (looking up)" },
+    card.options.positions.flat().map((p) =>
+      h("button", {
+        type: "button",
+        "data-position": p.id,
+        "aria-pressed": String(p.id === position),
+        title: `Module ${p.id} (orientation ${p.orientation})`,
+        text: p.id,
+        onclick: (e) => {
+          position = p.id;
+          grid.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === e.currentTarget)));
+        },
+      }),
+    ),
+  );
+  const go = h("button", {
+    type: "button",
+    class: "wide",
+    id: "lc-apply",
+    text: "Preview on this module",
+    onclick: async () => {
+      result.textContent = "";
+      const res = await runCard(card.id, { mode, position });
+      const r = res && res.result;
+      if (r && r.tier) {
+        const tier = { canvas: "painted per head (T1)", modules: "module-level look (T3)", strand: "whole-strand look" }[r.tier] || r.tier;
+        result.textContent = `${byId[mode].label} at ${position}: ${tier}. Kiosk copy: “${r.feature}”`;
+      }
+    },
+  });
+  showMode();
+  return cardShell(
+    card,
+    h("label", {}, "Mode ", modeSel),
+    swatches,
+    blurb,
+    h("div", { class: "lc-grid-label", text: "Where this module would hang (looking up at the canopy)" }),
+    grid,
+    go,
+    result,
+  );
 }
 
 function renderSweep() {
