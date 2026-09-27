@@ -1,7 +1,7 @@
 # The venue box — build, look after, replace
 
 **Who:** Alon (build); the second on-duty tech (look after). **When:** built and frozen by **Oct 8**, on site Oct 20.
-**How long:** about 2 hours the first time, 20 minutes for the cold spare.
+**How long:** about 2 hours the first time; the cold spare about 1 hour to prepare and 20–30 minutes to take over.
 
 The show runs on one Ubuntu 24.04 mini PC at the venue. It is the **only** place the show's Hubspace accounts are
 ever signed in. It starts everything by itself when it gets power: the Conductor (in Docker), a watchdog, the
@@ -19,14 +19,15 @@ nightly backup and the kiosk browser on the canopy touchscreen.
 | Box settings | `/etc/canopy/box.env` | Release tag, show-LAN address, kiosk user, backup options |
 | Watchdog | `canopy-watchdog.timer` (every 30 s) | 3 failed health checks in a row → restarts the Conductor, logs it |
 | Backups | `canopy-backup.timer` (04:30 nightly) | `/var/backups/canopy`, 14 days, optional USB copy |
-| Kiosk | `canopy-kiosk.service` (user unit of `kiosk`) | Chromium full screen on `http://localhost:8000/kiosk/` |
+| Kiosk | `canopy-kiosk.service` (user unit of `kiosk`) | Chromium full screen: a local "canopy is resting" page (`/opt/canopy/kiosk/resting.html`) until the Conductor answers, then `http://localhost:8000/kiosk/` |
 | Helpers | `/usr/local/sbin/canopy-*` | See the table at the end. Every one has `--help`. |
 
 ---
 
 ## 1. Hardware and BIOS (15 min)
 
-- [ ] Mini PC (x86-64, 8 GB RAM, 128 GB SSD or more), wired Ethernet to the show router, HDMI + USB to the
+- [ ] Mini PC (**x86-64**: the release image is linux/amd64, and the installer refuses any other CPU; 8 GB RAM,
+      128 GB SSD or more), wired Ethernet to the show router, HDMI + USB to the
       canopy touchscreen, a USB keyboard kept in the tech kit.
 - [ ] **BIOS: power on after AC loss.** Usually *Advanced → Power → Restore on AC Power Loss → Power On* (names
       vary: "AC Recovery", "After Power Failure"). Test it: pull the plug while running, plug it back — it must
@@ -97,7 +98,11 @@ the plan. Running it again is safe.
 
 Then:
 - [ ] `sudo canopy-status` — Conductor active and healthy, watchdog and backup timers active.
-- [ ] Reboot (`sudo canopy-restart box`) — everything comes back by itself; the kiosk shows the canopy page.
+- [ ] Reboot (`sudo canopy-restart box`) — everything comes back by itself; the touchscreen shows "The canopy is
+      resting" while the Conductor starts, then the canopy page (or, before step 4's enrollment, "This screen is
+      not set up yet").
+- [ ] `sudo canopy-stop --yes`, reboot, and check the touchscreen shows "The canopy is resting" (never the desktop)
+      the whole time; then `sudo canopy-start` — the canopy page is back within a few seconds.
 - [ ] Pull the power plug, plug it back — same result (BIOS setting).
 - [ ] Enroll the kiosk: on a phone, `/ops` → **Set up a device** → Kiosk → name "Canopy kiosk" → **Create setup
       link** → Copy. On the box: `sudo canopy-kiosk-enroll`, paste, tap **Set up this device** on the touchscreen.
@@ -124,25 +129,44 @@ Then:
 
 ## 7. The cold spare
 
-A second mini PC (or a laptop) that can take over in about 20 minutes.
+A second x86-64 mini PC (or an x86-64 laptop) that can take over in 20–30 minutes. It drives the canopy
+touchscreen when it takes over, so it is set up exactly like the main box, kiosk user included (the installer
+refuses a spare without the kiosk browser). It is installed **held** (`--spare`): its Conductor never starts until takeover, so it needs neither
+the show network nor the internet once it's installed, and it can't end up running next to the main box.
 
-**Prepare it (before Oct 20):**
-- [ ] Steps 1–4 above on the spare, with its **own** `conductor.env` (same settings, its own
-      `CONDUCTOR_SECRET_KEY` and the same ops password) and the same `--lan-ip` as the main box. Install from the
-      image tarball instead of building: copy `/opt/canopy/images/canopy-conductor-<tag>.tar.gz` and its `.sha256`
-      from the main box, then `sudo deploy/venue/install.sh --lan-ip 192.168.50.10 --image-tar <file>`
-      (add `--no-kiosk` on a laptop without the touchscreen).
-- [ ] Then **stop it and keep it stopped:** `sudo canopy-stop --yes`, and keep it **off the show network**. Two
-      Conductors must never run at once: they would fight over the lights and over the Hubspace sign-in.
+**Prepare it (before Oct 20, about 1 hour):**
+- [ ] Steps 1–3 above on the spare: the `kiosk` user with auto-login and the `gsettings` lines, the **same fixed
+      show-network address** as the main box (Settings → Network → Wired → IPv4 → Manual, `192.168.50.10`; it only
+      comes up once the cable is in the show router, which is fine), Tailscale, and its **own** `conductor.env`
+      (same settings and the same ops password, its **own** `CONDUCTOR_SECRET_KEY`).
+- [ ] Install it held, from the main box's image instead of building (on any network with internet for the
+      packages, **not** the show network): copy `/opt/canopy/images/canopy-conductor-<tag>.tar.gz` and its
+      `.sha256` from the main box (or the USB stick), check out the same tag, then
+      ```
+      sudo deploy/venue/install.sh --spare --lan-ip 192.168.50.10 --image-tar ~/canopy-conductor-<tag>.tar.gz
+      ```
+      It installs everything, then stops the Conductor and holds it (the same hold as `canopy-stop`).
+- [ ] Check: `sudo canopy-status` shows **BREAK-GLASS HOLD** and the same release as the main box. Reboot: the
+      touchscreen (or any screen) shows "The canopy is resting", never the desktop.
+- [ ] Keep it **off the show network** and powered off in the tech kit. Two Conductors must never run at once:
+      they would fight over the lights and over the Hubspace sign-in.
+- [ ] **Every release that goes on the main box goes on the spare too**, the same way (`release-and-freeze.md`):
+      a spare on an older release may refuse the newer box's backup.
 
-**Take over (about 20 min):**
-1. Unplug the main box (power and network). Plug the spare into its network cable, the touchscreen and the UPS.
+**Take over (20–30 min):**
+1. Unplug the main box (power and network). Plug the spare into its network cable, the touchscreen and the UPS,
+   and power it on. The touchscreen shows "The canopy is resting".
 2. Copy the newest backup from the USB stick (or the main box's disk) and restore it **without the sign-ins**:
-   `sudo canopy-restore <file> --skip-tokens --yes` (sign-ins are never copied between boxes).
-3. `sudo canopy-start`, then sign in to each account again (`outages.md` → re-sign-in), about 3 min each.
-4. Tablets keep working: same address, and their enrollments came back with the backup. The kiosk browser on
-   the spare is a new browser: enroll it (`sudo canopy-kiosk-enroll`, a new Kiosk link from `/ops`).
-5. `/ops` → 7 am checklist, all items. Tell Alon.
+   `sudo canopy-restore <file> --skip-tokens --yes` (sign-ins are never copied between boxes). The hold keeps
+   the Conductor stopped meanwhile.
+3. `sudo canopy-start` (ends the hold; the Conductor comes up on the show address). The touchscreen now says
+   "This screen is not set up yet — ask the canopy team" (the spare's browser is a new browser).
+4. Enroll the kiosk straight away: on a phone, `/ops` → **Set up a device** → Kiosk → **Create setup link** →
+   Copy; on the spare `sudo canopy-kiosk-enroll`, paste, tap **Set up this device** on the touchscreen. It then
+   shows the canopy page (or "resting" until the accounts are signed in).
+5. Sign in to each account again (`outages.md` → re-sign-in), about 3 min each. Tablets keep working: same
+   address, and their enrollments came back with the backup.
+6. `/ops` → 7 am checklist, all items. Tell Alon.
 
 ## Helpers (all need `sudo`; all have `--help`)
 

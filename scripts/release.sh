@@ -9,7 +9,8 @@ Usage: scripts/release.sh [--dry-run] [--from REF]
 
   1. checks the checkout: on main (or --from REF), no local changes, same commit as origin/main if that is known
   2. tags it vYYYY.MM.DD-N (today's date, N = the next free number today), an annotated tag, locally only
-  3. docker build from `git archive <tag>` (only committed files), labelled with the tag and commit
+  3. docker build --platform linux/amd64 (the venue box's CPU, whatever this laptop is) from `git archive <tag>`
+     (only committed files), labelled with the tag and commit; checks the image really is linux/amd64
   4. docker save → dist/canopy-conductor-<tag>.tar.gz and dist/canopy-conductor-<tag>.tar.gz.sha256
 
 Nothing is pushed. To share the tag afterwards: git push origin <tag>
@@ -59,6 +60,9 @@ done
 tag=v$day-$n
 out=dist/canopy-conductor-$tag.tar.gz
 image=canopy-conductor:$tag
+# The venue box is x86-64 (venue-box.md). An Apple-silicon laptop would otherwise build linux/arm64, which passes the
+# installer's checksum and commit checks and then dies on the box with "exec format error".
+platform=linux/amd64
 
 if existing=$(git tag --points-at "$commit" | grep -E '^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$' | head -1) &&
 	[ -n "$existing" ]; then
@@ -77,10 +81,17 @@ cleanup_tag() {
 }
 trap cleanup_tag ERR
 
-git archive --format=tar "$tag" | docker build --tag "$image" \
+git archive --format=tar "$tag" | docker build --platform "$platform" --tag "$image" \
 	--label "org.opencontainers.image.version=$tag" \
 	--label "org.opencontainers.image.revision=$commit" \
 	--label "org.opencontainers.image.title=Color Canopy Conductor" -
+
+arch=$(docker image inspect --format '{{ .Architecture }}' "$image")
+if [ "linux/$arch" != "$platform" ]; then
+	trap - ERR
+	cleanup_tag
+	die "The image came out as linux/$arch, not $platform. Is Docker's multi-platform build (buildx, QEMU) set up?"
+fi
 
 mkdir -p dist
 docker save "$image" | gzip >"$out.partial"
@@ -93,7 +104,7 @@ cat <<DONE
 
 Released $tag
   commit  $commit
-  image   $image ($image_id)
+  image   $image ($image_id, $platform)
   file    $out ($(du -h "$out" | cut -f1))
   sha256  $(cut -d' ' -f1 "$out.sha256")
 Nothing was pushed. Next (docs/runbooks/release-and-freeze.md):

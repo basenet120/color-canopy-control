@@ -274,7 +274,7 @@ def test_kiosk_user_unit_runs_chromium_full_screen_with_a_persistent_profile():
         "--disable-pinch",
         "--check-for-update-interval=31536000",
         "--user-data-dir=${CANOPY_KIOSK_PROFILE}",
-        "--app=${CANOPY_KIOSK_URL}",
+        "--app=file://${CANOPY_KIOSK_RESTING}?next=${CANOPY_KIOSK_URL}",
     ):
         assert flag in start.split(), flag
     assert "CANOPY_KIOSK_URL=http://localhost:8000/kiosk/" in svc["Environment"]
@@ -282,8 +282,8 @@ def test_kiosk_user_unit_runs_chromium_full_screen_with_a_persistent_profile():
     assert profile.startswith("CANOPY_KIOSK_PROFILE=%h/"), (
         "a persistent profile, so the enrollment cookie survives"
     )
-    assert svc["ExecStartPre"] == ["/opt/canopy/lib/kiosk-prestart.sh"], "waits for /healthz"
-    assert svc["Restart"] == ["always"] and svc["TimeoutStartSec"] == ["infinity"]
+    assert svc["ExecStartPre"] == ["/opt/canopy/lib/kiosk-prestart.sh"], "ships the resting page, never waits"
+    assert svc["Restart"] == ["always"]
     assert u["Install"]["WantedBy"] == ["graphical-session.target"]
 
 
@@ -503,3 +503,467 @@ def test_release_dry_run_numbers_tags_by_day_and_changes_nothing(tmp_path):
     (repo / "README.md").write_text("changed\n")
     dirty = _run(release, cwd=repo)
     assert dirty.returncode != 0 and "local changes" in dirty.stderr
+
+
+# ---- review fixes (venue lens F1, F2, F4–F10): scripts run against stub commands on a curated PATH -------------
+# Only these real tools are reachable; everything that could touch the box, Docker, systemd, apt or the network is a
+# stub, so a missing stub fails the test ("command not found") instead of running the real thing.
+SAFE_TOOLS = [
+    "bash",
+    "env",
+    "git",
+    "sha256sum",
+    "cut",
+    "grep",
+    "sed",
+    "cat",
+    "mktemp",
+    "mv",
+    "chmod",
+    "basename",
+    "dirname",
+    "readlink",
+    "install",
+    "cp",
+    "date",
+    "sleep",
+    "head",
+    "tail",
+    "tr",
+    "gzip",
+    "mkdir",
+    "rm",
+    "du",
+    "ls",
+    "touch",
+    "awk",
+    "seq",
+    "sort",
+    "find",
+    "uname",
+    "tar",
+    "hostname",
+    "uptime",
+    "df",
+    "mountpoint",
+    "wc",
+    "tee",
+    "true",
+    "false",
+]
+
+
+def _sandbox(tmp_path: Path, stubs: dict[str, str]) -> tuple[dict[str, str], Path]:
+    """A PATH holding only SAFE_TOOLS (symlinked) and the given stub scripts; returns (env, calls log)."""
+    bindir = tmp_path / "sandbox-bin"
+    bindir.mkdir(exist_ok=True)
+    for tool in SAFE_TOOLS:
+        real = shutil.which(tool)
+        if real and not (bindir / tool).exists():
+            (bindir / tool).symlink_to(real)
+    calls = tmp_path / "calls.log"
+    calls.touch()
+    real_id, real_stat = shutil.which("id"), shutil.which("stat")
+    real_install, real_cp = shutil.which("install"), shutil.which("cp")
+    defaults = {
+        # need_root: "root" for `id -u`; the kiosk user is uid 1001
+        "id": f"""#!/usr/bin/env bash
+if [ "$*" = "-u" ]; then echo 0; exit 0; fi
+if [ "$1" = "-u" ] && [ "$2" = "kiosk" ]; then echo 1001; exit 0; fi
+exec {real_id} "$@"
+""",
+        # check_env_file: the env file "belongs to root"
+        "stat": f"""#!/usr/bin/env bash
+if [ "$1" = "-c" ] && [ "$2" = "%u" ]; then echo 0; exit 0; fi
+exec {real_stat} "$@"
+""",
+    }
+    # install / cp write only inside tmp_path: anything else (/etc/systemd/system, /usr/local/sbin) is refused
+    for tool, real in (("install", real_install), ("cp", real_cp)):
+        defaults[tool] = f"""#!/usr/bin/env bash
+for last; do :; done
+case "$last" in
+{tmp_path}/*) exec {real} "$@" ;;
+esac
+echo "sandbox: refusing $(basename "$0") to $last" >&2
+exit 1
+"""
+    for name, body in {**defaults, **stubs}.items():
+        path = bindir / name
+        if path.is_symlink():
+            path.unlink()
+        path.write_text(body.replace("CALLS", str(calls)))
+        path.chmod(0o755)
+    # The canopy paths point into tmp_path; PATH is set last so nothing can put the real tools back.
+    env = {**_dry_env(tmp_path), "PATH": str(bindir)}
+    return env, calls
+
+
+def _logging_stub(name: str, exit_code: int = 0, out: str = "") -> str:
+    return (
+        f'#!/usr/bin/env bash\necho "{name} $*" >> CALLS\n{f"echo {out}" if out else ""}\nexit {exit_code}\n'
+    )
+
+
+def _box_env(tmp_path: Path, **values: str) -> Path:
+    box = tmp_path / "etc" / "box.env"
+    box.parent.mkdir(parents=True, exist_ok=True)
+    base = {"CONDUCTOR_TAG": "v2026.10.12-1", "CONDUCTOR_LAN_IP": "192.0.2.10", "CANOPY_KIOSK_USER": "kiosk"}
+    base.update(values)
+    box.write_text("".join(f"{k}={v}\n" for k, v in base.items()))
+    return box
+
+
+def _docker_stub(state: Path, *, revision: str, arch: str = "amd64", present: bool = False) -> str:
+    """docker: `load` makes the image exist; `image inspect` answers the revision label or the architecture."""
+    state.mkdir(parents=True, exist_ok=True)
+    if present:
+        (state / "loaded").touch()
+    return f"""#!/usr/bin/env bash
+echo "docker $*" >> CALLS
+case "$1" in
+load) touch {state}/loaded ;;
+image)
+	[ -e {state}/loaded ] || exit 1
+	case "$*" in
+	*revision*) echo {revision} ;;
+	*Architecture*) echo {arch} ;;
+	*) echo '[]' ;;
+	esac
+	;;
+save) printf 'not-really-an-image' ;;
+build) cat >/dev/null ;;
+esac
+exit 0
+"""
+
+
+def _release_checkout(tmp_path: Path, tag: str) -> tuple[Path, str]:
+    """A throwaway git repo holding deploy/ (and the runbooks, the resting page), tagged `tag` at HEAD."""
+    repo = tmp_path / "checkout"
+    shutil.copytree(ROOT / "deploy", repo / "deploy")
+    shutil.copytree(ROOT / "docs" / "runbooks", repo / "docs" / "runbooks")
+    shutil.copytree(ROOT / "web", repo / "web")
+    git = ["git", "-C", str(repo), "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+    assert _run(["git", "init", "-q", "-b", "main", str(repo)]).returncode == 0
+    assert _run([*git, "add", "-A"]).returncode == 0
+    assert _run([*git, "commit", "-qm", "release"]).returncode == 0
+    assert _run([*git, "tag", tag]).returncode == 0
+    return repo, _run([*git, "rev-parse", "HEAD"]).stdout.strip()
+
+
+def _install_failing_at_the_image(
+    tmp_path: Path, *, revision: str | None, arch: str
+) -> tuple[subprocess.CompletedProcess, Path]:
+    new = "v2026.10.24-1"
+    repo, commit = _release_checkout(tmp_path, new)
+    _good_env(tmp_path)
+    box = _box_env(tmp_path, CONDUCTOR_TAG="v2026.10.12-1")
+    tar = tmp_path / f"canopy-conductor-{new}.tar.gz"
+    tar.write_bytes(b"pretend image")
+    (tmp_path / f"{tar.name}.sha256").write_text(
+        _run(["sha256sum", str(tar)]).stdout.split()[0] + f"  {tar.name}\n"
+    )
+    os_release = tmp_path / "os-release"
+    os_release.write_text('ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n')
+    env, _ = _sandbox(
+        tmp_path,
+        {
+            "docker": _docker_stub(tmp_path / "docker", revision=revision or commit, arch=arch),
+            "dpkg": "#!/usr/bin/env bash\necho amd64\n",
+            **{
+                name: _logging_stub(name)
+                for name in ("apt-get", "apt-mark", "systemctl", "timedatectl", "snap")
+            },
+            "curl": _logging_stub("curl", 7),
+        },
+    )
+    env["CANOPY_OS_RELEASE"] = str(os_release)
+    assert env["PATH"] == str(tmp_path / "sandbox-bin"), "never the real apt-get, systemctl or docker"
+    result = _run(
+        [BASH, str(repo / "deploy" / "venue" / "install.sh"), "--no-kiosk", "--image-tar", str(tar)], env=env
+    )
+    return result, box
+
+
+@needs_bash
+@pytest.mark.skipif(shutil.which("git") is None, reason="git isn't installed")
+@pytest.mark.parametrize(
+    ("revision", "arch", "why"),
+    [("0" * 40, "amd64", "was built from commit"), (None, "arm64", "built for linux/arm64")],
+    ids=["wrong-commit", "wrong-architecture"],
+)
+def test_f1_a_hotfix_install_that_fails_at_the_image_leaves_box_env_on_the_running_release(
+    tmp_path, revision, arch, why
+):
+    """F1: box.env named the new tag before the image existed, so the next restart failed (and F10: an arm64 image
+    passed every check)."""
+    result, box = _install_failing_at_the_image(tmp_path, revision=revision, arch=arch)
+    assert result.returncode != 0 and why in result.stdout + result.stderr, result.stdout + result.stderr
+    values = _active(box.read_text())
+    assert values["CONDUCTOR_TAG"] == "v2026.10.12-1", (
+        "the running release stays the one the box restarts into"
+    )
+    assert "CONDUCTOR_PREVIOUS_TAG" not in values
+
+
+def _switch(box: Path, tag: str) -> subprocess.CompletedProcess:
+    common = VENUE / "lib" / "common.sh"
+    return _run([BASH, "-c", f'. "{common}" && switch_release "$1" "$2"', "switch", str(box), tag])
+
+
+@needs_bash
+def test_f2_every_release_switch_remembers_the_release_it_replaced(tmp_path):
+    """F2: install.sh never wrote CONDUCTOR_PREVIOUS_TAG, so rollback could land on a known-bad release."""
+    box = _box_env(tmp_path, CONDUCTOR_TAG="")
+    box.write_text("CONDUCTOR_LAN_IP=192.0.2.10\n")
+    v1, v2, v3 = "v2026.10.12-1", "v2026.10.20-1", "v2026.10.24-1"
+    assert _switch(box, v1).returncode == 0  # first install: nothing before it
+    assert "CONDUCTOR_PREVIOUS_TAG" not in _active(box.read_text())
+    _switch(box, v2)  # install v2
+    assert _active(box.read_text())["CONDUCTOR_PREVIOUS_TAG"] == v1
+    _switch(box, v1)  # v2 is bad: canopy-restart --tag v1
+    assert _active(box.read_text())["CONDUCTOR_PREVIOUS_TAG"] == v2
+    _switch(box, v3)  # install v3: the release it replaces is v1, not the bad v2
+    values = _active(box.read_text())
+    assert values["CONDUCTOR_TAG"] == v3 and values["CONDUCTOR_PREVIOUS_TAG"] == v1
+    _switch(box, v3)  # running the installer again changes nothing
+    assert _active(box.read_text())["CONDUCTOR_PREVIOUS_TAG"] == v1
+    assert _active(box.read_text())["CONDUCTOR_LAN_IP"] == "192.0.2.10"
+
+
+@needs_bash
+def test_f1_f2_the_installer_switches_the_release_only_after_the_image_is_checked(tmp_path):
+    _good_env(tmp_path)
+    _box_env(tmp_path, CONDUCTOR_TAG="v2026.10.12-1")
+    result = _run(
+        [BASH, str(VENUE / "install.sh"), "--dry-run", "--lan-ip", "192.0.2.10", "--no-kiosk"],
+        env=_dry_env(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    switch = out.index("switch_release")
+    assert out.index("==> Image") < switch < out.index("systemctl restart"), out
+    assert "set_env_value" not in out[: out.index("==> Image")], (
+        "box.env is untouched until the image is checked"
+    )
+    assert "from v2026.10.12-1" in out[switch:], "it says which release it replaces (the rollback target)"
+
+
+@needs_bash
+def test_f2_canopy_status_shows_the_previous_release_and_every_release_on_the_box(tmp_path):
+    box = _box_env(tmp_path, CONDUCTOR_TAG="v2026.10.24-1", CONDUCTOR_PREVIOUS_TAG="v2026.10.20-1")
+    docker = """#!/usr/bin/env bash
+case "$1 $2" in
+"images canopy-conductor") printf 'canopy-conductor v2026.10.24-1 abc 1 day ago\\ncanopy-conductor v2026.10.20-1 def 4 days ago\\n' ;;
+*) exit 1 ;;
+esac
+"""
+    env, _ = _sandbox(
+        tmp_path,
+        {
+            "docker": docker,
+            "curl": _logging_stub("curl", 7),
+            "systemctl": _logging_stub("systemctl", 3),
+            "timedatectl": "#!/usr/bin/env bash\necho yes\n",
+        },
+    )
+    env["CANOPY_BOX_FILE"] = str(box)
+    result = _run([BASH, str(VENUE / "bin" / "canopy-status"), "--no-checklist"], env=env)
+    assert "v2026.10.24-1" in result.stdout and "previous: v2026.10.20-1" in result.stdout, result.stdout
+    assert "canopy-conductor v2026.10.20-1" in result.stdout, "the releases a rollback can use"
+
+
+# F4: the kiosk opens a local resting page at once; it no longer waits (for ever) before Chromium starts.
+RESTING = ROOT / "web" / "kiosk-resting" / "index.html"
+
+
+@needs_bash
+def test_f4_kiosk_prestart_never_blocks_while_the_conductor_is_down(tmp_path):
+    profile = tmp_path / "profile"
+    (profile / "Default").mkdir(parents=True)
+    (profile / "Default" / "Preferences").write_text('{"exited_cleanly":false,"exit_type":"Crashed"}')
+    env, _ = _sandbox(
+        tmp_path, {"curl": _logging_stub("curl", 7)}
+    )  # the Conductor is down (held, or booting)
+    dest = tmp_path / "snap" / "canopy-resting.html"
+    env.update(
+        CANOPY_KIOSK_PROFILE=str(profile),
+        CANOPY_RESTING_SRC=str(RESTING),
+        CANOPY_KIOSK_RESTING=str(dest),
+        HOME=str(tmp_path),
+    )
+    result = subprocess.run(
+        [BASH, str(VENUE / "lib" / "kiosk-prestart.sh")],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert dest.read_text() == RESTING.read_text(), "the resting page is where the Chromium snap can read it"
+    prefs = (profile / "Default" / "Preferences").read_text()
+    assert '"exited_cleanly":true' in prefs and '"exit_type":"Normal"' in prefs
+
+
+@needs_bash
+def test_f4_kiosk_prestart_fails_loudly_without_the_resting_page(tmp_path):
+    env, _ = _sandbox(tmp_path, {})
+    env.update(
+        CANOPY_KIOSK_PROFILE=str(tmp_path / "p"),
+        CANOPY_RESTING_SRC=str(tmp_path / "missing.html"),
+        CANOPY_KIOSK_RESTING=str(tmp_path / "out" / "r.html"),
+        HOME=str(tmp_path),
+    )
+    result = _run([BASH, str(VENUE / "lib" / "kiosk-prestart.sh")], env=env)
+    assert result.returncode != 0 and "install.sh" in result.stdout + result.stderr
+
+
+def test_f4_kiosk_unit_opens_the_local_resting_page_which_moves_on_to_the_kiosk():
+    svc = _unit("canopy-kiosk.service")["Service"]
+    [start] = svc["ExecStart"]
+    assert "--app=file://${CANOPY_KIOSK_RESTING}?next=${CANOPY_KIOSK_URL}" in start.split()
+    resting = next(e for e in svc["Environment"] if e.startswith("CANOPY_KIOSK_RESTING="))
+    assert resting.startswith("CANOPY_KIOSK_RESTING=%h/snap/chromium/common/"), "the snap can only read there"
+    assert svc["TimeoutStartSec"] != ["infinity"], "the pre-start step no longer waits for the Conductor"
+    installer = (VENUE / "install.sh").read_text()
+    assert "web/kiosk-resting/index.html" in installer and "$CANOPY_HOME/kiosk/resting.html" in installer
+    assert "/opt/canopy/kiosk/resting.html" in (VENUE / "lib" / "kiosk-prestart.sh").read_text()
+
+
+def test_f4_resting_page_is_self_contained_and_true():
+    html = RESTING.read_text()
+    assert "The canopy is resting. It will be back shortly." in html
+    assert "<link" not in html and "src=" not in html, "a file:// page: everything inline"
+    assert not re.search(r"https://", html)
+    assert '"no-cors"' in html and "/healthz" in html
+    assert check_clean(html) == []
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None, reason="Node isn't installed; the resting page is UNVERIFIED here"
+)
+def test_f4_resting_page_polls_healthz_and_opens_only_the_local_kiosk():
+    result = subprocess.run(
+        [shutil.which("node"), str(ROOT / "tests" / "js" / "resting_test.mjs"), str(RESTING)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "resting ok" in result.stdout
+
+
+# F5: `canopy-restart kiosk` / `canopy-kiosk-enroll` never wait on the kiosk unit's start job.
+@needs_bash
+def test_f5_canopy_restart_kiosk_returns_at_once_and_says_why_when_the_conductor_is_down(tmp_path):
+    _box_env(tmp_path)
+    env, calls = _sandbox(
+        tmp_path, {"systemctl": _logging_stub("systemctl"), "curl": _logging_stub("curl", 7)}
+    )
+    result = _run([BASH, str(VENUE / "bin" / "canopy-restart"), "kiosk"], env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "systemctl --user --machine=kiosk@ --no-block restart canopy-kiosk.service" in calls.read_text()
+    assert "resting" in result.stdout and "canopy-status" in result.stdout
+
+
+@needs_bash
+def test_f5_kiosk_enroll_refuses_while_the_conductor_is_down(tmp_path):
+    _box_env(tmp_path)
+    env, calls = _sandbox(
+        tmp_path, {"systemctl": _logging_stub("systemctl"), "curl": _logging_stub("curl", 7)}
+    )
+    result = _run(
+        [BASH, str(VENUE / "bin" / "canopy-kiosk-enroll")],
+        env=env,
+        input="http://192.0.2.10:8000/enroll/abcdefghijklmnopqrstuvwxyz\n",
+    )
+    assert result.returncode != 0 and "canopy-start" in result.stderr, result.stdout + result.stderr
+    assert "systemctl" not in calls.read_text()
+    text = (VENUE / "bin" / "canopy-kiosk-enroll").read_text()
+    assert "kiosk_systemctl restart" not in text and "kiosk_systemctl --no-block restart" in text
+
+
+# F6: journalctl --user-unit filters on the caller's uid (root), so the kiosk's lines never showed.
+@needs_bash
+def test_f6_canopy_logs_kiosk_reads_the_kiosk_users_journal(tmp_path):
+    _box_env(tmp_path)
+    env, calls = _sandbox(tmp_path, {"journalctl": _logging_stub("journalctl")})
+    result = _run([BASH, str(VENUE / "bin" / "canopy-logs"), "kiosk", "--since", "2h"], env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = calls.read_text().splitlines()
+    args = call.split()
+    assert "--user-unit" not in args
+    assert "_UID=1001" in args and "_SYSTEMD_USER_UNIT=canopy-kiosk.service" in args
+    assert "USER_UNIT=canopy-kiosk.service" in args and "+" in args
+    assert "--since" in args and "-2h" in args
+
+
+# F7: `compose down` removes the container and its log; the history across restarts is in the unit's journal.
+@needs_bash
+def test_f7_canopy_logs_conductor_points_at_the_log_across_restarts(tmp_path):
+    env, calls = _sandbox(tmp_path, {"docker": _logging_stub("docker", out="2026-10-24T12:00:00Z")})
+    result = _run([BASH, str(VENUE / "bin" / "canopy-logs"), "conductor", "--since", "2h"], env=env)
+    assert result.returncode == 0
+    assert "canopy-logs service --since 2h" in result.stderr, result.stderr
+    assert "docker logs --since 2h canopy-conductor" in calls.read_text()
+    outages = (ROOT / "docs" / "runbooks" / "outages.md").read_text()
+    assert "canopy-logs service --since 2h" in outages
+
+
+# F8: the cold spare installs held, drives the touchscreen, and follows every release.
+@needs_bash
+def test_f8_a_spare_installs_held_and_never_without_the_kiosk(tmp_path):
+    _good_env(tmp_path)
+    env = _dry_env(tmp_path)
+    spare = _run([BASH, str(VENUE / "install.sh"), "--dry-run", "--spare", "--lan-ip", "192.0.2.10"], env=env)
+    out = spare.stdout
+    assert "Cold spare" in out and "would run: touch" in out and "hold" in out, out + spare.stderr
+    assert "systemctl restart canopy-conductor.service" not in out, "a spare never starts its Conductor"
+    no_kiosk = _run(
+        [BASH, str(VENUE / "install.sh"), "--dry-run", "--spare", "--no-kiosk", "--lan-ip", "192.0.2.10"],
+        env=env,
+    )
+    assert no_kiosk.returncode != 0 and "touchscreen" in no_kiosk.stderr
+
+
+def test_f8_runbooks_keep_the_spare_on_every_release_and_enroll_the_kiosk_first():
+    venue = (ROOT / "docs" / "runbooks" / "venue-box.md").read_text()
+    spare = venue[venue.index("## 7. The cold spare") :]
+    assert "--spare" in spare and "--no-kiosk" not in spare
+    takeover = spare[spare.index("**Take over") :].lower()
+    assert takeover.index("canopy-kiosk-enroll") < takeover.index("sign in to each account")
+    release = (ROOT / "docs" / "runbooks" / "release-and-freeze.md").read_text()
+    for section in ("## The Oct 12 freeze", "## Hotfix path"):
+        body = release[release.index(section) :].split("\n## ", 1)[0]
+        assert "cold spare" in body, section
+
+
+# F10: the release is built for the box's CPU, and the installer checks it.
+@needs_bash
+@pytest.mark.skipif(shutil.which("git") is None, reason="git isn't installed")
+@pytest.mark.parametrize(("arch", "ok"), [("amd64", True), ("arm64", False)])
+def test_f10_release_builds_for_linux_amd64_and_checks_it(tmp_path, arch, ok):
+    repo = tmp_path / "repo"
+    git = ["git", "-C", str(repo), "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+    _run(["git", "init", "-q", "-b", "main", str(repo)])
+    (repo / "README.md").write_text("x\n")
+    _run([*git, "add", "README.md"])
+    assert _run([*git, "commit", "-qm", "first"]).returncode == 0
+    env, calls = _sandbox(
+        tmp_path, {"docker": _docker_stub(tmp_path / "docker", revision="x", arch=arch, present=True)}
+    )
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t")
+    env["GIT_COMMITTER_EMAIL"] = "t@example.invalid"
+    result = _run([BASH, str(ROOT / "scripts" / "release.sh")], env=env, cwd=repo)
+    build = next(line for line in calls.read_text().splitlines() if line.startswith("docker build"))
+    assert "--platform linux/amd64" in build
+    tags = _run([*git, "tag", "-l"]).stdout.split()
+    if ok:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(tags) == 1 and "linux/amd64" in result.stdout
+    else:
+        assert result.returncode != 0 and "arm64" in result.stderr
+        assert tags == [], "a release that can't run on the box isn't tagged"

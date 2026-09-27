@@ -17,7 +17,8 @@ account, with the app **Group "Canopy"** holding the nine modules (made on insta
    sudo canopy-stop
    ```
    Type `stop` when asked. The Conductor stops and stays stopped — the watchdog and even a reboot won't start it —
-   until someone runs `canopy-start`. The lights keep their look; the kiosk shows "The canopy is resting".
+   until someone runs `canopy-start`. The lights keep their look; the kiosk shows "The canopy is resting" (after
+   a reboot too).
    - Can't reach a terminal? **Pause guest input** on `/ops` at least, and know that the Conductor will still put
      its look back within about a minute of any app change. For one module only, opening it on `/ops/module`
      holds it (the canopy leaves it alone while that page is open, up to 10 idle minutes).

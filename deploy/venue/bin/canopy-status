@@ -8,7 +8,8 @@ usage() {
 	cat <<'USAGE'
 Usage: sudo canopy-status [--no-checklist]
 
-Shows, in plain words: whether the Conductor is running and healthy, which release it runs, the watchdog's
+Shows, in plain words: whether the Conductor is running and healthy, which release it runs (and the one before,
+the rollback target), every release on the box, the watchdog's
 recent restarts, the kiosk browser, the box's clock (NTP), the latest backup, free disk space, and the /ops
 7 am checklist (each item PASS / WARN / FAIL with its fix).
 
@@ -41,7 +42,10 @@ say "Disk free: $(df -h --output=avail /var/lib/docker 2>/dev/null | tail -1 | t
 
 section "Conductor"
 tag=$(env_value "$CANOPY_BOX_FILE" CONDUCTOR_TAG)
-say "Release (box.env): ${tag:-not set}   Show-LAN address: $(env_value "$CANOPY_BOX_FILE" CONDUCTOR_LAN_IP)"
+previous=$(env_value "$CANOPY_BOX_FILE" CONDUCTOR_PREVIOUS_TAG)
+say "Release (box.env): ${tag:-not set} (previous: ${previous:-none})   Show-LAN address: $(env_value "$CANOPY_BOX_FILE" CONDUCTOR_LAN_IP)"
+say "Releases on this box (for sudo canopy-restart --tag <tag>):"
+docker images "$CANOPY_IMAGE" --format '{{ .Repository }} {{ .Tag }}  {{ .ID }}  {{ .CreatedSince }}' 2>/dev/null | sed 's/^/  /'
 if held; then
 	say "BREAK-GLASS HOLD: the Conductor is stopped on purpose (since $(date -r "$CANOPY_HOLD" '+%a %H:%M')). Hand the canopy back with: sudo canopy-start"
 fi

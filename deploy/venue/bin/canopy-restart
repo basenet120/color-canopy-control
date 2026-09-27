@@ -10,8 +10,10 @@ Usage: sudo canopy-restart [conductor|kiosk|box] [--tag TAG] [--yes]
 
   conductor  (default) restart the Conductor. The lights keep their look meanwhile; the kiosk shows "resting"
              and comes back by itself. Takes about 20-40 s. Afterwards the canopy returns to Lowcountry Calm.
-  kiosk      restart the kiosk browser on the touchscreen. About 5-10 s.
-  box        reboot the whole box. About 2-3 minutes until the kiosk is back. Asks first (unless --yes).
+  kiosk      restart the kiosk browser on the touchscreen. About 5-10 s; it shows "resting" until the
+             Conductor answers, then the canopy page.
+  box        reboot the whole box. The touchscreen is dark for about a minute, then "resting" until the
+             Conductor answers (2-3 minutes in all). Asks first (unless --yes).
 
   --tag TAG  switch the Conductor to another release that is already on this box, then restart it:
              rollback to the previous release, or a hotfix (docs/runbooks/release-and-freeze.md).
@@ -40,12 +42,18 @@ case $what in
 kiosk)
 	[ -z "$tag" ] || die "--tag is for the Conductor, not the kiosk."
 	say "Restarting the kiosk browser…"
-	kiosk_systemctl restart "$CANOPY_KIOSK_UNIT" || die "Couldn't reach the kiosk user's session. Is $(kiosk_user) logged in on the touchscreen? If not: sudo canopy-restart box"
-	say "Done. The touchscreen shows the canopy page within about 10 s."
+	# --no-block: never wait on the unit's start job (it returns as soon as systemd has queued the restart).
+	kiosk_systemctl --no-block restart "$CANOPY_KIOSK_UNIT" || die "Couldn't reach the kiosk user's session. Is $(kiosk_user) logged in on the touchscreen? If not: sudo canopy-restart box"
+	if healthy; then
+		say "Done. The touchscreen shows the canopy page within about 10 s."
+	else
+		say "Done, but the Conductor isn't answering: the touchscreen shows \"The canopy is resting\" and opens the"
+		say "canopy page by itself once it answers. Why it isn't answering: sudo canopy-status"
+	fi
 	;;
 box)
 	if [ "$yes" -ne 1 ]; then
-		read -r -p "Reboot the whole box now? The kiosk is dark for about 2-3 minutes; the lights keep their look. Type reboot: " answer
+		read -r -p "Reboot the whole box now? The kiosk is dark or resting for about 2-3 minutes; the lights keep their look. Type reboot: " answer
 		[ "$answer" = "reboot" ] || die "Not rebooted."
 	fi
 	say "Rebooting. Everything starts again by itself; check with: sudo canopy-status"
@@ -59,17 +67,19 @@ conductor)
 		printf '%s' "$tag" | grep -Eq "$CANOPY_TAG_RE" || die "$tag isn't a release tag (like v2026.10.12-1)."
 		docker image inspect "$CANOPY_IMAGE:$tag" >/dev/null 2>&1 ||
 			die "Release $tag isn't on this box. Load its image first: sudo docker load -i $CANOPY_HOME/images/$CANOPY_IMAGE-$tag.tar.gz"
+		check_image_arch "$CANOPY_IMAGE:$tag" || die "Not switched: release $tag can't run on this box (above)."
 		previous=$(env_value "$CANOPY_BOX_FILE" CONDUCTOR_TAG)
-		set_env_value "$CANOPY_BOX_FILE" CONDUCTOR_PREVIOUS_TAG "$previous"
-		set_env_value "$CANOPY_BOX_FILE" CONDUCTOR_TAG "$tag"
-		say "Switched the release from $previous to $tag (to go back: sudo canopy-restart --tag $previous)."
+		switch_release "$CANOPY_BOX_FILE" "$tag"
+		if [ "$previous" != "$tag" ]; then
+			say "Switched the release from $previous to $tag (to go back: sudo canopy-restart --tag $previous)."
+		fi
 	fi
 	say "Restarting the Conductor…"
 	systemctl restart "$CANOPY_UNIT" || die "The service didn't start. Why: sudo canopy-logs service"
 	if wait_healthy 120; then
 		say "Done. The canopy returns to Lowcountry Calm; check /ops (or sudo canopy-status)."
 	else
-		die "The Conductor hasn't answered after 2 minutes. Look at: sudo canopy-logs service; sudo canopy-logs conductor"
+		die "The Conductor hasn't answered after 2 minutes. Look at: sudo canopy-logs service --since 1h (its output across restarts)"
 	fi
 	;;
 esac

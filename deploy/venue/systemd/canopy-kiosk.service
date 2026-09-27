@@ -13,14 +13,18 @@ Environment=CANOPY_KIOSK_URL=http://localhost:8000/kiosk/
 # A persistent profile, so the kiosk's enrollment cookie survives restarts and reboots. Under ~/snap/chromium/common
 # because the Chromium snap can only write there.
 Environment=CANOPY_KIOSK_PROFILE=%h/snap/chromium/common/canopy-kiosk
+# The local "canopy is resting" page Chromium opens first (kiosk-prestart.sh copies it here from /opt/canopy/kiosk,
+# which the snap can't read). It polls the Conductor's /healthz and then opens CANOPY_KIOSK_URL, so the touchscreen
+# never shows the desktop or a browser error page while the Conductor is down, held or starting.
+Environment=CANOPY_KIOSK_RESTING=%h/snap/chromium/common/canopy-resting.html
 # Written only while canopy-kiosk-enroll runs (it points the kiosk at a setup link once), then removed.
 EnvironmentFile=-%h/.config/canopy/kiosk.env
-# Waits (for ever) until the Conductor answers /healthz, so the screen never shows a browser error page.
 ExecStartPre=/opt/canopy/lib/kiosk-prestart.sh
-ExecStart=/snap/bin/chromium --kiosk --noerrdialogs --disable-session-crashed-bubble --disable-infobars --overscroll-history-navigation=0 --disable-pinch --check-for-update-interval=31536000 --no-first-run --password-store=basic --disable-features=Translate --user-data-dir=${CANOPY_KIOSK_PROFILE} --app=${CANOPY_KIOSK_URL}
+ExecStart=/snap/bin/chromium --kiosk --noerrdialogs --disable-session-crashed-bubble --disable-infobars --overscroll-history-navigation=0 --disable-pinch --check-for-update-interval=31536000 --no-first-run --password-store=basic --disable-features=Translate --user-data-dir=${CANOPY_KIOSK_PROFILE} --app=file://${CANOPY_KIOSK_RESTING}?next=${CANOPY_KIOSK_URL}
 Restart=always
 RestartSec=3
-TimeoutStartSec=infinity
+# The pre-start step only copies a file; it never waits for the Conductor (the resting page does that).
+TimeoutStartSec=60
 
 [Install]
 WantedBy=graphical-session.target

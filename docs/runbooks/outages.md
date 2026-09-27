@@ -67,9 +67,11 @@ about 2 minutes), the password changed, Hubspace expired it, or a restore brough
 ## The box itself
 
 - **Power cut:** the UPS rides through short ones. A long one: the box boots by itself when power returns (BIOS
-  setting) and everything starts again in about 2–3 minutes, then the Conductor puts Lowcountry Calm on every
+  setting) and everything starts again in about 2–3 minutes (the kiosk shows "resting" once the desktop is up,
+  until the Conductor answers), then the Conductor puts Lowcountry Calm on every
   module. (What a module shows by itself right after losing power — its last look or a default — is
   **UNVERIFIED** until the bench's power test.)
 - **Conductor crashed or hung:** the watchdog restarts it after three failed checks (about 90 s). `sudo canopy-status`
-  → Watchdog shows it. More than twice in an hour: `sudo canopy-logs conductor --since 2h`, call Alon.
+  → Watchdog shows it. More than twice in an hour: `sudo canopy-logs service --since 2h` (the Conductor's output
+  across restarts; `canopy-logs conductor` starts again at every restart, so it can't show why), call Alon.
 - **Box dead:** `venue-box.md` → The cold spare.
