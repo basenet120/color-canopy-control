@@ -82,6 +82,12 @@ def test_paint_three_heads_apply_and_readback(context_factory, api, screenshots)
     assert _core_fill(page, 1) == "rgb(0, 0, 0)"
     state = api(f"/api/module/{BENCH}")["state"]
     assert all(state["heads"][i]["reported"] == RED for i in PICKED) and state["diff"] == []
+    # the simulator is the real kit's shape: a 60-entry frame, and the map shows its 30 pucks (entries 0–29)
+    assert state["head_count"]["reported"] == 60 and state["head_count"]["problem"] is None
+    assert len(state["heads"]) == 30 and page.locator("#map g[data-index]").count() == 30
+    slot3 = next(s for s in state["slots"] if s["slot"] == "custom-3")
+    assert slot3["length"] == 60 and [i for i, c in enumerate(slot3["heads"]) if c == RED] == list(PICKED)
+    assert "60-entry pattern, pucks use 0–29" in page.inner_text("#reported-look")
     assert "SIMULATED" in page.inner_text("#tele-last")
     page.click("#map g[data-index='7']")  # clear the selection outline for a clean picture
     page.click("[data-select='none']")
@@ -171,3 +177,24 @@ def test_lowcountry_preview_card_paints_a_canopy_slice(context_factory, api, scr
     assert all(h["reported"] != {"r": 0, "g": 0, "b": 0} for h in state["heads"])
     page.locator("[data-card='lowcountry-preview']").scroll_into_view_if_needed()
     page.screenshot(path=str(screenshots / "module-phone-lowcountry.png"))
+
+
+def test_calibrate_tab_sets_the_frame_offset(context_factory, api, screenshots):
+    """The Calibrate tab says how long the saved pattern is and which entries the pucks use, and saves the offset
+    to the overlay (nothing is sent to the lights)."""
+    page = _open_page(context_factory)
+    page.click(".tabs [data-tab='calibrate']")
+    assert page.input_value("#cal-offset") == "0"
+    explain = page.inner_text("#offset-explain")
+    assert "hold 60 entries" in explain and "use entries 0–29" in explain
+    assert "lights nothing, or lights the wrong half" in page.inner_text("#offset-field")
+    page.locator("#offset-field").scroll_into_view_if_needed()
+    page.screenshot(path=str(screenshots / "module-phone-calibrate.png"))
+    page.fill("#cal-offset", "30")
+    page.click("#cal-offset-save")
+    page.wait_for_function("/use entries 30–59/.test(document.querySelector('#offset-explain').textContent)")
+    assert api(f"/api/module/{BENCH}")["state"]["head_count"]["offset"] == 30
+    page.fill("#cal-offset", "0")
+    page.click("#cal-offset-save")
+    page.wait_for_function("/use entries 0–29/.test(document.querySelector('#offset-explain').textContent)")
+    assert api(f"/api/module/{BENCH}")["state"]["head_count"]["offset"] == 0

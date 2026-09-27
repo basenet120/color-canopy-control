@@ -9,7 +9,7 @@ Who: ops, or a tester granted the device (`require_device_access`; the auth midd
 - `POST /api/module/{id}/close`            `{lease}` (JSON or a sendBeacon text body) → release
 - `GET  /api/module/{id}[?refresh=1]`      map, capabilities, desired/reported per head, slots, flags, telemetry
 - `GET  /api/module/{id}/export`           the anonymized JSON behind "Copy anonymized JSON"
-- `POST /api/module/{id}/paint|whole|card|sweep|slot|effects|calibration|hold`  (each needs `lease`)
+- `POST /api/module/{id}/paint|whole|card|sweep|slot|effects|calibration|frame-offset|hold`  (each needs `lease`)
 
 Cross-site requests (review F5): every POST here is refused (403) when its Origin — or, without one, its Referer —
 names another host, and every POST except `close` must be `application/json` (415 otherwise), which a page on
@@ -116,6 +116,10 @@ class CalibrationBody(LeaseBody):
     orientation: str = Field(max_length=4)
     wire_order: list[list[float]] | None = Field(None, max_length=90)
     flip: bool = False
+
+
+class FrameOffsetBody(LeaseBody):
+    frame_offset: int = Field(ge=0, le=89)
 
 
 class HoldBody(LeaseBody):
@@ -308,6 +312,17 @@ async def calibration(request: Request, device_id: str, _who: Access, body: Cali
     except ModuleError as e:
         raise _fail(e) from None
     return _reply(session, map=saved)
+
+
+@router.post("/api/module/{device_id}/frame-offset")
+async def frame_offset(request: Request, device_id: str, _who: Access, body: FrameOffsetBody) -> JSONResponse:
+    """Which framebuffer entry drives puck 0 (saved to the ops overlay; nothing is sent to the lights)."""
+    session = _session(request, device_id, body.lease)
+    try:
+        head_count = session.set_frame_offset(body.frame_offset)
+    except ModuleError as e:
+        raise _fail(e) from None
+    return _reply(session, head_count=head_count)
 
 
 @router.post("/api/module/{device_id}/hold")

@@ -5,12 +5,16 @@ Rules implemented:
   wire order (`geometry.panel_order` — the registry's calibrated `wire_order`, or its `cable_path` +
   `start_corner`, else the canopy default, exactly what `/ops/module` draws), rotated 180° for a B panel and offset
   to the module's canopy position. Uncalibrated, this is `geometry.build_layout` head for head.
-- **Frame index = wire index.** A module's frame entry i is the canvas colour at the canopy position of the head
-  that is i-th along that module's cable, so a recalibrated wire order moves colours between frame indices, never
-  on the canopy.
-- **Head-count guard (07 §6).** A frame is exactly the device's framebuffer length, which must equal the registry's
-  `expected_heads` and the panel lattice (30). Anything else is refused with `PlanError` — per-head writes to a
-  strand that lost pucks would paint the wrong heads.
+- **Frame index = frame_offset + wire index.** A module's puck i is the canvas colour at the canopy position of the
+  head that is i-th along that module's cable, written into frame entry `frame_offset + i` (registry, default 0), so
+  a recalibrated wire order moves colours between frame indices, never on the canopy.
+- **Frame length ≠ head count.** A frame is exactly the device's framebuffer length, which can be longer than the
+  module (the real SQHDK03 reports 60 entries with 30 pucks). The pucks' entries sit at
+  [frame_offset, frame_offset + heads); every other entry is OFF (all fields 0), so frames stay deterministic.
+- **Head-count guard (07 §6).** The module's physical heads (`expected_heads`, else the lattice) must equal the
+  panel lattice (30), and the frame must be long enough to hold them from `frame_offset`. Anything else is refused
+  with `PlanError`. A shorter frame than expected means a strand that lost pucks; a longer one is fine (and then a
+  lost-puck fault can't be seen from the length — 07 §6: the daily check is visual).
 - **Colours are recipes** (`config/recipes.yaml`, `rgb_only` or `blend`); between recipe colours every frame field
   is interpolated (a side with no white keeps the other side's Kelvin and only fades white brightness). A colour
   level (`colorBrightness` in modes.yaml) scales the recipe entry's colour *and* white brightness.
@@ -36,7 +40,7 @@ from conductor.config import RecipesFile
 from conductor.engine_api import PlanError
 from conductor.geometry import panel_lattice, panel_order
 from conductor.looks.schema import BandCanvas, ColorLevel, GradientCanvas, PathwayCanvas
-from conductor.rows import FrameEntry
+from conductor.rows import FrameEntry, FrameLayout, PayloadError
 
 Point = tuple[float, float]
 PATH_SAMPLE_IN = 0.5  # the pathway's centre line is sampled every half inch for the distance to each head
@@ -54,13 +58,14 @@ class Placement:
     order: tuple[Point, ...]  # A-frame panel position of wire index i
     frame_length: int | None  # the device's framebuffer length (None = the device reports none)
     expected_heads: int | None  # the registry's expected head count
+    frame_offset: int = 0  # the framebuffer entry that drives puck 0 (registry `frame_offset`)
 
 
 @dataclass(frozen=True)
 class CanvasHead:
     device_id: str
     module: str
-    index: int  # wire index = frame index
+    index: int  # wire index (frame entry = the placement's frame_offset + index)
     x: float  # canopy inches from the left edge
     y: float  # canopy inches from the top edge
 
@@ -117,6 +122,7 @@ def placement_for(
         order=tuple((float(x), float(y)) for x, y in order),
         frame_length=frame_length,
         expected_heads=entry.expected_heads,
+        frame_offset=int(getattr(entry, "frame_offset", 0) or 0),
     )
 
 
@@ -141,20 +147,35 @@ def canvas_heads(canopy: Mapping[str, Any], placements: Iterable[Placement]) -> 
 
 
 def head_count_problem(placement: Placement, lattice_size: int) -> str | None:
-    """Why this module can't take a per-head frame, or None (the 07 §6 head-count guard)."""
-    n, expected = placement.frame_length, placement.expected_heads
+    """Why this module can't take a per-head frame, or None (the 07 §6 head-count guard).
+
+    The frame may be longer than the module's heads (the controller reports its capacity); it may not be shorter
+    than the entries the pucks need from `frame_offset`."""
+    n, expected, offset = placement.frame_length, placement.expected_heads, placement.frame_offset
     if n is None:
         return f"{placement.device_id} reports no frame length, so per-head frames are refused"
-    if expected is not None and n != expected:
+    heads = expected if expected is not None else lattice_size
+    if heads != lattice_size:
         return (
-            f"{placement.device_id} reports {n} heads but this module should have {expected}; per-head frames "
-            "are refused until the strand is checked (all pucks lit? cable cut?)"
+            f"{placement.device_id} should have {heads} heads but a panel holds {lattice_size}; per-head frames "
+            "refused"
         )
-    if n != lattice_size:
+    if n < heads + offset:
+        where = f" from entry {offset}" if offset else ""
         return (
-            f"{placement.device_id} has {n} heads but a panel holds {lattice_size}; per-head frames refused"
+            f"{placement.device_id} reports {n} heads but this module should have {heads}{where}; per-head "
+            "frames are refused until the strand is checked (all pucks lit? cable cut?)"
         )
     return None
+
+
+def frame_layout(placement: Placement, lattice_size: int) -> FrameLayout:
+    """Where this placement's heads sit in its device's frame. PlanError when the head-count guard refuses it."""
+    if problem := head_count_problem(placement, lattice_size):
+        raise PlanError(problem)
+    assert placement.frame_length is not None
+    heads = placement.expected_heads if placement.expected_heads is not None else lattice_size
+    return FrameLayout(placement.frame_length, heads, placement.frame_offset)
 
 
 # ---- colour maths ------------------------------------------------------------------------------------------------
@@ -280,16 +301,25 @@ def compose_canvas(
     recipes: RecipesFile,
     placements: Sequence[Placement],
 ) -> dict[str, list[FrameEntry]]:
-    """One frame per placed module (device id → entries in wire order, the device's frame length).
+    """One frame per placed module: device id → the device's full-length frame, the pucks' colours in wire order at
+    [frame_offset, frame_offset + heads) and OFF in every other entry.
 
     PlanError when a module fails the head-count guard or two placements share a canopy position."""
     lattice = len(panel_lattice(dict(canopy)))
     seen: dict[str, str] = {}
+    layouts: dict[str, FrameLayout] = {}
     for p in placements:
         if p.module in seen:
             raise PlanError(f"{p.device_id} and {seen[p.module]} both claim canopy position {p.module}")
         seen[p.module] = p.device_id
-        if problem := head_count_problem(p, lattice):
-            raise PlanError(problem)
+        layouts[p.device_id] = frame_layout(p, lattice)
     colour = _Evaluator(canvas, canopy, recipes)
-    return {p.device_id: [colour(x, y) for x, y in head_positions(canopy, p)] for p in placements}
+    out: dict[str, list[FrameEntry]] = {}
+    for p in placements:
+        try:
+            out[p.device_id] = layouts[p.device_id].place(
+                [colour(x, y) for x, y in head_positions(canopy, p)]
+            )
+        except PayloadError as e:
+            raise PlanError(f"{p.device_id}: {e}") from None
+    return out

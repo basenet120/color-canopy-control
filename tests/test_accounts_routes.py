@@ -360,3 +360,79 @@ def test_every_accounts_page_url_forbids_framing_and_caching(app_client, path):
     r = app_client.get(path)
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"], path
     assert r.headers["x-frame-options"] == "DENY" and r.headers["cache-control"] == "no-store", path
+
+
+# ---- a client that goes away mid-request (VWBD workshop, Sep 27 2026) ------------------------------------------
+def _post_and_vanish(client, path: str, content_type: str = "application/json") -> tuple[list[dict], list]:
+    """POST `path` straight into the ASGI app with a client that disconnects before sending its body (what
+    uvicorn does when the browser tab closes mid-request). Returns (ASGI messages sent back, errors raised)."""
+    sent: list[dict] = []
+    errors: list = []
+
+    async def receive() -> dict:
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"origin", b"http://testserver"),
+            (b"content-type", content_type.encode()),
+            (b"content-length", b"64"),
+        ],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+
+    async def call() -> None:
+        try:
+            await client.app(scope, receive, send)
+        except Exception as e:  # noqa: BLE001 - the test asserts nothing escapes
+            errors.append(e)
+
+    client.portal.call(call)
+    return sent, errors
+
+
+@pytest.mark.parametrize(
+    ("path", "content_type"),
+    [
+        ("/api/accounts/bench/disconnect", "application/json"),
+        ("/api/accounts/login", "application/json"),
+        ("/api/accounts/otp", "application/json"),
+        ("/api/accounts/bench/register", "application/json"),
+        ("/ops/accounts", "application/x-www-form-urlencoded"),
+    ],
+)
+def test_client_disconnect_mid_body_is_a_quiet_no_op(form_client, caplog, path, content_type):
+    """starlette.requests.ClientDisconnect while a route reads its body: no traceback, nothing acted on."""
+    form = (
+        path == "/ops/accounts"
+    )  # a successful connect turns the form off, so sign in only for the JSON API
+    if not form:
+        form_client.post(
+            "/api/accounts/login", json={"account": "bench", "email": EMAIL, "password": PASSWORD}
+        )
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        sent, errors = _post_and_vanish(form_client, path, content_type)
+    assert errors == []  # nothing escaped the route (uvicorn would have logged the traceback)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 499
+    assert (b"cache-control", b"no-store") in [(k.lower(), v) for k, v in start["headers"]]
+    assert not [r for r in caplog.records if r.levelno >= 40 or r.exc_info]  # no ERROR, no traceback
+    assert any("went away" in r.getMessage() for r in caplog.records)
+    # Nothing was done: the account is exactly as it was (still connected after a disconnect that never arrived).
+    bench = next(a for a in form_client.get("/api/accounts").json()["accounts"] if a["account"] == "bench")
+    assert bench["connected"] is not form

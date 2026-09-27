@@ -565,6 +565,10 @@ function renderLook() {
     line.textContent = st.reported_at ? "Every head matches what we sent." : "";
     line.className = "muted";
   }
+  // A controller frame longer than the module (60 entries for 30 pucks): say which entries the pucks use.
+  const note = $("frame-note");
+  note.textContent = st.head_count.pattern || "";
+  note.hidden = !st.head_count.pattern || String(st.reported_look).includes("-entry pattern");
 }
 
 // ---- telemetry --------------------------------------------------------------------------------------------------
@@ -1071,6 +1075,16 @@ function renderSweep() {
 }
 
 // ---- Slots --------------------------------------------------------------------------------------------------------
+// "30 heads", or for a longer controller frame "60-entry pattern · pucks use 0–29" (the mini-map shows the pucks).
+function slotLength(st, slot) {
+  const n = st.map.heads.length;
+  if (slot.length == null) return "? heads";
+  if (slot.length === n) return `${n} heads`;
+  const off = st.head_count.offset ?? 0;
+  if (slot.length >= off + n) return `${slot.length}-entry pattern · pucks use ${off}–${off + n - 1}`;
+  return `${slot.length} entries — too short for ${n} heads`;
+}
+
 function miniMap(heads, colors) {
   const map = S.state.map;
   const svg = s("svg", { viewBox: `-2 -2 ${map.width_in + 4} ${map.height_in + 4}`, role: "img", "aria-label": "Slot pattern" });
@@ -1098,7 +1112,7 @@ function renderSlots() {
         { class: `slot-card${slot.active ? " active" : ""}` },
         h("h3", {}, shortLabel(slot.slot), slot.active ? h("span", { class: "pill ready", text: "Showing" }) : ""),
         miniMap(st.map.heads, slot.heads),
-        h("div", { class: "meta", text: `${slot.length ?? "?"} heads · hash ${slot.hash ?? "–"}${recorded}` }),
+        h("div", { class: "meta", text: `${slotLength(st, slot)} · hash ${slot.hash ?? "–"}${recorded}` }),
         h(
           "div",
           { class: "button-grid" },
@@ -1206,6 +1220,18 @@ function renderCalibration() {
     : `a hop of ${map.longest_hop_in}″ is longer than the ${map.puck_spacing_in}″ cable — check the routing`;
   status.textContent = `${saved}: orientation ${cal.orientation}, along ${path}, head 0 at the ${cal.start_corner_as_shown.replace("-", " ")}${flipped}; ${hop}.`;
   status.className = `cal-status${map.hops_fit ? "" : " bad"}`;
+  // Frame offset: which entry of the device's saved pattern drives head 0.
+  const hc = S.state.head_count;
+  const length = hc.reported;
+  const input = $("cal-offset");
+  if (document.activeElement !== input) input.value = String(hc.offset ?? 0);
+  input.max = length != null ? String(Math.max(0, length - hc.map)) : "";
+  const last = (hc.offset ?? 0) + hc.map - 1;
+  $("offset-explain").textContent =
+    length == null
+      ? "The device hasn't reported how long its saved patterns are yet."
+      : `This device's saved patterns hold ${length} entries; the ${hc.map} heads use entries ${hc.offset ?? 0}–${last}.` +
+        (hc.problem ? ` ${hc.problem}.` : "");
 }
 
 function setupCalibration() {
@@ -1225,6 +1251,14 @@ function setupCalibration() {
     start_corner: S.cal.orientation === "B" ? SHOWN[S.cal.corner_shown] : S.cal.corner_shown,
   });
   $("cal-save").addEventListener("click", () => act("calibration", body(), { label: "Calibration saved" }));
+  $("cal-offset-save").addEventListener("click", () => {
+    const value = Number($("cal-offset").value);
+    if (!Number.isInteger(value) || value < 0) {
+      toast("The offset is a whole number, 0 or more.", "error");
+      return;
+    }
+    act("frame-offset", { frame_offset: value }, { label: `Frame offset ${value} saved` });
+  });
   $("cal-flip").addEventListener("click", () => {
     const order = S.state.map.heads.map((x) => [x.ax, x.ay]);
     act("calibration", { ...body(), wire_order: order, flip: true }, { label: "Wire order flipped and saved" });

@@ -24,6 +24,16 @@ Each branch is stacked on the previous one; every cut point was verified green l
 7. `claude/p35-p4-venue-vignettes` — P3.5 venue box (`deploy/venue`, release/freeze, ten runbooks), P4 vignette pages
    and device coverage, and the fixes for the 18 P1–P3 and 15 final-round review findings + 8 completeness gaps.
 
+## First real kit — VWBD's workshop, Sep 27 (branch `claude/hardware-fixes`)
+- **Fixed:** "Couldn't reach Hubspace" on Show devices — the adapter re-read a released response (D51; VWBD's patch +
+  loopback test, 7 fail → 13 pass).
+- **Learned:** the real SQHDK03 reports **60-entry** saved patterns with 30 pucks; per-puck painting now works on it
+  (D52). UNVERIFIED: that entries 0–29 drive the pucks — run the index sweep once; the Calibrate tab has the offset.
+- **Verified on hardware (by VWBD):** sign-in + token refresh, discovery + registration, slot select (Slots tab),
+  whole-strand test cards. Not yet: frame writes (Gate C), per-puck painting on the real kit.
+- **Wanted:** Gate A's "Copy anonymized JSON" from the real kit → becomes the simulator's real profile.
+- Verified in sim after the change: 960 tests, 35 e2e, soak 9/9 PASS.
+
 ## Workshop kit for VWBD (branch `claude/workshop-kit`, PR 8 after the stack)
 `uv run python scripts/make_workshop_kit.py` builds `dist/color-canopy-workshop-kit-<commit>.zip` (~570 KB, committed
 files only; no research, context docs or settings). VWBD unzips it on a shop laptop and runs `start.command` (Mac) or

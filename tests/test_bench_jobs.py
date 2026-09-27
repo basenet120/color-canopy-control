@@ -16,6 +16,8 @@ from conductor.bench.jobs import (
     FLAG_QUESTIONS,
     JOBS,
     LOOK_SPACING_S,
+    Q_HUE_RAMP,
+    Q_HUE_RAMP_WHOLE,
     coerce_params,
     colour_name,
     hue_ramp_entries,
@@ -76,7 +78,9 @@ RGBW = {0: (255, 0, 0), 1: (0, 255, 0), 2: (0, 0, 255), 3: (255, 255, 255)}
 
 
 # ---- Gate A ------------------------------------------------------------------------------------------------------
-def test_gate_a_passes_on_the_30_head_profile_and_stores_a_scrubbed_profile(tmp_path):
+def test_gate_a_passes_on_the_60_entry_profile_with_30_pucks_and_stores_a_scrubbed_profile(tmp_path):
+    """The real kit (VWBD workshop, Sep 27 2026): 60 framebuffer entries for 30 pucks is a PASS, with the note."""
+
     async def body(services, runner):
         writes = services.sim.stats()["writes"]
         record = await runner.run("gate_a", "bench-kit")
@@ -85,9 +89,16 @@ def test_gate_a_passes_on_the_30_head_profile_and_stores_a_scrubbed_profile(tmp_
     record, writes, profile = bench(tmp_path, body)
     result = record["result"]
     assert result["verdict"] == "pass" and writes == 0
+    note = (
+        "This controller's saved patterns hold 60 entries; this module's 30 pucks use entries 0–29 (confirm once "
+        "with the index sweep or the hue ramp)."
+    )
+    assert "60-entry frame for this module's 30 pucks" in result["summary"] and note in result["summary"]
     obs = result["observations"]
+    assert obs["frame_note"] == note and obs["pucks_use_entries"] == [0, 29]
+    assert obs["expected_heads"] == 30 and obs["frame_offset"] == 0 and obs["head_count_problem"] is None
     assert obs["slots"] == ["custom-1", "custom-2", "custom-3"] and obs["slot_count"] == 3
-    assert obs["framebuffer_length"] == 30 and obs["segment_hint"] == 30
+    assert obs["framebuffer_length"] == 60 and obs["segment_hint"] == 60
     assert obs["individual_mode"] is True and obs["cct_range"] == [2700, 6500]
     assert obs["brightness_instances"] == 1 and obs["warnings"] == []
     assert obs["presets"] and obs["programs"] and obs["speed_range"] == [-10, 10]
@@ -102,7 +113,20 @@ def test_gate_a_passes_on_the_30_head_profile_and_stores_a_scrubbed_profile(tmp_
     assert "sim-bench-kit" not in stored and "Bench kit (Prototype 01)" not in stored
 
 
-def test_gate_a_needs_eyes_on_an_unexpected_length_and_fails_without_individual(tmp_path):
+def test_gate_a_passes_a_30_entry_kit_without_a_note(tmp_path):
+    async def body(services, runner):
+        # a controller that reports one entry per puck (the pre-workshop model)
+        services.update_registry(
+            "kit-30", {"role": "spare", "account": "bench", "profile": "sqhdk03-sim-30", "expected_heads": 30}
+        )
+        return await runner.run("gate_a", "kit-30")
+
+    result = bench(tmp_path, body)["result"]
+    assert result["verdict"] == "pass" and "30-entry frame" in result["summary"]
+    assert "frame_note" not in result["observations"] and "saved patterns hold" not in result["summary"]
+
+
+def test_gate_a_needs_eyes_on_a_frame_too_short_for_the_pucks_and_fails_without_individual(tmp_path):
     async def body(services, runner):
         services.update_registry(
             "string-20", {"role": "spare", "account": "bench", "profile": "string-20seg"}
@@ -128,6 +152,7 @@ def test_gate_a_needs_eyes_on_an_unexpected_length_and_fails_without_individual(
     twenty, t3 = bench(tmp_path, body)
     assert twenty["result"]["verdict"] == "needs_eyes"
     assert twenty["result"]["observations"]["framebuffer_length"] == 20
+    assert "should have 30" in twenty["result"]["summary"]  # 20 entries can't hold a module's 30 pucks
     assert t3["result"]["verdict"] == "fail" and "T3 only" in t3["result"]["summary"]
 
 
@@ -157,14 +182,19 @@ def test_index_order_finds_the_painted_pattern_forward_and_reversed(tmp_path):
         writes = services.sim.stats()["writes"]
         paint(services, "custom-1", RGBW)
         forward = await runner.run("index_order", "bench-kit")
-        paint(services, "custom-1", {-1: (255, 0, 0), -2: (0, 255, 0), -3: (0, 0, 255), -4: (255, 255, 255)})
+        # reversed = the LAST PUCK is red: entry 29 of the 60-entry frame (entries 30–59 drive nothing)
+        paint(services, "custom-1", {29: (255, 0, 0), 28: (0, 255, 0), 27: (0, 0, 255), 26: (255, 255, 255)})
         reverse = await runner.run("index_order", "bench-kit")
         paint(services, "custom-1", {})
         missing = await runner.run("index_order", "bench-kit")
-        return forward, reverse, missing, services.sim.stats()["writes"] - writes
+        paint(services, "custom-1", {30 + i: c for i, c in RGBW.items()})  # the pucks use the upper half?
+        upper = await runner.run("index_order", "bench-kit")
+        return forward, reverse, missing, upper, services.sim.stats()["writes"] - writes
 
-    forward, reverse, missing, writes = bench(tmp_path, body)
+    forward, reverse, missing, upper, writes = bench(tmp_path, body)
     assert writes == 0
+    assert forward["result"]["observations"]["length"] == 60
+    assert forward["result"]["observations"]["pucks_use_entries"] == [0, 29]
     assert forward["result"]["observations"]["order"] == "forward"
     assert forward["result"]["observations"]["first_4_colours"] == ["red", "green", "blue", "white"]
     assert len(forward["result"]["observations"]["first_4"]) == 4
@@ -174,6 +204,12 @@ def test_index_order_finds_the_painted_pattern_forward_and_reversed(tmp_path):
         missing["result"]["verdict"] == "needs_eyes"
         and missing["result"]["observations"]["order"] == "not found"
     )
+    assert "pattern_at_entry" not in missing["result"]["observations"]
+    assert (
+        upper["result"]["verdict"] == "needs_eyes"
+        and upper["result"]["observations"]["pattern_at_entry"] == 30
+    )
+    assert "set the frame offset to 30" in upper["result"]["summary"]
 
 
 def test_colour_names():
@@ -255,7 +291,7 @@ def test_gate_c_replays_slot_1_into_slot_2_with_equal_hashes(tmp_path):
     assert result["ask_human"] == [question("gate_c", {"source": "custom-1", "target": "custom-2"})]
     assert obs["before_look"] == "custom-3" and obs["target_hash_before"] != obs["source_hash"]
     assert obs["hashes_match"] and obs["source_hash"] == obs["target_hash"]
-    assert obs["write"]["http_status"] == 200 and obs["length"] == 30
+    assert obs["write"]["http_status"] == 200 and obs["length"] == 60  # replayed untouched, all 60 entries
     slot1 = stored[(R.FRAME_CLASS, "custom-1")]  # painted in the app: in the cloud
     slot2 = device[(R.FRAME_CLASS, "custom-2")]  # written by Gate C: applied on the controller
     assert R.slot_hash(slot1) == R.slot_hash(slot2) == obs["source_hash"]
@@ -276,26 +312,61 @@ def test_gate_c_reports_a_refused_frame_as_a_fail(tmp_path):
 
 
 # ---- hue ramp ------------------------------------------------------------------------------------------------------
-def test_hue_ramp_length_is_the_devices_own_frame_length(tmp_path):
+def test_hue_ramp_spreads_over_the_physical_pucks_in_the_devices_own_frame(tmp_path):
+    """60-entry kit, 30 pucks: hue = 12°·i on entries 0–29 (all 30 pucks different), entries 30–59 OFF. A string
+    with no registry head count uses every entry (20)."""
+
     async def body(services, runner):
         services.update_registry(
             "string-20", {"role": "spare", "account": "bench", "profile": "string-20seg"}
         )
-        thirty = await runner.run("hue_ramp", "bench-kit")
+        kit = await runner.run("hue_ramp", "bench-kit")
         twenty = await runner.run("hue_ramp", "string-20")
         await asyncio.sleep(3)
-        return thirty, twenty, view(services), view(services, "sim-string-20")
+        return kit, twenty, view(services), view(services, "sim-string-20"), services.sim.puck_colors(ADDRESS)
 
-    thirty, twenty, kit, string20 = bench(tmp_path, body)
-    for record, device, n in ((thirty, kit, 30), (twenty, string20, 20)):
-        assert record["result"]["verdict"] == "needs_eyes"
-        assert record["result"]["observations"]["length"] == n
-        entries = R.frame_entries(device[(R.FRAME_CLASS, "custom-3")])
-        assert len(entries) == n
-        assert entries == hue_ramp_entries(n)
-        assert device[("color-individual", "custom")] == "custom-3"
+    kit, twenty, kit_view, string20, pucks = bench(tmp_path, body)
+    obs = kit["result"]["observations"]
+    assert kit["result"]["verdict"] == "needs_eyes" and kit["result"]["ask_human"] == [Q_HUE_RAMP]
+    assert (obs["length"], obs["heads"], obs["frame_offset"], obs["hue_step_deg"]) == (60, 30, 0, 12)
+    assert obs["whole_frame"] is False and obs["pucks_use_entries"] == [0, 29]
+    entries = R.frame_entries(kit_view[(R.FRAME_CLASS, "custom-3")])
+    assert len(entries) == 60
+    assert entries[:30] == hue_ramp_entries(30) and entries[30:] == [R.OFF_ENTRY] * 30
+    assert len({(p["r"], p["g"], p["b"]) for p in pucks}) == 30  # every simulated puck a different colour
+    assert kit_view[("color-individual", "custom")] == "custom-3"
+    assert twenty["result"]["observations"]["length"] == 20
+    assert R.frame_entries(string20[(R.FRAME_CLASS, "custom-3")]) == hue_ramp_entries(20)
     assert hue_ramp_entries(30)[0] == R.FrameEntry(255, 0, 0, 0, 100, 0)
     assert len({(e.r, e.g, e.b) for e in hue_ramp_entries(30)}) == 30
+    assert hue_ramp_entries(30) == hue_ramp_entries(30, 12.0)  # 12° per head on 30 heads, as before
+
+
+def test_hue_ramp_whole_frame_shows_which_entries_the_pucks_use(tmp_path):
+    """whole_frame: hue = 6°·i over all 60 entries, so the pucks (entries 0–29 in the simulator) show only the
+    first half of the rainbow (red → green); with frame_offset 30 the plain ramp moves to entries 30–59."""
+
+    async def body(services, runner):
+        whole = await runner.run("hue_ramp", "bench-kit", {"whole_frame": True})
+        await asyncio.sleep(3)
+        whole_view, whole_pucks = view(services), services.sim.puck_colors(ADDRESS)
+        services.update_registry("bench-kit", {"frame_offset": 30})
+        shifted = await runner.run("hue_ramp", "bench-kit")
+        await asyncio.sleep(3)
+        return whole, whole_view, whole_pucks, shifted, view(services), services.sim.puck_colors(ADDRESS)
+
+    whole, whole_view, whole_pucks, shifted, shifted_view, shifted_pucks = bench(tmp_path, body)
+    obs = whole["result"]["observations"]
+    assert obs["whole_frame"] is True and obs["hue_step_deg"] == 6 and obs["length"] == 60
+    assert whole["result"]["ask_human"] == [Q_HUE_RAMP_WHOLE]
+    assert "entries 0–29" in whole["result"]["summary"] and "entries 30–59" in whole["result"]["summary"]
+    assert R.frame_entries(whole_view[(R.FRAME_CLASS, "custom-3")]) == hue_ramp_entries(60)
+    assert whole_pucks[0] == {"r": 255, "g": 0, "b": 0} and whole_pucks[29]["b"] > 200 >= whole_pucks[29]["r"]
+    entries = R.frame_entries(shifted_view[(R.FRAME_CLASS, "custom-3")])
+    assert shifted["result"]["observations"]["pucks_use_entries"] == [30, 59]
+    assert entries[:30] == [R.OFF_ENTRY] * 30 and entries[30:] == hue_ramp_entries(30)
+    # the simulator's pucks are wired to entries 0–29, so the wrong offset leaves them dark: what the page warns of
+    assert shifted_pucks == [{"r": 0, "g": 0, "b": 0}] * 30
 
 
 # ---- latency trials, whole strand and the rate budget ---------------------------------------------------------------

@@ -12,6 +12,9 @@ that without a CORS preflight, which we never grant, so the ops Basic credential
 - `POST /api/accounts/{account}/register` `{metadevice_id, device_id}` — put the id in the ops overlay. An id
   registered to a spare kit moves to a non-spare entry (controller swap), taking the bench flags that kit proved.
 Gate refusals come back as 403 with the gate's plain reason. Every response here is `Cache-Control: no-store`.
+A client that goes away while its request body is still being read (`starlette.requests.ClientDisconnect`) is a
+quiet no-op: nothing was acted on (every route reads its body before doing anything; the form still counts it as
+one of its attempts), one INFO line is logged, and the answer — which nobody receives — is an empty 499.
 
 The HTML form (`POST /ops/accounts`, urlencoded) works only with `CONDUCTOR_ACCOUNT_CONNECT=1`, turns itself off
 (in memory) after any successful connect, checks that Origin/Referer is this host, allows 5 attempts per 15 minutes
@@ -38,6 +41,7 @@ from urllib.parse import parse_qs, urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.routing import APIRoute
+from starlette.requests import ClientDisconnect
 
 from conductor.accounts_api import PENDING_TTL_S, LoginOutcome, LoginState
 from conductor.config import ConfigError
@@ -87,8 +91,12 @@ RESTART_WARNING = (
 )
 
 
+CLIENT_GONE_STATUS = 499  # "client closed request": the client left before its request body arrived
+
+
 class _NoStoreRoute(APIRoute):
-    """Adds `Cache-Control: no-store` to every response from this router, including refusals."""
+    """Adds `Cache-Control: no-store` to every response from this router, including refusals, and turns a client
+    that disconnected mid-request into a quiet no-op instead of an unhandled traceback."""
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         original = super().get_route_handler()
@@ -100,6 +108,14 @@ class _NoStoreRoute(APIRoute):
                 raise HTTPException(
                     exc.status_code, exc.detail, headers={**(exc.headers or {}), **NO_STORE}
                 ) from None
+            except ClientDisconnect:
+                # Every route reads its body before acting, so nothing happened. Nobody receives this answer.
+                log.info(
+                    "%s %s: the client went away before its request arrived; nothing was done",
+                    request.method,
+                    request.url.path,
+                )
+                return Response(status_code=CLIENT_GONE_STATUS, headers=dict(NO_STORE))
             response.headers.update(NO_STORE)
             return response
 

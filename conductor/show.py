@@ -105,7 +105,7 @@ class ShowWiring:
             for r in info.states
             if r.function_class == "color-sequence-v2" and r.function_instance
         }
-        problem = caps.head_count_problem(entry.expected_heads)
+        problem = caps.head_count_problem(entry.expected_heads, entry.frame_offset)
         previous = self._head_problems.pop(entry.id, None)
         if previous and previous != problem:
             services.tracker.clear_problem(

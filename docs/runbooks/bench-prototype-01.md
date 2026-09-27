@@ -65,12 +65,18 @@ Steps appear live under the job. When it finishes you get a verdict and, for mos
 into the build session (see section 7).
 
 1. **Gate A — read-only profile dump.** Nothing changes on the lights.
-   Pass = 3 slots with a 30-entry frame (or a fixed 60). Fail = "T3 only" (no per-puck path).
+   Pass = 3 slots whose saved patterns have room for the module's 30 pucks. The real kit reports **60 entries**
+   per saved pattern with 30 pucks attached (VWBD's workshop, Sep 27) — the most pucks one controller can take,
+   not the pucks it has — and that is a pass: the result adds "this module's 30 pucks use entries 0–29 (confirm
+   once with the index sweep or the hue ramp)". Needs eyes = fewer entries than pucks, or slots that disagree.
+   Fail = "T3 only" (no per-puck path).
    Tap **Download profile (sqhdk03.json)** as well and send that file to the build session — it becomes the
    simulator's model of the real kit.
 2. **Index order.** First, in the Hubspace app, paint slot 1: puck 1 red, 2 green, 3 blue, 4 white (the rest
    anything dim), and save. Then Run. It reads slot 1 (nothing written) and says whether the red puck is
-   index 0 or the last entry. Answer whether the red puck is the one nearest the controller.
+   the first or the last of the pucks' entries (0 or 29 on the real kit — entries 30–59 drive nothing). If the
+   pattern turns up somewhere else in the 60 entries (say at entry 30), it says so and names the frame offset to
+   set on the module page. Answer whether the red puck is the one nearest the controller.
    While you're in the app: switch slot 1 through each effect and a few speeds, run Index order after each, and
    copy the JSON each time — that builds the effect-code table. Each result carries the slot's `header`
    (`motionEffect`, `motionSpeed`, `brightnessEffect`, `brightnessSpeed`, `brightnessDepth`, `id`, `version`,
@@ -92,8 +98,13 @@ into the build session (see section 7).
    Pass = HTTP 200, slot 2 reads back identical to slot 1, and you saw the lights **change** from the BEFORE
    look to exactly slot 1's pattern. Answer "Did the lights change from the BEFORE look to exactly slot 1's
    pattern?". Yes proves T1 (frames by API). If the lights never left the BEFORE look, answer No.
-6. **Hue ramp.** Every puck a different colour, running through the rainbow. **Take a clear photo of the whole
-   strand** (it becomes the index map) and answer the question.
+6. **Hue ramp.** Every puck a different colour, running once through the rainbow (12° apart on 30 pucks); on the
+   real kit's 60-entry pattern the rainbow goes into the pucks' entries (0–29) and the rest are written off.
+   **Take a clear photo of the whole strand** (it becomes the index map) and answer the question.
+   If the strand stays dark or looks wrong, run it again with **whole_frame** ticked (Options): the rainbow is
+   then spread over all 60 entries (6° apart), so the pucks show only part of it — red → yellow → green means
+   they use entries 0–29, cyan → blue → magenta means 30–59. Photograph that too; if it's the second half, set
+   the frame offset to 30 on the module page (Calibrate).
 7. **Latency trials.** 20 changes, one every 3 s, between slot 2 and slot 3 (after Gate C and the hue ramp they
    hold slot 1's pattern and the rainbow, so every trial is a visible change). It starts with whichever of the
    two isn't showing. If the two slots hold the same pattern, it first writes a rainbow into one of them (only
@@ -127,10 +138,11 @@ into the build session (see section 7).
     kit off at the wall, **unplug strings 2 and 3** (only string 1 stays on the controller), switch it back on and
     wait about 30 s for it to reconnect. Count the lit pucks. Tick **I've booted the kit with strings 2 and 3
     unplugged** (terminal: `--param confirmed=1`) and Run. It dumps the segment hints and all three slots' frame
-    lengths (from the profile and from readback) and says whether the cloud noticed the missing pucks. If it
-    didn't, the 12-puck fault can only be caught by eye at the 7 am check. Answer whether only string 1 lit.
-    Then switch the kit off, plug strings 2 and 3 back in, switch it on and run **Gate A** — it must say 30 again.
-    If Gate A reported a fixed 60-entry frame, set `full_heads` to 60 under Options.
+    lengths (from the profile and from readback) and says whether the cloud noticed the missing pucks — only a
+    number **below** the full kit's 30 counts (a controller that always says 60 can't show missing pucks). If it
+    didn't notice, the 12-puck fault can only be caught by eye at the 7 am check. Answer whether only string 1 lit.
+    Then switch the kit off, plug strings 2 and 3 back in, switch it on and run **Gate A** — it must say the same
+    as before (60 entries on the real kit). `full_heads` (Options) is the pucks on the full kit: leave it at 30.
 13. **Restore.** Puts the kit back to calm warm white 2700 K at 50%. Run it at the end of every session.
 
 A job that says **ERROR** stopped without a verdict: the device was busy, not connected or not allowed, a
@@ -184,7 +196,9 @@ For you, or VWBD's crew on Prototype 01, once `/ops/module` exists.
 
 - **Target a device.** Open `/ops/module`, pick the device. Opening it takes the device's lock (the show engine
   and bench jobs leave it alone); it's released when you leave or after 10 minutes idle.
-- **Module map.** The 30 pucks drawn where they sit on the panel, in wire order, with what each is showing.
+- **Module map.** The 30 pucks drawn where they sit on the panel, in wire order, with what each is showing. On the
+  real kit the saved patterns hold 60 entries; the page paints the 30 pucks into entries 0–29, writes the rest off,
+  and says so in a small line under the map ("60-entry pattern; pucks use 0–29").
 - **Paint + Apply.** Tap pucks to colour them, then Apply writes the frame into a slot and selects it. Per-puck
   writes (T1) are only offered once Gate C has passed on that kit.
 - **Whole-module controls.** Power, white temperature, brightness, RGB, presets and speed for the whole strand.
@@ -192,7 +206,9 @@ For you, or VWBD's crew on Prototype 01, once `/ops/module` exists.
   ivory; recipe compare (RGB-only vs RGB + warm white, side by side); thirds split for the Mylar zones; hue ramp;
   index sweep (one puck at a time, for mapping); single head.
 - **Slots and effects.** Select, read or rewrite slots 1–3; start benched effect codes only.
-- **Calibration.** Cable path, start corner and orientation; saved to the overlay.
+- **Calibration.** Cable path, start corner and orientation; saved to the overlay. Also **Pattern entry that drives
+  head 0** (the frame offset, normally 0): only change it if the index sweep lights nothing, or lights the wrong
+  half — e.g. 30 if the pucks turn out to use entries 30–59. Saving it sends nothing to the lights.
 - **Hold / photo mode.** Freezes the current look so nothing changes while you photograph.
 - **Telemetry strip.** Every write with its time, HTTP result and whether readback matched.
 

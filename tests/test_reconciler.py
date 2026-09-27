@@ -370,7 +370,7 @@ def test_drifted_t1_slot_is_rewritten_at_most_once_per_10_min_then_alerted():
         await w.run_for(10 * 60)  # commissioning counts as a write: the limit starts there
         address, slot = "sim-canopy-r2c2", "custom-1"
         recorded = w.recorded[("canopy-r2c2", slot)]
-        other = R.frame_value(None, [R.FrameEntry(0, 0, 255)] * 30, expected_length=30)
+        other = R.frame_value(None, [R.FrameEntry(0, 0, 255)] * 60, expected_length=60)
 
         def stored_hash():
             stored = {r.key: r.value for r in w.sim.cloud_view(address)}
@@ -417,7 +417,7 @@ def test_drifted_t2_slot_is_only_alerted():
         app_edit(
             w,
             address,
-            [R.slot_write("custom-1", R.frame_value(None, [R.FrameEntry(9, 9, 9)] * 30, expected_length=30))],
+            [R.slot_write("custom-1", R.frame_value(None, [R.FrameEntry(9, 9, 9)] * 60, expected_length=60))],
         )
         await w.run_for(130)
         alerts = [a["message"] for a in w.events("alert") if a.get("device_id") == "canopy-r0c0"]
