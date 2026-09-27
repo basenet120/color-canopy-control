@@ -24,6 +24,15 @@ Each branch is stacked on the previous one; every cut point was verified green l
 7. `claude/p35-p4-venue-vignettes` — P3.5 venue box (`deploy/venue`, release/freeze, ten runbooks), P4 vignette pages
    and device coverage, and the fixes for the 18 P1–P3 and 15 final-round review findings + 8 completeness gaps.
 
+## Workshop kit for VWBD (branch `claude/workshop-kit`, PR 8 after the stack)
+`uv run python scripts/make_workshop_kit.py` builds `dist/color-canopy-workshop-kit-<commit>.zip` (~570 KB, committed
+files only; no research, context docs or settings). VWBD unzips it on a shop laptop and runs `start.command` (Mac) or
+`start.bat` (Windows): bench mode on one laptop, only their test account and their registered module allowed, a
+simulator practice mode, and `workshop/README.md` walks them through connect → Gates A–C → the Prototype 01 tests on
+`/ops/module`. Verified: from a fresh unzip on Linux, setup + simulator + every page. UNVERIFIED: macOS and Windows
+starters (not runnable here) and the real-module path (needs the kit). Alternative with no install: once the stack is
+merged, staging in bench mode + a tester link from /ops (the original P0b design).
+
 ## Next step (Alon, at the bench)
 1. Attach the repo (above); merge the stack in order as CI goes green.
 2. Staging: `CONDUCTOR_MODE=bench`, `HUBSPACE_LIVE=1`, `HUBSPACE_ACCOUNT_ALLOWLIST=<bench email>`,
