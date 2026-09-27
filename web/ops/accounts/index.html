@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Hubspace accounts · Canopy Ops</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/ops/ops.css">
+<script type="module" src="/ops/accounts/accounts.js"></script>
+</head>
+<body class="ops">
+<main class="narrow">
+  <header class="page-head brand">
+    <h1>Hubspace accounts</h1>
+    <a href="/ops/">Back to Ops</a>
+  </header>
+  <p class="banner-ok" id="result" hidden></p>
+  <p class="error" id="load-error" hidden></p>
+  <p class="notice" id="sim-note" hidden>Simulator: sign-in here is simulated. Nothing is sent to Hubspace and
+    nothing is stored. Use an email ending in @example.invalid; the password <code>needs-code</code> shows the
+    emailed-code step (the simulated code is <code>000000</code>).</p>
+
+  <section class="card" aria-labelledby="status-h">
+    <h2 id="status-h">Accounts</h2>
+    <ul class="list" id="accounts"><li class="muted">Loading…</li></ul>
+  </section>
+
+  <section class="card" aria-labelledby="signin-h">
+    <h2 id="signin-h">Sign in to an account</h2>
+    <p class="notice" id="connect-blocked" hidden></p>
+
+    <div id="form-on" hidden>
+      <form method="post" action="/ops/accounts" class="stack" autocomplete="on">
+        <input type="hidden" name="step" value="login">
+        <div>
+          <label for="account">Account</label>
+          <select id="account" name="account" required></select>
+        </div>
+        <div>
+          <label for="email">Hubspace email</label>
+          <input id="email" name="email" type="email" autocomplete="username" autocapitalize="off"
+                 spellcheck="false" required>
+        </div>
+        <div>
+          <label for="password">Hubspace password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit">Sign in</button>
+      </form>
+      <p class="muted">If Hubspace emails a code, the next page asks for it. Don't restart or redeploy the
+        Conductor in between — that loses the sign-in and you'd have to start again. Only the refresh token is
+        kept, encrypted; the password is never stored. This form turns itself off after one successful sign-in.</p>
+    </div>
+
+    <div id="form-off" hidden>
+      <p id="form-reason"></p>
+      <p>From a laptop, run this and answer the questions (email, password, and the emailed code if asked):</p>
+      <pre class="cmd" id="cli-command">python -m conductor.auth login --server … --account bench --user …</pre>
+      <p class="muted">The command talks to this Conductor, which does the sign-in. To use this page instead, set
+        <code>CONDUCTOR_ACCOUNT_CONNECT=1</code> and restart; the form turns itself off again after one successful
+        sign-in.</p>
+    </div>
+  </section>
+
+  <section class="card" id="devices-card" aria-labelledby="devices-h" hidden>
+    <h2 id="devices-h">Devices on <span id="devices-account"></span></h2>
+    <p class="muted" id="devices-note"></p>
+    <ul class="list" id="devices"></ul>
+    <p class="notice">After you register a device, add its id to <code>HUBSPACE_DEVICE_ALLOWLIST</code> on this
+      runtime and restart. Until then it stays read-only: nothing can write to it.</p>
+    <p class="banner-ok" id="register-result" hidden></p>
+    <p class="error" id="devices-error" hidden></p>
+  </section>
+</main>
+</body>
+</html>

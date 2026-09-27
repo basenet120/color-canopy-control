@@ -1,0 +1,140 @@
+# The six Lowcountry Modes (02, 04 "Canopy control model"), as data. The engine compiles each mode to exactly one
+# PUT per module. Every technique carries the "Hubspace feature" statement the kiosk shows WHILE THAT TECHNIQUE IS IN
+# USE — copy follows the tier actually running (05 #12, 07 §6). Statements never say the Hubspace app paints the
+# 270 heads as one canvas, and never credit non-Hubspace light to Hubspace.
+#
+# Techniques:
+#   strand  — one whole-strand look on every module (white / rgb / preset / program), rows.Look fields
+#   canvas  — T1: a look designed in canopy inches over all 270 heads, split into nine frames, written into `slot`
+#             at commissioning and only SELECTED at show time (store-and-select, 04)
+#   slot    — T2: select `slot`, hand-painted in the Hubspace app (the reconciler verifies its hash, never rewrites)
+#   modules — T3: module-level composition: each module = one coarse pixel (a strand look per canopy position)
+#
+# `ladder` is tried in order; the engine uses the first tier the capabilities + bench flags allow, and downgrades
+# with hysteresis (07 §6). Colours name entries in config/recipes.yaml.
+kiosk:
+  title: The Color Canopy
+  prompt: "Choose a mood. Watch the light change."
+  tagline: "Make it your mood."
+  resting: "The canopy is resting. It will be back shortly."
+  updating: "Changing the light…"
+  ready: "Ready"
+
+modes:
+  lowcountry-calm:
+    label: Lowcountry Calm
+    blurb: Warm ivory and a relaxed lamp glow.
+    preview: ["#FFE4BC", "#FFD9A8", "#F7C98B"]
+    ladder: [strand]
+    techniques:
+      strand:
+        look: {kind: white, cct: 2700, brightness: 60}
+        fallback_look: {kind: rgb, rgb: [255, 190, 120], brightness: 60}  # when 2700 K is outside the CCT range
+        feature: "Tunable white and dimming: all nine Hubspace strands set to a warm 2700 K."
+
+  rainbow-row-sunset:
+    label: Rainbow Row Sunset
+    blurb: Home Depot orange melting into peach and warm white.
+    preview: ["#F96302", "#FFB08A", "#FFD9A8"]
+    ladder: [canvas, slot, modules]
+    slot: custom-1
+    techniques:
+      canvas:
+        canvas:
+          kind: gradient
+          axis: y            # canopy top (y=0) → bottom (y=120)
+          stops:
+            - {at: 0.0, color: hd-orange}
+            - {at: 0.55, color: peach}
+            - {at: 1.0, color: warm-white}
+          recipe: blend      # rgb_only | blend (per-puck white needs bench gate 6)
+        brightness: 90
+        feature: "Every one of the 270 lights set individually, saved as a Hubspace custom pattern on each of nine strands."
+      slot:
+        brightness: 90
+        feature: "A custom pattern painted light by light in the Hubspace app, saved on each strand."
+      modules:
+        rows:   # canopy module row → strand look
+          - {kind: rgb, rgb: [249, 99, 2], brightness: 90}
+          - {kind: rgb, rgb: [255, 160, 110], brightness: 85}
+          - {kind: white, cct: 2700, brightness: 80}
+        feature: "Each Hubspace strand set to its own colour — orange, peach and warm white."
+
+  garden-gathering:
+    label: Garden Gathering
+    blurb: A warm pathway glowing through the canopy.
+    preview: ["#8A4B12", "#FFD9A8", "#C8751C"]
+    ladder: [canvas, slot, modules]
+    slot: custom-2
+    techniques:
+      canvas:
+        canvas:
+          kind: pathway
+          base: {color: deep-amber, colorBrightness: 25}
+          path: {color: warm-white, colorBrightness: 100, width_in: 14, amplitude_in: 30, periods: 1.5}
+          recipe: blend
+        brightness: 85
+        feature: "Per-light colour and brightness — a warm pathway saved as a Hubspace custom pattern on each strand."
+      slot:
+        brightness: 85
+        feature: "A custom pattern painted light by light in the Hubspace app, saved on each strand."
+      modules:
+        middle_row: {kind: white, cct: 2700, brightness: 100}
+        others: {kind: rgb, rgb: [255, 90, 0], brightness: 25}
+        feature: "Each Hubspace strand set to its own brightness — a bright centre row as the pathway."
+
+  holiday-at-home:
+    label: Holiday at Home
+    blurb: A warm living room, dressed for the holidays.
+    preview: ["#B3261E", "#FFD9A8", "#2E6B3A"]
+    ladder: [strand]
+    techniques:
+      strand:
+        # A twinkle-type preset that looks right without phase sync across the nine controllers (04). The first
+        # name the device actually lists is used; UNVERIFIED on SQHDK03 until Gate A lists its presets.
+        presets: [snowfall, white-star, mistletoe, christmas]
+        look: {kind: preset, speed: -8, brightness: 70}
+        fallback_look: {kind: white, cct: 2700, brightness: 70}
+        feature: "A built-in Hubspace holiday preset, running on each strand's own controller at a slow speed."
+        fallback_feature: "Tunable white and dimming: a warm holiday glow on all nine Hubspace strands."
+
+  golden-hour:
+    label: Golden Hour
+    blurb: A rich amber wash across the canopy.
+    preview: ["#E0600A", "#FF8C1A", "#FFC46B"]
+    ladder: [canvas, slot, modules]
+    slot: custom-3
+    motion: true   # re-trigger all nine as one burst or none (07 §6)
+    techniques:
+      canvas:
+        canvas:
+          kind: band_per_module   # one soft amber band per module over deep amber, so in-phase motion reads as waves
+          base: {color: deep-amber, colorBrightness: 60}
+          band: {color: amber, colorBrightness: 100, width_in: 20}
+          recipe: blend
+        brightness: 90
+        # On-device motion runs only once a directional motionEffect code is bench-enabled (config/conductor.yaml
+        # effects.enabled). Until then the band is static and the copy says "glow", never "moving".
+        motion_effect: {motionEffect: null, motionSpeed: 10}
+        feature: "A saved Hubspace custom pattern in amber tones on each of nine strands."
+        motion_feature: "A saved Hubspace custom pattern with an animated effect, running on each strand's own controller — all nine started together."
+      slot:
+        brightness: 90
+        feature: "An amber custom pattern painted in the Hubspace app, saved on each strand."
+      modules:
+        columns:   # canopy module column → strand look (a coarse left-to-right amber gradient)
+          - {kind: rgb, rgb: [255, 90, 0], brightness: 70}
+          - {kind: rgb, rgb: [255, 126, 0], brightness: 85}
+          - {kind: rgb, rgb: [255, 170, 60], brightness: 100}
+        feature: "Each Hubspace strand set to its own shade of amber."
+
+  goodnight-glow:
+    label: The Goodnight Glow
+    blurb: Soft, warm, dimmed light to end the evening.
+    preview: ["#5A3514", "#A8641E", "#E09A4C"]
+    ladder: [strand]
+    techniques:
+      strand:
+        look: {kind: white, cct: 2200, brightness: 10}   # clamped up to the device's CCT floor (2700 on the sibling)
+        fallback_look: {kind: rgb, rgb: [255, 90, 0], brightness: 10}
+        feature: "Dimming and the warmest white: all nine Hubspace strands turned down low."
