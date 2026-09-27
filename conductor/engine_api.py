@@ -126,6 +126,8 @@ class CanopyState:
     # route answers 429/409 with `message` and a Retry-After of `retry_after_s` (None = no point retrying soon).
     refused: bool = False
     retry_after_s: float | None = None
+    # Wall time guest input was paused (None while it's on). A pause survives a restart (saved under <data>/state/).
+    paused_since: float | None = None
 
     def to_json(self) -> dict:
         return {
@@ -135,6 +137,7 @@ class CanopyState:
             "feature": self.feature,
             "phase": str(self.phase),
             "guest_input": self.guest_input,
+            "paused_since": self.paused_since,
             "cooldown_until": self.cooldown_until,
             "changed_at": self.changed_at,
             "modules": self.modules,

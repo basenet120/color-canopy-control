@@ -49,6 +49,14 @@ class TicketBook:
         self._tickets[ticket.value] = ticket
         return ticket
 
+    def revoke_session(self, session: str) -> int:
+        """Drop every outstanding ticket issued to enrolled session `session` (its fingerprint): a ticket fetched just
+        before ops revoked the device must not open a socket afterwards (review V5). Returns how many."""
+        gone = [k for k, t in self._tickets.items() if t.session is not None and t.session == session]
+        for k in gone:
+            del self._tickets[k]
+        return len(gone)
+
     def redeem(self, value: object) -> Ticket | None:
         """Consume a ticket. Returns None for unknown, reused or expired tickets."""
         self._sweep()

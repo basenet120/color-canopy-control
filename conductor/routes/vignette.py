@@ -7,8 +7,13 @@ elsewhere, including /ops); `require_room` below is the belt to its braces (403 
 - `GET  /vignette/<room>/`            the shared page (`web/vignette/index.html`); its CSS/JS are served beside it
 - `GET  /api/vignette/<room>[?refresh=1]`  room title, scenes, colour swatches, white shortcuts, and per device:
                                       controls from its own profile, desired look, what it reports now, the
-                                      tracker's status (Ready / Updating / Needs attention) and `simulated`
-- `POST /api/vignette/<room>/action`  `{device_id | group, action, value?, outlet?, confirm?}` → one PUT per device
+                                      tracker's status (Ready / Updating / Needs attention) and `simulated`.
+                                      Rows are look rows only (`vignettes.LOOK_CLASSES`): never telemetry such as
+                                      wifi-ssid, MAC addresses or geo-coordinates, slot patterns or driver addresses
+                                      — the same on the `vignette:<room>` topic
+- `POST /api/vignette/<room>/action`  `{device_id | group, action, value?, outlet?, confirm?}` → one PUT per device;
+                                      a group sends to every device that can take it and lists the rest in
+                                      `skipped` with the reason (422 only when none can)
 - `POST /api/vignette/<room>/scene`   `{scene}` → one PUT per device in the scene
 
 Writes are JSON only and same-origin (a form on another site can't send JSON without a preflight we never grant; a

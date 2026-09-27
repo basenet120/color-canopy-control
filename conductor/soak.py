@@ -8,6 +8,9 @@ Schedule (fractions of the run, so a shorter run keeps the same shape):
 - commissioning (T1 slot contents), then the engine starts on the idle mode;
 - `changes` kiosk mode changes at seeded random times, at least one cooldown apart, clear of the fault windows;
 - a button-mash burst: 40 kiosk taps 0.25 s apart, then 20 ops taps 0.2 s apart (ops bypass the cooldown);
+- `drift_events` changes made outside the Conductor (the Hubspace app): one module's look changed straight in the
+  simulated cloud (`SimDriver.faults.change_out_of_band` — no executor, no rate budget), at seeded times while the
+  canopy is settled, clear of mode changes and the fault windows;
 - one window of HTTP 500s (the pinned 43 min) and one internet outage (the pinned 30 min), each with an ops mode
   change in the middle, so recovery has to re-apply a look the lights aren't showing.
 
@@ -15,6 +18,8 @@ Measured (ground truth = `SimDriver.device_view`, what the lights actually show)
 - time from each accepted change (kiosk, ops, idle) to all nine modules correct — p50/p95/max, target p95 ≤ 5 s;
 - the executor's peak queue depth (never more than 2 per device: pending + in flight);
 - self-heal time after every silent drop that mattered (the look the module should show was dropped) — ≤ 10 s;
+- detect + heal time after every out-of-band change (from the change until the lights show the look again; the
+  rolling true-up has to notice it — no command of ours failed) — ≤ 10 s, and the true-up's read load (GET/s);
 - tier downgrades (0 at 5% throttling);
 - time from each fault ending to all nine modules showing the current look — ≤ 60 s;
 - the smallest gap between two writes to one device (≥ the 1 s budget) and the final look.
@@ -237,6 +242,7 @@ class SoakConfig:
     seed: int = 0
     mash_kiosk_taps: int = 40
     mash_ops_taps: int = 20
+    drift_events: int = 12  # out-of-band changes (the Hubspace app) the reconciler must find and undo
     sim_settings: SimSettings = field(default_factory=SimSettings.from_acceptance)
     targets: dict = field(default_factory=dict)  # from acceptance.yaml
     report_path: Path | None = REPORT_PATH
@@ -415,6 +421,10 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         "refused": {"kiosk": 0, "during_faults": 0},
         "heals": [],
         "heal_timeouts": 0,
+        "drift_heals": [],  # seconds from an out-of-band change until the lights show the look again
+        "drift_timeouts": 0,
+        "drift_skipped": 0,  # a change that didn't make the module wrong, or a look change that superseded it
+        "drift_attempted": 0,
         "recoveries": {},
         "max_queue": 0,
         "min_write_gap_s": None,
@@ -520,6 +530,46 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
             await clock.sleep(POLL_S)
         results["heal_timeouts"] += 1
 
+    # A look other than the module's own: blue if it isn't showing blue already, else warm white.
+    def out_of_band_rows(mt: Any) -> list[StateRow]:
+        blue = [R.power(True), R.color_mode("color"), R.color_rgb(0, 0, 255)]
+        if not R.compare(blue, mt.expect or mt.rows):
+            return [R.power(True), R.color_mode("white"), R.color_temperature(4000)]
+        return blue
+
+    async def drift(t: float) -> None:
+        """Change one module outside the Conductor, then time until the lights show the look again."""
+        await at(t)
+        for _ in range(6):  # wait (up to 30 s) for a settled canopy, so this measures drift, not a change
+            plan = engine.current_plan()
+            if plan is not None and engine.outage is None and _all_correct(world, plan):
+                break
+            await clock.sleep(5.0)
+        else:
+            results["drift_skipped"] += 1
+            return
+        results["drift_attempted"] += 1
+        device_id = drift_rng.choice(sorted(plan.modules))
+        address = world.addresses[device_id]
+        response = sim.faults.change_out_of_band(address, out_of_band_rows(plan.modules[device_id]))
+        if not response.ok:
+            results["drift_skipped"] += 1
+            return
+        started = clock.monotonic()
+        seen_wrong = False
+        while clock.monotonic() - started < WATCH_LIMIT_S:
+            if engine.current_plan() is not plan:
+                results["drift_skipped"] += 1  # a look change (idle return, ops) superseded it
+                return
+            correct = _correct(world, plan, device_id)
+            if not correct:
+                seen_wrong = True
+            elif seen_wrong or clock.monotonic() - started > 3.0:  # the edit applied (or the fix beat it)
+                results["drift_heals"].append(clock.monotonic() - started)
+                return
+            await clock.sleep(POLL_S)
+        results["drift_timeouts"] += 1
+
     async def watch_recovery(name: str, ended: float) -> None:
         while clock.monotonic() - ended < WATCH_LIMIT_S * 2:
             plan = engine.current_plan()
@@ -544,6 +594,22 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         times.append(t)
     times.sort()
     modes = compiler.modes()
+    drift_rng = random.Random(f"{cfg.seed}:drift")  # its own stream: the rest of the schedule stays as it was
+    drift_times: list[float] = []
+    attempts = 0
+    while len(drift_times) < cfg.drift_events and attempts < max(1, cfg.drift_events) * 1000:
+        attempts += 1
+        t = drift_rng.uniform(lo, t0 + duration - 120.0)
+        # clear of the fault windows (and the minute after), the mash, and every mode change: 30 s after one
+        # (settled) and at least 20 s before the next; drift() also waits for a settled canopy first
+        if in_fault(t, pad_after=60.0) or in_fault(t + 20.0) or mash_at - 20.0 < t < mash_at + 90.0:
+            continue
+        if any(t - 30.0 < c < t + 20.0 for c in times):
+            continue
+        if any(abs(t - other) < 30.0 for other in drift_times):
+            continue
+        drift_times.append(t)
+    drift_times.sort()
 
     async def at(t: float) -> None:
         delay = t - clock.monotonic()
@@ -597,6 +663,7 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         commission = await engine.commission(source="soak")
         await engine.start()
     drivers = [asyncio.get_running_loop().create_task(c) for c in (kiosk_changes(), mash(), faults())]
+    drivers += [asyncio.get_running_loop().create_task(drift(t)) for t in drift_times]
     await at(t0 + duration)
     for task in drivers:
         if not task.done():
@@ -634,6 +701,17 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
     }
     results["windows_s"] = {"http_500": window_s, "outage": outage_s}
     results["duration_s"] = duration
+    reads = results["reconciler"].get("true_up_reads", 0)
+    modules = len(world.modules) or 1
+    interval = engine.deps.settings.reconciler.true_up_interval_s
+    results["read_load"] = {
+        "true_up_reads": reads,
+        "true_up_interval_s": interval,
+        "per_s": reads / duration if duration else 0.0,
+        "nominal_per_s": modules / interval,  # one account: all nine canopy modules
+        "all_reads": results["sim"].get("reads", 0),
+        "all_writes": results["sim"].get("writes", 0),
+    }
     return results
 
 
@@ -686,6 +764,21 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
             "max": mx,
             "target": f"every one ≤ {heal_target:g} s",
             "pass": results["heal_timeouts"] == 0 and (mx is None or mx <= heal_target),
+        }
+    )
+    drift_heals = results.get("drift_heals") or []
+    p50, p95, mx = stats(drift_heals)
+    rows.append(
+        {
+            "name": f"Detect + heal a change made outside the Conductor ({len(drift_heals)} out-of-band changes)",
+            "p50": p50,
+            "p95": p95,
+            "max": mx,
+            "target": f"every one ≤ {heal_target:g} s",
+            "pass": bool(drift_heals)
+            and results.get("drift_timeouts", 0) == 0
+            and mx is not None
+            and mx <= heal_target,
         }
     )
     downgrades = [t for t in results["tier_changes"] if t["direction"] == "down"]
@@ -798,6 +891,7 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
             f"refused while resting: {refused['during_faults']}."
         ),
         f"- Changes during a fault (not in the percentiles): {len(faulted)}.",
+        _drift_line(results),
         f"- Outages the engine detected (resting → recovered): {outages}.",
         (
             f"- Tier changes: {len(results['tier_changes'])}{' — ' + tiers if tiers else ''}. "
@@ -805,7 +899,8 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
         ),
         (
             f"- Reconciler: {rec['reasserts']} module re-asserts, {results['early_reasserts']} early re-asserts "
-            f"after a verification readback differed, {rec['true_ups']} true-ups, {rec['probes']} outage probes, "
+            f"after a verification readback differed, {rec.get('drift_resends', 0)} modules re-sent after a true-up "
+            f"read showed they'd changed, {rec['true_ups']} full true-ups, {rec['probes']} outage probes, "
             f"{rec['slot_rewrites']} slot rewrites."
         ),
         (
@@ -821,6 +916,21 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _drift_line(results: dict) -> str:
+    load = results.get("read_load") or {}
+    return (
+        f"- Out-of-band changes (`SimDriver.faults.change_out_of_band`, i.e. the Hubspace app): "
+        f"{results.get('drift_attempted', 0)} made, {len(results.get('drift_heals') or [])} measured, "
+        f"{results.get('drift_skipped', 0)} skipped (the canopy wasn't settled, or a look change superseded it), "
+        f"{results.get('drift_timeouts', 0)} never healed. Found by the rolling true-up: each module read once every "
+        f"{load.get('true_up_interval_s', 0):g} s, spread across the modules — {load.get('true_up_reads', 0)} reads "
+        f"in the run = {load.get('per_s', 0):.2f} GET/s on the canopy account (nominal "
+        f"{load.get('nominal_per_s', 0):.2f}/s; reads skip a module whose command is still verifying and pause "
+        f"while resting). All reads {load.get('all_reads', 0)}, all writes {load.get('all_writes', 0)}; reads are "
+        "never counted against the 1 write/s per device budget."
+    )
 
 
 def _motion_line(results: dict) -> str:

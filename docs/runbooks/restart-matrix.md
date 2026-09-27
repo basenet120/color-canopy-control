@@ -22,5 +22,9 @@ off for a moment.
 
 After any restart: `/ops` → 7 am checklist → **Run**, and `sudo canopy-status` if you're on the box.
 
+**Guest input stays paused across every restart in this table.** A pause is saved on the box (`<data>/state/`), so a
+watchdog restart, a reboot, a release or `canopy-start` never lets guests back in on its own; `/ops` shows "Guest input
+paused since …" and an alert. Press **Resume guest input** only when the checks are done.
+
 Don't power-cycle modules one after another hoping for the best: each one needs about a minute to come back, and
 a module that's still offline after one power cycle needs `controller-swap.md`, not more cycles.

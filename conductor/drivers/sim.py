@@ -17,6 +17,9 @@ Rules being implemented:
 - **Cloud vs device (07 §5).** The cloud stores accepted rows when it acks; the device applies them
   `device_apply_extra_s` later — and only if it's powered (`faults.set_available`). Readback shows the cloud's rows
   or the device's rows per `readback_semantics`, so the reconciler can be tested against both possibilities.
+- **Out-of-band changes** (`faults.change_out_of_band`): a change made outside the Conductor — the Hubspace app, a
+  cloud-side revert — validated and stored like a PUT and delivered to the device, but never through this driver's
+  transport fault model, the executor or the rate budget. The soak uses it to measure drift detection + heal.
 - **Devices that settle** (`DEVICE_SETTLES`): a lock applies `locking`, then reports `locked` to the cloud.
 - All timing comes from the injected Clock; all randomness from seeded `random.Random` streams, so a run on
   `VirtualTimeLoop` is reproducible. Device application is evaluated lazily from the clock (no background tasks).
@@ -113,8 +116,20 @@ class SimDevice:
         self.animation_origin: float | None = None  # wall clock the on-device animation phase started (seam)
 
 
+def _copy(value: Any) -> Any:
+    """A deep copy of JSON-shaped data (dicts, lists, scalars) — what every stored value is. Several times faster
+    than `copy.deepcopy`, which matters now that the true-up reads each module every few seconds (the soak)."""
+    if isinstance(value, dict):
+        return {k: _copy(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_copy(v) for v in value]
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    return copy.deepcopy(value)
+
+
 def _rows(values: Mapping[Key, Any]) -> list[StateRow]:
-    return [StateRow(k[0], k[1], copy.deepcopy(v)) for k, v in values.items()]
+    return [StateRow(k[0], k[1], _copy(v)) for k, v in values.items()]
 
 
 def _is_int(v: Any) -> bool:
@@ -215,6 +230,7 @@ class SimCloud:
         self.rng = rng
         self.devices: dict[str, SimDevice] = {}
         self.seconds_rows_dropped = 0
+        self.out_of_band_changes = 0
 
     def device(self, address: str) -> SimDevice:
         try:
@@ -266,6 +282,17 @@ class SimCloud:
         return WireResponse(
             200, None, [StateRow(k[0], k[1], copy.deepcopy(v)) for k, v, _ in accepted], dropped
         )
+
+    def change_out_of_band(self, address: str, rows: Sequence[StateRow]) -> WireResponse:
+        """A change made outside the Conductor (the Hubspace app, a cloud-side revert): validated and stored like a
+        PUT (stamped now, in ms) and delivered to the device. Calls the class's own `accept_wire`, so a test's or
+        the soak's wrapper around the instance's `accept_wire` never sees it as the Conductor's write."""
+        stamp = int(self.clock.now() * 1000)
+        body = {"metadeviceId": address, "values": [r.to_wire(stamp) for r in rows]}
+        response = SimCloud.accept_wire(self, body)
+        if response.ok:
+            self.out_of_band_changes += 1
+        return response
 
     # -- device side
     def _deliver(self, device: SimDevice, rows: list[tuple[Key, Any]]) -> None:
@@ -355,6 +382,10 @@ class SimFaults:
     def set_available(self, address: str, available: bool) -> None:
         """Cut (False) or restore (True) a controller's power. Unpowered: available=false, nothing applied."""
         self._driver.cloud.set_available(address, available)
+
+    def change_out_of_band(self, address: str, rows: Sequence[StateRow]) -> WireResponse:
+        """Change a device the way the Hubspace app would (see SimCloud.change_out_of_band)."""
+        return self._driver.cloud.change_out_of_band(address, rows)
 
     def expire_token(self, account: str) -> None:
         self.expired_accounts.add(account)
@@ -634,6 +665,7 @@ class SimDriver:
             "connection_failures": c["write_connection"] + c["read_connection"],
             "silent_drops": c["silent_drops"],
             "seconds_rows_dropped": self.cloud.seconds_rows_dropped,
+            "out_of_band_changes": self.cloud.out_of_band_changes,
             "read_rows_dropped": c["read_rows_dropped"],
             "min_interval_violations": dict(self._violations),
             "min_interval_violations_total": sum(self._violations.values()),

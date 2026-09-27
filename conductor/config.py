@@ -77,7 +77,8 @@ class ExecutorSettings(_Strict):
 
 
 class ReconcilerSettings(_Strict):
-    true_up_interval_s: float = 60
+    # each module is read once per interval, the reads spread across the modules (reconciler.py); ≥ 1 s
+    true_up_interval_s: float = Field(5, ge=1)
     reassert_after_s: float = 4
     downgrade_after_wrong_s: float = 10
     downgrade_throttles: int = 3
@@ -360,6 +361,108 @@ def save_overlay_patch(
 def overlay_text(registry: Registry) -> str:
     """The overlay as YAML, for "download as a diff to commit back to git" (07 §8). Callers anonymize ids."""
     return yaml.safe_dump(registry.overlay.model_dump(), sort_keys=True, allow_unicode=True)
+
+
+# Fields the overlay may hold that never go into git (devices.yaml: "never with real ids in git"): the Afero
+# metadevice id, and the address of the kit that proved the bench flags (also a metadevice id).
+NOT_FOR_GIT = ("metadevice_id", "flags_proven_on")
+
+
+@dataclass
+class OverlayDiff:
+    """The ops overlay folded into config/devices.yaml, as text (07 §8: "downloadable as a diff to commit back")."""
+
+    before: str  # config/devices.yaml as it is in git
+    after: str  # the same file with every overlay edit applied, line by line (comments and layout kept)
+    changed: list[str]  # device ids whose entry changed or was added
+    left_out: list[str]  # device ids with a field left out for git (NOT_FOR_GIT)
+    problem: str = (
+        ""  # set when the edited file didn't re-read as the same registry (then `after` is `before`)
+    )
+
+
+def _flow(entry: Mapping[str, Any]) -> str:
+    return yaml.safe_dump(
+        dict(entry), default_flow_style=True, sort_keys=False, width=10**9, allow_unicode=True
+    ).strip()
+
+
+def overlay_diff(registry: Registry, config_dir: Path = CONFIG_DIR) -> OverlayDiff:
+    """Apply the overlay's device edits to devices.yaml's own lines: a one-line `- {id: …}` entry is rewritten in
+    place as one line, a block entry as a block, a new device is appended to the list. Fields in NOT_FOR_GIT are left
+    out. The result is re-read and checked against the merged registry before it is offered."""
+    import re
+
+    path = config_dir / "devices.yaml"
+    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    raw = _read_yaml(path)
+    base = {d["id"]: d for d in raw.get("devices") or [] if isinstance(d, dict) and "id" in d}
+    lines = before.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    changed: list[str] = []
+    left_out: list[str] = []
+    expected: dict[str, dict] = {}
+    appended: list[str] = []
+    for device_id, patch in sorted(registry.overlay.devices.items()):
+        clean = {k: v for k, v in patch.items() if k not in NOT_FOR_GIT}
+        if len(clean) != len(patch):
+            left_out.append(device_id)
+        if device_id not in base:
+            if not clean:
+                continue
+            entry = {"id": device_id, **clean}
+            expected[device_id] = entry
+            appended.append(f"  - {_flow(entry)}\n")
+            changed.append(device_id)
+            continue
+        merged = {**base[device_id], **clean}
+        if merged == base[device_id]:
+            continue
+        expected[device_id] = merged
+        flow = re.compile(rf"^(\s*)-\s*\{{\s*id:\s*{re.escape(device_id)}\s*[,}}]")
+        block = re.compile(rf"^(\s*)-\s+id:\s*{re.escape(device_id)}\s*(#.*)?$")
+        for i, line in enumerate(lines):
+            if m := flow.match(line):
+                lines[i] = f"{m.group(1)}- {_flow(merged)}\n"
+                break
+            if m := block.match(line.rstrip("\n")):
+                indent = m.group(1)
+                end = i + 1
+                while (
+                    end < len(lines)
+                    and lines[end].strip()
+                    and (len(lines[end]) - len(lines[end].lstrip()) > len(indent))
+                ):
+                    end += 1
+                dumped = yaml.safe_dump(
+                    [merged], default_flow_style=False, sort_keys=False, allow_unicode=True
+                )
+                lines[i:end] = [f"{indent}{text}\n" for text in dumped.splitlines()]
+                break
+        else:
+            return OverlayDiff(before, before, [], left_out, f"couldn't find {device_id} in {path.name}")
+        changed.append(device_id)
+    after = "".join(lines + appended)
+    # Re-read the edited file: every changed entry must come back exactly as merged, and the whole file must
+    # still validate — otherwise offer no diff rather than a wrong one.
+    try:
+        reread = yaml.safe_load(after) or {}
+        RegistryFile.model_validate(_apply_defaults(reread))
+        got = {d["id"]: d for d in reread.get("devices") or []}
+        wrong = [d for d, entry in expected.items() if got.get(d) != entry]
+        unchanged = [d for d in base if d not in expected and got.get(d) != base[d]]
+    except (yaml.YAMLError, ValidationError) as e:
+        return OverlayDiff(before, before, [], left_out, f"the edited {path.name} didn't validate: {e}")
+    if wrong or unchanged:
+        return OverlayDiff(
+            before,
+            before,
+            [],
+            left_out,
+            f"the edited {path.name} re-read differently for {', '.join(wrong + unchanged)}",
+        )
+    return OverlayDiff(before, after, changed, left_out)
 
 
 def unknown_devices(registry: Registry, seen_addresses: Iterable[str]) -> list[str]:

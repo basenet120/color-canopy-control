@@ -69,7 +69,11 @@ function renderState(st) {
   tier.textContent = TIER_TEXT[st.tier] || st.tier || "";
   const guest = $("canopy-guest");
   guest.hidden = false;
-  guest.textContent = st.guest_input ? "Guest input on" : "Guest input paused";
+  // A pause is saved on the box and survives a restart (canopy.py), so say since when.
+  guest.textContent = st.guest_input
+    ? "Guest input on"
+    : `Guest input paused${st.paused_since ? ` since ${clock(st.paused_since)}` : ""}`;
+  guest.title = st.guest_input ? "" : "Stays paused across a Conductor restart until someone presses Resume.";
   guest.className = `chip ${st.guest_input ? "ok" : "warn"}`;
   const feature = $("canopy-feature");
   feature.hidden = !st.feature;

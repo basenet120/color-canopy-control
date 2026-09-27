@@ -12,6 +12,7 @@ Oct 29. **How long:** the whole show; each action below takes seconds.
 
 - **Pause guest input** — the kiosk shows "The canopy is resting" and can't change anything. The canopy keeps its
   current look. Use it for photos, VIP moments, fixing something, or anything odd. **Resume guest input** undoes it.
+  A pause stays on through a Conductor restart or a reboot until someone resumes it.
 - **Safe look** — Lowcountry Calm (warm ivory) on all nine modules, now, whatever else is going on. Use it when the
   canopy looks wrong and you want a known-good look while you think.
 - **Re-assert all** — every module whose Hubspace readback differs from its look gets the look again. Harmless;

@@ -206,6 +206,7 @@ def make_world(
     compiler: FakeCompiler | None = None,
     tier_allowed=None,
     seed: int = 0,
+    state_dir=None,
 ) -> World:
     """Build on a running VirtualTimeLoop (inside run_virtual)."""
     clock = VirtualClock()
@@ -237,6 +238,7 @@ def make_world(
         ladder=compiler.ladder,
         modes=compiler.modes,
         record_slot_hash=lambda d, s, h: recorded.__setitem__((d, s), h),
+        state_dir=state_dir,
     )
     if tier_allowed is not None:
         deps.tier_allowed = tier_allowed
