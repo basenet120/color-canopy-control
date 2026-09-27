@@ -1,0 +1,50 @@
+# Device registry defaults (in git). Ops edits — real metadevice ids, calibration, capability flags from the bench —
+# go to the overlay <CONDUCTOR_DATA_DIR>/overrides/registry.yaml, never here, and never with real ids in git.
+#
+# Every device has a logical `id` used by every API and page. Drivers resolve it to their own address:
+#   - the simulator uses `sim-<id>`;
+#   - the Afero driver uses `metadevice_id`, which only the ops overlay sets (after account connect / Gate A).
+# The live gate's allowlist is over metadevice ids: HUBSPACE_DEVICE_ALLOWLIST ∩ {writable devices' metadevice_id}.
+accounts:
+  bench:
+    label: Bench kit account
+  canopy:
+    label: Canopy account (venue box only)
+  entry:
+    label: Entryway account (venue box only)
+  living:
+    label: Holiday living room account (venue box only)
+  bedroom:
+    label: Bedroom account (venue box only)
+  garden:
+    label: Glow Garden account (venue box only)
+
+device_defaults:
+  canopy_module:
+    model: SQHDK03
+    profile: sqhdk03-sim  # simulator profile (conductor/sim/profiles); the sibling string resized to 30
+    expected_heads: 30
+    writable: true
+
+devices:
+  - id: bench-kit
+    role: bench
+    account: bench
+    label: Bench kit (Prototype 01)
+    model: SQHDK03
+    profile: sqhdk03-sim
+    expected_heads: 30
+    orientation: A
+    writable: true
+
+  # The nine canopy modules, reflected-ceiling view, row-major. Orientation comes from the canopy's scheme
+  # (config/canopy.yaml) unless a module overrides it.
+  - {id: canopy-r0c0, role: canopy_module, account: canopy, module: r0c0, label: Module 1}
+  - {id: canopy-r0c1, role: canopy_module, account: canopy, module: r0c1, label: Module 2}
+  - {id: canopy-r0c2, role: canopy_module, account: canopy, module: r0c2, label: Module 3}
+  - {id: canopy-r1c0, role: canopy_module, account: canopy, module: r1c0, label: Module 4}
+  - {id: canopy-r1c1, role: canopy_module, account: canopy, module: r1c1, label: Module 5}
+  - {id: canopy-r1c2, role: canopy_module, account: canopy, module: r1c2, label: Module 6}
+  - {id: canopy-r2c0, role: canopy_module, account: canopy, module: r2c0, label: Module 7}
+  - {id: canopy-r2c1, role: canopy_module, account: canopy, module: r2c1, label: Module 8}
+  - {id: canopy-r2c2, role: canopy_module, account: canopy, module: r2c2, label: Module 9}

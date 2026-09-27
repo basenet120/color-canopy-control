@@ -1,0 +1,33 @@
+# Conductor runtime settings (in git). Validated on load; see conductor/config.py for every field.
+executor:
+  min_write_interval_s: 1.0      # ≤ 1 write/s per device (Afero attribute guidance; 07 §6)
+  account_concurrency: 9         # concurrent requests per Hubspace account (a mode change is a 9-PUT burst)
+  max_attempts: 3                # executor-owned retries (aioafero's MAX_RETRIES is forced to 1)
+  backoff_s: [1.0, 2.0, 4.0]     # before attempt 2, 3, ... (never below min_write_interval_s)
+  readback_delay_s: 1.0          # first verification GET after a 2xx
+  readback_attempts: 3
+  readback_interval_s: 1.0
+
+reconciler:
+  true_up_interval_s: 60         # periodic readback of every canopy module
+  reassert_after_s: 4            # re-check a few seconds after each change
+  downgrade_after_wrong_s: 10    # a module wrong longer than this downgrades the mode's tier
+  downgrade_throttles: 3         # ... or ≥ this many throttles in the window, per account
+  downgrade_throttle_window_s: 60
+  upgrade_after_clean_s: 300
+  slot_rewrite_min_interval_s: 600
+  outage_probe_interval_s: 10
+
+kiosk:
+  cooldown_s: 8
+  idle_return_s: 180
+  idle_mode: lowcountry-calm
+
+module_page:
+  lock_idle_timeout_s: 600
+  sweep_step_s: 2.0              # index sweep: one frame write per step, never faster than the rate budget
+
+effects:
+  # motionEffect / brightnessEffect codes the bench has enabled. Every code starts disabled (06 #4).
+  # Example after the bench: {motionEffect: {1: "scroll (benched Oct 2)"}}
+  enabled: {motionEffect: {}, brightnessEffect: {}}

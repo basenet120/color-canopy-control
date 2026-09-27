@@ -7,6 +7,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pyyaml>=6.0",
+    "cryptography>=43",
+    "pydantic>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -14,7 +16,12 @@ dependencies = [
 live = ["aioafero==9.3.0"]
 
 [dependency-groups]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "playwright==1.56.0",
+]
 
 [tool.uv]
 package = false
