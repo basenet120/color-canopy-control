@@ -16,7 +16,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from conductor import __version__, redact
 from conductor.auth import BasicAuthMiddleware, check_auth_configuration
 from conductor.geometry import build_layout, load_canopy_config, pitch_violations
-from conductor.routes import accounts, bench, core, devices, module
+from conductor.routes import accounts, bench, core, devices, kiosk, module, ops
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 log = logging.getLogger("conductor")
@@ -34,6 +34,13 @@ async def lifespan(app: FastAPI):
     for problem in services.problems:
         log.warning("Needs attention: %s", problem)
     await services.start()
+    from conductor import logring
+    from conductor.show import ShowWiring
+
+    services.extras["logring"] = logring.install()
+    if os.environ.get("CONDUCTOR_ENGINE") != "off":  # tests only: run the app without the canopy engine
+        services.extras["show"] = ShowWiring(services)
+        await services.extras["show"].start()
     try:
         yield
     finally:
@@ -141,7 +148,10 @@ app.include_router(devices.router)
 app.include_router(accounts.router)
 app.include_router(bench.router)
 app.include_router(module.router)
+app.include_router(kiosk.router)
+app.include_router(ops.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 app.mount("/ops", StaticFiles(directory=WEB_DIR / "ops", html=True), name="ops")
+app.mount("/kiosk", StaticFiles(directory=WEB_DIR / "kiosk", html=True), name="kiosk")
 app.mount("/visualizer", StaticFiles(directory=WEB_DIR / "visualizer", html=True), name="visualizer")

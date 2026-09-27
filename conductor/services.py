@@ -146,7 +146,7 @@ class Services:
 
     async def close(self) -> None:
         # Stop page sessions and bench runs first so their locks are released and nothing is left pending.
-        for key in ("module_manager", "bench"):
+        for key in ("show", "module_manager", "bench"):
             owner = self.extras.get(key)
             closer = getattr(owner, "close_all", None) or getattr(owner, "close", None)
             if closer is not None:

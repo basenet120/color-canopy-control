@@ -553,3 +553,34 @@ def _modules(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
         look = _to_look(spec, c, notes, d.id)
         modules[d.id] = _target(d, c, _vector(look, c))
     return ModePlan(mode_id, mode.label, Tier.T3, tech.feature, False, modules, notes.lines(len(devices)))
+
+
+class EngineCompiler:
+    """The looks compiler in the shape the engine and `make soak` call: compile(mode, tier), ladder(mode), modes().
+
+    Capabilities default to the simulator's SQHDK03 profile for every canopy module (the soak's world)."""
+
+    def __init__(self, registry: Any, capabilities: Mapping[str, Capabilities] | None = None):
+        if capabilities is None:
+            from conductor.capabilities import detect
+            from conductor.sim.profiles import profile_parts
+
+            functions, states = profile_parts()
+            caps = detect(functions, states)
+            capabilities = {e.id: caps for e in registry.canopy_modules()}
+        self._ctx = CompileContext(registry=registry, capabilities=capabilities)
+
+    def compile(self, mode_id: str, tier: Tier) -> ModePlan:
+        return compile_mode(mode_id, tier, self._ctx)
+
+    def ladder(self, mode_id: str) -> list[Tier]:
+        return ladder(mode_id, self._ctx.modes)
+
+    def modes(self) -> list[str]:
+        return list(self._ctx.modes.modes)
+
+
+def engine_compiler(
+    *, registry: Any, capabilities: Mapping[str, Capabilities] | None = None
+) -> EngineCompiler:
+    return EngineCompiler(registry, capabilities)

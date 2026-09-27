@@ -10,6 +10,7 @@ from conductor.looks.compile import (
     available_tiers,
     compile_first,
     compile_mode,
+    engine_compiler,
     ladder,
     module_look,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "compile_first",
     "compile_mode",
     "compose_canvas",
+    "engine_compiler",
     "evaluate",
     "head_positions",
     "ladder",

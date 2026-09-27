@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -48,10 +49,10 @@ def _wait_healthy(url: str, proc: subprocess.Popen, timeout: float = 30.0) -> No
     raise RuntimeError("the Conductor didn't become healthy in time")
 
 
-@pytest.fixture(scope="session")
-def server(tmp_path_factory) -> Iterator[str]:
+@contextmanager
+def _serve(app: str, data: Path, **extra_env: str) -> Iterator[str]:
+    """Run `app` (an ASGI import path) under uvicorn on a free port on the simulator; yield its base URL."""
     port = _free_port()
-    data = tmp_path_factory.mktemp("conductor-data")
     env = {
         k: v
         for k, v in os.environ.items()
@@ -62,6 +63,7 @@ def server(tmp_path_factory) -> Iterator[str]:
         CONDUCTOR_DATA_DIR=str(data),
         CONDUCTOR_BASIC_AUTH=f"{USER}:{PASSWORD}",
         PYTHONPATH=str(ROOT),
+        **extra_env,
     )
     url = f"http://127.0.0.1:{port}"
     with open(data / "uvicorn.log", "w") as log:
@@ -70,7 +72,7 @@ def server(tmp_path_factory) -> Iterator[str]:
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "conductor.app:app",
+                app,
                 "--host",
                 "127.0.0.1",
                 "--port",
@@ -90,6 +92,76 @@ def server(tmp_path_factory) -> Iterator[str]:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+def _wait_canopy_ready(url: str, timeout: float = 90.0) -> None:
+    """With the real engine, the simulator commissions the slots at startup and refuses mode changes meanwhile;
+    tests start once the canopy is ready."""
+    import base64
+    import json
+    import time
+    import urllib.request
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    auth = {"Authorization": "Basic " + base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            state = json.load(opener.open(urllib.request.Request(f"{url}/api/kiosk/state", headers=auth)))
+            if state.get("phase") == "ready":
+                return
+        except Exception:  # noqa: BLE001, S110 - not up yet / no engine
+            pass
+        time.sleep(0.5)
+
+
+@pytest.fixture(scope="session")
+def server(tmp_path_factory) -> Iterator[str]:
+    with _serve("conductor.app:app", tmp_path_factory.mktemp("conductor-data")) as url:
+        _wait_canopy_ready(url)
+        yield url
+
+
+@pytest.fixture(scope="session")
+def design_server(tmp_path_factory) -> Iterator[str]:
+    """The Conductor WITHOUT the canopy engine (CONDUCTOR_ENGINE=off): for design tests that stub the canopy in the
+    browser — a real engine's WebSocket pushes would override the stub — and for the engine-missing test."""
+    with _serve(
+        "conductor.app:app", tmp_path_factory.mktemp("conductor-design"), CONDUCTOR_ENGINE="off"
+    ) as url:
+        yield url
+
+
+@pytest.fixture
+def design_context_factory(browser, design_server):
+    contexts = []
+
+    def make(viewport: dict = PHONE, **kw):
+        ctx = browser.new_context(
+            base_url=design_server,
+            viewport=viewport,
+            extra_http_headers=AUTH_HEADER,
+            device_scale_factor=kw.pop("device_scale_factor", 1),
+            has_touch=kw.pop("has_touch", viewport["width"] < 800),
+            is_mobile=kw.pop("is_mobile", False),
+            **kw,
+        )
+        contexts.append(ctx)
+        return ctx
+
+    yield make
+    for ctx in contexts:
+        ctx.close()
+
+
+@pytest.fixture(scope="session")
+def ops_server(tmp_path_factory) -> Iterator[str]:
+    """The Conductor with the test-only FakeEngine (tests_e2e/ops_server.py; CONDUCTOR_ENGINE=off keeps the real
+    one out) so the ops page's scripted states are deterministic. The real engine is covered by test_kiosk."""
+    with _serve(
+        "tests_e2e.ops_server:app", tmp_path_factory.mktemp("conductor-ops-data"), CONDUCTOR_ENGINE="off"
+    ) as url:
+        yield url
 
 
 @pytest.fixture(scope="session")

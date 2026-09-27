@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canopy Calibration</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/ops/ops.css">
+<script type="module" src="/ops/calibrate/calibrate.js"></script>
+</head>
+<body class="ops">
+<main class="dash">
+  <header class="page-head brand">
+    <h1>Calibration</h1>
+    <a href="/ops/">Back to Ops</a>
+  </header>
+  <p class="error" id="load-error" hidden></p>
+
+  <section class="card" aria-labelledby="how-h">
+    <h2 id="how-h">Check each module's wire order</h2>
+    <p>Every module's lights are numbered along the cable (head 0 is the first on the wire). Painted looks and
+      Golden Hour only land in the right place if the map below matches how VWBD actually routed each cable.</p>
+    <div class="ramp" aria-hidden="true"></div>
+    <ol class="steps">
+      <li><strong>Pause guest input</strong> on /ops if guests are around. Opening a module page holds that module:
+        the canopy won't touch it until you close the page.</li>
+      <li>Tap <strong>Calibrate</strong> on a module below, then on its page go to <strong>Tests → Hue ramp</strong>.
+        Every head gets its own colour along the wire: red at head 0, then orange, yellow, green, cyan, blue and
+        magenta at the far end (head 29).</li>
+      <li><strong>Photograph the whole module from directly below</strong>, pointing straight up, with the canopy's
+        top edge (the plan's top) at the top of the photo.</li>
+      <li>On the <strong>Calibrate</strong> tab, compare the photo with the map: the red head must be where the map
+        shows head 0, and the colours must follow the map's wire line.</li>
+      <li>If the colours run the wrong way, tap <strong>Flip wire order</strong>. If red is in a different corner or
+        the cable runs in columns, set the start corner and cable path, then <strong>Save</strong>. If the panel
+        hangs turned round, choose orientation B.</li>
+      <li>Run the hue ramp again to confirm, close the module page (that releases it), and press
+        <strong>Re-assert all</strong> on /ops.</li>
+    </ol>
+    <p class="muted small">Not sure about the photo? A photo taken straight up can come out mirrored left-to-right.
+      The <strong>index sweep</strong> (Tests tab) lights one head at a time instead — slower, but it can't be
+      misread. Both write every head individually, so on real hardware they work once bench Gate C has passed for
+      that kit.</p>
+  </section>
+
+  <section class="card" aria-labelledby="modules-h">
+    <h2 id="modules-h" class="bar">The nine modules <span id="progress"></span></h2>
+    <p class="muted small">As the plan shows them. The dot marks head 0; the line is the wire order now saved.</p>
+    <div class="cal-grid" id="modules"><p class="muted">Loading…</p></div>
+  </section>
+</main>
+</body>
+</html>

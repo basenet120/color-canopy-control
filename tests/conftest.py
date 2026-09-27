@@ -12,11 +12,15 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/fake_*.py helpers
 
 
-def _env(monkeypatch, tmp_path, **extra):
+def _env(monkeypatch, tmp_path, *, engine: bool = False, **extra):
     for key in ("CONDUCTOR_BASIC_AUTH", "HUBSPACE_LIVE", "CONDUCTOR_MODE", "RAILWAY_ENVIRONMENT_NAME"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("CONDUCTOR_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("CONDUCTOR_SIM_SPEED", "fast")
+    if engine:
+        monkeypatch.delenv("CONDUCTOR_ENGINE", raising=False)
+    else:
+        monkeypatch.setenv("CONDUCTOR_ENGINE", "off")  # P0-era and FakeEngine tests: no real canopy engine
     for k, v in extra.items():
         monkeypatch.setenv(k, v)
 
@@ -36,5 +40,15 @@ def app_client_auth(monkeypatch, tmp_path):
     from conductor.app import app
 
     _env(monkeypatch, tmp_path, CONDUCTOR_BASIC_AUTH="crew:canopy")
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def app_client_show(monkeypatch, tmp_path):
+    """The whole show: the real canopy engine on the fast simulator (commissioned at startup), auth off."""
+    from conductor.app import app
+
+    _env(monkeypatch, tmp_path, engine=True, CONDUCTOR_AUTH="off")
     with TestClient(app) as client:
         yield client
