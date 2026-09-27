@@ -104,3 +104,174 @@ that run applied (only if the overlay still holds exactly what it applied).
 
 **D20 — Hold means hold.** Entering photo/hold mode withdraws the page's pending and retrying commands so the lights
 don't change during a photo. The module page shows SIMULATOR from its own target's flag, never the global badge.
+
+## 2026-09-27 — P1–P4
+
+**D21 — Engine behaviour (P1).** Kiosk requests are refused (never raised) during the 8 s cooldown, while guest input
+is paused, while resting (outage) and while slots are being commissioned; ops/idle/reconciler requests bypass the
+cooldown. Only a command still throttled after the executor's retries counts toward the "≥ 3 throttles in 60 s"
+downgrade — counting each 429 would downgrade at kiosk pace under the pinned 5 % rate. When a verification readback
+already differs, the module is re-sent at once (≤ 3 per module per change; motion modes re-send all nine once) —
+without this the p95 target missed, because ~9 % of changes contain a silent drop. Locked modules (bench/module page)
+don't block READY. The canopy rests when ≥ 3 modules fail with transport/5xx errors and nothing succeeds in between.
+
+**D22 — Show wiring.** On the simulator the slots are commissioned automatically at startup, so demos run T1 as the
+show will after install day; on hardware commissioning is an explicit /ops action. A T1 mode is shown only once every
+module's slot has a recorded hash. Mode requests during commissioning are refused with "Writing the saved patterns…".
+
+**D23 — Looks.** Canvas looks are composed over the 270 heads in canopy inches through each module's calibrated wire
+order; the head-count guard refuses a frame whose length differs from the module's expected heads. Colour temperature
+outside a device's range is clamped with a note (Goodnight 2200 → 2700 K on the sibling profile) — never silently.
+Holiday uses the first listed preset the device actually has. Golden Hour is a static amber glow, and says so, until
+a directional motionEffect code is bench-enabled.
+
+**D24 — Venue box (P3.5).** Secrets live only in `/etc/canopy/conductor.env` (root, 0600); non-secret box settings
+in `/etc/canopy/box.env`. The data volume is external so no compose command can delete it. Break-glass means stopping
+the Conductor (`canopy-stop`, held through reboots until `canopy-start`), because merely pausing guest input lets the
+reconciler undo app edits. Three spare kits are registry entries on the canopy account; registering a spare's device
+as a module moves it off the spare and carries only bench flags that same kit proved. The cold spare restores
+`/data` with `--skip-tokens` and signs in fresh (07 §3: never copy tokens between runtimes). The venue env example sets
+`HUBSPACE_LIVE_UNTIL=2026-11-02` (end of Home Depot's authorization window, pending the letter).
+
+**D25 — Gates on every module.** T1/T2 are used only when every module's own kit passed (flags are bound to the kit,
+D19). Install day runs Gates B and C on all nine modules (~5 min each), not just one.
+
+**D26 — Vignettes (P4).** Device profiles for the A19 bulb, the plugs, the deadbolt, the fan and the path lights are
+synthesized from aioafero 9.3.0's controller source (UNVERIFIED until real dumps). Every action sends the device's
+full rows (an outlet toggle restates the other outlet). Locks are never part of scenes and need a two-step confirm.
+The bedroom fan is disabled until the census confirms it. A broken `config/vignettes.yaml` turns the vignette pages
+off with a "Needs attention" line instead of stopping the app. **Oct 12 fallback criteria (06 #11):** switch a room's
+iPad to the stock Hubspace app (Guided Access, that room's account) unless by Oct 12 (1) each device kind has been
+dumped at the bench and matches its profile, (2) from the venue box a tap reads back Ready within ~5 s p95 and a scene
+within ~10 s with no throttling pattern, (3) the real deadbolt locks and unlocks with a readback, (4) the pages run
+all day on the real iPads in Guided Access, and (5) the authorization letter covers the vignette accounts.
+
+## 2026-09-27 — after the P1–P3 adversarial review: surfaces (kiosk, /ops, log tail)
+
+**D27 — Refusals are never a 200.** The real engine reports a refusal as a `CanopyState` with `refused=True`; the
+kiosk route maps it from the engine's own flags (stopped / commissioning / outage → 503 + Retry-After, paused → 423,
+cooldown → 429, anything else — no tier compiles — → 409) and logs the engine's sentence; guests only ever see the
+kiosk's calm copy. Ops controls answer 409 with the engine's sentence; a commissioning run that never started is a
+409, one that ran with problems is `ok: false`. Success lines are built from the state the engine returned (look,
+tier, "N of 9 modules", held modules, outage), never a fixed sentence.
+
+**D28 — Commissioning reads as "resting" on the kiosk.** Writing slot contents changes no look, so the kiosk's view
+of the state (`/api/kiosk/state`) turns an engine UPDATING-while-commissioning into RESTING "being set up". The kiosk
+now treats a WebSocket "canopy" event only as a trigger to re-read `/api/kiosk/state` (debounced 120 ms), so there
+is one view of the truth; the engine's own phase is unchanged (canopy.py wasn't this fix's to edit).
+
+**D29 — The log ring keeps stderr.** Adding the ring to the root logger switched off `logging.lastResort`, so
+`logring.install()` also adds a redacted WARNING+ stderr handler (resolving `sys.stderr` at write time, like
+lastResort) unless the root already writes to the console. The ring is installed first thing in the lifespan.
+
+**D30 — Engine alerts on /ops.** `conductor/alerts.py` subscribes to telemetry and keeps warn/error `alert`s and
+`tier` downgrades as one line per problem (keyed: tier per mode, slot per device+slot, outage, commissioning, the
+7 am test), with a count, until resolved by the matching event (upgrade, "rewrote it (applied)", Hubspace answering,
+an all-good info alert) or acknowledged (`POST /api/ops/alerts/ack`, hidden until it happens again). Info alerts
+are logged at INFO, warn/error at WARNING. No tracker `flag_problem` for drift (the tracker's problems have other
+owners); the checklist's Slot hashes item still catches it.
+
+**D31 — The checklist fails Guest input while the canopy rests** (not paused), and "Needs attention" says so.
+Re-assert with no look answers 409 "nothing to re-assert"; during commissioning, 409 "wait"; during an outage it
+says a module was probed. A refused test mode change is a failed test with its own fix text.
+
+**D32 — Clock check on the venue box.** The flag's folder mounted but no `synchronized` file = **not synced** (the
+watchdog removes the flag when chrony isn't synced). The FAIL says plainly the box's clock is not synced to internet
+time and the fix is the network + chrony (`chronyc tracking`, `systemctl restart chrony`); "can't tell" (staging)
+never asks for a mount.
+
+**D33 — The kiosk draws the tier in use.** `/api/kiosk/state` carries `module_colours` (nine, r0c0…r2c2, the mean of
+each module's plan preview) when the plan is T3, and `/api/kiosk/modes` gives each mode the tier the engine would
+pick now (`compile_best`, ~15 ms per mode) with pattern "modules" at T3. The kiosk re-reads the list when the tier in
+use differs from it (at most every 30 s).
+
+**D34 — /ops device list by role and room.** `/api/devices` adds `vignette`, `kind` and `groups` (canopy, bench,
+spares, then rooms in vignettes.yaml order). Module page / Bench / head count only for strands; vignette devices get
+their room page.
+
+## 2026-09-27 — canopy engine, after the P1–P3 adversarial review (engine findings F1–F11)
+
+Numbered D35–E9 so they don't collide with other review branches; the lead may renumber when merging.
+
+**D35 — Capabilities are a background loop, and the first look waits for its first round.** `ShowWiring.start()`
+returns at once; a task reads every module's profile concurrently (15 s timeout each), retries the ones missing with
+backoff 1, 2, 4 … 60 s, and reads again on the engine's outage recovery, the driver's `on_recovery`, a module coming
+back online (a readback with `available: true` after `false`) and `/api/devices?refresh=1`. The idle mode is requested
+after the first round (success or not) rather than by `engine.start()`, so a box whose profiles answer at once doesn't
+send Calm twice. New or changed capabilities re-compile the current mode (source "reconciler"). In sim, commissioning
+waits until every module is read.
+
+**D36 — The safe look assumes conservative capabilities; everything else leaves an unread module out.** Lowcountry
+Calm compiles for a module without a profile with the sibling string's documented white range (2700–6500 K, 04), so
+the safe look can always go out. Every other mode compiles for the modules that were read and lists the rest in
+`ModePlan.skipped` (the engine shows them as needing attention). Copy that counts ("all nine", "270 lights") counts
+the modules actually driven.
+
+**D37 — Slot records carry an origin and effect fields.** `DeviceEntry.slot_origin` ("api" = commissioned, "app" =
+recorded as hand-painted) and `slot_effects` sit next to `slot_hashes`. A hash without an origin is "api" (before this,
+commissioning was the only writer), so an old overlay can never make the "painted in the Hubspace app" copy appear. T2
+needs "app" records; T1 is shown only with "api" records on every module. Commissioning never overwrites an "app" slot
+(protecting 15–20 min of hand-painting per module); going back to T1 for it means removing its record in the overlay
+(runbook). Changing that would need an explicit "forget this record" action.
+
+**D38 — T1 is judged against the commissioned readback hash; stale slots are rewritten once.** The engine's expected
+slot row names only the recorded hash (`rows.slot_hash_expectation`, read by `rows.compare`; the canonical projection
+is unchanged). When the look now compiles to another pattern or other effect codes (recalibration, a design edit, a
+code enabled or disabled), the reconciler rewrites that slot within the existing 10-minute limit — once per compiled
+content, never in a loop — and the expectation, copy and motion flag follow the new record. A slot that already holds
+exactly the current content (e.g. a rewrite whose verification a newer command superseded) is recorded without a
+write. One slot write per module at a time.
+
+**D39 — Motion copy follows the device, and `motion` means "re-trigger as one burst".** Golden Hour's motion copy
+appears only when every module's slot holds the benched code (recorded from readback at commissioning, else the
+header readback). `ModePlan.motion` is set whenever a slot may animate (a code configured and enabled, a slot that
+still holds an effect, a hand-painted slot of a `motion: true` mode whose header animates or is unknown), so copy and
+re-trigger semantics are no longer the same flag. The effect fields are checked on readback apart from the hash;
+only motionEffect/brightnessEffect count (speeds and depth aren't claimed in copy).
+
+**D40 — 503/504 are an outage, 429/403 are throttling.** THROTTLED attempts or readbacks with HTTP 503/504 count toward
+the resting streak like SERVER_ERROR and never toward the throttle downgrade, matching the adapter's own outage
+classification (D15).
+
+**D41 — Upgrades lift past rungs that can't be shown.** When a floor lifts onto a rung that isn't allowed or doesn't
+compile, it keeps lifting to the next usable rung in the same step, so T3 → T1 takes one clean interval (5 min) when T2
+isn't available.
+
+**D42 — Lowcountry Calm never names a Kelvin value it can't show.** A strand look whose copy names its Kelvin value uses
+the configured fallback look (and its copy) when a module's range would clamp that value; without a fallback, the
+copy names the value actually sent. Goodnight's copy names no value, so its 2200 → 2700 K clamp stands.
+
+**D43 — The soak runs the show's wiring, with a SIMULATED motion code.** `make soak` builds `build_services` +
+`ShowWiring` on the virtual clock with a temporary data dir (telemetry kept in memory), so it exercises the capability
+loop, the commissioning gate, overlay records and the real ladder. `config/sim/soak.yaml` enables motionEffect 1 for
+Golden Hour in the soak only (nothing benched; the report labels it SIMULATED) so the all-or-none re-trigger is
+measured. The pinned acceptance conditions are unchanged. `run_soak(compiler=…)` still runs the bare engine.
+
+## 2026-09-27 — final verify round (15 confirmed findings + 8 completeness gaps, all addressed)
+
+**D44 — Self-heal covers changes made outside the Conductor.** The reconciler reads each canopy module once every
+5 s on a rolling schedule (≈ 1.8 GET/s on the canopy account; reads never count against the write budget), so a
+module changed in the Hubspace app or one that lost its look is back within 10 s (soak: p95 6.1 s over 12 injected
+out-of-band changes). Slot hashes are re-checked only when a slot changed or every 60 s. The read load on real Afero
+is UNVERIFIED — if the bench rate test or the venue shows read throttling, raise `reconciler.true_up_interval_s`.
+
+**D45 — Guest-input pause survives restarts** (atomic file under `<data>/state/`); an unreadable file counts as paused.
+
+**D46 — Unenrolled kiosk screens never show a sign-in dialog.** `/kiosk` and `/kiosk/*` without a principal get a
+calm "This screen isn't set up yet" page (401, no Basic challenge); every other path keeps the challenge. While the
+Conductor is down the kiosk unit shows a local resting page that polls `/healthz`, never the desktop.
+
+**D47 — Releases are amd64 and tags switch last.** `release.sh` builds `--platform linux/amd64`; `install.sh` checks
+the image's commit and architecture and writes `CONDUCTOR_TAG` only after the image is verified, recording the
+previous tag for rollback. The cold spare installs with `--spare` (held and stopped until takeover).
+
+**D48 — Overlay export.** `GET /api/ops/overlay` (ops only) downloads the ops overlay YAML (with real ids, for
+restoring on a box) plus a diff against `config/devices.yaml` with real ids replaced (for committing to git).
+
+**D49 — Four more bench jobs settle the remaining UNVERIFIED behaviours:** `stale_clock_put` (lastUpdateTime
+now − 10 min), `active_slot_rewrite` (rewrite the showing slot without reselecting), `rate_ramp` (5 → 2 → 1 s frame
+writes, silent-drop count, stop at the first failure) and `head_count_boot` (the 12-puck fault). A bench-only stamp
+override on a command is the one way to send a chosen lastUpdateTime, and it still passes the gate.
+
+**D50 — Vignette pages see only look rows.** Tablets and the `vignette:<room>` topic never get telemetry rows (SSID,
+MACs, geo). A revoked enrolled session's sockets are closed, including tickets issued before the revoke.

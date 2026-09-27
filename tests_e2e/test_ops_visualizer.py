@@ -2,7 +2,7 @@
 the app registers it, else tests/fake_engine.FakeEngine via tests_e2e/ops_server.py).
 
 Screenshots: docs/screenshots/ops-phone*.png (390×844), ops-tablet.png (1024×768), ops-calibrate-phone.png,
-visualizer-desktop*.png (1280×800).
+visualizer-desktop*.png (1280×800), visualizer-phone.png (390×844).
 """
 
 from __future__ import annotations
@@ -235,6 +235,21 @@ def test_visualizer_desired_vs_reported(page_at, call, held_module, screenshots)
     )
 
 
+def test_visualizer_on_a_phone(page_at, held_module, screenshots):
+    """The layout at 390×844: every module drawn, nothing wider than the phone."""
+    page = page_at(PHONE)
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto("/visualizer/")
+    page.wait_for_function("document.querySelector('#stats').textContent.includes('match')")
+    assert "270 heads" in page.inner_text("#stats")
+    assert "Golden Hour" in page.inner_text("#now")
+    page.wait_for_function("document.querySelector('#live').dataset.state === 'open'")
+    assert page.evaluate("document.documentElement.scrollWidth") <= PHONE["width"]
+    page.screenshot(path=str(screenshots / "visualizer-phone.png"))
+    assert errors == []
+
+
 def test_visualizer_still_draws_the_layout_without_colours(page_at):
     page = page_at(DESKTOP)
     page.route(
@@ -245,3 +260,114 @@ def test_visualizer_still_draws_the_layout_without_colours(page_at):
     assert page.locator("#schemes button").count() == 2
     assert page.locator("button[data-view='both']").is_disabled()
     assert "engine down" in page.inner_text("#engine-note")
+
+
+# ---- review fixes: honest controls (F3), alerts on /ops (F5), devices grouped by role / room ----------------------
+def _json_route(status: int, payload: dict):
+    return lambda route: route.fulfill(
+        status=status, content_type="application/json", body=json.dumps(payload)
+    )
+
+
+def test_ops_refusals_show_in_the_error_style(page_at):
+    """Review F3: the engine's refusal (a 409) or a commissioning run with problems (ok:false) is never green."""
+    page = page_at(PHONE)
+    _open_ops(page)
+    page.route(
+        "**/api/canopy/safe-look",
+        _json_route(409, {"detail": "The safe look can't be compiled: no strand technique (test)."}),
+    )
+    page.click("#safe-btn")
+    page.wait_for_function(
+        "document.querySelector('#control-result').textContent.includes(\"can't be compiled\")"
+    )
+    assert page.get_attribute("#control-result", "class") == "error"
+    page.route(
+        "**/api/canopy/commission",
+        _json_route(
+            200, {"ok": False, "message": "Wrote 7 slot(s); 2 need attention.", "result": {}, "state": None}
+        ),
+    )
+    page.click("#commission-btn")
+    page.click("#commission-dialog button[value='go']")
+    page.wait_for_function(
+        "document.querySelector('#control-result').textContent.includes('2 need attention')"
+    )
+    assert page.get_attribute("#control-result", "class") == "error"
+    # a real, accepted change is green and says what went where
+    page.unroute("**/api/canopy/safe-look")
+    page.click("#safe-btn")
+    page.wait_for_function(
+        "document.querySelector('#control-result').textContent.startsWith('Safe look sent')"
+    )
+    assert page.get_attribute("#control-result", "class") == "banner-ok"
+    assert "of 9 modules" in page.inner_text("#control-result")
+
+
+def test_ops_alerts_can_be_acknowledged(page_at, screenshots):
+    """Review F5: an engine alert (here injected into the summary in the browser) shows with its module link and an
+    Acknowledge button that calls the ack API."""
+    page = page_at(PHONE)
+    acked: list[dict] = []
+    alert = {
+        "message": "Module 3: the hand-painted pattern in custom-1 changed (hash 1a2b3c4d, expected 5e6f7a8b). "
+        "Repaint it in the Hubspace app, or record the new hash on /ops.",
+        "link": "/ops/module/?device=canopy-r0c2",
+        "alert": "slot:canopy-r0c2:custom-1",
+        "level": "warn",
+        "at": time.time(),
+    }
+
+    def summary(route):
+        body = route.fetch().json()
+        if not acked:
+            body["attention"] = [*body["attention"], alert]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+    def ack(route):
+        acked.append(json.loads(route.request.post_data or "{}"))
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True}))
+
+    page.route("**/api/ops/summary", summary)
+    page.route("**/api/ops/alerts/ack", ack)
+    _open_ops(page)
+    page.wait_for_selector("#attention li.alert")
+    item = page.locator("#attention li.alert")
+    assert "custom-1 changed" in item.inner_text()
+    assert item.locator("a").get_attribute("href") == "/ops/module/?device=canopy-r0c2"
+    page.locator("#attention-card").screenshot(path=str(screenshots / "ops-attention-phone.png"))
+    item.locator("button.ack").click()
+    page.wait_for_selector("#attention li.alert", state="detached")
+    assert acked == [{"key": "slot:canopy-r0c2:custom-1"}]
+
+
+def test_ops_devices_grouped_by_role_and_room(page_at, screenshots):
+    page = page_at(TABLET)
+    _open_ops(page)
+    page.wait_for_selector("#devices section[data-group='vignette-garden'] li")
+    groups = page.eval_on_selector_all("#devices section.dev-group", "els => els.map((e) => e.dataset.group)")
+    assert groups == [
+        "canopy",
+        "bench",
+        "spares",
+        "vignette-entry",
+        "vignette-living",
+        "vignette-bedroom",
+        "vignette-garden",
+    ]
+    for key in ("canopy", "bench", "spares"):
+        for row in page.locator(f"#devices section[data-group='{key}'] li").all():
+            assert row.locator("a", has_text="Open module page").count() == 1
+            assert row.locator("a", has_text="Bench").count() == 1
+            assert "30 heads" in row.inner_text()
+    assert page.locator("#devices section[data-group='canopy'] li").count() == 9
+    for key in ("vignette-entry", "vignette-living", "vignette-bedroom", "vignette-garden"):
+        room = key.split("-", 1)[1]
+        section = page.locator(f"#devices section[data-group='{key}']")
+        assert section.locator("a", has_text="Open module page").count() == 0
+        assert section.locator("a", has_text="Bench").count() == 0
+        assert "heads" not in section.inner_text()
+        for link in section.locator("li a", has_text="Open room page").all():
+            assert link.get_attribute("href") == f"/vignette/{room}/"
+    assert "Holiday Living Room" in page.inner_text("#devices section[data-group='vignette-living'] h3")
+    page.locator("#devices-card").screenshot(path=str(screenshots / "ops-devices-tablet.png"))

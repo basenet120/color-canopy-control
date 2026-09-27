@@ -7,6 +7,10 @@ Who gets through the middleware, in order:
   message (iOS Safari is unreliable with Basic on upgrades; D4). `/ws` itself is not under `/ws/`.
 - `/enroll/...` HTTP requests — always; the one-time link token is the credential (D5).
 - An enrolled device's `cc_session` cookie — only for the paths its role may use (`roles.path_allowed`).
+- The kiosk page (`/kiosk`, `/kiosk/...`) without an enrolled kiosk's cookie gets 401 with a calm "not set up yet"
+  page and **no** Basic challenge, so Chromium never puts a sign-in dialog on the guest touchscreen (a cold-spare
+  takeover, a revoked or expired kiosk session). A request carrying the ops credential still gets through, but a
+  browser is never asked for it here.
 - Everything else gets 401 with the Basic challenge (a WebSocket is closed with 1008 before the handshake).
 
 With CONDUCTOR_BASIC_AUTH unset (local development only; `check_auth_configuration` refuses it elsewhere), auth is
@@ -35,6 +39,43 @@ TICKET_WS_PREFIX = "/ws/"  # browser WebSockets: ticket auth in the endpoint (D4
 ENROLL_PREFIX = "/enroll/"  # one-time enrollment links: the token is the credential (D5)
 PrincipalResolver = Callable[[str], Principal | None]
 CHALLENGE = [(b"www-authenticate", b'Basic realm="Color Canopy"'), (b"content-length", b"0")]
+KIOSK_PREFIX = "/kiosk"
+# Self-contained (nothing else loads without a session). It re-checks the page every 30 s and reloads once it is
+# allowed, so a kiosk enrolled meanwhile (or a session lookup that failed once) comes back by itself.
+NOT_SET_UP_PAGE = b"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>The Color Canopy</title>
+<style>
+html, body { margin: 0; height: 100%; }
+body { display: grid; place-items: center; background: #F7F1E6; color: #2E2A26; overflow: hidden;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+  font-family: "Iowan Old Style", "Bitstream Charter", Charter, "Palatino Linotype", Palatino, Georgia, serif; }
+main { text-align: center; padding: 0 8vw; }
+h1 { margin: 0; font-weight: 400; font-size: min(6.4vw, 11vh); }
+p { margin: 1.2em 0 0; color: #6A6158; font-size: min(2.3vw, 4vh); }
+</style>
+</head>
+<body>
+<main>
+<h1>The Color Canopy</h1>
+<p>This screen is not set up yet &mdash; ask the canopy team.</p>
+</main>
+<script>
+setInterval(function () {
+  fetch(location.href, { cache: "no-store" }).then(function (r) { if (r.ok) location.reload(); }, function () {});
+}, 30000);
+</script>
+</body>
+</html>
+"""
+NOT_SET_UP_HEADERS = [
+    (b"content-type", b"text/html; charset=utf-8"),
+    (b"content-length", str(len(NOT_SET_UP_PAGE)).encode()),
+    (b"cache-control", b"no-store"),
+]
 
 
 def check_auth_configuration(env: Mapping[str, str] = os.environ) -> None:
@@ -87,6 +128,10 @@ class BasicAuthMiddleware:
             await receive()  # the websocket.connect event
             await send({"type": "websocket.close", "code": 1008})
             return
+        if _is_kiosk_page(path):
+            await send({"type": "http.response.start", "status": 401, "headers": NOT_SET_UP_HEADERS})
+            await send({"type": "http.response.body", "body": NOT_SET_UP_PAGE})
+            return
         await send({"type": "http.response.start", "status": 401, "headers": CHALLENGE})
         await send({"type": "http.response.body", "body": b""})
 
@@ -117,6 +162,12 @@ def _open_without_credentials(kind: str, path: str) -> bool:
         return normal.startswith(TICKET_WS_PREFIX)
     token = normal.removeprefix(ENROLL_PREFIX)
     return normal.startswith(ENROLL_PREFIX) and bool(token) and "/" not in token
+
+
+def _is_kiosk_page(path: str) -> bool:
+    """`/kiosk` or anything under `/kiosk/`, in normal form (the guest touchscreen's page and its assets)."""
+    normal = normalize_path(path)
+    return normal is not None and (normal == KIOSK_PREFIX or normal.startswith(KIOSK_PREFIX + "/"))
 
 
 def _authorized(scope, expected: bytes) -> bool:

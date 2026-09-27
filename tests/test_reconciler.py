@@ -75,7 +75,7 @@ def test_repeated_drops_on_one_module_still_heal_within_10_s():
     assert healed is not None and healed <= 10.0
 
 
-def test_an_app_edit_is_undone_by_the_next_true_up():
+def test_an_app_edit_is_undone_by_the_rolling_true_up_within_10_s():
     async def main():
         w = make_world(settings=QUIET)
         await w.engine.start(apply_initial=False)
@@ -91,8 +91,9 @@ def test_an_app_edit_is_undone_by_the_next_true_up():
 
     wrong, healed, stats = run_virtual(main)
     assert wrong
-    assert healed is not None and healed <= 60 + 10  # true-up every 60 s, then a re-assert
-    assert stats["true_ups"] >= 1
+    # each module is read every 5 s (rolling), then re-sent at once: within the 10 s self-heal target (review gap)
+    assert healed is not None and healed + 3 <= 10
+    assert stats["true_up_reads"] >= 1 and stats["drift_resends"] >= 1
 
 
 def test_motion_plan_retriggers_all_modules_as_one_burst():

@@ -14,7 +14,9 @@ server → client
   {"type": "error", "message": "..."}                           e.g. a topic the role can't see
 
 Close codes: 1008 for no/bad/expired ticket, bad Origin, or a first message that isn't auth — and for an open
-socket whose enrolled session was revoked on /ops (it stops receiving events at once, then is closed).
+socket whose enrolled session was revoked on /ops (it stops receiving events at once, then is closed). Revoking a
+session also voids the tickets it was issued, and a ticket whose session is no longer active (revoked or expired,
+checked with `session_active` at redeem) is refused with 1008, so no socket opens for a revoked device (review V5).
 
 Topics:
   canopy          — canopy mode/tier/module status (kiosk, ops, visualizer)
@@ -83,9 +85,16 @@ class _Client:
 
 
 class WsHub:
-    def __init__(self, tickets: TicketBook, hello: Callable[[], dict] | None = None):
+    def __init__(
+        self,
+        tickets: TicketBook,
+        hello: Callable[[], dict] | None = None,
+        session_active: Callable[[str], bool] | None = None,
+    ):
         self.tickets = tickets
         self.hello = hello or (dict)
+        # fingerprint → is that enrolled session still valid (RoleStore.session_active); None = don't check
+        self.session_active = session_active
         self._clients: set[_Client] = set()
         self._snapshots: dict[str, Callable[[], dict]] = {}
 
@@ -106,10 +115,20 @@ class WsHub:
     def close_session(self, session: str) -> int:
         """Close every socket opened with a ticket from enrolled session `session` (its fingerprint), with 1008.
         Called when the session is revoked. Returns how many sockets were closed."""
+        self.tickets.revoke_session(session)  # tickets fetched before the revoke never open a socket
         closing = [c for c in self._clients if c.ticket.session is not None and c.ticket.session == session]
         for client in closing:
             client.revoke()
         return len(closing)
+
+    def _session_ok(self, ticket: Ticket) -> bool:
+        if ticket.session is None or self.session_active is None:
+            return True
+        try:
+            return bool(self.session_active(ticket.session))
+        except Exception:  # can't tell: refuse (the page fetches a new ticket and retries)
+            log.exception("session check failed")
+            return False
 
     async def serve(self, websocket) -> None:
         """Run one client connection (Starlette/FastAPI WebSocket)."""
@@ -131,7 +150,7 @@ class WsHub:
             if isinstance(msg, dict) and msg.get("type") == "auth"
             else None
         )
-        if ticket is None:
+        if ticket is None or not self._session_ok(ticket):
             await websocket.close(code=WS_CLOSE_POLICY)
             return
         client = _Client(ticket)

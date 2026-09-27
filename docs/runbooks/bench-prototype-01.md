@@ -1,6 +1,6 @@
 # Bench runbook — Prototype 01 kit
 
-For Alon at the bench, on a phone. One kit, one table, Wi-Fi. About an hour the first time.
+For Alon at the bench, on a phone. One kit, one table, Wi-Fi. About an hour and a half the first time.
 Every job is one tap on `/ops/bench` (or one command in a terminal). Nothing here touches show hardware.
 
 **Before you start**
@@ -103,7 +103,35 @@ into the build session (see section 7).
    **Stop this run** (next to the Running pill) stops any job that is going and frees the kit.
 8. **Whole-strand looks.** Warmest and coolest white, 10% and 1%, HD orange, and a preset at slowest / middle /
    fastest. Each holds about 2 s. Film it and answer one question per look.
-9. **Restore.** Puts the kit back to calm warm white 2700 K at 50%. Run it at the end of every session.
+9. **Stale clock — a write stamped 10 minutes ago** (07 §10). Film it with the clock in frame. It selects another
+   slot (one whose pattern differs from what is showing) with every row's `lastUpdateTime` set **10 minutes in
+   the past** — what a venue box with a lagging clock would send — then reads back. If the cloud **stored** it, the
+   result says so and asks whether the strand switched. If the cloud answered 200 but **dropped** it, a second
+   select with a current stamp follows about 3 s later as the control, and the question is whether the lights
+   stayed put after the first write and switched only after the second. Either answer settles the venue-box NTP
+   question; send the JSON.
+10. **Rewrite the showing slot — no reselect** (04 gate #6). A slot must be showing (after step 9 one usually
+    is; if the result says none is, run the **Hue ramp** first). It rewrites the slot that is **showing** with a
+    visibly different pattern (the rainbow, or the reversed rainbow if it already shows the rainbow) in one small
+    write — no select, no colour-mode or power rows — and reads it back. Watch the strand and answer "Did the
+    lights change to the new pattern while slot N stayed selected?". Yes = rewriting a showing slot re-renders
+    it; No = every slot rewrite must be followed by a reselect. Refuses (nothing sent) when no slot is showing,
+    and on a real kit until Gate C's flag is applied.
+11. **Rate ramp** (04 gate #11). About 1½ minutes with the defaults: 10 frame writes into slot 3 at 5 s spacing,
+    10 at 2 s, 10 at 1 s — never faster than one write a second — each read back and compared with what was sent.
+    A 2xx whose readback doesn't show the frame counts as a **silent drop**. It **stops at the first 429/403**
+    and never retries. Pass = everything stored with no throttling down to 1 write/s. Fail = Hubspace throttled
+    (the result says at which spacing and write). `writes_per_step` (1–50, under Options) sets the length; the
+    full 04 plan is 50. Also needs Gate C's flag on a real kit.
+12. **Head count at boot — strings 2–3 unplugged** (07 §6, 04 gate #10). Read-only. Before running: switch the
+    kit off at the wall, **unplug strings 2 and 3** (only string 1 stays on the controller), switch it back on and
+    wait about 30 s for it to reconnect. Count the lit pucks. Tick **I've booted the kit with strings 2 and 3
+    unplugged** (terminal: `--param confirmed=1`) and Run. It dumps the segment hints and all three slots' frame
+    lengths (from the profile and from readback) and says whether the cloud noticed the missing pucks. If it
+    didn't, the 12-puck fault can only be caught by eye at the 7 am check. Answer whether only string 1 lit.
+    Then switch the kit off, plug strings 2 and 3 back in, switch it on and run **Gate A** — it must say 30 again.
+    If Gate A reported a fixed 60-entry frame, set `full_heads` to 60 under Options.
+13. **Restore.** Puts the kit back to calm warm white 2700 K at 50%. Run it at the end of every session.
 
 A job that says **ERROR** stopped without a verdict: the device was busy, not connected or not allowed, a
 check before the first write refused (the message says why), a read failed, or the run was stopped. **Read the
@@ -144,7 +172,8 @@ With `CONDUCTOR_BASIC_AUTH=user:password` in the environment (or `--user NAME`, 
 - `python -m conductor.bench --server <staging URL> run gate_b --device bench-kit` — follows the steps live,
   asks the questions and posts your answers
 - `--param k=v` sets a job option, e.g. `run latency_trials --param n=10 --param spacing_s=5` (n ≤ 100,
-  spacing ≤ 30 s); the unplugged test needs `run gate_b_unplugged --param confirmed=1`
+  spacing ≤ 30 s); the unplugged test needs `run gate_b_unplugged --param confirmed=1`, and the head-count test
+  `run head_count_boot --param confirmed=1`; `run rate_ramp --param writes_per_step=50` is the full 04 ramp
 - `python -m conductor.bench --server <staging URL> stop <run id>` — stops a run that is going (Ctrl-C only
   stops following it)
 - `python -m conductor.bench run gate_c --local` — tries any job on the simulator on your laptop, no server

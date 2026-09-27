@@ -84,23 +84,39 @@ async function disconnect(a) {
   load();
 }
 
-function registerControls(account, device, registry) {
-  const choices = registry.filter((r) => !r.metadevice_id || r.metadevice_id === device.metadevice_id);
-  if (!choices.length) return h("div", { class: "sub" }, "Every registry device on this account already has an id.");
-  const bench = choices.find((r) => r.role === "bench");
+// A registry entry that already has a (different) Hubspace device gets this one instead: that's a controller swap.
+function replaces(entry, device) {
+  return Boolean(entry.metadevice_id) && entry.metadevice_id !== device.metadevice_id;
+}
+
+// Unregistered devices can be registered as any entry on this account (free entries first). A device registered as
+// a spare kit can be swapped in for a module (it moves off the spare, with the bench flags it proved).
+function registerControls(account, device, registry, onSpare) {
+  const choices = registry
+    .filter((r) => r.id !== device.registered_as && (!onSpare || r.role !== "spare"))
+    .sort((a, b) => Number(replaces(a, device)) - Number(replaces(b, device)));
+  if (!choices.length) return null;
+  const bench = choices.find((r) => r.role === "bench" && !replaces(r, device));
   const select = h(
     "select",
-    { "aria-label": "Register as" },
-    choices.map((r) => h("option", { value: r.id }, `${r.label} (${r.id})`)),
+    { "aria-label": onSpare ? "Swap in as" : "Register as" },
+    choices.map((r) =>
+      h("option", { value: r.id }, `${r.label} (${r.id})${replaces(r, device) ? " — replaces its current kit" : ""}`),
+    ),
   );
+  const chosen = () => choices.find((r) => r.id === select.value);
   return h(
     "div",
     { class: "actions" },
-    bench
-      ? h("button", { type: "button", onclick: () => register(account, device, bench.id) }, `Use as ${bench.label}`)
+    bench && !onSpare
+      ? h("button", { type: "button", onclick: () => register(account, device, bench) }, `Use as ${bench.label}`)
       : null,
     select,
-    h("button", { type: "button", class: "secondary", onclick: () => register(account, device, select.value) }, "Register"),
+    h(
+      "button",
+      { type: "button", class: "secondary", onclick: () => register(account, device, chosen()) },
+      onSpare ? "Swap in" : "Register",
+    ),
   );
 }
 
@@ -139,20 +155,32 @@ async function showDevices(account) {
                 ? `Registered as ${d.registered_as}${d.allowlisted ? "" : " — not in HUBSPACE_DEVICE_ALLOWLIST yet"}`
                 : "Not registered: the Conductor won't write to it.",
             ),
-            d.registered_as ? null : registerControls(account, d, registry),
+            d.registered_as && !onSpare(d, registry)
+              ? null
+              : registerControls(account, d, registry, Boolean(d.registered_as)),
           ),
         )
       : h("li", { class: "muted" }, "This account can't see any devices."),
   );
 }
 
-async function register(account, device, deviceId) {
+function onSpare(device, registry) {
+  const entry = registry.find((r) => r.id === device.registered_as);
+  return Boolean(entry && entry.role === "spare");
+}
+
+async function register(account, device, entry) {
   show($("devices-error"), "");
-  if (!window.confirm(`Register ${device.name || device.metadevice_id} as ${deviceId}?`)) return;
+  if (!entry) return;
+  const name = device.name || device.metadevice_id;
+  const question = replaces(entry, device)
+    ? `Register ${name} as ${entry.id}? It replaces the kit ${entry.id} uses now: the canopy stops driving that one.`
+    : `Register ${name} as ${entry.id}?`;
+  if (!window.confirm(question)) return;
   try {
     const result = await api(`/api/accounts/${encodeURIComponent(account)}/register`, {
       method: "POST",
-      body: { metadevice_id: device.metadevice_id, device_id: deviceId },
+      body: { metadevice_id: device.metadevice_id, device_id: entry.id },
     });
     await showDevices(account);
     show($("register-result"), result.message);

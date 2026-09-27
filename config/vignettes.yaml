@@ -1,0 +1,108 @@
+# The four staff-run vignettes (P4): room titles, outlet names, colour swatches and scenes, as data.
+# Devices come from config/devices.yaml (role: vignette, vignette: <room>) — a PLACEHOLDER census (06 #18).
+#
+# Everything here stays inside what the stock Hubspace app can do in that room (01 scope): on/off, brightness,
+# colour, white temperature, the device's own effects, outlet on/off, fan speed, lock/unlock. A scene is just
+# several of those at once — one Hubspace update per device. Locks are never part of a scene (they need a confirm).
+#
+# Scene steps: `device: <id>` or `kind: bulb|plug|fan|string|path` (every device of that kind in the room), and
+# `set:` with any of the page's actions for that kind:
+#   power: true|false · brightness: 1–100 · color_temperature: <kelvin> · white: true · color: "#RRGGBB"
+#   effect: <the device's own effect name> · speed: −10…10 · slot: custom-1|custom-2|custom-3 (strings)
+#   outlets: {<outlet>: true|false} (plugs) · fan_speed: <the fan's own speed name>
+# Values are checked against each device's own profile when the scene runs; a device that can't do a step is
+# skipped and named on the page, and the rest of the scene still runs.
+
+# Colour swatches for colour bulbs and string lights (the stock app has a colour wheel; these are its shortcuts).
+palette:
+  - {label: Home Depot orange, hex: "#F96302"}
+  - {label: Amber, hex: "#FF9A1F"}
+  - {label: Holiday red, hex: "#E0182D"}
+  - {label: Evergreen, hex: "#1F8A3B"}
+  - {label: Gold, hex: "#FFC21A"}
+  - {label: Blush, hex: "#FF7FA8"}
+  - {label: Lowcountry blue, hex: "#3C7DD9"}
+  - {label: Lavender, hex: "#9B6CFF"}
+
+# White-temperature shortcuts (each device only shows the ones inside its own range).
+whites:
+  - {label: Candle, kelvin: 2200}
+  - {label: Warm, kelvin: 2700}
+  - {label: Soft, kelvin: 3000}
+  - {label: Neutral, kelvin: 4000}
+  - {label: Daylight, kelvin: 5000}
+  - {label: Cool, kelvin: 6500}
+
+rooms:
+  entry:
+    space: Traditional Entryway
+    title: A smarter welcome
+    scenes: []
+
+  living:
+    space: Holiday Living Room
+    title: Set the holiday mood
+    outlets:
+      living-plug: {outlet-1: Tree, outlet-2: Garland}
+    scenes:
+      - id: holiday-evening
+        label: Holiday evening
+        steps:
+          - {kind: bulb, set: {color_temperature: 2700, brightness: 60, power: true}}
+          - {device: living-plug, set: {outlets: {outlet-1: true, outlet-2: true}}}
+      - id: festive
+        label: Festive
+        steps:
+          - {kind: bulb, set: {effect: christmas, brightness: 80, power: true}}
+          - {device: living-plug, set: {outlets: {outlet-1: true, outlet-2: true}}}
+      - id: all-off
+        label: All off
+        steps:
+          - {kind: bulb, set: {power: false}}
+          - {kind: plug, set: {power: false}}
+
+  bedroom:
+    space: Bedroom + Comfort
+    title: Find your evening glow
+    outlets:
+      bedroom-plug: {power: Humidifier}
+    scenes:
+      - id: evening-glow
+        label: Evening glow
+        steps:
+          - {kind: bulb, set: {color_temperature: 2200, brightness: 40, power: true}}
+          - {device: bedroom-plug, set: {power: true}}
+      - id: wake-up-bright
+        label: Wake up bright
+        steps:
+          - {kind: bulb, set: {color_temperature: 4000, brightness: 100, power: true}}
+      - id: all-off
+        label: All off
+        steps:
+          - {kind: bulb, set: {power: false}}
+          - {kind: plug, set: {power: false}}
+
+  garden:
+    space: Glow Garden
+    title: Bring the garden to life
+    outlets:
+      garden-plug: {outlet-1: Fountain, outlet-2: Spare}
+    scenes:
+      - id: garden-glow
+        label: Garden glow
+        steps:
+          - {device: garden-string, set: {color_temperature: 2700, brightness: 70, power: true}}
+          - {device: garden-path, set: {brightness: 80, power: true}}
+          - {device: garden-plug, set: {outlets: {outlet-1: true}}}
+      - id: garden-party
+        label: Garden party
+        steps:
+          - {device: garden-string, set: {effect: rainbow, brightness: 90, power: true}}
+          - {device: garden-path, set: {brightness: 100, power: true}}
+          - {device: garden-plug, set: {outlets: {outlet-1: true}}}
+      - id: all-off
+        label: All off
+        steps:
+          - {kind: string, set: {power: false}}
+          - {kind: path, set: {power: false}}
+          - {kind: plug, set: {power: false}}

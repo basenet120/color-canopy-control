@@ -1086,8 +1086,13 @@ function renderSlots() {
   const t1 = st.t1.allowed;
   root.replaceChildren(
     ...st.slots.map((slot) => {
+      const origin = slot.recorded_origin === "app" ? "hand-painted (app)" : "commissioned";
       const recorded =
-        slot.recorded_hash == null ? "" : slot.recorded_hash === slot.hash ? " · matches the recorded hash" : " · DIFFERS from the recorded hash";
+        slot.recorded_hash == null
+          ? ""
+          : slot.recorded_hash === slot.hash
+            ? ` · matches the recorded ${origin} hash`
+            : ` · DIFFERS from the recorded ${origin} hash`;
       return h(
         "div",
         { class: `slot-card${slot.active ? " active" : ""}` },
@@ -1119,6 +1124,23 @@ function renderSlots() {
                 document.querySelectorAll("#paint-slot button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.slot === S.paintSlot)));
                 renderAll();
               }
+            },
+          }),
+          h("button", {
+            type: "button",
+            class: "secondary",
+            text: "Painted in the Hubspace app — record it",
+            title: "Reads this slot back and saves its fingerprint as hand-painted (T2). Sends nothing to the lights.",
+            onclick: async () => {
+              const ok = window.confirm(
+                `Record ${shortLabel(slot.slot)} as a pattern painted in the Hubspace app?\n\n` +
+                  "This reads the slot back and saves its fingerprint, so the show can select it at the hand-painted " +
+                  "tier (T2). Nothing is sent to the lights. Only do this after painting it in the app: the Conductor " +
+                  "never rewrites a hand-painted slot, and commissioning leaves it alone.",
+              );
+              if (!ok) return;
+              const res = await act("slot", { slot: slot.slot, action: "record_app" });
+              if (res && res.slot) toast(res.slot.message, "info", 9000);
             },
           }),
           h("button", {
@@ -1309,6 +1331,14 @@ async function main() {
     return;
   }
   const wanted = new URLSearchParams(location.search).get("device");
+  if (wanted && !devices.some((d) => d.id === wanted)) {
+    // Never fall back to opening (and locking) some other device. A vignette device isn't listed here at all: it
+    // has its room page, and opening it here would take it away from the room's tablet.
+    showPicker(devices, "Pick a module.");
+    banner(`${wanted} can't be opened on this page (it isn't a strand you have access to). Vignette devices are ` +
+      "controlled from their room page.");
+    return;
+  }
   const pick = devices.find((d) => d.id === wanted) || devices.find((d) => d.id === "bench-kit") || devices[0];
   if (!pick) {
     showPicker(devices);

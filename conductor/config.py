@@ -77,7 +77,8 @@ class ExecutorSettings(_Strict):
 
 
 class ReconcilerSettings(_Strict):
-    true_up_interval_s: float = 60
+    # each module is read once per interval, the reads spread across the modules (reconciler.py); ≥ 1 s
+    true_up_interval_s: float = Field(5, ge=1)
     reassert_after_s: float = 4
     downgrade_after_wrong_s: float = 10
     downgrade_throttles: int = 3
@@ -122,7 +123,9 @@ def load_settings(config_dir: Path = CONFIG_DIR) -> ConductorSettings:
 
 # ---- registry ----------------------------------------------------------------------------------------------------
 Role = Literal["bench", "canopy_module", "vignette", "spare"]
+VIGNETTE_KINDS = ("bulb", "plug", "lock", "fan", "string", "path")
 Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]
+SlotOrigin = Literal["api", "app"]
 
 
 class DeviceFlags(_Strict):
@@ -155,7 +158,38 @@ class DeviceEntry(_Strict):
     flags: DeviceFlags = Field(default_factory=DeviceFlags)
     flags_proven_on: str | None = None  # the driver address (metadevice id) of the kit that proved `flags`
     slot_hashes: dict[str, str] = Field(default_factory=dict)
+    # Where each recorded slot hash came from: "api" = written by the Conductor's commissioning (T1), "app" =
+    # hand-painted in the Hubspace app and recorded on the module page (T2). A hash without an entry is "api"
+    # (before this field existed, commissioning was the only writer).
+    slot_origin: dict[str, SlotOrigin] = Field(default_factory=dict)
+    # The slot header's effect fields as read back when the hash was recorded (motionEffect, brightnessEffect, …).
+    # The canonical hash deliberately leaves them out (07 §6), so they are verified separately.
+    slot_effects: dict[str, dict[str, int]] = Field(default_factory=dict)
     notes: str = ""
+
+    def slot_patch(self, slot: str, *, digest: str, origin: str, effects: Mapping[str, int] | None) -> dict:
+        """The overlay patch that records one slot (hash, origin, effect fields), merged with the other slots."""
+        all_effects = {k: dict(v) for k, v in (self.slot_effects or {}).items()}
+        if effects:
+            all_effects[slot] = {k: int(v) for k, v in effects.items()}
+        else:
+            all_effects.pop(slot, None)
+        return {
+            "slot_hashes": {**(self.slot_hashes or {}), slot: digest},
+            "slot_origin": {**(self.slot_origin or {}), slot: origin},
+            "slot_effects": all_effects,
+        }
+
+    def slot_record(self, slot: str) -> dict[str, Any] | None:
+        """The recorded {hash, origin, effects} of `slot`, or None when nothing is recorded."""
+        digest = (self.slot_hashes or {}).get(slot)
+        if not digest:
+            return None
+        return {
+            "hash": digest,
+            "origin": (self.slot_origin or {}).get(slot, "api"),
+            "effects": dict((self.slot_effects or {}).get(slot) or {}) or None,
+        }
 
     def flags_for(self, address: str | None) -> DeviceFlags:
         """The bench flags, but only when they were proven on the kit at `address`; else none are proven.
@@ -199,6 +233,13 @@ class RegistryFile(_Strict):
                     raise ValueError(f"two enabled devices claim canopy position {d.module}")
                 if d.enabled:
                     modules.add(d.module)
+            if d.role == "vignette":
+                if not d.vignette:
+                    raise ValueError(f"vignette device {d.id!r} needs `vignette:` (the room id, e.g. living)")
+                if d.kind not in VIGNETTE_KINDS:
+                    raise ValueError(
+                        f"vignette device {d.id!r} needs `kind:` set to one of {', '.join(VIGNETTE_KINDS)}"
+                    )
         ids = [d.metadevice_id for d in self.devices if d.metadevice_id]
         if len(ids) != len(set(ids)):
             raise ValueError("the same metadevice_id is assigned to two devices")
@@ -320,6 +361,108 @@ def save_overlay_patch(
 def overlay_text(registry: Registry) -> str:
     """The overlay as YAML, for "download as a diff to commit back to git" (07 §8). Callers anonymize ids."""
     return yaml.safe_dump(registry.overlay.model_dump(), sort_keys=True, allow_unicode=True)
+
+
+# Fields the overlay may hold that never go into git (devices.yaml: "never with real ids in git"): the Afero
+# metadevice id, and the address of the kit that proved the bench flags (also a metadevice id).
+NOT_FOR_GIT = ("metadevice_id", "flags_proven_on")
+
+
+@dataclass
+class OverlayDiff:
+    """The ops overlay folded into config/devices.yaml, as text (07 §8: "downloadable as a diff to commit back")."""
+
+    before: str  # config/devices.yaml as it is in git
+    after: str  # the same file with every overlay edit applied, line by line (comments and layout kept)
+    changed: list[str]  # device ids whose entry changed or was added
+    left_out: list[str]  # device ids with a field left out for git (NOT_FOR_GIT)
+    problem: str = (
+        ""  # set when the edited file didn't re-read as the same registry (then `after` is `before`)
+    )
+
+
+def _flow(entry: Mapping[str, Any]) -> str:
+    return yaml.safe_dump(
+        dict(entry), default_flow_style=True, sort_keys=False, width=10**9, allow_unicode=True
+    ).strip()
+
+
+def overlay_diff(registry: Registry, config_dir: Path = CONFIG_DIR) -> OverlayDiff:
+    """Apply the overlay's device edits to devices.yaml's own lines: a one-line `- {id: …}` entry is rewritten in
+    place as one line, a block entry as a block, a new device is appended to the list. Fields in NOT_FOR_GIT are left
+    out. The result is re-read and checked against the merged registry before it is offered."""
+    import re
+
+    path = config_dir / "devices.yaml"
+    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    raw = _read_yaml(path)
+    base = {d["id"]: d for d in raw.get("devices") or [] if isinstance(d, dict) and "id" in d}
+    lines = before.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    changed: list[str] = []
+    left_out: list[str] = []
+    expected: dict[str, dict] = {}
+    appended: list[str] = []
+    for device_id, patch in sorted(registry.overlay.devices.items()):
+        clean = {k: v for k, v in patch.items() if k not in NOT_FOR_GIT}
+        if len(clean) != len(patch):
+            left_out.append(device_id)
+        if device_id not in base:
+            if not clean:
+                continue
+            entry = {"id": device_id, **clean}
+            expected[device_id] = entry
+            appended.append(f"  - {_flow(entry)}\n")
+            changed.append(device_id)
+            continue
+        merged = {**base[device_id], **clean}
+        if merged == base[device_id]:
+            continue
+        expected[device_id] = merged
+        flow = re.compile(rf"^(\s*)-\s*\{{\s*id:\s*{re.escape(device_id)}\s*[,}}]")
+        block = re.compile(rf"^(\s*)-\s+id:\s*{re.escape(device_id)}\s*(#.*)?$")
+        for i, line in enumerate(lines):
+            if m := flow.match(line):
+                lines[i] = f"{m.group(1)}- {_flow(merged)}\n"
+                break
+            if m := block.match(line.rstrip("\n")):
+                indent = m.group(1)
+                end = i + 1
+                while (
+                    end < len(lines)
+                    and lines[end].strip()
+                    and (len(lines[end]) - len(lines[end].lstrip()) > len(indent))
+                ):
+                    end += 1
+                dumped = yaml.safe_dump(
+                    [merged], default_flow_style=False, sort_keys=False, allow_unicode=True
+                )
+                lines[i:end] = [f"{indent}{text}\n" for text in dumped.splitlines()]
+                break
+        else:
+            return OverlayDiff(before, before, [], left_out, f"couldn't find {device_id} in {path.name}")
+        changed.append(device_id)
+    after = "".join(lines + appended)
+    # Re-read the edited file: every changed entry must come back exactly as merged, and the whole file must
+    # still validate — otherwise offer no diff rather than a wrong one.
+    try:
+        reread = yaml.safe_load(after) or {}
+        RegistryFile.model_validate(_apply_defaults(reread))
+        got = {d["id"]: d for d in reread.get("devices") or []}
+        wrong = [d for d, entry in expected.items() if got.get(d) != entry]
+        unchanged = [d for d in base if d not in expected and got.get(d) != base[d]]
+    except (yaml.YAMLError, ValidationError) as e:
+        return OverlayDiff(before, before, [], left_out, f"the edited {path.name} didn't validate: {e}")
+    if wrong or unchanged:
+        return OverlayDiff(
+            before,
+            before,
+            [],
+            left_out,
+            f"the edited {path.name} re-read differently for {', '.join(wrong + unchanged)}",
+        )
+    return OverlayDiff(before, after, changed, left_out)
 
 
 def unknown_devices(registry: Registry, seen_addresses: Iterable[str]) -> list[str]:

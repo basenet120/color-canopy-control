@@ -252,7 +252,7 @@ def build_services(
         idle_timeout_s=settings.module_page.lock_idle_timeout_s,
         on_change=lambda event: _record_lock(telemetry, event),
     )
-    services.hub = WsHub(tickets, hello=services.version)
+    services.hub = WsHub(tickets, hello=services.version, session_active=roles.session_active)
     roles.on_session_revoked(services.hub.close_session)  # a revoked phone's open sockets close at once
     for driver in (sim, afero):
         if driver is None:

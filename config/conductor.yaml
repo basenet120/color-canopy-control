@@ -9,7 +9,11 @@ executor:
   readback_interval_s: 1.0
 
 reconciler:
-  true_up_interval_s: 60         # periodic readback of every canopy module
+  # Rolling true-up: each canopy module is read once per interval, the reads spread evenly (9 modules → one GET
+  # every ~0.56 s = 1.8 GET/s on the canopy account; reads are never counted against the write budget). Catches a
+  # change made outside the Conductor (the Hubspace app, a controller that lost its look) within the 10 s
+  # self-heal target: ≤ 5 s to notice + a tick, a GET, a PUT and the device applying it (make soak measures it).
+  true_up_interval_s: 5
   reassert_after_s: 4            # re-check a few seconds after each change
   downgrade_after_wrong_s: 10    # a module wrong longer than this downgrades the mode's tier
   downgrade_throttles: 3         # ... or ≥ this many throttles in the window, per account

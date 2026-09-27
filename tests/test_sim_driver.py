@@ -69,7 +69,7 @@ def test_one_device_per_enabled_registry_entry_and_protocol_shape():
     health = driver.health()
     json.dumps(health)
     assert health["simulated"] and health["devices"] == len(REG.devices)
-    assert health["accounts"]["canopy"] == {"devices": 9, "token": "ok"}
+    assert health["accounts"]["canopy"] == {"devices": 12, "token": "ok"}  # nine modules + three spares
 
 
 def test_discover_and_fetch_profile_reflect_current_cloud_state():
@@ -85,7 +85,7 @@ def test_discover_and_fetch_profile_reflect_current_cloud_state():
         return everything, canopy, info
 
     everything, canopy, info = run_virtual(main)
-    assert len(everything) == len(REG.devices) and len(canopy) == 9
+    assert len(everything) == len(REG.devices) and len(canopy) == 12  # nine modules + three spares
     assert all(i.simulated and i.account == "canopy" for i in canopy)
     assert info.device_id == KIT and info.raw["id"] == KIT and info.model.startswith("SQHDK03")
     caps = detect(info.functions, info.states)

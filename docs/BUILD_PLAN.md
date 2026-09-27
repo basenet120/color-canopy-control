@@ -78,6 +78,21 @@ Runtime code lives under `conductor/`, `config/`, `web/` only — the Dockerfile
   `{"type":"auth"}` first, then subscribe (`ws.py` has the protocol).
 - **Clock:** every service takes a `Clock`; tests and `make soak` run on `VirtualTimeLoop`.
 
+## v1 seams (designed for, not built)
+
+The build prompt's "seams, not code, for v1" (05 phase-2 ideas, 06 #12, 07 §6–§7). Each is a place the design already
+leaves room for; none has code beyond what's named. Building one is its own PR, bench-gated where it touches hardware.
+
+| Seam | Where it would plug in | What exists today |
+|---|---|---|
+| **Conclave push** (P4, optional) | A change *trigger* only (07 §5): the Afero adapter opens the Conclave stream (`conductor/drivers/afero_transport.py` already lets `conclave*.afero.net` through the choke point) and calls the reconciler's `check_module_soon(device_id, target)` for the module that changed, so drift is read (REST) at once instead of on the rolling true-up. Readback stays the truth. | Host allowlisted in the transport; nothing subscribes. The rolling true-up (`reconciler.py`, every module read once per `true_up_interval_s` = 5 s) is what finds out-of-band changes today. |
+| **SimDriver animation clocks and drift** | `SimDevice.animation_origin` (`conductor/drivers/sim.py`) records each apply's phase origin within `start_skew_max_s`; a clock model would advance a per-device phase from it (period from the motion code and speed, drift per hour, reset on power loss) and `device_view` would report the phase, so the soak can measure "all nine in phase" for motion plans. | The origin and skew are recorded; nothing animates. Motion plans are measured only as "all nine re-triggered as one burst". |
+| **Golden Hour's second technique: the stepped sweep** | A new `TechniqueName` (`conductor/looks/schema.py`, e.g. `sweep`) on Golden Hour's ladder in `config/modes.yaml`, compiled (`conductor/looks/compile.py`) to a *sequence* of `ModePlan` steps, each one PUT per module it touches (never one module's update split across PUTs, 07 §6), ≥ 2 s per step with a hard cap (06 #6). The engine would run the steps from a task on the Clock, as the current plan's "program", stopping on the next request; the executor's 1 write/s per device and burst rules apply unchanged. | Golden Hour ships one technique (on-device motion in a tight 9-PUT burst); the ladder falls back to slot/modules. 06 #12 picks between them from bench footage. |
+| **`SupplementalDriver`** | `conductor/drivers/supplemental.py` implements `DeviceDriver` (sACN/DDP/WLED/FPP) and `Services.target` would pick it for the registry devices it serves (today it picks by purpose only); its devices would get their own executor. Kiosk copy must never credit it to Hubspace (05 #12). | Interface stub; every call raises `NotImplementedError`. |
+| **Presence triggers** | A new request *source* for `CanopyEngine.request_mode(mode_id, source="presence")` (and the vignettes' `scene()`), fed by a small service on the Clock (a sensor webhook or a camera count) with its own cooldown, below guest input (kiosk wins) and above idle hold. The pause (`pause_guest_input`) would silence it too. | `request_mode` already takes any `source`; cooldown and pause rules key off `source == "kiosk"`. |
+| **Audio** | The same seam as presence (a `source="audio"` mode request or scene), plus an optional audio cue alongside a mode change published on the `canopy` WS topic for the kiosk page to play. Never audio-reactive lighting through Hubspace: the write budget (≤ 1 write/s per device) can't follow a beat. | Nothing. |
+| **Shows beyond the six modes** | New entries in `config/modes.yaml` (validated by `conductor/looks/schema.py`; the engine, commissioning and kiosk read the list, not a count). A seventh T1 mode needs a slot: there are three (`custom-1…3`), so a new canvas mode shares or replaces one, or runs at T3 (`modules`). The kiosk's 2 × 3 grid (`web/kiosk/kiosk.css`) is laid out for six. A timed show = a sequence of mode requests from a scheduler task on the Clock, `source="show"`. | Six modes; the 2 × 3 kiosk grid. |
+
 ## HTTP API (P0 / P0b)
 
 | Method + path | Who | What |
@@ -126,8 +141,5 @@ Runtime code lives under `conductor/`, `config/`, `web/` only — the Dockerfile
 ## Delivery
 
 PRs in order, each from its own `claude/*` branch stacked on the previous one, each asking for a merge commit:
-1. `claude/p0-contracts` — this plan, DECISIONS, contract modules and their tests.
-2. `claude/p0-gate-drivers` — SimDriver, Afero adapter + choke point, executor, tracker, roles/ws, services.
-3. `claude/p0-bench` — accounts (CLI + page), bench jobs + pages + clock + CLI, runbook.
-4. `claude/p0b-module` — `/ops/module`.
-5. `claude/p1-engine`, 6. `claude/p2-looks`, 7. `claude/p3-surfaces`, 8. `claude/p35-venue`, 9. `claude/p4-vignettes`.
+1. `claude/p0-contracts`, 2. `claude/p0-gate-drivers`, 3. `claude/p0-bench`, 4. `claude/p0b-module`,
+5. `claude/p1-engine-looks`, 6. `claude/p3-surfaces`, 7. `claude/p35-p4-venue-vignettes` (see docs/STATUS.md).

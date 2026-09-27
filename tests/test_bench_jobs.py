@@ -488,9 +488,18 @@ def test_every_job_is_listed_with_a_spec():
         "hue_ramp",
         "latency_trials",
         "whole_strand",
+        "stale_clock_put",
+        "active_slot_rewrite",
+        "rate_ramp",
+        "head_count_boot",
         "restore",
     }
-    assert {name for name, job in JOBS.items() if not job.spec.writes} == {"gate_a", "index_order"}
+    assert {name for name, job in JOBS.items() if not job.spec.writes} == {
+        "gate_a",
+        "index_order",
+        "head_count_boot",
+    }
+    assert list(JOBS)[-1] == "restore"  # the page lists jobs in order; restore ends every session
 
 
 def test_rows_the_device_does_not_declare_are_left_out(tmp_path):

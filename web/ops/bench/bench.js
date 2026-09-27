@@ -82,14 +82,18 @@ function renderDeviceStatus() {
   updateBanner();
 }
 
+// A job whose setup the person must confirm first (kit off at the wall, strings unplugged) has a `confirm_label`;
+// its `confirmed` option is shown as that tick box, outside the Options.
+const isConfirm = (job, name) => Boolean(job.confirm_label) && name === "confirmed";
+
 function paramInput(job, name, value) {
   const id = `p-${job.name}-${name}`;
-  if (job.name === "gate_b_unplugged" && name === "confirmed") {
+  if (isConfirm(job, name)) {
     return el(
       "label",
       { class: "confirm", for: id },
       el("input", { type: "checkbox", id, "data-param": name }),
-      "I've switched the kit off at the wall",
+      job.confirm_label,
     );
   }
   const type = typeof value === "boolean" ? "checkbox" : typeof value === "number" ? "number" : "text";
@@ -110,8 +114,8 @@ function renderJobs() {
   wrap.replaceChildren(
     ...state.jobs.map((job, i) => {
       const params = Object.entries(job.params || {});
-      const confirm = params.filter(([n]) => job.name === "gate_b_unplugged" && n === "confirmed");
-      const options = params.filter(([n]) => !(job.name === "gate_b_unplugged" && n === "confirmed"));
+      const confirm = params.filter(([n]) => isConfirm(job, n));
+      const options = params.filter(([n]) => !isConfirm(job, n));
       const card = el(
         "article",
         { class: "card stack job-card", "data-job": job.name },
@@ -164,6 +168,11 @@ async function runJob(job, card) {
 async function openRun(runId) {
   state.runId = runId;
   state.record = null;
+  // Nothing from the previous run may show while this one loads (its title, or a "Finished" pill).
+  const job = state.jobs.find((j) => runId.includes(`-${j.name}-`));
+  $("run-title").textContent = job ? job.title : "Run";
+  $("run-pill").className = "pill updating";
+  $("run-pill").textContent = "Loading…";
   $("steps").replaceChildren();
   $("result").hidden = true;
   $("run-panel").hidden = false;

@@ -8,6 +8,9 @@ Schedule (fractions of the run, so a shorter run keeps the same shape):
 - commissioning (T1 slot contents), then the engine starts on the idle mode;
 - `changes` kiosk mode changes at seeded random times, at least one cooldown apart, clear of the fault windows;
 - a button-mash burst: 40 kiosk taps 0.25 s apart, then 20 ops taps 0.2 s apart (ops bypass the cooldown);
+- `drift_events` changes made outside the Conductor (the Hubspace app): one module's look changed straight in the
+  simulated cloud (`SimDriver.faults.change_out_of_band` — no executor, no rate budget), at seeded times while the
+  canopy is settled, clear of mode changes and the fault windows;
 - one window of HTTP 500s (the pinned 43 min) and one internet outage (the pinned 30 min), each with an ops mode
   change in the middle, so recovery has to re-apply a look the lights aren't showing.
 
@@ -15,16 +18,25 @@ Measured (ground truth = `SimDriver.device_view`, what the lights actually show)
 - time from each accepted change (kiosk, ops, idle) to all nine modules correct — p50/p95/max, target p95 ≤ 5 s;
 - the executor's peak queue depth (never more than 2 per device: pending + in flight);
 - self-heal time after every silent drop that mattered (the look the module should show was dropped) — ≤ 10 s;
+- detect + heal time after every out-of-band change (from the change until the lights show the look again; the
+  rolling true-up has to notice it — no command of ours failed) — ≤ 10 s, and the true-up's read load (GET/s);
 - tier downgrades (0 at 5% throttling);
 - time from each fault ending to all nine modules showing the current look — ≤ 60 s;
 - the smallest gap between two writes to one device (≥ the 1 s budget) and the final look.
 
 Writes `docs/reports/sim-acceptance.md` and exits non-zero when any target fails.
 
-The compiler: `run_soak(compiler=...)` takes any object with `compile(mode_id, tier)`, `ladder(mode_id)` and
-`modes()`. The default tries the looks compiler (`conductor.looks`); when it isn't importable here it falls back to
-the built-in compiler below (strand looks, module-level looks, and simple one-colour-per-module canvas frames) and the
-report says so.
+The world (07 §7 soak validity, review F11): by default the soak runs **the show's own wiring** — `build_services`
+on the virtual clock with a temporary `CONDUCTOR_DATA_DIR` and `conductor.show.ShowWiring`, exactly as the app's
+lifespan builds it: capabilities read from each module's (simulated) profile in the background, the looks compiler,
+the commissioning gate on T1, slot records (hash, origin, effect fields) in the registry overlay, the same ladder and
+tier rules. Only the simulator's conditions (pinned) and one soak-only setting differ: `config/sim/soak.yaml` enables a
+SIMULATED on-device motion code for Golden Hour, so the all-or-none motion re-trigger (07 §6) is measured too. Nothing
+real has been benched; the report says so.
+
+`run_soak(compiler=...)` still takes any object with `compile(mode_id, tier)`, `ladder(mode_id)` and `modes()` and
+then runs the bare engine on it (the older world: every tier allowed, no overlay); `BuiltinCompiler` below is kept for
+that path.
 """
 
 from __future__ import annotations
@@ -33,11 +45,14 @@ import argparse
 import asyncio
 import logging
 import random
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -58,6 +73,11 @@ from conductor.telemetry import Telemetry, percentile
 log = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 REPORT_PATH = ROOT / "docs" / "reports" / "sim-acceptance.md"
+SOAK_SETTINGS = CONFIG_DIR / "sim" / "soak.yaml"
+SHOW_DESCRIPTION = (
+    "the show's own wiring (build_services + conductor.show.ShowWiring → conductor.looks): profiles read in the "
+    "background, the commissioning gate on T1, slot records in the overlay"
+)
 POLL_S = 0.1  # how often a measurement looks at the lights
 WATCH_LIMIT_S = 120.0  # a measurement gives up (and fails) after this long
 
@@ -222,6 +242,7 @@ class SoakConfig:
     seed: int = 0
     mash_kiosk_taps: int = 40
     mash_ops_taps: int = 20
+    drift_events: int = 12  # out-of-band changes (the Hubspace app) the reconciler must find and undo
     sim_settings: SimSettings = field(default_factory=SimSettings.from_acceptance)
     targets: dict = field(default_factory=dict)  # from acceptance.yaml
     report_path: Path | None = REPORT_PATH
@@ -238,6 +259,89 @@ class _World:
     engine: Any
     modules: list[str]
     addresses: dict[str, str]
+    wiring: Any = None  # ShowWiring (the show's own wiring), when the soak runs it
+    services: Any = None
+    cleanup: Any = None  # a callable removing the temporary data/config directories
+    motion: dict | None = None  # the SIMULATED motion setting in force
+
+
+def _soak_config_dir(motion: dict | None) -> Path:
+    """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml)."""
+    root = Path(tempfile.mkdtemp(prefix="canopy-soak-config-"))
+    config = root / "config"
+    shutil.copytree(CONFIG_DIR, config)
+    if motion:
+        modes_path = config / "modes.yaml"
+        modes = yaml.safe_load(modes_path.read_text(encoding="utf-8"))
+        canvas = modes["modes"][motion["mode"]]["techniques"]["canvas"]
+        canvas["motion_effect"] = {
+            **(canvas.get("motion_effect") or {}),
+            "motionEffect": int(motion["motionEffect"]),
+        }
+        modes_path.write_text(yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        settings_path = config / "conductor.yaml"
+        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        enabled = settings.setdefault("effects", {}).setdefault("enabled", {})
+        enabled.setdefault("motionEffect", {})[int(motion["motionEffect"])] = str(
+            motion.get("note", "SIMULATED")
+        )
+        enabled.setdefault("brightnessEffect", {})
+        settings_path.write_text(
+            yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8"
+        )
+    return config
+
+
+def load_soak_motion(path: Path = SOAK_SETTINGS) -> dict | None:
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        motion = (yaml.safe_load(f) or {}).get("motion")
+    return motion or None
+
+
+async def _build_show(cfg: SoakConfig) -> _World:
+    """The app's own wiring on the virtual clock: build_services + ShowWiring, a temp data dir (the overlay)."""
+    from conductor.services import build_services
+    from conductor.show import ShowWiring
+
+    motion = load_soak_motion()
+    config_dir = _soak_config_dir(motion)
+    data = Path(tempfile.mkdtemp(prefix="canopy-soak-data-"))
+    clock = VirtualClock()
+    services = build_services(
+        {"CONDUCTOR_DATA_DIR": str(data)}, clock=clock, config_dir=config_dir, sim_settings=cfg.sim_settings
+    )
+    services.telemetry.dir = None  # events stay in memory: the soak measures the engine, not disk appends
+    sim = services.sim
+    sim.seed = cfg.seed
+    for rng, name in ((sim._fault_rng, "faults"), (sim._latency_rng, "latency"), (sim._world_rng, "world")):
+        rng.seed(f"{cfg.seed}:{name}")  # the same seeded streams the bare world uses
+    await services.start()
+    wiring = ShowWiring(services)
+    services.extras["show"] = wiring
+    engine = await wiring.start()
+    modules = [d.id for d in services.registry.canopy_modules()]
+
+    def cleanup() -> None:
+        shutil.rmtree(config_dir.parent, ignore_errors=True)
+        shutil.rmtree(data, ignore_errors=True)
+
+    return _World(
+        clock,
+        services.registry,
+        sim,
+        services.executor_for(sim),
+        services.tracker,
+        services.telemetry,
+        engine,
+        modules,
+        {d: f"sim-{d}" for d in modules},
+        wiring=wiring,
+        services=services,
+        cleanup=cleanup,
+        motion=motion,
+    )
 
 
 def _build(cfg: SoakConfig, compiler: Any) -> _World:
@@ -290,8 +394,13 @@ def _all_correct(world: _World, plan: ModePlan) -> bool:
 
 
 async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
-    world = _build(cfg, compiler)
+    world = await _build_show(cfg) if compiler is None else _build(cfg, compiler)
     engine, clock, sim = world.engine, world.clock, world.sim
+    if compiler is None:
+        compiler = SimpleNamespace(modes=world.wiring.mode_ids)  # the schedule only needs the mode ids
+        # the show commissions its slots once every profile is read (as the app does in sim): wait for it
+        while world.wiring.last_commission is None and clock.monotonic() < 600:
+            await clock.sleep(1.0)
     rng = random.Random(f"{cfg.seed}:schedule")
     duration = cfg.hours * 3600.0
     window_s = cfg.sim_settings.http_500_window_s or 43 * 60
@@ -312,9 +421,19 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         "refused": {"kiosk": 0, "during_faults": 0},
         "heals": [],
         "heal_timeouts": 0,
+        "drift_heals": [],  # seconds from an out-of-band change until the lights show the look again
+        "drift_timeouts": 0,
+        "drift_skipped": 0,  # a change that didn't make the module wrong, or a look change that superseded it
+        "drift_attempted": 0,
         "recoveries": {},
         "max_queue": 0,
         "min_write_gap_s": None,
+        "wiring": {
+            "show_wiring": world.wiring is not None,
+            "motion": world.motion,
+            "motion_plans": 0,  # accepted changes that installed a motion plan (all-or-none re-trigger)
+            "tiers": {},  # accepted changes per tier
+        },
     }
     tasks: set[asyncio.Task] = set()
 
@@ -374,6 +493,9 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         source = event.get("source", "")
         if plan is None or source in ("reconciler", "recovery"):
             return
+        results["wiring"]["motion_plans"] += int(bool(plan.motion))
+        tiers = results["wiring"]["tiers"]
+        tiers[str(plan.tier)] = tiers.get(str(plan.tier), 0) + 1
         now = clock.monotonic()
         spawn(watch_change(plan, source, now, in_fault(now, pad_after=60.0) or engine.outage and "resting"))
 
@@ -408,6 +530,46 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
             await clock.sleep(POLL_S)
         results["heal_timeouts"] += 1
 
+    # A look other than the module's own: blue if it isn't showing blue already, else warm white.
+    def out_of_band_rows(mt: Any) -> list[StateRow]:
+        blue = [R.power(True), R.color_mode("color"), R.color_rgb(0, 0, 255)]
+        if not R.compare(blue, mt.expect or mt.rows):
+            return [R.power(True), R.color_mode("white"), R.color_temperature(4000)]
+        return blue
+
+    async def drift(t: float) -> None:
+        """Change one module outside the Conductor, then time until the lights show the look again."""
+        await at(t)
+        for _ in range(6):  # wait (up to 30 s) for a settled canopy, so this measures drift, not a change
+            plan = engine.current_plan()
+            if plan is not None and engine.outage is None and _all_correct(world, plan):
+                break
+            await clock.sleep(5.0)
+        else:
+            results["drift_skipped"] += 1
+            return
+        results["drift_attempted"] += 1
+        device_id = drift_rng.choice(sorted(plan.modules))
+        address = world.addresses[device_id]
+        response = sim.faults.change_out_of_band(address, out_of_band_rows(plan.modules[device_id]))
+        if not response.ok:
+            results["drift_skipped"] += 1
+            return
+        started = clock.monotonic()
+        seen_wrong = False
+        while clock.monotonic() - started < WATCH_LIMIT_S:
+            if engine.current_plan() is not plan:
+                results["drift_skipped"] += 1  # a look change (idle return, ops) superseded it
+                return
+            correct = _correct(world, plan, device_id)
+            if not correct:
+                seen_wrong = True
+            elif seen_wrong or clock.monotonic() - started > 3.0:  # the edit applied (or the fix beat it)
+                results["drift_heals"].append(clock.monotonic() - started)
+                return
+            await clock.sleep(POLL_S)
+        results["drift_timeouts"] += 1
+
     async def watch_recovery(name: str, ended: float) -> None:
         while clock.monotonic() - ended < WATCH_LIMIT_S * 2:
             plan = engine.current_plan()
@@ -432,6 +594,22 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         times.append(t)
     times.sort()
     modes = compiler.modes()
+    drift_rng = random.Random(f"{cfg.seed}:drift")  # its own stream: the rest of the schedule stays as it was
+    drift_times: list[float] = []
+    attempts = 0
+    while len(drift_times) < cfg.drift_events and attempts < max(1, cfg.drift_events) * 1000:
+        attempts += 1
+        t = drift_rng.uniform(lo, t0 + duration - 120.0)
+        # clear of the fault windows (and the minute after), the mash, and every mode change: 30 s after one
+        # (settled) and at least 20 s before the next; drift() also waits for a settled canopy first
+        if in_fault(t, pad_after=60.0) or in_fault(t + 20.0) or mash_at - 20.0 < t < mash_at + 90.0:
+            continue
+        if any(t - 30.0 < c < t + 20.0 for c in times):
+            continue
+        if any(abs(t - other) < 30.0 for other in drift_times):
+            continue
+        drift_times.append(t)
+    drift_times.sort()
 
     async def at(t: float) -> None:
         delay = t - clock.monotonic()
@@ -479,9 +657,13 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         spawn(watch_recovery("outage", clock.monotonic()))
 
     # -- run ------------------------------------------------------------------------------------------------------
-    commission = await engine.commission(source="soak")
-    await engine.start()
+    if world.wiring is not None:
+        commission = world.wiring.last_commission or {"ok": False, "message": "never ran", "modes": {}}
+    else:
+        commission = await engine.commission(source="soak")
+        await engine.start()
     drivers = [asyncio.get_running_loop().create_task(c) for c in (kiosk_changes(), mash(), faults())]
+    drivers += [asyncio.get_running_loop().create_task(drift(t)) for t in drift_times]
     await at(t0 + duration)
     for task in drivers:
         if not task.done():
@@ -496,8 +678,13 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
     results["final_correct"] = final_plan is not None and _all_correct(world, final_plan)
     results["final_mode"] = final_plan.mode_id if final_plan else None
     results["final_tier"] = str(final_plan.tier) if final_plan else None
-    await engine.stop()
-    await world.executor.close()
+    if world.wiring is not None:
+        await world.wiring.close()
+        await world.services.close()
+        world.cleanup()
+    else:
+        await engine.stop()
+        await world.executor.close()
     for task in list(tasks):
         task.cancel()
     results["commission"] = {
@@ -514,6 +701,17 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
     }
     results["windows_s"] = {"http_500": window_s, "outage": outage_s}
     results["duration_s"] = duration
+    reads = results["reconciler"].get("true_up_reads", 0)
+    modules = len(world.modules) or 1
+    interval = engine.deps.settings.reconciler.true_up_interval_s
+    results["read_load"] = {
+        "true_up_reads": reads,
+        "true_up_interval_s": interval,
+        "per_s": reads / duration if duration else 0.0,
+        "nominal_per_s": modules / interval,  # one account: all nine canopy modules
+        "all_reads": results["sim"].get("reads", 0),
+        "all_writes": results["sim"].get("writes", 0),
+    }
     return results
 
 
@@ -566,6 +764,21 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
             "max": mx,
             "target": f"every one ≤ {heal_target:g} s",
             "pass": results["heal_timeouts"] == 0 and (mx is None or mx <= heal_target),
+        }
+    )
+    drift_heals = results.get("drift_heals") or []
+    p50, p95, mx = stats(drift_heals)
+    rows.append(
+        {
+            "name": f"Detect + heal a change made outside the Conductor ({len(drift_heals)} out-of-band changes)",
+            "p50": p50,
+            "p95": p95,
+            "max": mx,
+            "target": f"every one ≤ {heal_target:g} s",
+            "pass": bool(drift_heals)
+            and results.get("drift_timeouts", 0) == 0
+            and mx is not None
+            and mx <= heal_target,
         }
     )
     downgrades = [t for t in results["tier_changes"] if t["direction"] == "down"]
@@ -636,7 +849,8 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
             f"{s.device_apply_extra_s_max:g} s, {s.throttle_429_rate:.0%} of requests → 429, "
             f"{s.silent_drop_rate:.0%} silent drops, readback semantics `{s.readback_semantics}`."
         ),
-        f"- Compiler: {meta['compiler']}.",
+        f"- World: {meta['compiler']}.",
+        _motion_line(results),
         (
             f"- Faults: one {windows['http_500'] / 60:.0f}-min window of HTTP 500s and one "
             f"{windows['outage'] / 60:.0f}-min internet outage, each with an ops mode change in the middle; "
@@ -677,6 +891,7 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
             f"refused while resting: {refused['during_faults']}."
         ),
         f"- Changes during a fault (not in the percentiles): {len(faulted)}.",
+        _drift_line(results),
         f"- Outages the engine detected (resting → recovered): {outages}.",
         (
             f"- Tier changes: {len(results['tier_changes'])}{' — ' + tiers if tiers else ''}. "
@@ -684,7 +899,8 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
         ),
         (
             f"- Reconciler: {rec['reasserts']} module re-asserts, {results['early_reasserts']} early re-asserts "
-            f"after a verification readback differed, {rec['true_ups']} true-ups, {rec['probes']} outage probes, "
+            f"after a verification readback differed, {rec.get('drift_resends', 0)} modules re-sent after a true-up "
+            f"read showed they'd changed, {rec['true_ups']} full true-ups, {rec['probes']} outage probes, "
             f"{rec['slot_rewrites']} slot rewrites."
         ),
         (
@@ -702,6 +918,35 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
     return "\n".join(lines)
 
 
+def _drift_line(results: dict) -> str:
+    load = results.get("read_load") or {}
+    return (
+        f"- Out-of-band changes (`SimDriver.faults.change_out_of_band`, i.e. the Hubspace app): "
+        f"{results.get('drift_attempted', 0)} made, {len(results.get('drift_heals') or [])} measured, "
+        f"{results.get('drift_skipped', 0)} skipped (the canopy wasn't settled, or a look change superseded it), "
+        f"{results.get('drift_timeouts', 0)} never healed. Found by the rolling true-up: each module read once every "
+        f"{load.get('true_up_interval_s', 0):g} s, spread across the modules — {load.get('true_up_reads', 0)} reads "
+        f"in the run = {load.get('per_s', 0):.2f} GET/s on the canopy account (nominal "
+        f"{load.get('nominal_per_s', 0):.2f}/s; reads skip a module whose command is still verifying and pause "
+        f"while resting). All reads {load.get('all_reads', 0)}, all writes {load.get('all_writes', 0)}; reads are "
+        "never counted against the 1 write/s per device budget."
+    )
+
+
+def _motion_line(results: dict) -> str:
+    wiring = results.get("wiring") or {}
+    motion = wiring.get("motion")
+    tiers = ", ".join(f"{k} {n}" for k, n in sorted((wiring.get("tiers") or {}).items())) or "none"
+    if not motion:
+        return f"- Motion: no motion code enabled; accepted changes by tier: {tiers}."
+    return (
+        f"- Motion: **SIMULATED** — `config/sim/soak.yaml` enables motionEffect {motion['motionEffect']} for "
+        f"{motion['mode']} (soak only; nothing has been benched and the simulator doesn't animate). "
+        f"{wiring.get('motion_plans', 0)} accepted changes installed a motion plan (all-or-none re-trigger). "
+        f"Accepted changes by tier: {tiers}."
+    )
+
+
 def load_targets(path: Path = ACCEPTANCE_FILE) -> dict:
     with open(path, encoding="utf-8") as f:
         return (yaml.safe_load(f) or {}).get("targets") or {}
@@ -712,10 +957,10 @@ def run_soak(cfg: SoakConfig | None = None, compiler: Any = None) -> tuple[dict,
     cfg = cfg or SoakConfig()
     wall = RealClock()
     started = wall.monotonic()
-    description = "the compiler passed to run_soak"
-    if compiler is None:
-        compiler, description = default_compiler(load_registry(CONFIG_DIR, None))
+    description = "the compiler passed to run_soak (the bare engine: every tier allowed, no overlay)"
     results = run_virtual(lambda: _soak(cfg, compiler))
+    if results["wiring"]["show_wiring"]:
+        description = SHOW_DESCRIPTION
     verdicts = evaluate(results, cfg.targets or load_targets())
     meta = {
         "generated": datetime.fromtimestamp(wall.now(), UTC).strftime("%Y-%m-%d %H:%M UTC"),

@@ -15,10 +15,19 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `GET  /api/ops/checklist[?client_ms=]`  the 7 am checklist, each item pass / warn / fail with a plain fix
 - `POST /api/ops/checklist/test-mode-change`  `{mode?, restore?}` one ops mode change, timed to READY (10 s)
 - `GET  /api/ops/logs[?since=&limit=]`  the log tail (redacted; see conductor/logring.py)
+- `GET  /api/ops/overlay[?part=all|yaml|diff]`  the ops overlay (07 §8), as an attachment: the overlay's YAML (to
+  restore under <data>/overrides/registry.yaml) plus a unified diff folding it into config/devices.yaml, to commit
+  back to git. The YAML keeps real metadevice ids (ops only; tester, kiosk and vignette never reach it); the diff
+  leaves them out, because devices.yaml never holds real ids.
 
 Every POST must be JSON from this site (same rule as the module page, D17): a cross-site form can't pause the
 canopy with the ops password cached in someone's browser. Every control publishes `{"kind": "control", ...}` on
 WS topic "ops" so other open dashboards refresh.
+
+Controls say what actually happened (07 §10: a non-developer at 7 am acts on these). conductor/canopy.py reports a
+refusal as a `CanopyState` with `refused=True`; every control turns that into a 409 with the engine's own sentence,
+and a commissioning run that finished with problems answers `ok: false`. The success message is built from the state
+the engine returned (the look, its tier, how many modules it went to, any held on a test page, an outage).
 
 "Reported" colours are the cloud's REST readback of each strand rendered per head (`render.head_colors`): they
 prove what Hubspace stores, not what the pucks show (07 §5). The payload says so, and says SIMULATED in sim.
@@ -27,18 +36,21 @@ prove what Hubspace stores, not what the pucks show (07 §5). The payload says s
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import logging
 import shutil
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from conductor.config import NOT_FOR_GIT, overlay_diff, overlay_text
 from conductor.drivers.base import StateRow
 from conductor.engine_api import PlanError
 from conductor.gate import Purpose
@@ -74,6 +86,9 @@ TOKEN_STALE_S = (
     600  # a live sign-in that hasn't refreshed for this long is suspect (it refreshes ~every 2 min)
 )
 THROTTLE_WINDOW_S = 600
+# systemd-timesyncd creates this file once the clock is synced; on the venue box the watchdog keeps a copy in step
+# with chrony and the compose file mounts its folder here (deploy/venue/lib/watchdog.sh). Folder there, file absent =
+# not synced.
 TIMESYNC_FLAG = Path("/run/systemd/timesync/synchronized")
 LOG_LIMIT_MAX = 500
 
@@ -115,6 +130,14 @@ class TestModeBody(_Body):
 # ---- helpers -------------------------------------------------------------------------------------------------
 def engine_or_none(services: Any) -> Any | None:
     return services.extras.get(ENGINE_KEY)
+
+
+def engine_flag(engine: Any, name: str) -> Any:
+    """An optional engine attribute (conductor/canopy.py: `commissioning`, `outage`, `paused`, `stopped`)."""
+    try:
+        return getattr(engine, name, None)
+    except Exception:  # noqa: BLE001 - a property that fails is just "unknown"
+        return None
 
 
 def engine_of(services: Any) -> Any:
@@ -221,6 +244,41 @@ async def _engine_call(what: str, call: Callable[[], Any]) -> Any:
         ) from None
 
 
+TIER_WORDS = {
+    "canvas": "T1, every head painted",
+    "slot": "T2, a slot painted in the app",
+    "modules": "T3, one colour per module",
+    "strand": "a whole-strand look",
+}
+
+
+def _refused(state: Any, fallback: str) -> None:
+    """The engine declined (conductor/canopy.py returns `refused=True`, never raises): a 409 with its sentence."""
+    if getattr(state, "refused", False):
+        raise HTTPException(status_code=409, detail=getattr(state, "message", "") or fallback)
+
+
+def _sent_line(engine: Any, state: Any, what: str) -> str:
+    """ "<what>: <look> (<tier>) on N of 9 modules" from the state the engine returned — never a fixed sentence."""
+    label = state.label or state.mode or "the look"
+    tier = TIER_WORDS.get(state.tier or "", state.tier or "")
+    look = f"{label} ({tier})" if tier else label
+    if engine_flag(engine, "outage") is not None:
+        return (
+            f"{what}: {look} is set, but Hubspace isn't answering (the canopy is resting), so it goes to every module "
+            "as soon as Hubspace answers again."
+        )
+    modules = state.modules or {}
+    total = len(modules)
+    held = sum(1 for m in modules.values() if m.get("locked"))
+    if not total:
+        return f"{what}: {look}."
+    line = f"{what}: {look} on {total - held} of {total} modules"
+    if held:
+        line += f"; {held} held on a test page are left alone until they're released"
+    return line + "."
+
+
 def _known_mode(services: Any, mode: str) -> None:
     known = [m["id"] for m in mode_list(services)]
     if known and mode not in known:
@@ -234,16 +292,34 @@ def _known_mode(services: Any, mode: str) -> None:
 async def reassert(request: Request, _ops: Ops) -> JSONResponse:
     services = services_of(request)
     engine = engine_of(services)
+    before = await _engine_call("report its state", engine.state)
+    outage = engine_flag(engine, "outage")
+    if engine_flag(engine, "commissioning") is True:
+        raise HTTPException(
+            status_code=409,
+            detail="Commissioning is writing the saved patterns right now, so there's nothing to re-assert yet. "
+            "Wait for it to finish (a minute or two), then press Re-assert all.",
+        )
+    if outage is None and not before.mode:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nothing to re-assert: the canopy has no look yet ({before.message or 'no mode'}). Press Safe "
+            "look; if that is refused too, the log tail below says why.",
+        )
     state = await _engine_call("re-assert the canopy", lambda: engine.reassert_all(source="ops"))
+    _refused(state, "The engine refused to re-assert the canopy.")
     _publish(services, "reassert")
-    return JSONResponse(
-        {
-            "ok": True,
-            "message": "Re-asserting: any module whose readback differs from its look gets the look again.",
-            "state": state.to_json(),
-        },
-        headers=NO_STORE,
-    )
+    if outage is not None:
+        message = (
+            "Hubspace isn't answering (the canopy is resting): one module was checked now. The look goes back to "
+            "every module as soon as Hubspace answers."
+        )
+    else:
+        message = (
+            f"Re-asserting {state.label or state.mode}: any module whose readback differs from its look gets the "
+            "look again."
+        )
+    return JSONResponse({"ok": True, "message": message, "state": state.to_json()}, headers=NO_STORE)
 
 
 @router.post("/api/canopy/pause")
@@ -256,7 +332,8 @@ async def pause(request: Request, body: PauseBody, _ops: Ops) -> JSONResponse:
     )
     _publish(services, "pause" if body.paused else "resume")
     message = (
-        "Guest input paused: the kiosk shows the canopy is resting and can't change it."
+        "Guest input paused: the kiosk shows the canopy is resting and can't change it. It stays paused across a "
+        "restart until someone presses Resume guest input."
         if body.paused
         else "Guest input resumed: guests can choose a mood again."
     )
@@ -268,13 +345,10 @@ async def safe_look(request: Request, _ops: Ops) -> JSONResponse:
     services = services_of(request)
     engine = engine_of(services)
     state = await _engine_call("set the safe look", lambda: engine.safe_look(source="ops"))
+    _refused(state, "The engine refused the safe look.")
     _publish(services, "safe_look")
     return JSONResponse(
-        {
-            "ok": True,
-            "message": "Safe look sent: Lowcountry Calm on all nine modules.",
-            "state": state.to_json(),
-        },
+        {"ok": True, "message": _sent_line(engine, state, "Safe look sent"), "state": state.to_json()},
         headers=NO_STORE,
     )
 
@@ -284,9 +358,19 @@ async def commission(request: Request, _ops: Ops) -> JSONResponse:
     services = services_of(request)
     engine = engine_of(services)
     result = await _engine_call("commission the slots", lambda: engine.commission(source="ops"))
+    result = result if isinstance(result, dict) else {}
+    ok = result.get("ok", True) is not False
+    message = str(result.get("message") or "")
+    if not ok and "finished_at" not in result:  # it never ran: already running, or the canopy is resting
+        raise HTTPException(status_code=409, detail=message or "The engine refused to commission the slots.")
     _publish(services, "commission")
     return JSONResponse(
-        {"ok": True, "result": result, "state": _state_json(engine)},
+        {
+            "ok": ok,
+            "message": message or "Commissioning finished. Run the checklist to see the slot hashes.",
+            "result": result,
+            "state": _state_json(engine),
+        },
         headers=NO_STORE,
     )
 
@@ -297,8 +381,12 @@ async def change_mode(request: Request, body: ModeBody, _ops: Ops) -> JSONRespon
     engine = engine_of(services)
     _known_mode(services, body.mode)
     state = await _engine_call("change the mode", lambda: engine.request_mode(body.mode, source="ops"))
+    _refused(state, f"The engine refused to change to {body.mode}.")
     _publish(services, "mode", mode=body.mode)
-    return JSONResponse({"ok": True, "state": state.to_json()}, headers=NO_STORE)
+    return JSONResponse(
+        {"ok": True, "message": _sent_line(engine, state, "Changing to"), "state": state.to_json()},
+        headers=NO_STORE,
+    )
 
 
 @router.get("/api/canopy/state")
@@ -516,10 +604,14 @@ def _item(item_id: str, title: str, status: str, detail: str, fix: str = "", not
 
 
 async def ntp_status() -> tuple[bool | None, str]:
-    """(synced?, how we know). None when this box can't tell (e.g. inside a container without the flag)."""
+    """(synced?, how we know). None when this box can't tell (e.g. a staging container with no clock state)."""
     try:
         if TIMESYNC_FLAG.exists():
-            return True, "systemd-timesyncd reports the clock synchronized"
+            return True, "the box reports its clock synced to internet time"
+        if (
+            TIMESYNC_FLAG.parent.is_dir()
+        ):  # the flag's folder is there (venue box mount, or timesyncd): no flag
+            return False, "the box reports its clock is not synced to internet time"
     except OSError:
         pass
     exe = shutil.which("timedatectl")
@@ -540,7 +632,11 @@ async def ntp_status() -> tuple[bool | None, str]:
         return None, "timedatectl didn't answer"
     value = out.decode("utf-8", "replace").strip().lower()
     if value in ("yes", "no"):
-        return value == "yes", f"timedatectl says NTPSynchronized={value}"
+        return value == "yes", (
+            "timedatectl says the clock is synced to internet time"
+            if value == "yes"
+            else "timedatectl says the clock is not synced to internet time"
+        )
     return None, "timedatectl gave no NTP status"
 
 
@@ -549,14 +645,21 @@ async def _check_clock(services: Any, client_ms: float | None) -> dict:
     server_ms = services.clock.now() * 1000.0
     skew_ms = None if client_ms is None else server_ms - client_ms
     title = "Clock synced"
-    parts = []
+    if synced is True:
+        parts = ["The box's clock is synced to internet time (NTP)."]
+    elif synced is False:
+        parts = ["The box's clock is not synced to internet time (NTP)."]
+    else:
+        parts = ["The Conductor can't see whether the box's clock is synced to internet time."]
     if skew_ms is not None:
         parts.append(f"The box and this browser differ by {abs(skew_ms) / 1000:.1f} s.")
-    parts.append(f"NTP: {how}.")
+    parts.append(f"(How we know: {how}.)")
     detail = " ".join(parts)
     ntp_fix = (
-        "On the box run `timedatectl` and make sure 'System clock synchronized: yes' (fix with "
-        "`sudo timedatectl set-ntp true` and check the network). A lagging clock may get writes accepted and dropped."
+        "The box keeps its clock with chrony, over the internet. Check the box's network first (is the internet "
+        "up?). Then on the box run `chronyc tracking` (Leap status should say Normal) or `timedatectl` (System "
+        "clock synchronized: yes); if not, `sudo systemctl restart chrony`, wait 2 minutes and press Run again. A "
+        "clock that is off may get Hubspace writes accepted and then dropped (unverified), so fix it before doors."
     )
     if synced is False:
         return _item("clock", title, "fail", detail, ntp_fix)
@@ -578,8 +681,9 @@ async def _check_clock(services: Any, client_ms: float | None) -> dict:
             title,
             "warn",
             detail,
-            "Check the box's clock: run `timedatectl` on the box (inside Docker, mount /run/systemd/timesync "
-            "read-only so the Conductor can see it).",
+            "Check the box's clock yourself: on the venue box run `sudo canopy-status` (Box → NTP synchronized) or "
+            "`timedatectl`. If it isn't synced, check the internet, then `sudo systemctl restart chrony`. (A staging "
+            "server can't report this; nothing to do there.)",
         )
     if small:
         return _item(
@@ -919,7 +1023,9 @@ def _check_test_result(services: Any) -> dict:
         title,
         "pass" if last["ok"] else "fail",
         last["message"],
-        "" if last["ok"] else "Open the modules that didn't reach Ready, then run the test again.",
+        ""
+        if last["ok"]
+        else last.get("fix") or "Open the modules that didn't reach Ready, then run the test again.",
     )
 
 
@@ -932,10 +1038,19 @@ def _check_guest_input(services: Any, state: dict | None) -> dict:
             "guest_input",
             title,
             "warn",
-            "Guest input is paused: the kiosk shows the canopy is resting.",
+            "Guest input is paused: the kiosk shows the canopy is resting. (A pause is kept across restarts.)",
             "Press Resume guest input before doors open.",
         )
     detail = "On: guests can choose a mood."
+    if state.get("phase") == "resting":
+        return _item(
+            "guest_input",
+            title,
+            "fail",
+            f"Guest input is on, but the canopy is resting, so guests can't change it: {state.get('message')}",
+            "If Hubspace is down, the canopy comes back by itself when it answers (outages.md). Otherwise press "
+            "Safe look; if that is refused too, restart the Conductor (restart-matrix.md) and read the log tail.",
+        )
     if state.get("phase") == "needs_attention":
         return _item(
             "guest_input", title, "warn", f"{detail} But the canopy needs attention: {state.get('message')}"
@@ -984,6 +1099,40 @@ def _pick_test_mode(services: Any, current: str | None) -> str:
     raise HTTPException(status_code=409, detail="There's no other mode to change to.")
 
 
+def _test_refused(services: Any, target: str, state: Any) -> JSONResponse:
+    """The engine declined the test mode change: that is a failed test, recorded like one."""
+    clock = services.clock
+    label = next((m["label"] for m in mode_list(services) if m["id"] == target), target)
+    message = f"The engine refused the test mode change to {label}: {state.message or 'no reason given'}"
+    result = {
+        "ok": False,
+        "mode": target,
+        "label": label,
+        "elapsed_s": 0.0,
+        "window_s": TEST_WINDOW_S,
+        "modules": [
+            {
+                "device_id": entry.id,
+                "label": entry.label or entry.id,
+                "status": (state.modules.get(entry.id) or {}).get("status", "unknown"),
+                "reason": (state.modules.get(entry.id) or {}).get("reason", ""),
+                "ready_after_s": None,
+            }
+            for entry in services.registry.canopy_modules()
+        ],
+        "message": message,
+        "fix": "Nothing was sent. Press Safe look; if that is refused too, restart the Conductor "
+        "(restart-matrix.md) and read the log tail.",
+        "restored_to": None,
+        "at": clock.now(),
+        "simulated": bool(services.engine_driver.simulated),
+    }
+    services.extras[TEST_RESULT_KEY] = result
+    services.telemetry.record("alert", level="warn", message=f"7 am test mode change: {message}")
+    _publish(services, "test_mode_change", ok=False, message=message)
+    return JSONResponse(result, headers=NO_STORE)
+
+
 @router.post("/api/ops/checklist/test-mode-change")
 async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> JSONResponse:
     services = services_of(request)
@@ -997,7 +1146,9 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
             status_code=400, detail="That mode is already showing; choose a different one to test a change."
         )
     start = clock.monotonic()
-    await _engine_call("change the mode", lambda: engine.request_mode(target, source="ops"))
+    accepted = await _engine_call("change the mode", lambda: engine.request_mode(target, source="ops"))
+    if getattr(accepted, "refused", False):
+        return _test_refused(services, target, accepted)
     ready_after: dict[str, float] = {}
     ids = [e.id for e in services.registry.canopy_modules()]
     state = engine.state()
@@ -1040,8 +1191,11 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
     restored_to = None
     if body.restore and before.mode and before.mode != target and target != services.settings.kiosk.idle_mode:
         try:
-            await engine.request_mode(before.mode, source="ops")
-            restored_to = before.mode
+            back = await engine.request_mode(before.mode, source="ops")
+            if getattr(back, "refused", False):
+                message += f" (Couldn't change back to {before.label or before.mode}: {back.message})"
+            else:
+                restored_to = before.mode
         except Exception as exc:  # noqa: BLE001 - the test result stands; say the restore failed
             message += f" (Couldn't change back to {before.label or before.mode}: {exc})"
     result = {
@@ -1079,4 +1233,60 @@ async def logs(request: Request, _ops: Ops, since: int | None = None, limit: int
     return JSONResponse(
         {"records": records, "last_seq": ring.last_seq, "capacity": ring.capacity},
         headers=NO_STORE,
+    )
+
+
+# ---- the ops overlay, to commit back to git (07 §8) --------------------------------------------------------------
+@router.get("/api/ops/overlay")
+async def overlay_download(request: Request, _ops: Ops, part: str = "all") -> PlainTextResponse:
+    """The overlay's YAML and a unified diff against config/devices.yaml, as a download (ops only)."""
+    if part not in ("all", "yaml", "diff"):
+        raise HTTPException(status_code=422, detail="part is all, yaml or diff.")
+    services = services_of(request)
+    registry = services.registry
+    stamp = datetime.fromtimestamp(services.clock.now(), UTC).strftime("%Y%m%dT%H%M%SZ")
+    overlay = overlay_text(registry) if registry.overlay.devices else "devices: {}\n"
+    folded = overlay_diff(registry, Path(services.config_dir))
+    diff = "".join(
+        difflib.unified_diff(
+            folded.before.splitlines(keepends=True),
+            folded.after.splitlines(keepends=True),
+            "a/config/devices.yaml",
+            "b/config/devices.yaml",
+        )
+    )
+    if part == "yaml":
+        body, name, media = overlay, f"registry-overlay-{stamp}.yaml", "application/x-yaml"
+    elif part == "diff":
+        body, name, media = diff, f"devices-yaml-{stamp}.diff", "text/x-diff"
+    else:
+        history = registry.overlay_path.parent / "history" if registry.overlay_path is not None else None
+        versions = (
+            len(list(history.glob("registry-*.yaml"))) if history is not None and history.is_dir() else 0
+        )
+        where = str(registry.overlay_path) if registry.overlay_path is not None else "(no data directory)"
+        head = [
+            f"Color Canopy ops overlay, downloaded {stamp} (07 §8).",
+            f"Overlay file: {where} ({versions} earlier version(s) kept under overrides/history/).",
+            f"Devices edited: {', '.join(sorted(registry.overlay.devices)) or 'none'}.",
+            "",
+            "1. The overlay as it is on this box (restore it under <data>/overrides/registry.yaml). It holds real",
+            "   metadevice ids: keep it off git and out of chat.",
+            "",
+            *(f"    {line}" for line in overlay.splitlines()),
+            "",
+            "2. The same edits folded into config/devices.yaml, to commit back to git (`git apply` this file).",
+            f"   Left out, because devices.yaml never holds real ids: {', '.join(NOT_FOR_GIT)}"
+            + (f" (on {', '.join(folded.left_out)})." if folded.left_out else " (none set)."),
+        ]
+        if folded.problem:
+            head.append(f"   No diff: {folded.problem}. Copy the edits from part 1 by hand.")
+        elif not diff:
+            head.append("   Nothing to commit: every edit is a real id, or there are no edits.")
+        body = "\n".join(head) + "\n\n" + diff
+        name, media = f"canopy-overlay-{stamp}.patch", "text/x-diff"
+    return PlainTextResponse(
+        body,
+        media_type=media,
+        headers={**NO_STORE, "Content-Disposition": f'attachment; filename="{name}"'},
     )

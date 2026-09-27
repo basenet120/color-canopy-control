@@ -13,6 +13,9 @@ Ref Docs/
 secrets/
 *.token.json
 
+# Release images (scripts/release.sh): tarballs never enter git
+dist/
+
 # Local runtime data (the default CONDUCTOR_DATA_DIR) and bench output
 var/
 reports/local/

@@ -16,15 +16,26 @@ Rules implemented:
   `motion=True` with `motion_feature` only when its `motionEffect` code is bench-enabled; otherwise it is static,
   says so in a note, and uses the static `feature` (the schema refuses movement words there).
 - **Bench proof.** With `flags` (live hardware), T1 needs Gate C (`t1_frames`) and T2 needs Gate B (`t2_select`) on
-  every module; without flags (the simulator) every tier is allowed (07 §6 "sim runs T1"). T2 needs a recorded hash
-  of the hand-painted slot on every module.
+  every module; without flags (the simulator) every tier is allowed (07 §6 "sim runs T1"). T2 needs a hash recorded
+  as **hand-painted in the Hubspace app** (origin "app", module page → Slots) on every module: a hash commissioning
+  recorded is the Conductor's own canvas and never makes the "painted in the app" copy true.
+- **Motion follows the device.** A canvas look's copy claims motion only when every module's slot holds the
+  bench-enabled code (the effect fields recorded from readback at commissioning, else the slot header's readback);
+  `motion` (re-trigger all nine as one burst) is set whenever a slot may animate. At T2, a `motion: true` mode whose
+  hand-painted slot animates — or whose header is unknown — is a motion plan too.
+- **Partial plans.** A module without capabilities is left out (`ModePlan.skipped`; the engine shows it as needing
+  attention) and copy that counts strands or lights counts the modules actually driven. The safe look
+  (`SAFE_MODES`) never waits: it assumes `SAFE_DEFAULT_CAPS` for an unread module.
+- **Kelvin in the copy.** A strand look whose copy names its Kelvin value uses the configured fallback look when a
+  module's range would clamp that value (Lowcountry Calm never says "2700 K" at 3000 K).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -51,6 +62,12 @@ NUMBER_WORDS = {
     9: "nine",
 }
 STATIC_EFFECTS = {"motionEffect": 0, "brightnessEffect": 0}
+SAFE_MODES = frozenset({"lowcountry-calm"})  # the safe look: must compile even before a profile is read
+# What the safe look assumes for a module whose profile hasn't been read (the sibling string's documented white
+# range, 04): enough for a whole-strand white or RGB look, nothing painted.
+SAFE_DEFAULT_CAPS = Capabilities(
+    power=True, brightness_range=(1, 100), cct_range=(2700, 6500), rgb=True, color_modes=["white", "color"]
+)
 
 
 @lru_cache(maxsize=4)
@@ -80,7 +97,12 @@ class CompileContext:
       hand-painted content for a T2 preview). Missing = the default header, with a note.
     - `effects_enabled`: `settings.effects.enabled` ({"motionEffect": {code: note}, "brightnessEffect": {...}}).
     - `recorded_hashes`: device id → slot → the hash recorded after commissioning / hand-painting. None = use each
-      registry entry's `slot_hashes`.
+      registry entry's `slot_hashes` (with its `slot_origin` and `slot_effects`).
+    - `recorded_origins` / `recorded_effects`: with `recorded_hashes`, where each hash came from ("api" =
+      commissioned by the Conductor, "app" = hand-painted in the Hubspace app; default "api") and the slot header's
+      effect fields read back when it was recorded.
+    - `safe_modes`: modes that compile with conservative capabilities (`SAFE_DEFAULT_CAPS`) for a module whose
+      profile hasn't been read. Every other mode leaves such a module out of the plan (`ModePlan.skipped`).
     - `flags`: device id → bench `DeviceFlags` (already resolved for the kit at that address). None = simulator:
       every tier allowed.
     - `modes`, `recipes`, `canopy`: loaded from `config_dir` when not given.
@@ -92,6 +114,9 @@ class CompileContext:
     effects_enabled: Mapping[str, Mapping[int, str]] | None = None
     recorded_hashes: Mapping[str, Mapping[str, str]] | None = None
     flags: Mapping[str, DeviceFlags] | None = None
+    recorded_origins: Mapping[str, Mapping[str, str]] | None = None
+    recorded_effects: Mapping[str, Mapping[str, Mapping[str, int]]] | None = None
+    safe_modes: frozenset[str] = SAFE_MODES
     modes: ModesFile | None = None
     recipes: RecipesFile | None = None
     canopy: dict | None = None
@@ -133,10 +158,34 @@ class CompileContext:
             raise PlanError(f"{device_id} hasn't been read yet (no capabilities), so no look can be planned")
         return caps
 
-    def recorded(self, entry: DeviceEntry, slot: str) -> str | None:
-        if self.recorded_hashes is not None:
-            return (self.recorded_hashes.get(entry.id) or {}).get(slot)
-        return entry.slot_hashes.get(slot)
+    def record(self, entry: DeviceEntry, slot: str) -> dict[str, Any] | None:
+        """The recorded {hash, origin, effects} of `slot` on this module, or None."""
+        if self.recorded_hashes is None:
+            return entry.slot_record(slot)
+        digest = (self.recorded_hashes.get(entry.id) or {}).get(slot)
+        if not digest:
+            return None
+        effects = ((self.recorded_effects or {}).get(entry.id) or {}).get(slot)
+        return {
+            "hash": digest,
+            "origin": ((self.recorded_origins or {}).get(entry.id) or {}).get(slot, "api"),
+            "effects": dict(effects) if effects else None,
+        }
+
+    def recorded(self, entry: DeviceEntry, slot: str, origin: str | None = None) -> str | None:
+        """The recorded hash (only one of that origin when `origin` is given)."""
+        rec = self.record(entry, slot)
+        if rec is None or (origin is not None and rec["origin"] != origin):
+            return None
+        return rec["hash"]
+
+    def held_effects(self, entry: DeviceEntry, slot: str, origin: str) -> dict[str, int] | None:
+        """The effect fields the device's slot holds: recorded with a hash of `origin`, else the slot header's
+        readback, else None (unknown)."""
+        rec = self.record(entry, slot)
+        if rec is not None and rec["origin"] == origin and rec["effects"] is not None:
+            return rec["effects"]
+        return R.slot_effects(self.readback(entry.id, slot))
 
     def readback(self, device_id: str, slot: str) -> Any:
         return (self.slot_readback.get(device_id) or {}).get(slot)
@@ -169,13 +218,59 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
     devices = ctx.devices
     if not devices:
         raise PlanError("there are no canopy modules in the registry")
+    assumed = []
+    if mode_id in ctx.safe_modes:
+        # The safe look never waits for profiles: a module that hasn't been read gets conservative capabilities.
+        assumed = [d for d in devices if d.id not in ctx.capabilities]
+        if assumed:
+            ctx = replace(
+                ctx, capabilities={**ctx.capabilities, **{d.id: SAFE_DEFAULT_CAPS for d in assumed}}
+            )
+    ready = [d for d in devices if d.id in ctx.capabilities]
+    skipped = {
+        d.id: f"{d.label or d.id}'s profile hasn't been read yet (no capabilities), so it was left out of this look"
+        for d in devices
+        if d.id not in ctx.capabilities
+    }
+    if not ready:
+        raise PlanError(
+            f"no module's profile has been read yet ({', '.join(skipped)} hasn't been read yet), so no look can "
+            "be planned"
+        )
     if tier is Tier.STRAND:
-        return _strand(mode_id, mode, ctx, devices)
-    if tier is Tier.T1:
-        return _canvas(mode_id, mode, ctx, devices)
-    if tier is Tier.T2:
-        return _slot(mode_id, mode, ctx, devices)
-    return _modules(mode_id, mode, ctx, devices)
+        plan = _strand(mode_id, mode, ctx, ready)
+    elif tier is Tier.T1:
+        plan = _canvas(mode_id, mode, ctx, ready)
+    elif tier is Tier.T2:
+        plan = _slot(mode_id, mode, ctx, ready)
+    else:
+        plan = _modules(mode_id, mode, ctx, ready)
+    if assumed:
+        plan.notes.append(
+            "Profile not read yet, so the safe look assumes the sibling string's white range (2700–6500 K): "
+            + ", ".join(d.id for d in assumed)
+        )
+    if skipped:
+        plan.skipped = skipped
+        plan.feature = _counted(plan.feature, ready, devices)
+        plan.notes.append(f"Left out (no capabilities yet): {', '.join(skipped)}")
+    return plan
+
+
+def _counted(feature: str, ready: Sequence[DeviceEntry], devices: Sequence[DeviceEntry]) -> str:
+    """Copy that counts strands or lights, corrected for the modules actually in the plan (kiosk copy is true)."""
+    total, n = len(devices), len(ready)
+    out = feature
+    for word, repl in ((_count_words(total), _count_words(n)), (str(total), str(n))):
+        out = re.sub(
+            rf"\b{re.escape(word)}\b",
+            lambda m, repl=repl: repl.capitalize() if m.group(0)[0].isupper() else repl,
+            out,
+            flags=re.IGNORECASE,
+        )
+    heads_all = sum(d.expected_heads or 30 for d in devices)
+    heads_ready = sum(d.expected_heads or 30 for d in ready)
+    return re.sub(rf"\b{heads_all}\b", str(heads_ready), out)
 
 
 def compile_first(mode_id: str, ctx: CompileContext, *, skip: Sequence[Tier | str] = ()) -> ModePlan:
@@ -295,6 +390,19 @@ def _to_look(spec: LookSpec, caps: Capabilities, notes: _Notes, device_id: str, 
     )
 
 
+def _named_kelvin_clamped(
+    spec: LookSpec, feature: str, devices: Sequence[DeviceEntry], caps: Mapping[str, Capabilities]
+) -> str | None:
+    """Why the copy can't stand: it names `spec.cct` in Kelvin but a module's range clamps it. None when fine."""
+    if spec.kind != "white" or not spec.cct or not re.search(rf"\b{spec.cct}\s?K\b", feature):
+        return None
+    for d in devices:
+        rng = caps[d.id].cct_range
+        if rng and not rng[0] <= spec.cct <= rng[1]:
+            return f"{d.id}: {spec.cct} K is outside its colour temperature range {rng[0]}–{rng[1]} K"
+    return None
+
+
 def _generic_feature(spec: LookSpec, count: int) -> str:
     """A true sentence for a fallback look the mode's config gave no copy for."""
     n = _count_words(count)
@@ -361,6 +469,17 @@ def _strand(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
             if problem := _look_problem(spec, caps[d.id]):
                 reason = f"{d.id}: {problem}"
                 break
+    if reason is None and (problem := _named_kelvin_clamped(spec, feature, devices, caps)):
+        # The copy names a Kelvin value a module can't show: never claim it (kiosk copy is true). With a fallback
+        # look the mode's config says what to show instead; without one, the copy names what is actually sent.
+        if tech.fallback_look is not None:
+            reason = problem
+        else:
+            sent = {max(c.cct_range[0], min(c.cct_range[1], spec.cct)) for c in caps.values() if c.cct_range}
+            if len(sent) == 1:
+                feature = re.sub(rf"\b{spec.cct}(\s?)K\b", rf"{sent.pop()}\1K", feature)
+            else:
+                feature = _generic_feature(spec, len(devices))
     if reason is not None:
         if tech.fallback_look is None:
             raise PlanError(f"{mode.label} can't run: {reason}, and it has no fallback look")
@@ -400,15 +519,33 @@ def _canvas(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
     frames = compose_canvas(tech.canvas, canopy=ctx.canopy, recipes=ctx.recipes, placements=placements)
 
     # Motion only when the configured code is one the bench has enabled; otherwise static, and the copy says so.
+    # The copy follows what the slots HOLD (07 §6): the effect fields recorded from readback at commissioning, else
+    # the slot header's readback. The canonical hash leaves them out, so they are checked here and on readback.
     effects: dict[str, int] = dict(STATIC_EFFECTS)
     motion, feature = False, tech.feature
     me = tech.motion_effect
     enabled = (ctx.effects_enabled or {}).get("motionEffect") or {}
+    held = {d.id: ctx.held_effects(d, slot, "api") for d in devices}
+    if any(R.animates(h) for h in held.values()):
+        motion = True  # a slot still animates: re-trigger all nine as one burst until it's rewritten
     if me is not None:
         if me.motionEffect and me.motionEffect in enabled:
             effects = {"motionEffect": me.motionEffect, "motionSpeed": me.motionSpeed, "brightnessEffect": 0}
-            motion, feature = True, tech.motion_feature or tech.feature
-            notes.add(f"On-device motion: motionEffect {me.motionEffect} ({enabled[me.motionEffect]})")
+            motion = True
+            missing = [
+                d.id
+                for d in devices
+                if held[d.id] is None or int(held[d.id].get("motionEffect") or 0) != me.motionEffect
+            ]
+            if not missing:
+                feature = tech.motion_feature or tech.feature
+                notes.add(f"On-device motion: motionEffect {me.motionEffect} ({enabled[me.motionEffect]})")
+            else:
+                notes.add(
+                    f"motionEffect {me.motionEffect} is bench-enabled but not saved in {slot} on "
+                    f"{', '.join(missing)} yet (commissioning or the slot rewrite puts it there), so the copy "
+                    "doesn't claim motion"
+                )
         elif me.motionEffect:
             notes.add(
                 f"Motion is off: motionEffect {me.motionEffect} isn't bench-enabled, so the pattern is static"
@@ -475,14 +612,29 @@ def _slot(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEnt
             raise PlanError(f"{d.id} has no slot {slot}")
         if ctx.flags is not None and ctx.flags.get(d.id, DeviceFlags()).t2_select is not True:
             raise PlanError(f"selecting slots by API (T2) isn't proven on {d.id} yet (bench Gate B)")
-        if not ctx.recorded(d, slot):
+        if not ctx.recorded(d, slot, "app"):
             unverified.append(d.id)
     if unverified:
+        # Only a hash recorded as painted in the Hubspace app counts (F4): a hash commissioning recorded is the
+        # Conductor's own canvas, and calling it "painted in the Hubspace app" would be false.
+        commissioned = [d.id for d in devices if d.id in unverified and ctx.recorded(d, slot, "api")]
+        why = (
+            f"; {', '.join(commissioned)} hold{'s' if len(commissioned) == 1 else ''} the Conductor's commissioned "
+            "pattern, not one painted in the app"
+            if commissioned
+            else ""
+        )
         raise PlanError(
-            f"hand-painted slot not verified yet: {slot} on {', '.join(unverified)} has no recorded hash "
-            "(paint it in the Hubspace app, then record its hash on /ops)"
+            f"hand-painted slot not verified yet: {slot} on {', '.join(unverified)} has no hash recorded as painted "
+            f"in the Hubspace app{why} (paint it in the app, then record it on the module page's Slots tab)"
         )
     notes = _Notes()
+    # Motion (07 §6, F9): an app-painted pattern can carry an animation. When the mode is a motion mode and any
+    # slot animates — or its header is unknown — re-assert all nine as one burst, never one module on its own.
+    animated = [R.animates(ctx.held_effects(d, slot, "app")) for d in devices]
+    motion = bool(mode.motion) and any(a is None or a for a in animated)
+    if motion:
+        notes.add("Re-triggered as one burst: the hand-painted slot may animate on the device")
     design = _design_frames(mode, ctx, devices, caps)
     modules = {}
     for d in devices:
@@ -491,7 +643,7 @@ def _slot(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEnt
         rows = _vector(
             R.Look("slot", brightness=max(lo, min(hi, tech.brightness)), slot=slot, speed=tech.speed), c
         )
-        recorded = ctx.recorded(d, slot)
+        recorded = ctx.recorded(d, slot, "app")
         value = ctx.readback(d.id, slot)
         preview_rows = None
         if value is not None and R.slot_hash(value) == recorded:
@@ -506,7 +658,7 @@ def _slot(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEnt
         modules[d.id] = _target(d, c, rows, slot=slot, slot_hash=recorded, preview_rows=preview_rows)
         if preview_rows is None:
             modules[d.id].preview = []
-    return ModePlan(mode_id, mode.label, Tier.T2, tech.feature, False, modules, notes.lines(len(devices)))
+    return ModePlan(mode_id, mode.label, Tier.T2, tech.feature, motion, modules, notes.lines(len(devices)))
 
 
 def _design_frames(

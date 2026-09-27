@@ -116,6 +116,18 @@ async def _bench_runner_gate_c(env: Env, address: str) -> str:
     return str(record["result"]["observations"].get("write", {}).get("status", record["result"]["verdict"]))
 
 
+async def _bench_runner_stale_clock(env: Env, address: str) -> str:
+    """The stale-clock job: its select carries a shifted lastUpdateTime (Command.stamp_offset_s) — same gate."""
+    device_id = env.world.registry.logical_for(address).id
+    with tempfile.TemporaryDirectory() as data:
+        runner = BenchRunner(_BenchServices(env, Path(data)))  # type: ignore[arg-type]
+        try:
+            record = await runner.run("stale_clock_put", device_id, {})
+        except BenchBusy:
+            return "lock_refused"
+    return str(record["result"]["observations"].get("write", {}).get("status", record["result"]["verdict"]))
+
+
 async def _module_page_paint(env: Env, address: str) -> str:
     """/ops/module: open the device (takes its lock) → paint three heads (a T1 frame write + select, one PUT)."""
     import json
@@ -276,6 +288,38 @@ async def _canopy_commission(env: Env, address: str) -> str:
     return str(report["modes"]["sunset"]["modules"][device_id]["status"])
 
 
+async def _vignette_action(env: Env, address: str) -> str:
+    """/vignette/<room>: a staff tablet's action → one ENGINE command per device through the executor. (The fake
+    devices are 20-segment strings, so the room's device under test is the Glow Garden string.)"""
+    from conductor.config import OverlayFile, Registry, RegistryFile
+    from conductor.vignettes import RoomConfig, VignetteDeps, VignetteService, VignettesFile
+
+    registry = Registry(
+        RegistryFile.model_validate(
+            {
+                "accounts": {"bench": {"label": "Bench"}},
+                "devices": [
+                    {"id": "garden-string", "role": "vignette", "vignette": "garden", "kind": "string"}
+                    | {"account": "bench", "metadevice_id": address}
+                ],
+            }
+        ),
+        OverlayFile(),
+        None,
+    )
+    service = VignetteService(
+        VignetteDeps(
+            registry=lambda: registry,
+            target=lambda d, _purpose: Target(d, address, env.world.driver, env.executor),
+            rooms=VignettesFile(
+                rooms={"garden": RoomConfig(space="Glow Garden", title="Bring the garden to life")}
+            ),
+        )
+    )
+    report = await service.action("garden", device_id="garden-string", action="brightness", value=40)
+    return str(report["results"][0]["status"])
+
+
 WriterPath = Callable[[Env, str], Awaitable[str]]
 WRITER_PATHS: dict[str, WriterPath] = {
     "executor.submit (engine)": _executor_engine,
@@ -283,12 +327,14 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "executor.burst (mode change)": _executor_burst,
     "driver.write (anything bypassing the executor)": _driver_direct,
     "bench runner (gate_c)": _bench_runner_gate_c,
+    "bench runner (stale_clock_put, shifted stamp)": _bench_runner_stale_clock,
     "module page (paint)": _module_page_paint,
     "module page (lowcountry preview)": _module_page_lowcountry_preview,
     "canopy engine (mode change)": _canopy_mode_change,
     "reconciler (re-assert)": _canopy_reassert,
     "idle hold": _canopy_idle_hold,
     "slot manager (commission)": _canopy_commission,
+    "vignette action": _vignette_action,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
 COVERED_MODULES = {
@@ -297,6 +343,7 @@ COVERED_MODULES = {
     "conductor/module/session.py": "module page (paint)",
     "conductor/canopy.py": "canopy engine (mode change)",
     "conductor/reconciler.py": "reconciler (re-assert)",
+    "conductor/vignettes.py": "vignette action",
 }
 ALLOWED = {"denied", "lock_refused", "locked"}
 

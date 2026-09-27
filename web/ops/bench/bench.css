@@ -9,6 +9,7 @@
 .sim-banner strong { letter-spacing: 0.08em; }
 /* the banner already says SIMULATED at the top; keep the shared badge out of its way */
 body.bench .sim-badge { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); }
+body.bench { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 64px); } /* keep the last answer buttons clear of the badge */
 
 /* `.btn` sets display, which would otherwise beat the hidden attribute */
 [hidden] { display: none !important; }
@@ -65,3 +66,8 @@ button.big, .btn.big { width: 100%; min-height: 56px; font-size: 1.05rem; }
   border-radius: 0; padding: 10px 4px; text-align: left; font-weight: 500;
 }
 .runs .when { color: var(--muted); font-size: 0.85rem; }
+
+/* Scrolled-to sections (the run panel, an error) land below the sticky SIMULATED banner, not under it; the fixed
+   Simulator badge at the bottom never covers the last thing on the page. */
+.run-panel, #error { scroll-margin-top: 96px; }
+body.bench main { padding-bottom: 72px; }

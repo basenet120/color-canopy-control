@@ -69,7 +69,11 @@ function renderState(st) {
   tier.textContent = TIER_TEXT[st.tier] || st.tier || "";
   const guest = $("canopy-guest");
   guest.hidden = false;
-  guest.textContent = st.guest_input ? "Guest input on" : "Guest input paused";
+  // A pause is saved on the box and survives a restart (canopy.py), so say since when.
+  guest.textContent = st.guest_input
+    ? "Guest input on"
+    : `Guest input paused${st.paused_since ? ` since ${clock(st.paused_since)}` : ""}`;
+  guest.title = st.guest_input ? "" : "Stays paused across a Conductor restart until someone presses Resume.";
   guest.className = `chip ${st.guest_input ? "ok" : "warn"}`;
   const feature = $("canopy-feature");
   feature.hidden = !st.feature;
@@ -208,13 +212,15 @@ async function loadHeads() {
 }
 
 // ---- controls -----------------------------------------------------------------------------------------------------
+// The result line says what the engine actually did: a refusal comes back as a 409 (the engine's own sentence) and a
+// commissioning run with problems as ok:false — both in the error style, never a green "done".
 async function control(button, path, body, busy) {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = busy;
   try {
     const res = await api(path, { method: "POST", body });
-    note($("control-result"), res.message || "Done.", "ok");
+    note($("control-result"), res.message || "The canopy engine accepted that.", res.ok === false ? "error" : "ok");
     if (res.state) renderState({ ...res.state, modes: undefined });
     else loadState();
     loadHeads();
@@ -251,10 +257,7 @@ function setupControls() {
 
 async function commission() {
   const res = await control($("commission-btn"), "/api/canopy/commission", {}, "Commissioning…");
-  if (res) {
-    const r = res.result || {};
-    note($("control-result"), r.message || "Commissioning finished. Run the checklist to see the slot hashes.", "ok");
-  }
+  if (res) runChecklist(); // the slot hashes item shows what was recorded
 }
 
 // ---- the 7 am checklist -------------------------------------------------------------------------------------------
@@ -315,6 +318,8 @@ async function testModeChange() {
 }
 
 // ---- needs attention, accounts, devices ---------------------------------------------------------------------------
+// Engine and reconciler alerts (slot drift, a tier downgrade, a failed rewrite…) carry `alert`: they stay until
+// they're resolved or someone acknowledges them here.
 function renderAttention(items) {
   const list = $("attention");
   if (!items.length) {
@@ -324,9 +329,35 @@ function renderAttention(items) {
   fill(
     list,
     items.map((item) =>
-      h("li", {}, h("span", {}, item.message, " ", item.link ? h("a", { href: item.link }, "Fix") : null)),
+      h(
+        "li",
+        { class: item.alert ? `alert ${item.level || ""}` : null },
+        h(
+          "span",
+          {},
+          item.message,
+          " ",
+          item.link ? h("a", { href: item.link }, item.alert ? "Open module page" : "Fix") : null,
+        ),
+        item.alert
+          ? h("div", { class: "alert-foot" },
+              item.at ? h("span", { class: "muted" }, clock(item.at)) : null,
+              h("button", { type: "button", class: "secondary ack", onclick: (e) => ack(e.currentTarget, item.alert) },
+                "Acknowledge"))
+          : null,
+      ),
     ),
   );
+}
+
+async function ack(button, key) {
+  button.disabled = true;
+  try {
+    await api("/api/ops/alerts/ack", { method: "POST", body: { key } });
+  } catch (err) {
+    if (err.status !== 404) note($("control-result"), err.message, "error");
+  }
+  refresh();
 }
 
 function accountPill(a) {
@@ -370,33 +401,76 @@ function capsLine(d) {
   return d.capabilities_error ? `Profile not read: ${d.capabilities_error}` : "Profile not read yet";
 }
 
-function renderDevices(list) {
-  devices = list;
-  fill(
-    $("devices"),
-    list.map((d) => {
-      const q = encodeURIComponent(d.id);
-      const lock = d.lock ? `In use by ${d.lock.owner}` : null;
-      return h(
-        "li",
-        {},
-        h("div", { class: "row" }, h("span", { class: "title" }, d.label), statusPill(d.status),
-          d.simulated ? simTag() : null),
-        h("div", { class: "sub" }, [d.id, d.module, d.account && `account: ${d.account}`].filter(Boolean).join(" · ")),
-        d.reason && d.status !== "ready" ? h("div", { class: "sub" }, d.reason) : null,
-        h("div", { class: "sub" }, capsLine(d)),
-        d.status !== "needs_attention" ? (d.problems || []).map((p) => h("div", { class: "problem" }, p)) : null,
-        d.head_count_problem ? h("div", { class: "problem" }, `Head count: ${d.head_count_problem}`) : null,
-        lock ? h("div", { class: "sub" }, lock) : null,
-        d.purposes.bench.simulated === false
-          ? h("div", { class: "sub" }, d.allowlisted ? "Bench reaches the real device" : "Real device, read-only (not allowlisted)")
-          : null,
-        h(
+const KIND_TEXT = {
+  bulb: "Colour bulb",
+  plug: "Smart plug",
+  lock: "Smart lock",
+  fan: "Ceiling fan",
+  string: "String lights",
+  path: "Path lights",
+};
+
+function profileLine(d) {
+  const kind = KIND_TEXT[d.kind] || d.kind || "Device";
+  if (d.capabilities) return `${kind} · profile read`;
+  return `${kind} · ${d.capabilities_error ? `profile not read: ${d.capabilities_error}` : "profile not read yet"}`;
+}
+
+// One device. Strands (canopy modules, bench kit, spares) get the head count, the module page and the bench;
+// vignette devices get their room page (the module page and bench are for strands only).
+function deviceItem(d, strand) {
+  const q = encodeURIComponent(d.id);
+  const lock = d.lock ? `In use by ${d.lock.owner}` : null;
+  const room = d.vignette ? `/vignette/${encodeURIComponent(d.vignette)}/` : null;
+  return h(
+    "li",
+    { "data-device": d.id },
+    h("div", { class: "row" }, h("span", { class: "title" }, d.label), statusPill(d.status),
+      d.simulated ? simTag() : null),
+    h("div", { class: "sub" }, [d.id, d.module, d.account && `account: ${d.account}`].filter(Boolean).join(" · ")),
+    d.reason && d.status !== "ready" ? h("div", { class: "sub" }, d.reason) : null,
+    h("div", { class: "sub" }, strand ? capsLine(d) : profileLine(d)),
+    d.status !== "needs_attention" ? (d.problems || []).map((p) => h("div", { class: "problem" }, p)) : null,
+    strand && d.head_count_problem ? h("div", { class: "problem" }, `Head count: ${d.head_count_problem}`) : null,
+    lock ? h("div", { class: "sub" }, lock) : null,
+    d.purposes.bench.simulated === false
+      ? h("div", { class: "sub" }, d.allowlisted ? "Bench reaches the real device" : "Real device, read-only (not allowlisted)")
+      : null,
+    strand
+      ? h(
           "div",
           { class: "actions" },
           h("a", { class: "btn secondary", href: `/ops/module/?device=${q}` }, "Open module page"),
           h("a", { class: "btn secondary", href: `/ops/bench/?device=${q}` }, "Bench"),
+        )
+      : room
+        ? h("div", { class: "actions" }, h("a", { class: "btn secondary", href: room }, "Open room page"))
+        : null,
+  );
+}
+
+function renderDevices(list, groups) {
+  devices = list;
+  const byId = new Map(list.map((d) => [d.id, d]));
+  const sections =
+    Array.isArray(groups) && groups.length
+      ? groups
+      : [{ id: "all", title: "All devices", strand: true, link: null, devices: list.map((d) => d.id) }];
+  fill(
+    $("devices"),
+    sections.map((g) => {
+      const members = g.devices.map((id) => byId.get(id)).filter(Boolean);
+      return h(
+        "section",
+        { class: "dev-group", "data-group": g.id },
+        h(
+          "h3",
+          { class: "group-title" },
+          h("span", {}, g.title),
+          h("span", { class: "muted count" }, `${members.length}`),
+          g.link ? h("a", { class: "group-link", href: g.link }, "Room page") : null,
         ),
+        h("ul", { class: "list" }, members.map((d) => deviceItem(d, g.strand))),
       );
     }),
   );
@@ -631,7 +705,7 @@ async function refresh(full = false) {
     simBadge(v);
     renderAttention(summary.attention || []);
     renderAccounts(summary.accounts || {});
-    renderDevices(list.devices || []);
+    renderDevices(list.devices || [], list.groups);
     renderBudget(summary);
     $("devices-note").textContent = list.simulated
       ? "The show engine runs on the simulator here: statuses are SIMULATED."

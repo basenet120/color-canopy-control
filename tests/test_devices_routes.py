@@ -11,7 +11,12 @@ def _device(body: dict, device_id: str) -> dict:
 def test_devices_list_registry_targets_and_capabilities(app_client):
     body = app_client.get("/api/devices").json()
     assert body["simulated"] is True and body["mode"] == "sim"
-    assert len(body["devices"]) == 10
+    registry = app_client.app.state.services.registry
+    assert (
+        len(body["devices"])
+        == len(registry.devices)
+        == 10 + len(registry.by_role("spare")) + len(registry.by_role("vignette"))
+    )
     kit = _device(body, "bench-kit")
     assert (
         kit["label"] and kit["role"] == "bench" and kit["account"] == "bench" and kit["expected_heads"] == 30
@@ -44,15 +49,16 @@ def test_capabilities_are_cached_until_refresh(app_client, monkeypatch):
         return await original(address, purpose=purpose)
 
     monkeypatch.setattr(services.sim, "fetch_profile", counting)
+    n = len(services.registry.devices)
     app_client.get("/api/devices")
-    assert len(calls) == 10 and all(p == "bench" for _, p in calls)
+    assert len(calls) == n and all(p == "bench" for _, p in calls)
     app_client.get("/api/devices")
     app_client.get("/api/devices/bench-kit")
-    assert len(calls) == 10
+    assert len(calls) == n
     app_client.get("/api/devices/bench-kit?refresh=1")
-    assert len(calls) == 11
+    assert len(calls) == n + 1
     app_client.get("/api/devices?refresh=1")
-    assert len(calls) == 21
+    assert len(calls) == 2 * n + 1
 
 
 def test_a_failing_profile_read_is_reported_not_raised(app_client, monkeypatch):

@@ -142,7 +142,7 @@
       <section class="card" id="devices-card" aria-labelledby="devices-h">
         <h2 id="devices-h" class="bar">Devices <button type="button" class="secondary" id="refresh">Refresh</button></h2>
         <p class="muted" id="devices-note"></p>
-        <ul class="list" id="devices"><li class="muted">Loading…</li></ul>
+        <div class="dev-groups" id="devices"><p class="muted">Loading…</p></div>
       </section>
 
       <section class="card" id="links-card" aria-labelledby="links-h">
@@ -153,7 +153,11 @@
           <a class="btn secondary" href="/ops/bench/">Bench</a>
           <a class="btn secondary" href="/ops/module/">Single module</a>
           <a class="btn secondary" href="/ops/accounts/">Accounts</a>
+          <a class="btn secondary" href="/api/ops/overlay" download
+            title="The ops edits (registry, calibration, slot hashes, spare swaps): the overlay file plus a diff to commit back to git">Download ops edits</a>
         </div>
+        <p class="muted small">Download ops edits: the overlay on this box (it holds real device ids — keep it off git)
+          and a diff folding the same edits into config/devices.yaml for git, without the ids.</p>
         <p class="muted" id="version"></p>
       </section>
     </div>
