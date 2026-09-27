@@ -289,8 +289,8 @@ def test_every_card_compiles_and_applies(app_client, fast):
     # out-of-range white is clamped with a note, not refused
     clamped = _post(app_client, "card", lease, card="white", params={"kelvin": 2200}).json()["result"]
     assert clamped["status"] == "applied" and "sent 2700 K" in clamped["notes"][0]
-    placeholder = _post(app_client, "card", lease, card="lowcountry-preview")
-    assert placeholder.status_code == 400 and "arrive with the modes" in placeholder.json()["detail"].lower()
+    no_mode = _post(app_client, "card", lease, card="lowcountry-preview")
+    assert no_mode.status_code == 400 and "choose one of the modes" in no_mode.json()["detail"].lower()
     assert _post(app_client, "card", lease, card="nope").status_code == 400
     assert _post(app_client, "card", lease, card="single-head", params={"index": 99}).status_code == 400
 
@@ -311,6 +311,104 @@ def test_recipe_compare_splits_the_module_in_halves(app_client, fast):
             assert entry["whiteBrightness"] == recipes.blend.whiteBrightness and entry["g"] == recipes.blend.g
         else:
             assert entry["colorBrightness"] == 0 and entry["whiteBrightness"] == 0  # the dark divider
+
+
+def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client, fast):
+    from conductor.geometry import load_canopy_config
+    from conductor.looks import compose_canvas, load_modes, placement_for
+
+    lease, state = _open(app_client)
+    card = {c["id"]: c for c in state["cards"]}["lowcountry-preview"]
+    assert not card.get("placeholder") and len(card["options"]["modes"]) == 6
+    assert [[p["id"] for p in row] for row in card["options"]["positions"]][1] == ["r1c0", "r1c1", "r1c2"]
+    modes, canopy = load_modes(), load_canopy_config()
+    bench = _services(app_client).registry.get(BENCH)
+
+    def expected_frame(mode_id, position):
+        canvas = modes.mode(mode_id).techniques.canvas.canvas
+        placement = placement_for(canopy, bench, frame_length=30, module=position)
+        return compose_canvas(canvas, canopy=canopy, recipes=load_recipes(), placements=[placement])[BENCH]
+
+    # T1 on the simulator: that position's frame, written into the page's scratch slot and selected (one PUT)
+    r = _post(
+        app_client,
+        "card",
+        lease,
+        card="lowcountry-preview",
+        params={"mode": "rainbow-row-sunset", "position": "r0c1"},
+    )
+    assert r.status_code == 200, r.text
+    result = r.json()["result"]
+    assert result["status"] == "applied" and result["tier"] == "canvas" and result["motion"] is False
+    assert result["feature"] == modes.mode("rainbow-row-sunset").techniques.canvas.feature
+    assert any("scratch slot" in n for n in result["notes"])
+    heads = r.json()["state"]["heads"]
+    top_row = [h["paint"] for h in heads]
+    assert top_row == [e.to_json() for e in expected_frame("rainbow-row-sunset", "r0c1")]
+    view = {row.key: row.value for row in _services(app_client).sim.cloud_view(f"sim-{BENCH}")}
+    assert view[("color-individual", "custom")] == "custom-3" and view[("brightness", None)] == 90
+    _wait(lambda: [h["reported"] for h in heads] == _ground_truth(app_client))  # the lights show it too
+    # the bottom row of the canopy is a different slice of the same gradient
+    bottom = _post(
+        app_client,
+        "card",
+        lease,
+        card="lowcountry-preview",
+        params={"mode": "rainbow-row-sunset", "position": "r2c1"},
+    )
+    assert [h["paint"] for h in bottom.json()["state"]["heads"]] == [
+        e.to_json() for e in expected_frame("rainbow-row-sunset", "r2c1")
+    ]
+    assert bottom.json()["state"]["heads"][0]["paint"] != top_row[0]
+
+    # a whole-strand mode is its strand look, with the clamp note
+    night = _post(
+        app_client,
+        "card",
+        lease,
+        card="lowcountry-preview",
+        params={"mode": "goodnight-glow", "position": "r1c1"},
+    ).json()
+    assert night["result"]["tier"] == "strand" and any(
+        "2200 K clamped" in n for n in night["result"]["notes"]
+    )
+
+    def night_kelvin():
+        view = {row.key: row.value for row in _services(app_client).sim.device_view(f"sim-{BENCH}")}
+        return str(view[("color-temperature", None)]) == "2700" and view[("brightness", None)] == 10
+
+    _wait(night_kelvin)
+
+    # where per-head frames aren't allowed, the module-level (T3) look for that position is shown instead
+    session = _services(app_client).extras["module_sessions"][BENCH]
+    session.t1_status = lambda: (False, "bench Gate C hasn't passed")
+    golden = _post(
+        app_client,
+        "card",
+        lease,
+        card="lowcountry-preview",
+        params={"mode": "golden-hour", "position": "r1c2"},
+    ).json()
+    assert golden["result"]["tier"] == "modules" and golden["result"]["status"] == "applied"
+    assert any("Gate C" in n for n in golden["result"]["notes"])
+    assert golden["state"]["heads"][4]["reported"] == {
+        "r": 255,
+        "g": 170,
+        "b": 60,
+    }  # the right-hand column's amber
+
+    bad = _post(
+        app_client,
+        "card",
+        lease,
+        card="lowcountry-preview",
+        params={"mode": "golden-hour", "position": "r5c5"},
+    )
+    assert bad.status_code == 400 and "outside the canopy" in bad.json()["detail"]
+    nope = _post(
+        app_client, "card", lease, card="lowcountry-preview", params={"mode": "disco", "position": "r0c0"}
+    )
+    assert nope.status_code == 400
 
 
 # ---- sweep ------------------------------------------------------------------------------------------------------

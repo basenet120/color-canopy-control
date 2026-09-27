@@ -191,9 +191,18 @@ def test_gradient_and_mix():
         C.gradient([C.OFF] * 30, POSITIONS, [], red, blue, "z")
 
 
-def test_catalog_lists_every_card_and_marks_t1_and_the_placeholder():
+def test_catalog_lists_every_card_and_marks_t1_and_the_lowcountry_preview():
     cards = {c["id"]: c for c in C.catalog(RECIPES)}
-    assert cards["lowcountry-preview"]["placeholder"] is True
+    assert cards["lowcountry-preview"]["placeholder"] is True  # without the modes it is shown as unavailable
     assert not cards["white"]["needs_t1"] and cards["hue-ramp"]["needs_t1"]
     with pytest.raises(PayloadError, match="modes"):
-        _compile("lowcountry-preview")
+        _compile("lowcountry-preview")  # runs through the module session, which has the compiler
+    from conductor.geometry import load_canopy_config
+    from conductor.looks import load_modes
+
+    preview = {c["id"]: c for c in C.catalog(RECIPES, load_modes(), load_canopy_config())}[
+        "lowcountry-preview"
+    ]
+    assert "placeholder" not in preview and not preview["needs_t1"]
+    assert preview["defaults"] == {"mode": "lowcountry-calm", "position": "r1c1"}
+    assert [m["id"] for m in preview["options"]["modes"]][-1] == "goodnight-glow"
