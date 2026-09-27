@@ -1,0 +1,5 @@
+# Test fixtures, not secrets: sentinel values the credential-canary tests plant to prove that no password ever
+# reaches logs, responses or files (07 §3). Each line is a gitleaks fingerprint (commit:file:rule:line).
+de06e9361bae0e26da132cc09460c10f9e5031ee:tests/test_accounts_routes.py:generic-api-key:16
+de06e9361bae0e26da132cc09460c10f9e5031ee:tests/test_accounts_canary_routes.py:generic-api-key:25
+d19b0b4d63c6ab6c3a031cbe9feb1427c8764af6:tests/test_credential_canary.py:generic-api-key:22
