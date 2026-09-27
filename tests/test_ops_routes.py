@@ -271,7 +271,8 @@ def test_checklist_clock_compares_with_the_browser(app_client, monkeypatch):
 
     monkeypatch.setattr(ops_routes, "ntp_status", unsynced)
     clock = _items(app_client.get("/api/ops/checklist").json())["clock"]
-    assert clock["status"] == "fail" and "set-ntp" in clock["fix"]
+    assert clock["status"] == "fail" and "chrony" in clock["fix"]
+    assert "not synced to internet time" in clock["detail"]
 
 
 def test_checklist_without_the_engine_fails_guest_input(app_client):

@@ -59,3 +59,17 @@ and throttling, token rotation behaviour, 401/403 semantics, the index order, iO
    ~15–20 min per module) or T3. The ladder and copy handle it; staff time is the cost.
 2. Real throttling behaviour is unknown; the soak's 5 % 429 + 1 % silent drop model is an assumption.
 3. The GitHub push block: nothing reaches Alon until the repo is attached to this session.
+
+## Review fixes — surfaces (`claude/wt-fix2-surfaces`, 2026-09-27)
+Fixes for the P1–P3 adversarial review's surface findings F2, F3, F4, F5, F6, F8 (D21–D28), plus the /ops device
+list grouped by role/room and the 7 am clock check wording for the venue box (chrony).
+- **Verified in sim:** `uv run pytest -q` all green (regression tests in `tests/test_surfaces_review_fixes.py`, most
+  against the real canopy engine on the simulator); `uv run pytest -q tests_e2e` 30 passed (Playwright, Chromium),
+  including a refused kiosk choice never showing "Changing the light…", flat per-module drawing at T3, red refusal
+  lines on /ops, acknowledging an alert, and the grouped device list. Screenshots regenerated and reviewed:
+  `docs/screenshots/ops-*.png` (new: `ops-attention-phone.png` — alert injected in the browser — and
+  `ops-devices-tablet.png`), `kiosk-*.png`.
+- **Needs the venue box:** the clock item reading the watchdog's flag folder (`/run/canopy/timesync` mounted at
+  `/run/systemd/timesync`) — unit-tested with a temporary folder only; process-log output of Conductor warnings
+  under the real compose/journald setup.
+- Also: `tests/test_deploy.py` compose-tag test deflaked (compose names either missing variable first).

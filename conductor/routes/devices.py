@@ -1,12 +1,15 @@
 """Devices and the ops summary (ops only; BUILD_PLAN "HTTP API", 07 §1, §6, §10).
 
 - `GET /api/devices[?refresh=1]` — every enabled registry device: identity (id, label, role, account, module,
-  orientation, expected heads, flags, metadevice id), where each purpose's writes go ({driver, simulated,
-  address}), the tracker's status + reason for the engine address, who holds its lock, capabilities detected from
-  the device's own profile, and any head-count problem.
+  vignette room + kind, orientation, expected heads, flags, metadevice id), where each purpose's writes go ({driver,
+  simulated, address}), the tracker's status + reason for the engine address, who holds its lock, capabilities
+  detected from the device's own profile, and any head-count problem. Plus `groups`: the /ops device list's sections
+  in order — canopy modules, bench, spares, then each vignette room (with its /vignette/<room>/ link).
 - `GET /api/devices/{id}[?refresh=1]` — the same record plus the tracker's full snapshot.
 - `GET /api/ops/summary` — version, "Needs attention" items, accounts, locks, the executor's rate budget per
-  driver, and simulator statistics when the engine runs on the simulator.
+  driver, and simulator statistics when the engine runs on the simulator. "Needs attention" includes the canopy
+  resting while guest input is on, and the engine's and reconciler's alerts (conductor/alerts.py) — each alert item
+  carries `alert` (its key) for `POST /api/ops/alerts/ack {"key"}`, which hides it until it happens again.
 
 Capabilities are fetched lazily (a profile read through the bench target's driver, Purpose.BENCH — a GET, never a
 write) and cached in `services.extras["capabilities"]`; `refresh=1` re-fetches. A failed fetch is cached for
@@ -20,12 +23,14 @@ import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 from conductor import __version__
+from conductor.alerts import AlertBoard
 from conductor.capabilities import Capabilities, detect
 from conductor.gate import GateDenied, Purpose
 from conductor.roles_api import Principal
-from conductor.routes.accounts import accounts_summary
+from conductor.routes.accounts import accounts_summary, same_origin
 from conductor.routes.deps import require_ops, services_of
 
 router = APIRouter()
@@ -129,6 +134,8 @@ def _device_record(services: Any, entry: Any, caps_record: dict | None) -> dict:
         "account": entry.account,
         "model": entry.model,
         "module": entry.module,
+        "vignette": entry.vignette,
+        "kind": entry.kind,
         "orientation": entry.orientation,
         "expected_heads": entry.expected_heads,
         "writable": entry.writable,
@@ -150,6 +157,59 @@ def _device_record(services: Any, entry: Any, caps_record: dict | None) -> dict:
     }
 
 
+STRAND_GROUPS = (
+    ("canopy_module", "canopy", "Canopy modules"),
+    ("bench", "bench", "Bench kit"),
+    ("spare", "spares", "Spares"),
+)
+
+
+def _room_titles(services: Any) -> dict[str, str]:
+    """Vignette room id → its space name, in config/vignettes.yaml order ({} when that file can't be read)."""
+    try:
+        from conductor.vignettes import VignetteService
+
+        rooms = VignetteService.of(services).rooms.rooms
+    except Exception:  # noqa: BLE001 - a bad vignettes.yaml is already a "Needs attention" line
+        return {}
+    return {room_id: (getattr(room, "space", None) or room_id) for room_id, room in rooms.items()}
+
+
+def device_groups(services: Any, entries: list[Any]) -> list[dict]:
+    """The /ops device list's sections: canopy modules, bench, spares (strands: module page, bench, head count),
+    then each vignette room (its /vignette/<room>/ page)."""
+    groups = []
+    for role, key, title in STRAND_GROUPS:
+        ids = [e.id for e in entries if e.role == role]
+        if role == "canopy_module":
+            ids = [e.id for e in sorted((e for e in entries if e.role == role), key=lambda e: e.module or "")]
+        if ids:
+            groups.append({"id": key, "title": title, "strand": True, "link": None, "devices": ids})
+    titles = _room_titles(services)
+    rooms = list(titles) + sorted(
+        {e.vignette for e in entries if e.role == "vignette" and e.vignette} - set(titles)
+    )
+    for room in rooms:
+        ids = [e.id for e in entries if e.role == "vignette" and e.vignette == room]
+        if ids:
+            groups.append(
+                {
+                    "id": f"vignette-{room}",
+                    "title": titles.get(room) or room,
+                    "strand": False,
+                    "link": f"/vignette/{room}/",
+                    "devices": ids,
+                }
+            )
+    placed = {d for g in groups for d in g["devices"]}
+    rest = [e.id for e in entries if e.id not in placed]
+    if rest:
+        groups.append(
+            {"id": "other", "title": "Other devices", "strand": False, "link": None, "devices": rest}
+        )
+    return groups
+
+
 # ---- routes --------------------------------------------------------------------------------------------------
 @router.get("/api/devices")
 async def list_devices(request: Request, _ops: Ops, refresh: bool = False) -> dict:
@@ -160,6 +220,7 @@ async def list_devices(request: Request, _ops: Ops, refresh: bool = False) -> di
         "simulated": bool(services.engine_driver.simulated),
         "mode": str(services.gate_settings.mode),
         "devices": [_device_record(services, e, caps.get(e.id)) for e in entries],
+        "groups": device_groups(services, entries),
     }
 
 
@@ -198,6 +259,15 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
 
     for problem in runtime_problems(services):
         add(problem, "/ops/accounts/" if problem == services.token_store.problem else None)
+    engine = services.extras.get("canopy")
+    if engine is not None:
+        try:
+            state = engine.state()
+        except Exception:  # noqa: BLE001
+            state = None
+            add("The canopy engine can't report its state. The log tail below says why.")
+        if state is not None and state.guest_input and str(state.phase) == "resting":
+            add(f"The canopy is resting, so guests can't change it: {state.message or 'no reason given'}")
     for account in accounts["accounts"]:
         label = account.get("label") or account["account"]
         if account.get("needs_reauth"):
@@ -231,7 +301,45 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
         caps = (caps_cache.get(entry.id) or {}).get("caps")
         if caps is not None and (problem := caps.head_count_problem(entry.expected_heads)):
             add(f"{name}: {problem}", f"/ops/module/?device={entry.id}")
+    for alert in AlertBoard.of(services).active():
+        link = None
+        if alert.device_id:
+            entry = services.registry.logical_for(alert.device_id)
+            if entry is None:
+                try:
+                    entry = services.registry.get(alert.device_id)
+                except KeyError:
+                    entry = None
+            if entry is not None:
+                link = f"/ops/module/?device={entry.id}"
+        message = alert.message + (f" ({alert.count} times)" if alert.count > 1 else "")
+        if all(i["message"] != message for i in items):
+            items.append(
+                {
+                    "message": message,
+                    "link": link,
+                    "alert": alert.key,
+                    "level": alert.level,
+                    "at": alert.last_t,
+                }
+            )
     return items
+
+
+class AckBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/api/ops/alerts/ack")
+async def ack_alert(request: Request, body: AckBody, _ops: Ops) -> dict:
+    """Hide one engine alert from "Needs attention" until it happens again (JSON from this site only, D17)."""
+    headers = request.headers
+    if ("origin" in headers or "referer" in headers) and not same_origin(headers):
+        raise HTTPException(status_code=403, detail="Refused: this request came from another site.")
+    if not AlertBoard.of(services_of(request)).ack(body.key):
+        raise HTTPException(status_code=404, detail="That alert isn't showing any more.")
+    return {"ok": True, "message": "Acknowledged. It comes back if it happens again."}
 
 
 @router.get("/api/ops/summary")

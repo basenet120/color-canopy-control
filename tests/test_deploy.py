@@ -138,7 +138,8 @@ def test_docker_compose_config_accepts_the_file_and_insists_on_a_tag(tmp_path):
     ok = _run([*base, "--env-file", str(box), "config", "--quiet"], env=env)
     assert ok.returncode == 0, ok.stderr
     empty = tmp_path / "empty.env"
-    empty.write_text("")
+    # only the tag is missing: with both missing, compose names either one first (it varies run to run)
+    empty.write_text("CONDUCTOR_LAN_IP=192.0.2.10\n")
     missing = _run([*base, "--env-file", str(empty), "config", "--quiet"], env=env)
     assert missing.returncode != 0 and "CONDUCTOR_TAG" in missing.stderr
 
