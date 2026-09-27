@@ -9,10 +9,10 @@ off for a moment.
 
 | What | Who | How | How long | What guests see |
 |---|---|---|---|---|
-| **Kiosk browser** (frozen, blank, wrong page) | on-duty tech | USB keyboard on the box → **Alt+F4** (it reopens by itself), or `sudo canopy-restart kiosk` | 5–10 s | Screen blank a few seconds |
+| **Kiosk browser** (frozen, blank, wrong page) | on-duty tech | USB keyboard on the box → **Alt+F4** (it reopens by itself), or `sudo canopy-restart kiosk` (returns at once) | 5–10 s | Screen blank a few seconds, then "resting" until the Conductor answers |
 | **Vignette tablet page** | on-duty tech | Leave Guided Access, reload the page; lost sign-in: new link from `/ops` → Set up a device | 30 s (2 min to re-enroll) | That room's tablet only |
 | **Conductor** (`/ops` won't load, kiosk resting for no reason) | on-duty tech | `sudo canopy-restart` — or wait: the watchdog restarts it after 3 failed checks (≈ 90 s) | 20–40 s; canopy returns to Lowcountry Calm | Kiosk "resting", then back |
-| **Whole box** | on-duty tech | `sudo canopy-restart box`; if frozen: hold the power button 5 s, then press it once | 2–3 min until the kiosk is back | Kiosk dark 2–3 min |
+| **Whole box** | on-duty tech | `sudo canopy-restart box`; if frozen: hold the power button 5 s, then press it once | 2–3 min until the kiosk is back | Kiosk dark about 1 min (boot), then "resting" until the Conductor answers |
 | **Show router** | on-duty tech (tell Alon) | Power-cycle it at its plug (it's on the UPS) | 2–5 min; modules rejoin Wi-Fi by themselves (**UNVERIFIED** how fast), then the Conductor re-applies within 60 s | Kiosk "resting" meanwhile; tablets drop |
 | **One module** (offline, stuck, only 12 pucks lit) | on-duty tech or VWBD | **Power-cycle module N at its switch** (off 10 s, on); then **Re-assert all** on `/ops` | About 1 min to rejoin (**UNVERIFIED**); it gets its look back automatically | That module dark for a minute |
 | **Kit swap** (controller dead) | Alon or the second on-duty tech, with VWBD | `controller-swap.md` | 30–45 min plus VWBD's physical work | Guest input paused; that module dark |

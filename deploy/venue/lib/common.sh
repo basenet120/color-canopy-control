@@ -2,9 +2,11 @@
 # Shared by the venue-box scripts (install.sh, bin/canopy-*, the systemd helpers). Source it; don't run it.
 #
 # Layout on the box (docs/runbooks/venue-box.md):
-#   /opt/canopy/                     docker-compose.yml, bin/, lib/, images/ (saved image tarballs)
+#   /opt/canopy/                     docker-compose.yml, bin/, lib/, images/ (saved image tarballs),
+#                                    kiosk/resting.html (what the touchscreen shows until the Conductor answers)
 #   /etc/canopy/conductor.env        the Conductor's settings and secrets (root, 0600; never in git)
-#   /etc/canopy/box.env              non-secret box settings: CONDUCTOR_TAG, CONDUCTOR_LAN_IP, kiosk user, backups
+#   /etc/canopy/box.env              non-secret box settings: CONDUCTOR_TAG (+ CONDUCTOR_PREVIOUS_TAG, the release
+#                                    it replaced), CONDUCTOR_LAN_IP, kiosk user, backups
 #   /var/lib/canopy/                 the break-glass hold flag, watchdog state and log
 #   /var/backups/canopy/             nightly backups of the canopy-data volume
 # Every path can be overridden by the environment (tests and dry runs use temporary directories).
@@ -70,6 +72,45 @@ set_env_value() {
 	printf '%s=%s\n' "$key" "$value" >>"$tmp"
 	chmod 0644 "$tmp"
 	mv -f "$tmp" "$file"
+}
+
+# switch_release FILE TAG → make TAG the release the box runs (CONDUCTOR_TAG), remembering the release it replaces
+# as CONDUCTOR_PREVIOUS_TAG (the rollback target). Switching to the tag it already runs changes nothing. Call it only
+# once the image TAG is on the box and checked: the next restart, reboot or watchdog run starts whatever this names.
+switch_release() {
+	local file=$1 tag=$2 current
+	current=$(env_value "$file" CONDUCTOR_TAG)
+	[ "$current" = "$tag" ] && return 0
+	if printf '%s' "$current" | grep -Eq "$CANOPY_TAG_RE"; then
+		set_env_value "$file" CONDUCTOR_PREVIOUS_TAG "$current"
+	fi
+	set_env_value "$file" CONDUCTOR_TAG "$tag"
+}
+
+# box_architecture → the box's CPU as Docker names it (amd64, arm64).
+box_architecture() {
+	local arch
+	arch=$(dpkg --print-architecture 2>/dev/null) || arch=$(uname -m)
+	case $arch in
+	x86_64) arch=amd64 ;;
+	aarch64) arch=arm64 ;;
+	esac
+	printf '%s' "$arch"
+}
+
+# check_image_arch IMAGE → true when IMAGE runs on this box's CPU; otherwise says why (an image built on an
+# Apple-silicon laptop is linux/arm64 and dies with "exec format error" on the x86-64 box).
+check_image_arch() {
+	local image=$1 have want
+	have=$(docker image inspect --format '{{ .Architecture }}' "$image" 2>/dev/null) || {
+		say "Can't read the architecture of $image."
+		return 1
+	}
+	want=$(box_architecture)
+	[ "$have" = "$want" ] && return 0
+	say "$image is built for linux/$have, but this box is $want: it would stop with \"exec format error\"."
+	say "Cut the release with scripts/release.sh (it builds for linux/amd64), or build on the box without --image-tar."
+	return 1
 }
 
 # check_env_file FILE [--allow-own] → prints every problem with the Conductor's env file and returns non-zero when

@@ -28,6 +28,9 @@ for arg in "$@"; do
 done
 need_root "$@"
 
+# The touchscreen opens the link on the Conductor, so it has to be answering (and the kiosk shows "resting" till then).
+healthy || die "The Conductor isn't answering, so the touchscreen can't open a setup link. Start it first (sudo canopy-start after break-glass, or see sudo canopy-status), then run this again."
+
 read -r -s -p "Paste the setup link and press Enter: " link
 echo
 token=${link##*/enroll/}
@@ -46,10 +49,11 @@ trap cleanup EXIT
 (umask 077 && printf 'CANOPY_KIOSK_URL=http://localhost:8000/enroll/%s\n' "$token" >"$override")
 chown "$user:" "$override"
 
-kiosk_systemctl restart "$CANOPY_KIOSK_UNIT" ||
+# --no-block: never wait on the kiosk unit's start job.
+kiosk_systemctl --no-block restart "$CANOPY_KIOSK_UNIT" ||
 	die "Couldn't restart the kiosk browser. Is $user logged in on the touchscreen?"
 say "On the touchscreen: tap \"Set up this device\". It then shows the canopy page."
 read -r -p "Press Enter once the touchscreen shows the canopy page… " _
 cleanup
-kiosk_systemctl restart "$CANOPY_KIOSK_UNIT"
+kiosk_systemctl --no-block restart "$CANOPY_KIOSK_UNIT"
 say "Done. The kiosk is signed in; it appears under \"Set-up devices\" on /ops (revoke it there if it's ever lost)."
