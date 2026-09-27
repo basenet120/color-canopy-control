@@ -14,16 +14,20 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
   the current mode one rung. So do `downgrade_throttles` **commands that still ended throttled after the executor's
   retries** within `downgrade_throttle_window_s` on one account. Individual 429s that a retry cleared never count —
   that is what keeps 5% random throttling from ever downgrading. Floors lift one rung after `upgrade_after_clean_s`
-  with no wrong module and no throttled command.
+  with no wrong module and no throttled command — straight to the next rung that is allowed and compiles (a rung that
+  can't be shown is skipped, so T3 → T1 takes one clean interval when T2 isn't available).
 - **Outage.** While the engine rests, only the probe runs: one module's readback every `outage_probe_interval_s`
   (rotating through the modules); the first good one ends the outage and the engine re-applies the look.
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).
 - **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused), request
   `kiosk.idle_mode` with source "idle".
 - **Slots.** During a true-up each module's slot objects are hashed (canonical projection of the readback, 07 §6)
-  and compared with the recorded hash. A drifted T1 slot is rewritten — at most once per
-  `slot_rewrite_min_interval_s` per slot — and an alert is recorded either way; a drifted T2 slot (hand-painted in the
-  app) is only alerted. Alerts are recorded once per drifted content, not every minute.
+  and compared with the recorded hash; the effect fields that make a pattern animate (motionEffect, brightnessEffect
+  — outside the hash) are compared with those recorded, separately. A drifted T1 slot (commissioned, origin "api") is
+  rewritten — at most once per `slot_rewrite_min_interval_s` per slot — and an alert is recorded either way; so is a
+  *stale* one (it matches its record, but the look now compiles to another pattern or other effect codes), once per
+  compiled content. A slot that already holds exactly the current content is recorded, not written. A drifted T2 slot
+  (hand-painted in the app, origin "app") is only alerted. Alerts are recorded once per drifted content.
 
 Nothing here writes directly: sends go through the engine (`CanopyEngine.send` / `rewrite_slot`), which submits to
 the Target's executor.
@@ -383,58 +387,103 @@ class Reconciler:
 
     # ---- slots ------------------------------------------------------------------------------------------------
     def check_slots(self, device_id: str, target: Any, rows: list[StateRow]) -> None:
+        """Compare each recorded slot's readback with its record: the canonical hash (07 §6) and, separately, the
+        effect fields that make it animate (the hash leaves them out). A commissioned (T1) slot is rewritten when it
+        drifted — or when it still matches its record but the look now compiles to something else (stale: a
+        recalibration, a design edit, an effect code enabled or disabled) — at most once per
+        `slot_rewrite_min_interval_s`; a hand-painted (T2) slot is only alerted."""
         engine = self.engine
         got_rows = {r.key: r.value for r in rows}
         for slot, expected, tier, _mode in engine.slot_expectations(device_id):
             key = (device_id, slot)
             value = got_rows.get((R.FRAME_CLASS, slot))
             digest = R.slot_hash(value)
-            if digest is None or digest == expected:
+            if digest is None:
                 self._drift_alerted.pop(key, None)
                 continue
-            if self._drift_alerted.get(key) == digest and tier is not Tier.T1:
-                continue
-            self.stats["drift"] += 1
+            record = engine.recorded_slot(device_id, slot)
+            want_effects = record["effects"] if record is not None and record["hash"] == expected else None
+            fields = R.effects_differ(want_effects, R.slot_effects(value))
             label = engine._entry(device_id).label if engine._entry(device_id) else device_id
+            painted = tier is not Tier.T1 and (record is None or record["origin"] == "app")
+            kind = "hand-painted" if painted else "saved"
+            if digest == expected and not fields:
+                stale = engine.stale_slot(device_id, slot, value) if tier is Tier.T1 else None
+                if stale is None:
+                    self._drift_alerted.pop(key, None)
+                    continue
+                why, content = stale
+                token = f"stale:{content}"
+                if self._drift_alerted.get(key) == token:
+                    continue  # one rewrite per compiled content, never a loop (07 §6)
+                what = f"the saved pattern in {slot} is out of date: {why}"
+            else:
+                token = digest + (":" + ",".join(fields) if fields else "")
+                if self._drift_alerted.get(key) == token and tier is not Tier.T1:
+                    continue
+                what = (
+                    f"the {kind} pattern in {slot} changed (hash {digest}, expected {expected})"
+                    if digest != expected
+                    else f"the effect fields of {slot} changed ({', '.join(fields)} differ from what was recorded)"
+                )
+            self.stats["drift"] += 1
             if tier is not Tier.T1:
-                self._drift_alerted[key] = digest
+                self._drift_alerted[key] = token
                 engine.telemetry.record(
                     "alert",
                     level="warn",
                     device_id=device_id,
-                    message=f"{label}: the hand-painted pattern in {slot} changed (hash {digest}, expected "
-                    f"{expected}). Repaint it in the Hubspace app, or record the new hash on /ops.",
+                    message=f"{label}: {what}. "
+                    + (
+                        "It was hand-painted in the Hubspace app, so the Conductor leaves it alone: repaint it in "
+                        "the app, or record it again on the module page's Slots tab."
+                        if painted
+                        else "No canvas mode owns it here, so it's left alone."
+                    ),
+                )
+                continue
+            if engine.adopt_slot(device_id, slot, value):
+                # It already holds what the look compiles to now (e.g. a rewrite whose verification a newer
+                # command superseded): recorded from this readback, nothing written.
+                self._drift_alerted.pop(key, None)
+                engine.telemetry.record(
+                    "alert",
+                    level="info",
+                    device_id=device_id,
+                    message=f"{label}: {slot} already holds the current pattern; recorded its hash (nothing sent).",
                 )
                 continue
             last = engine.slot_written.get(key)
             min_interval = self.settings.slot_rewrite_min_interval_s
             if last is not None and self.clock.monotonic() - last < min_interval:
-                if self._drift_alerted.get(key) != digest:
-                    self._drift_alerted[key] = digest
+                if self._drift_alerted.get(key) != "waiting:" + token:
+                    self._drift_alerted[key] = "waiting:" + token
                     engine.telemetry.record(
                         "alert",
                         level="warn",
                         device_id=device_id,
-                        message=f"{label}: the saved pattern in {slot} changed (hash {digest}), but it was written "
-                        f"less than {round(min_interval / 60)} min ago, so it's left alone until then.",
+                        message=f"{label}: {what}, but it was written less than {round(min_interval / 60)} min "
+                        "ago, so it's left alone until then.",
                     )
                 continue
-            self._drift_alerted[key] = digest
+            self._drift_alerted[key] = token
             self.stats["slot_rewrites"] += 1
             engine.slot_written[key] = self.clock.monotonic()  # the limit counts from the attempt
             task = asyncio.get_running_loop().create_task(
-                self._rewrite(device_id, slot, label), name=f"canopy:rewrite:{device_id}:{slot}"
+                self._rewrite(device_id, slot, label, what), name=f"canopy:rewrite:{device_id}:{slot}"
             )
             self._rewrites.add(task)
             task.add_done_callback(self._rewrites.discard)
 
-    async def _rewrite(self, device_id: str, slot: str, label: str) -> None:
+    async def _rewrite(self, device_id: str, slot: str, label: str, what: str = "") -> None:
         status = await self.engine.rewrite_slot(device_id, slot, source="reconciler")
+        what = what or f"the saved pattern in {slot} had drifted"
         if status == str(CommandStatus.APPLIED):
-            self._drift_alerted.pop((device_id, slot), None)  # a new drift after this is news again
-            message = f"{label}: the saved pattern in {slot} had drifted; rewrote it (applied)."
+            if not self._drift_alerted.get((device_id, slot), "").startswith("stale:"):
+                self._drift_alerted.pop((device_id, slot), None)  # a new drift after this is news again
+            message = f"{label}: {what}; rewrote it (applied)."
         else:
-            message = f"{label}: the saved pattern in {slot} had drifted; the rewrite didn't take: {status}."
+            message = f"{label}: {what}; the rewrite didn't take: {status}."
         self.engine.telemetry.record("alert", level="warn", device_id=device_id, message=message)
 
 

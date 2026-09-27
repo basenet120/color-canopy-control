@@ -102,6 +102,11 @@ def _cached_capabilities(services: Any, device_id: str) -> dict | None:
 
 
 async def _capabilities(services: Any, device_ids: list[str], refresh: bool) -> dict[str, dict]:
+    wiring = services.extras.get("show")
+    if refresh and wiring is not None and hasattr(wiring, "request_refresh"):
+        wiring.request_refresh(
+            device_ids
+        )  # the canopy engine reads the profiles again too (in the background)
     records: dict[str, dict] = {}
     todo = []
     for device_id in device_ids:
@@ -213,6 +218,10 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
                 "them or find out why they're shared with this account.",
                 "/ops/accounts/",
             )
+    wiring = services.extras.get("show")
+    if wiring is not None and hasattr(wiring, "attention"):
+        for line in wiring.attention():  # canopy modules whose profile the engine hasn't read yet
+            add(line, "/ops/")
     caps_cache = services.extras.get(CAPS_KEY, {})
     for entry in services.registry.devices:
         try:

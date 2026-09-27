@@ -124,6 +124,7 @@ def load_settings(config_dir: Path = CONFIG_DIR) -> ConductorSettings:
 Role = Literal["bench", "canopy_module", "vignette", "spare"]
 VIGNETTE_KINDS = ("bulb", "plug", "lock", "fan", "string", "path")
 Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]
+SlotOrigin = Literal["api", "app"]
 
 
 class DeviceFlags(_Strict):
@@ -156,7 +157,38 @@ class DeviceEntry(_Strict):
     flags: DeviceFlags = Field(default_factory=DeviceFlags)
     flags_proven_on: str | None = None  # the driver address (metadevice id) of the kit that proved `flags`
     slot_hashes: dict[str, str] = Field(default_factory=dict)
+    # Where each recorded slot hash came from: "api" = written by the Conductor's commissioning (T1), "app" =
+    # hand-painted in the Hubspace app and recorded on the module page (T2). A hash without an entry is "api"
+    # (before this field existed, commissioning was the only writer).
+    slot_origin: dict[str, SlotOrigin] = Field(default_factory=dict)
+    # The slot header's effect fields as read back when the hash was recorded (motionEffect, brightnessEffect, …).
+    # The canonical hash deliberately leaves them out (07 §6), so they are verified separately.
+    slot_effects: dict[str, dict[str, int]] = Field(default_factory=dict)
     notes: str = ""
+
+    def slot_patch(self, slot: str, *, digest: str, origin: str, effects: Mapping[str, int] | None) -> dict:
+        """The overlay patch that records one slot (hash, origin, effect fields), merged with the other slots."""
+        all_effects = {k: dict(v) for k, v in (self.slot_effects or {}).items()}
+        if effects:
+            all_effects[slot] = {k: int(v) for k, v in effects.items()}
+        else:
+            all_effects.pop(slot, None)
+        return {
+            "slot_hashes": {**(self.slot_hashes or {}), slot: digest},
+            "slot_origin": {**(self.slot_origin or {}), slot: origin},
+            "slot_effects": all_effects,
+        }
+
+    def slot_record(self, slot: str) -> dict[str, Any] | None:
+        """The recorded {hash, origin, effects} of `slot`, or None when nothing is recorded."""
+        digest = (self.slot_hashes or {}).get(slot)
+        if not digest:
+            return None
+        return {
+            "hash": digest,
+            "origin": (self.slot_origin or {}).get(slot, "api"),
+            "effects": dict((self.slot_effects or {}).get(slot) or {}) or None,
+        }
 
     def flags_for(self, address: str | None) -> DeviceFlags:
         """The bench flags, but only when they were proven on the kit at `address`; else none are proven.

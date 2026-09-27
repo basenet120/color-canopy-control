@@ -8,6 +8,22 @@ repository set"), and no GitHub CLI or repo-attach tool is available here. Every
 stacked branches below and will be pushed (and the PRs opened) the moment access exists. **Alon: add the repo to
 this session's sources with push access** (claude.ai/code → the session → Sources), then say "push".
 
+## Latest unit — canopy engine fixes after the P1–P3 adversarial review (`claude/wt-fix2-engine`)
+Fixes engine findings F1–F11 (judgment calls E1–E9 in `docs/DECISIONS.md`), each with a regression test in
+`tests/test_engine_review2.py` that fails on the previous code:
+capabilities read in the background with retries and refreshed on recovery / back online / ops Refresh (F1); one unread
+module no longer blocks the others and the safe look always compiles (F2); 503/504 rest the canopy instead of
+downgrading (F3); slot records carry an origin ("api" commissioned / "app" hand-painted) and T2 copy needs "app" (F4);
+T1 judged against the commissioned readback hash, stale slots rewritten once (F5); motion copy only when the slot holds
+the benched code, effect fields verified on readback (F6); module page Slots → "Painted in the Hubspace app — record
+it" (F7, runbook updated); upgrades skip rungs that can't be shown (F8); T2 motion plans (F9); Calm never claims 2700 K
+when clamped (F10); the soak runs the show's own wiring plus a SIMULATED motion code (F11).
+- **Verified (sim):** `uv run pytest -q` green; `ruff format` / `ruff check` clean; `python -m conductor.soak` PASS on
+  every target (`docs/reports/sim-acceptance.md`, now through ShowWiring).
+- **Needs hardware:** whether the cloud canonicalizes slot entries (the stale check assumes it doesn't — one rewrite per
+  compiled content, then an alert); rewriting the active slot without reselecting (Gate 6); how the Afero link's first
+  connect shows up (the loop retries every ≤ 60 s regardless).
+
 ## PR stack (merge order — please use merge commits, not squash)
 1. `claude/p0-contracts` — build plan, decisions log, and the contract modules (clock, live gate, token store,
    redaction, WS tickets + hub, driver interface, rows/compare/slot hash, capabilities, locks, telemetry, config +
