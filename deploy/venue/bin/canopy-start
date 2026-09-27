@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# canopy-start — end break-glass: start the Conductor again.
+set -uo pipefail
+# shellcheck source=../lib/common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/common.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: sudo canopy-start
+
+Ends break-glass (canopy-stop): removes the hold and starts the Conductor. Within about a minute it puts the canopy
+back to Lowcountry Calm and undoes anything changed in the Hubspace app meanwhile (slots it commissioned are
+rewritten at most once per 10 minutes). Put the phones with the Hubspace app away first.
+
+  -h, --help this help
+USAGE
+}
+
+for arg in "$@"; do
+	case $arg in
+	-h | --help) usage && exit 0 ;;
+	*) usage >&2 && exit 2 ;;
+	esac
+done
+need_root "$@"
+
+rm -f "$CANOPY_HOLD"
+say "Starting the Conductor…"
+systemctl start "$CANOPY_UNIT" || die "The service didn't start. Why: sudo canopy-logs service"
+if wait_healthy 120; then
+	say "The Conductor is back. Open /ops: check Needs attention, then Resume guest input if it is paused."
+else
+	die "The Conductor hasn't answered after 2 minutes. Look at: sudo canopy-logs service; sudo canopy-logs conductor"
+fi

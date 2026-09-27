@@ -48,3 +48,11 @@ devices:
   - {id: canopy-r2c0, role: canopy_module, account: canopy, module: r2c0, label: Module 7}
   - {id: canopy-r2c1, role: canopy_module, account: canopy, module: r2c1, label: Module 8}
   - {id: canopy-r2c2, role: canopy_module, account: canopy, module: r2c2, label: Module 9}
+
+  # Spare kits (06 #24: 12 kits = 9 + 3). Onboard them to the canopy account at install and register them here, so
+  # they're known (not an "unregistered device" alert) and can be bench-tested. The engine never drives a spare.
+  # Controller swap: register the spare's Hubspace device as the dead module on /ops/accounts; it moves off the spare
+  # entry and takes the bench flags it proved with it (docs/runbooks/controller-swap.md).
+  - {id: spare-1, role: spare, account: canopy, label: Spare kit 1, model: SQHDK03, profile: sqhdk03-sim, expected_heads: 30}
+  - {id: spare-2, role: spare, account: canopy, label: Spare kit 2, model: SQHDK03, profile: sqhdk03-sim, expected_heads: 30}
+  - {id: spare-3, role: spare, account: canopy, label: Spare kit 3, model: SQHDK03, profile: sqhdk03-sim, expected_heads: 30}

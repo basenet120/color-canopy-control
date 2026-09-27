@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# canopy-logs — read the venue box's logs.
+set -uo pipefail
+# shellcheck source=../lib/common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/common.sh"
+
+usage() {
+	cat <<'USAGE'
+Usage: sudo canopy-logs [conductor|watchdog|backup|kiosk|service] [--since 1h] [--follow]
+
+  conductor  (default) the Conductor's own log: every command, readback and alert (secrets are redacted)
+  watchdog   the 30-second health checks and any automatic restarts
+  backup     the nightly backups
+  kiosk      the kiosk browser on the touchscreen
+  service    when the Conductor's service started, stopped or failed to start (and why)
+
+  --since T  how far back, e.g. 10m, 2h, 1d (default 1h)
+  --follow   keep printing new lines (Ctrl-C to stop)
+  -h, --help this help
+
+The same log tail is on /ops ("Log") without a terminal.
+USAGE
+}
+
+what=conductor
+since=1h
+follow=()
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h | --help) usage && exit 0 ;;
+	--since) since=${2:?--since needs a value like 2h} && shift ;;
+	--since=*) since=${1#--since=} ;;
+	-f | --follow) follow=(--follow) ;;
+	conductor | watchdog | backup | kiosk | service) what=$1 ;;
+	*) usage >&2 && exit 2 ;;
+	esac
+	shift
+done
+[[ $since =~ ^[0-9]+[smhd]$ ]] || die "--since takes a number and a unit: 10m, 2h or 1d."
+need_root "$@"
+
+# journalctl takes "-2h" / "-1d"; docker takes Go durations, which have no days.
+journal_since="-$since"
+docker_since=$since
+[[ $since == *d ]] && docker_since="$((${since%d} * 24))h"
+case $what in
+conductor) exec docker logs --since "$docker_since" "${follow[@]}" "$CANOPY_CONTAINER" ;;
+watchdog) exec journalctl -u canopy-watchdog.service --since "$journal_since" --no-pager "${follow[@]}" ;;
+backup) exec journalctl -u canopy-backup.service --since "$journal_since" --no-pager "${follow[@]}" ;;
+kiosk) exec journalctl --user-unit "$CANOPY_KIOSK_UNIT" --since "$journal_since" --no-pager "${follow[@]}" ;;
+service) exec journalctl -u "$CANOPY_UNIT" --since "$journal_since" --no-pager "${follow[@]}" ;;
+esac

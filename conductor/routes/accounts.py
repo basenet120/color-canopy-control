@@ -9,7 +9,8 @@ that without a CORS preflight, which we never grant, so the ops Basic credential
 - `POST /api/accounts/{account}/disconnect` — stop using the account and forget its stored token.
 - `GET  /api/accounts/{account}/devices` — what the connected account can see (read-only discovery), each device
   marked with the registry id it is registered as, or read-only when it isn't registered/allowlisted (07 §1).
-- `POST /api/accounts/{account}/register` `{metadevice_id, device_id}` — put the id in the ops overlay.
+- `POST /api/accounts/{account}/register` `{metadevice_id, device_id}` — put the id in the ops overlay. An id
+  registered to a spare kit moves to a non-spare entry (controller swap), taking the bench flags that kit proved.
 Gate refusals come back as 403 with the gate's plain reason. Every response here is `Cache-Control: no-store`.
 
 The HTML form (`POST /ops/accounts`, urlencoded) works only with `CONDUCTOR_ACCOUNT_CONNECT=1`, turns itself off
@@ -394,8 +395,12 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
             409,
             f"{entry.id} belongs to the {entry.account} account, not {account}. Register it from its own account.",
         )
+    spare = None  # a spare kit handing its Hubspace device to this entry (controller swap)
     for other in services.registry.file.devices:
         if other.id != entry.id and metadevice_id in (other.metadevice_id, other.sim_address):
+            if other.role == "spare" and entry.role != "spare":
+                spare = other
+                continue
             raise _refuse(409, f"That Hubspace device is already registered as {other.id}.")
     simulated = bool(services.accounts.simulated)
     if not simulated and metadevice_id not in services.extras.get(DISCOVERED_KEY, {}).get(account, ()):
@@ -405,11 +410,22 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
             "then register one of them.",
         )
     previous = entry.metadevice_id
+    patch: dict[str, Any] = {"metadevice_id": metadevice_id}
+    if spare is not None and spare.flags_proven_on == metadevice_id:
+        # Bench flags belong to the kit that proved them (D19), so they move with it.
+        patch["flags"] = spare.flags.model_dump()
+        patch["flags_proven_on"] = metadevice_id
     try:
-        services.update_registry(entry.id, {"metadevice_id": metadevice_id})
+        if spare is not None and spare.metadevice_id == metadevice_id:
+            # Two entries can't hold one id: release it from the spare first. If the next step fails, the kit is
+            # simply unregistered (register it again); nothing else changes.
+            services.update_registry(spare.id, {"metadevice_id": None})
+        services.update_registry(entry.id, patch)
     except ConfigError as exc:
         raise _refuse(400, str(exc)) from None
     services.extras.get("capabilities", {}).pop(entry.id, None)
+    if spare is not None:
+        services.extras.get("capabilities", {}).pop(spare.id, None)
     allowlisted = metadevice_id in services.gate.effective_allowlist()
     if simulated:
         message = (
@@ -423,11 +439,19 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
             f"Saved. Add {metadevice_id} to HUBSPACE_DEVICE_ALLOWLIST on this runtime and restart before bench "
             "jobs can write to it; until then it stays read-only."
         )
+    if spare is not None:
+        carried = "its bench flags came with it" if "flags" in patch else "it has no bench flags yet"
+        message = (
+            f"Moved from {spare.id} to {entry.id} ({carried}). Calibrate it and press Commission slots. "
+            + message
+        )
     return JSONResponse(
         {
             "device_id": entry.id,
             "metadevice_id": metadevice_id,
             "replaced": previous if previous and previous != metadevice_id else None,
+            "moved_from": spare.id if spare is not None else None,
+            "flags_carried": "flags" in patch,
             "allowlisted": allowlisted,
             "simulated": simulated,
             "message": message,

@@ -1,0 +1,53 @@
+# The Color Canopy Conductor on the venue box (07 §10). Started and stopped by canopy-conductor.service:
+#   docker compose --project-name canopy --env-file /etc/canopy/box.env --file /opt/canopy/docker-compose.yml up
+# /etc/canopy/box.env (not secret) supplies CONDUCTOR_TAG and CONDUCTOR_LAN_IP for the lines below.
+# /etc/canopy/conductor.env (root, 0600, never in git) holds the Conductor's settings and secrets.
+# Exactly one Conductor: desired state, sign-ins and the rate budget live in its memory. Never scale this service.
+name: canopy
+
+services:
+  conductor:
+    # Built on the box from a release tag (install.sh) or loaded from its saved tarball. Never pulled.
+    image: canopy-conductor:${CONDUCTOR_TAG:?set CONDUCTOR_TAG in /etc/canopy/box.env}
+    pull_policy: never
+    container_name: canopy-conductor
+    restart: always
+    env_file:
+      - ${CANOPY_ENV_FILE:-/etc/canopy/conductor.env}
+    environment:
+      # Pinned here so a typo in conductor.env can't move the data out of the volume or the port off the mapping.
+      CONDUCTOR_DATA_DIR: /data
+      PORT: "8000"
+    ports:
+      # The kiosk browser on this box, and the show LAN (vignette tablets, staff phones). Nothing else.
+      - "127.0.0.1:8000:8000"
+      - "${CONDUCTOR_LAN_IP:?set CONDUCTOR_LAN_IP in /etc/canopy/box.env}:8000:8000"
+    volumes:
+      - canopy-data:/data
+      # The host's NTP state for the 7 am checklist's "Clock synced" (the watchdog keeps the flag file current).
+      - /run/canopy/timesync:/run/systemd/timesync:ro
+    healthcheck:
+      # The image has no curl; /healthz is open and content-free.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"
+      interval: 15s
+      timeout: 6s
+      retries: 3
+      start_period: 40s
+    # Time to save the rotated Hubspace sign-in and finish in-flight writes on shutdown.
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "10"
+
+volumes:
+  canopy-data:
+    # Created once by install.sh (docker volume create canopy-data). External so that no compose command,
+    # not even `down -v`, can delete the sign-ins, the registry overlay and the slot hashes.
+    external: true
+    name: canopy-data

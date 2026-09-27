@@ -1,0 +1,26 @@
+# The canopy touchscreen: Chromium full screen on /kiosk/. A systemd USER unit for the auto-login desktop user,
+# installed to /etc/systemd/user/ and enabled for graphical sessions by install.sh (systemctl --global enable).
+#   sudo canopy-restart kiosk   restarts it · sudo canopy-kiosk-enroll   enrolls it (one-time setup link)
+[Unit]
+Description=Color Canopy kiosk (Chromium, full screen)
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=CANOPY_KIOSK_URL=http://localhost:8000/kiosk/
+# A persistent profile, so the kiosk's enrollment cookie survives restarts and reboots. Under ~/snap/chromium/common
+# because the Chromium snap can only write there.
+Environment=CANOPY_KIOSK_PROFILE=%h/snap/chromium/common/canopy-kiosk
+# Written only while canopy-kiosk-enroll runs (it points the kiosk at a setup link once), then removed.
+EnvironmentFile=-%h/.config/canopy/kiosk.env
+# Waits (for ever) until the Conductor answers /healthz, so the screen never shows a browser error page.
+ExecStartPre=/opt/canopy/lib/kiosk-prestart.sh
+ExecStart=/snap/bin/chromium --kiosk --noerrdialogs --disable-session-crashed-bubble --disable-infobars --overscroll-history-navigation=0 --disable-pinch --check-for-update-interval=31536000 --no-first-run --password-store=basic --disable-features=Translate --user-data-dir=${CANOPY_KIOSK_PROFILE} --app=${CANOPY_KIOSK_URL}
+Restart=always
+RestartSec=3
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=graphical-session.target
