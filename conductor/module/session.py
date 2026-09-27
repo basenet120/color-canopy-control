@@ -96,6 +96,7 @@ class SessionDeps:
     entry: Callable[[str], DeviceEntry]  # logical id → the registry entry as it is now
     publish: Callable[[str, dict], None] = lambda _topic, _data: None
     save_calibration: Callable[[str, Mapping[str, Any]], Any] | None = None  # Services.update_registry
+    save_registry: Callable[[str, Mapping[str, Any]], Any] | None = None  # the same, for slot records
     tracker: Any = None  # DeviceStateTracker (optional)
     modes: Any = None  # looks.ModesFile for the Lowcountry preview card (None: the card is unavailable)
 
@@ -144,6 +145,7 @@ class ModuleSession:
         self.positions = display_positions(self.map)
         self.paint: list[R.FrameEntry] = [C.OFF] * len(self.positions)
         self.paint_slot = DEFAULT_PAINT_SLOT
+        self.written_slots: set[str] = set()  # slots this page wrote a frame into
         self.results: deque[dict] = deque(maxlen=RECENT_RESULTS)
         self.in_flight = 0
         self.hold: dict = {"on": False, "name": None, "since": None}
@@ -408,6 +410,7 @@ class ModuleSession:
             raise ModuleError(str(e), 400) from None
         self.paint = list(frame)
         self.paint_slot = slot
+        self.written_slots.add(slot)  # this page's own pattern: never recordable as "painted in the app"
         return await self._send(rows, label)
 
     def _stop_sweep_for(self, why: str) -> None:
@@ -694,7 +697,9 @@ class ModuleSession:
             self.publish("sweep")
 
     async def slot(self, slot: str, action: str) -> dict:
-        """select (T2) | write_current (T1, no select) | read (fresh readback) | load (slot → paint, no write)."""
+        """select (T2) | write_current (T1, no select) | read (fresh readback) | load (slot → paint, no write) |
+        record_app (record the pattern painted in the Hubspace app: fresh readback → hash + effect fields saved to
+        the registry overlay with origin "app"; nothing is sent to the lights)."""
         slot = self._require_slot(slot)
         if action == "select":
             self._check_can_write()
@@ -716,7 +721,64 @@ class ModuleSession:
             self.paint_slot = slot
             self.publish("paint")
             return {"slot": slot, "loaded": True}
-        raise ModuleError("action must be select, write_current, read or load", 400)
+        if action == "record_app":
+            return await self.record_app_slot(slot)
+        raise ModuleError("action must be select, write_current, read, load or record_app", 400)
+
+    async def record_app_slot(self, slot: str) -> dict:
+        """Record the pattern hand-painted in the Hubspace app in `slot` (T2, 04 ladder): read the slot back now,
+        save its canonical hash (07 §6) and effect fields with origin "app" to the ops overlay. Refused when the
+        slot holds the Conductor's own commissioned pattern or a frame this page wrote (it isn't an app painting)."""
+        slot = self._require_slot(slot)
+        self._validate_lease()
+        await self.refresh(force=True)
+        if self.last_read_error:
+            raise ModuleError(
+                f"Couldn't read {slot} back ({self.last_read_error}). Nothing was recorded.", 502
+            )
+        value = self._slot_value(slot)
+        digest = R.slot_hash(value)
+        if digest is None:
+            raise ModuleError(f"The readback has no pattern in {slot}, so there's nothing to record.")
+        entry = self.entry
+        record = entry.slot_record(slot)
+        if record is not None and record["origin"] == "api" and record["hash"] == digest:
+            raise ModuleError(
+                f"{slot} holds the pattern the Conductor commissioned (its hash matches the commissioning record), "
+                "not one painted in the Hubspace app. Paint it in the app first. Nothing was recorded."
+            )
+        if slot in self.written_slots:
+            raise ModuleError(
+                f"This page wrote {slot} itself, so it isn't a pattern painted in the Hubspace app. Paint it in the "
+                "app, then record it. Nothing was recorded."
+            )
+        save = self.deps.save_registry or self.deps.save_calibration
+        if save is None:
+            raise ModuleError("The slot can't be recorded here (no registry overlay).", 500)
+        effects = R.slot_effects(value)
+        try:
+            save(self.device_id, entry.slot_patch(slot, digest=digest, origin="app", effects=effects))
+        except ConfigError as e:
+            raise ModuleError(str(e), 400) from None
+        moving = R.animates(effects)
+        message = (
+            f"Recorded {slot} as painted in the Hubspace app (hash {digest}"
+            + (", with an animated effect" if moving else "")
+            + "). Nothing was sent to the lights. The show can select this slot at the hand-painted tier (T2)"
+            + (
+                " — on real hardware only once bench Gate B is proven for this kit —"
+                if not self.target.simulated
+                else ""
+            )
+            + " once all nine modules are recorded; the Conductor never rewrites it, and /ops alerts if it changes."
+        )
+        if self.target.simulated:
+            message += " SIMULATED — the simulator's slot, not a real app painting."
+        self.deps.telemetry.record(
+            "alert", level="info", device_id=self.address, message=f"{self.device_id}: {message}"
+        )
+        self.publish("slots")
+        return {"slot": slot, "hash": digest, "origin": "app", "effects": effects, "message": message}
 
     def effects_enabled(self) -> dict[str, dict[int, str]]:
         enabled = self.deps.settings.effects.enabled
@@ -855,7 +917,8 @@ class ModuleSession:
         reported = self._reported_state()
         mode = reported.get(("color-mode", None))
         selected = reported.get(("color-individual", "custom"))
-        recorded = self.entry.slot_hashes
+        entry = self.entry
+        recorded = entry.slot_hashes
         out = []
         for slot in self.caps.slots or list(R.SLOTS):
             value = reported.get((R.FRAME_CLASS, slot))
@@ -872,6 +935,10 @@ class ModuleSession:
                     "slot": slot,
                     "hash": R.slot_hash(value),
                     "recorded_hash": recorded.get(slot),
+                    # "api" = commissioned by the Conductor (T1), "app" = recorded as hand-painted (T2)
+                    "recorded_origin": (entry.slot_origin or {}).get(slot, "api")
+                    if recorded.get(slot)
+                    else None,
                     "length": len(entries) if entries is not None else None,
                     "heads": render.head_colors(state, self.n, self.caps),
                     "active": mode == "individual" and selected == slot,

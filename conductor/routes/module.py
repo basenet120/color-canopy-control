@@ -99,7 +99,7 @@ class SweepBody(LeaseBody):
 
 class SlotBody(LeaseBody):
     slot: str = Field(max_length=20)
-    action: Literal["select", "write_current", "read", "load"]
+    action: Literal["select", "write_current", "read", "load", "record_app"]
 
 
 class EffectsBody(LeaseBody):

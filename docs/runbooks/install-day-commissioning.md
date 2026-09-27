@@ -85,6 +85,15 @@ On `/ops/bench/` → pick **Module N**, film the module with the clock page if A
 - [ ] The result says "Wrote N slot(s)" with nothing needing attention (27 for nine modules × three slots). A module
       listed as needing attention: open it on `/ops/module`, check it's online, then Commission again (it only
       rewrites what's missing; a slot is written at most once per 10 minutes).
+- [ ] Commissioning records each slot as **commissioned** (the Conductor wrote it). It never overwrites a slot that was
+      recorded as **hand-painted in the Hubspace app** (see the note at the end); those modules show "skipped".
+- Recalibrating a module *after* commissioning is fine: the show keeps judging each slot by what was commissioned, and
+  the reconciler rewrites the out-of-date slots on its own (each slot at most once per 10 minutes, with an alert on
+  `/ops`). The same happens to Golden Hour's slot when a motion code is enabled after the bench: the kiosk only says
+  the pattern moves once every module's slot actually holds the benched code.
+- If a module's profile couldn't be read (it was offline when the box started), `/ops` → **Needs attention** says so;
+  the canopy keeps retrying and leaves that module out of every look but the safe one. **Refresh** on the device list
+  retries at once.
 
 ## 8. Verify (15 min)
 
@@ -116,7 +125,19 @@ On `/ops/bench/` → pick **Module N**, film the module with the clock page if A
 ---
 
 **If Gate C fails on the platform (T2, hand-painted slots).** The fallback is painting slots 1–3 in the Hubspace app
-(about 15–20 min per module) and having the Conductor select them (Gate B). **Not buildable yet:** the Conductor has
-no "record this hand-painted slot's hash" action, and it won't select a hand-painted slot without a recorded hash
-(it can't tell a repainted slot from a staff edit otherwise). Until that exists, painted modes run at module level
-(T3) and the kiosk copy says so. Tell Alon at once if Gate C fails.
+(about 15–20 min per module) and having the Conductor select them (Gate B, `t2_select`, must be proven on each kit).
+Tell Alon at once if Gate C fails. Then, per module:
+- [ ] In the Hubspace app (canopy account), paint the module's slice of Rainbow Row Sunset into **Custom 1**, Garden
+      Gathering into **Custom 2** and Golden Hour into **Custom 3** (use the kiosk's design or `/ops` heads view as the
+      reference; the calibration map on `/ops/calibrate` shows which puck is where).
+- [ ] `/ops/module/?device=canopy-rXcY` → **Slots** → on each painted slot press **Painted in the Hubspace app —
+      record it** and confirm. It reads the slot back and saves its fingerprint (hash + effect fields) as
+      *hand-painted*; nothing is sent to the lights. It refuses a slot that still holds the Conductor's commissioned
+      pattern or a frame the page itself wrote. VWBD's testers can do this on the modules they're granted.
+- [ ] Close the module page. Once all nine modules have a slot recorded, the kiosk shows that mode at the hand-painted
+      tier with the copy "painted … in the Hubspace app". Until then the mode runs at module level (T3).
+- Hand-painted slots are never rewritten: if one changes (someone edits it in the app), `/ops` alerts and the slot
+  checklist fails — repaint it in the app, then record it again. Commissioning skips them too. To go back to
+  Conductor-written frames for a slot later, remove its entries under `slot_hashes` / `slot_origin` / `slot_effects`
+  for that module in the overlay (`/data/overrides/registry.yaml` inside the container, volume `canopy-data`),
+  restart, then press Commission slots.

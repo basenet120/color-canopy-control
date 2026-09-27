@@ -23,8 +23,9 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   NEEDS_ATTENTION when a module has needed attention (wrong after re-asserts, offline, signed out) longer than
   `reconciler.downgrade_after_wrong_s`, can't be addressed, or every module is locked; UPDATING while any command is pending, verifying or
   waiting for a readback; READY when every non-locked module's readback matches (tracker READY).
-- **Outage.** When `CONNECTION` / `TIMEOUT` / `SERVER_ERROR` outcomes hit at least `min(3, modules)` different modules
-  with no success in between, the engine rests ("The canopy is resting…"); the reconciler probes one module every
+- **Outage.** When `CONNECTION` / `TIMEOUT` / `SERVER_ERROR` outcomes — or THROTTLED with HTTP 503/504, which the
+  Afero adapter keeps retryable but counts as an outage signature (D15) — hit at least `min(3, modules)` different
+  modules with no success in between, the engine rests ("The canopy is resting…"); the reconciler probes one module every
   `outage_probe_interval_s` and, on the first good readback, re-applies the current mode to every module in one
   burst. Ops requests during an outage become the current mode and go out on recovery. A driver's optional
   `on_recovery` list (the Afero adapter's watchdog) triggers an immediate probe.
@@ -35,12 +36,20 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   next reconciler tick; one that ends FAILED after `reassert_after_s`.
 - **Commissioning.** `commission()` writes each T1 mode's slot content (the slot object only, one PUT per module,
   header copied from the device's own readback of that slot, verified on the slot row) and records the canonical
-  hash of the readback per (device, slot) through `record_slot_hash`. A write that didn't land (silent drop,
+  hash of the readback per (device, slot), with origin "api" and the header's effect fields, through `record_slot`
+  (or `record_slot_hash`). A slot recorded as hand-painted in the Hubspace app (origin "app") is never overwritten.
+  Afterwards the current mode is re-picked (commissioning can unlock T1).
+- **Slot expectations.** A commissioned T1 slot is judged by the hash recorded from its readback, not by a frame
+  compiled now (`_expect`); when the look now compiles to something else (recalibration, a design edit, an effect
+  code enabled or disabled) the reconciler rewrites that stale slot, rate-limited, and the expectation, the copy and
+  the motion flag follow the new record. A write that didn't land (silent drop,
   throttling past the executor's retries, a throttled header read) is retried within the same run, up to
   `COMMISSION_ROUNDS`; a slot that did land is written again at most once per `reconciler.slot_rewrite_min_interval_s`.
   Guest requests, the reconciler and idle hold wait while it runs.
-- **Throttling.** Only a command that still ended THROTTLED after the executor's retries counts toward the
-  hysteresis throttle downgrade (see reconciler.py) — a 429 that a retry cleared never does.
+- **Throttling.** Only a command that still ended THROTTLED (429/403 — not 503/504, an outage) after the executor's
+  retries counts toward the hysteresis throttle downgrade (see reconciler.py) — a 429 that a retry cleared never does.
+- **Modules left out.** A module the plan skipped (`ModePlan.skipped`, e.g. its profile hasn't been read) is shown as
+  needing attention; the others are driven.
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -59,7 +68,7 @@ from typing import Any
 from conductor import rows as R
 from conductor.clock import Clock
 from conductor.config import ConductorSettings, Registry
-from conductor.drivers.base import Outcome
+from conductor.drivers.base import Outcome, StateRow
 from conductor.engine_api import CanopyPhase, CanopyState, ModePlan, ModuleTarget, PlanError, Tier
 from conductor.executor import CommandExecutor
 from conductor.executor_api import Command, CommandResult, CommandStatus, DeviceStatus
@@ -79,6 +88,10 @@ COMMISSIONING_MESSAGE = "The canopy is being set up. Try again in a minute."
 STOPPED_MESSAGE = "The canopy engine is stopped."
 STARTING_MESSAGE = "The canopy is getting ready."
 OUTAGE_OUTCOMES = frozenset({str(Outcome.CONNECTION), str(Outcome.TIMEOUT), str(Outcome.SERVER_ERROR)})
+# 503/504 come back THROTTLED (retryable, D15) but are an outage signature, not rate limiting: they rest the canopy
+# like SERVER_ERROR and never count toward the throttle downgrade. Only 429/403 are throttling.
+OUTAGE_HTTP_STATUSES = frozenset({503, 504})
+REPLAN_DELAY_S = 1.0  # re-pick the current look this long after its slots' records changed (coalesced)
 OUTAGE_MIN_MODULES = 3  # distinct modules failing (no success in between) before the canopy rests
 _RESEND_STATUSES = (CommandStatus.FAILED, CommandStatus.MISMATCH)
 _SLOT_RETRY = (CommandStatus.FAILED, CommandStatus.MISMATCH, CommandStatus.SUPERSEDED)
@@ -93,6 +106,16 @@ Compiler = Callable[[str, Tier], ModePlan]
 Ladder = Callable[[str], list[Tier]]
 TierAllowed = Callable[[str, Tier], tuple[bool, str]]
 SlotHashRecorder = Callable[[str, str, str], None]
+# (device id, slot, {"hash", "origin", "effects"}) — the full record (origin "api" for commissioning)
+SlotRecorder = Callable[[str, str, dict], None]
+
+
+def is_outage_signal(outcome: Any, http_status: int | None) -> bool:
+    """Does this attempt/readback outcome say Hubspace is down (rest the canopy), rather than busy or picky?"""
+    outcome = str(outcome)
+    if outcome in OUTAGE_OUTCOMES:
+        return True
+    return outcome == str(Outcome.THROTTLED) and http_status in OUTAGE_HTTP_STATUSES
 
 
 def _all_allowed(_mode: str, _tier: Tier) -> tuple[bool, str]:
@@ -117,6 +140,8 @@ class EngineDeps:
     tier_allowed: TierAllowed = _all_allowed  # capabilities + bench flags → (allowed, why not)
     record_slot_hash: SlotHashRecorder | None = None  # lead: → registry overlay slot_hashes
     simulated: Callable[[], bool] | None = None  # lead: lambda: services.engine_driver.simulated
+    # Preferred over record_slot_hash when set: saves hash + origin + effect fields in one overlay write.
+    record_slot: SlotRecorder | None = None
 
 
 @dataclass
@@ -171,9 +196,14 @@ class CanopyEngine:
         self._last_publish_mono = float("-inf")
         # (device id, slot) → monotonic time the slot was last written (the rewrite limit counts from it)
         self.slot_written: dict[tuple[str, str], float] = {}
-        self.slot_records: dict[tuple[str, str], dict] = {}  # (device id, slot) → {hash, mode, tier}
+        # (device id, slot) → {hash, mode, tier, origin, effects}: what this process commissioned
+        self.slot_records: dict[tuple[str, str], dict] = {}
         self._t1_plans: dict[str, ModePlan] = {}  # T1 plans compiled for commissioning and drift rewrites
         self._t1_failed: set[str] = set()
+        self._t1_key: Any = None  # the registry the cached T1 plans were compiled against
+        self._replan_handle: asyncio.TimerHandle | None = None
+        self._slot_locks: dict[str, asyncio.Lock] = {}
+        self.recovery_listeners: list[Callable[[], Any]] = []  # called when an outage ends (ShowWiring)
         self.stats: dict[str, Any] = {"outages": [], "tier_changes": [], "early_reasserts": 0}
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
 
@@ -358,7 +388,8 @@ class CanopyEngine:
             f"Wrote {written} slot(s)"
             + (f"; {len(problems)} need attention" if problems else "")
             + (
-                f"; {statuses.count('skipped')} skipped (recently written or no slot content)"
+                f"; {statuses.count('skipped')} skipped (recently written, hand-painted in the app, or no slot "
+                "content — each module says why)"
                 if "skipped" in statuses
                 else ""
             )
@@ -367,6 +398,8 @@ class CanopyEngine:
         self.telemetry.record(
             "alert", level="info" if not problems else "warn", message=f"Commissioning: {report['message']}"
         )
+        # The slots' records changed: re-pick the current mode's tier (commissioning can unlock T1) and its copy.
+        self._replan_soon()
         self._publish_soon()
         return report
 
@@ -378,6 +411,7 @@ class CanopyEngine:
         active_statuses: list[tuple[str, DeviceStatus]] = []
         unresolved = []
         locked_count = 0
+        skipped = plan.skipped if plan is not None else {}
         for device_id in self._module_ids():
             entry = self._entry(device_id)
             record: dict[str, Any] = {
@@ -387,6 +421,11 @@ class CanopyEngine:
                 "simulated": simulated,
             }
             target = self._targets.get(device_id)
+            if device_id in skipped:  # left out of the look (e.g. its profile hasn't been read yet)
+                record.update(status=str(DeviceStatus.NEEDS_ATTENTION), reason=skipped[device_id] + ".")
+                unresolved.append(device_id)
+                modules[device_id] = record
+                continue
             if target is None:
                 record.update(
                     status=str(DeviceStatus.NEEDS_ATTENTION),
@@ -544,7 +583,7 @@ class CanopyEngine:
                 self._locked.add(target.address)
                 continue
             mt = plan.modules[device_id]
-            expect = list(mt.expect) if mt.expect else list(mt.rows)
+            expect = self._expect(device_id, mt, plan)
             self.tracker.set_desired(
                 target.address,
                 expect,
@@ -635,7 +674,7 @@ class CanopyEngine:
 
     def _module_ids(self) -> list[str]:
         if self._plan is not None:
-            return list(self._plan.modules)
+            return [*self._plan.modules, *(d for d in self._plan.skipped if d not in self._plan.modules)]
         return [d.id for d in self.deps.registry().canopy_modules()]
 
     def _entry(self, device_id: str) -> Any:
@@ -662,6 +701,8 @@ class CanopyEngine:
             result.status is CommandStatus.FAILED
             and result.attempts
             and result.attempts[-1].outcome is Outcome.THROTTLED  # the executor's retries didn't clear it
+            and result.attempts[-1].http_status
+            not in OUTAGE_HTTP_STATUSES  # 503/504: an outage, not a throttle
         ):
             self.reconciler.note_throttle_failure(self._account_of(address))
         current = record.kind == "show" and record.generation == self._generation
@@ -703,7 +744,9 @@ class CanopyEngine:
             differs = [c for c in event.get("mismatched") or () if c != R.FRAME_CLASS]
             if kind == "readback" and differs:
                 self._maybe_early_reassert(address)
-        elif outcome in OUTAGE_OUTCOMES and self._outage is None and not self._stopped:
+        elif (
+            is_outage_signal(outcome, event.get("http_status")) and self._outage is None and not self._stopped
+        ):
             self._bad_streak.add(address)
             if len(self._bad_streak) >= min(OUTAGE_MIN_MODULES, max(1, len(self._by_address))):
                 self.enter_outage(
@@ -774,6 +817,11 @@ class CanopyEngine:
         self.reconciler.on_recovery()
         if self._plan is not None:
             self.send(None, source="recovery", label=f"recovery: {self._plan.mode_id}")
+        for listener in list(self.recovery_listeners):
+            try:
+                listener()
+            except Exception:
+                log.exception("canopy recovery listener failed")
         self._publish_soon()
 
     def _on_driver_recovery(self, _account: str = "") -> None:
@@ -809,9 +857,19 @@ class CanopyEngine:
         """Lift every hysteresis floor one rung; re-apply the current mode if its tier can rise. Returns the modes."""
         lifted = []
         for mode_id in list(self.floors):
-            self.floors[mode_id] -= 1
-            if self.floors[mode_id] <= 0:
+            floor = self.floors[mode_id] - 1
+            try:
+                ladder = list(self.deps.ladder(mode_id))
+            except (KeyError, LookupError, PlanError, ValueError):
+                ladder = []
+            # A rung that isn't allowed or doesn't compile right now can't be shown, so lifting the floor onto it
+            # would change nothing and cost another clean interval (F8): lift past it to the next usable rung.
+            while 0 < floor < len(ladder) and not self._usable(mode_id, ladder[floor]):
+                floor -= 1
+            if floor <= 0:
                 del self.floors[mode_id]
+            else:
+                self.floors[mode_id] = floor
             lifted.append(mode_id)
         plan = self._plan
         if plan is not None and plan.mode_id in lifted:
@@ -820,6 +878,15 @@ class CanopyEngine:
                 self._tier_change(plan.mode_id, plan.tier, better.tier, reason, "up")
                 self._show(better, "reconciler")
         return lifted
+
+    def _usable(self, mode_id: str, tier: Tier) -> bool:
+        if not self.deps.tier_allowed(mode_id, tier)[0]:
+            return False
+        try:
+            self.deps.compile(mode_id, tier)
+        except (PlanError, KeyError, LookupError):
+            return False
+        return True
 
     def _tier_change(self, mode_id: str, old: Tier, new: Tier, reason: str, direction: str) -> None:
         self.stats["tier_changes"].append(
@@ -854,6 +921,15 @@ class CanopyEngine:
             target = self._targets.get(device_id) or self._resolve(device_id)
             if target is None:
                 modules[device_id] = {"status": "failed", "reason": self._unresolved.get(device_id, "")}
+                continue
+            record = self.recorded_slot(device_id, mt.slot)
+            if record is not None and record["origin"] == "app":
+                modules[device_id] = {
+                    "status": "skipped",
+                    "slot": mt.slot,
+                    "reason": "Painted in the Hubspace app and recorded as hand-painted: commissioning never "
+                    "overwrites a hand-painted slot (runbook: install-day commissioning).",
+                }
                 continue
             last = self.slot_written.get((device_id, mt.slot))
             if last is not None and now - last < min_interval:
@@ -915,14 +991,173 @@ class CanopyEngine:
             entry.update(status="mismatch", reason="The readback didn't include the slot's pattern.")
             return entry
         entry["hash"] = digest
-        self.slot_records[(device_id, slot)] = {"hash": digest, "mode": plan.mode_id, "tier": str(plan.tier)}
-        if self.deps.record_slot_hash is not None:
-            try:
-                self.deps.record_slot_hash(device_id, slot, digest)
-            except Exception as e:  # the overlay refused it: the write happened, the record didn't
-                log.exception("record_slot_hash failed for %s %s", device_id, slot)
-                entry["reason"] = f"Written, but the hash couldn't be saved: {e}"
+        error = self._record_slot_value(device_id, slot, plan, value)
+        if error:
+            entry["reason"] = error
         return entry
+
+    def _record_slot_value(self, device_id: str, slot: str, plan: ModePlan, value: Any) -> str | None:
+        """Record a commissioned slot's readback (hash, origin "api", effect fields). Returns why saving failed."""
+        digest = R.slot_hash(value)
+        effects = R.slot_effects(value)
+        error = None
+        previous = self.recorded_slot(device_id, slot)
+        self.slot_records[(device_id, slot)] = {
+            "hash": digest,
+            "mode": plan.mode_id,
+            "tier": str(plan.tier),
+            "origin": "api",
+            "effects": effects,
+        }
+        try:
+            if self.deps.record_slot is not None:
+                self.deps.record_slot(device_id, slot, {"hash": digest, "origin": "api", "effects": effects})
+            elif self.deps.record_slot_hash is not None:
+                self.deps.record_slot_hash(device_id, slot, digest)
+        except Exception as e:  # the overlay refused it: the write happened, the record didn't
+            log.exception("record_slot_hash failed for %s %s", device_id, slot)
+            error = f"Written, but the hash couldn't be saved: {e}"
+        self._slot_recorded(device_id, slot, previous)
+        return error
+
+    def adopt_slot(self, device_id: str, slot: str, value: Any) -> bool:
+        """A commissioned slot that already holds exactly what its T1 look compiles to now (a rewrite that landed
+        although its verification was superseded by a newer command): record its readback, write nothing."""
+        record = self.recorded_slot(device_id, slot)
+        if record is not None and record["origin"] == "app":
+            return False
+        owner = self.t1_target(device_id, slot)
+        if owner is None:
+            return False
+        plan, mt = owner
+        if not mt.slot_hash or R.slot_hash(value) != mt.slot_hash:
+            return False
+        if R.effects_differ(R.slot_effects(mt.slot_value), R.slot_effects(value)):
+            return False
+        self._record_slot_value(device_id, slot, plan, value)
+        return True
+
+    def _slot_lock(self, device_id: str) -> asyncio.Lock:
+        """One slot write per module at a time (a second one would supersede the first's verification)."""
+        lock = self._slot_locks.get(device_id)
+        if lock is None:
+            lock = self._slot_locks[device_id] = asyncio.Lock()
+        return lock
+
+    # ---- recorded slots -----------------------------------------------------------------------------------------
+    def recorded_slot(self, device_id: str, slot: str) -> dict | None:
+        """The slot's record {hash, origin, effects}: a hand-painted record saved on the module page wins, then what
+        this process commissioned, then the registry overlay's record."""
+        entry = self._entry(device_id)
+        saved = entry.slot_record(slot) if entry is not None and hasattr(entry, "slot_record") else None
+        mine = self.slot_records.get((device_id, slot))
+        if saved is not None and saved["origin"] == "app":
+            return saved
+        if mine is not None:
+            return {"hash": mine["hash"], "origin": mine.get("origin", "api"), "effects": mine.get("effects")}
+        return saved
+
+    def _expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
+        """What readback must show. A T1 slot that was commissioned is judged by the hash recorded from its readback
+        then (07 §6), not by the frame compiled now (a recalibration or design edit changes that without touching
+        the device: the reconciler rewrites such a stale slot, rate-limited, and the expectation follows)."""
+        expect = list(mt.expect) if mt.expect else list(mt.rows)
+        if plan.tier is Tier.T1 and mt.slot:
+            record = self.recorded_slot(device_id, mt.slot)
+            if record is not None and record["origin"] == "api":
+                expect = [r for r in expect if r.key != (R.FRAME_CLASS, mt.slot)]
+                expect.append(R.slot_hash_expectation(mt.slot, record["hash"]))
+                mt.expect = expect
+        return expect
+
+    def _slot_recorded(self, device_id: str, slot: str, previous: dict | None) -> None:
+        """A slot's record changed: the current look's expectation for that module follows at once, and when the
+        effect fields changed (the copy may now claim — or stop claiming — motion) the look is re-picked."""
+        plan = self._plan
+        record = self.recorded_slot(device_id, slot)
+        if plan is None or record is None or plan.tier is not Tier.T1:
+            return
+        mt = plan.modules.get(device_id)
+        if mt is None or mt.slot != slot:
+            return
+        target = self._targets.get(device_id)
+        if previous is None or previous["hash"] != record["hash"]:
+            expect = self._expect(device_id, mt, plan)
+            if target is not None and self.locks.holder(target.address) is None:
+                self.tracker.set_desired(
+                    target.address,
+                    expect,
+                    label=f"{plan.label} ({plan.tier})",
+                    source=self._source or "reconciler",
+                    meta={"mode": plan.mode_id, "tier": str(plan.tier), "device_id": device_id},
+                )
+                self.dirty.add(target.address)
+                if not self._commissioning:
+                    self.reconciler.check_module_soon(device_id, target)
+        if R.animates((previous or {}).get("effects")) != R.animates(record.get("effects")):
+            self._replan_soon()
+
+    def _replan_soon(self) -> None:
+        """Re-pick the current mode's best plan shortly (coalesced): slot records changed, so its tier, copy or
+        motion may change. Skipped when a newer look was installed meanwhile (it was compiled with the records)."""
+        if self._plan is None or self._stopped:
+            return
+        if self._replan_handle is not None:
+            self._replan_handle.cancel()
+        generation = self._generation
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def fire() -> None:
+            self._replan_handle = None
+            if self._stopped or self._plan is None or self._generation != generation:
+                return
+            if self._commissioning:
+                self._replan_handle = loop.call_later(REPLAN_DELAY_S, fire)
+                return
+            plan = self._plan
+            better, _ = self.compile_best(plan.mode_id)
+            if better is None or (better.tier, better.feature, better.motion) == (
+                plan.tier,
+                plan.feature,
+                plan.motion,
+            ):
+                return
+            if better.tier != plan.tier:
+                ladder = list(self.deps.ladder(plan.mode_id))
+                up = ladder.index(better.tier) < ladder.index(plan.tier) if plan.tier in ladder else True
+                self._tier_change(
+                    plan.mode_id, plan.tier, better.tier, "the slots' records changed", "up" if up else "down"
+                )
+            self._show(better, "reconciler")
+
+        self._replan_handle = loop.call_later(REPLAN_DELAY_S, fire)
+
+    def stale_slot(self, device_id: str, slot: str, readback_value: Any) -> tuple[str, str] | None:
+        """A commissioned T1 slot whose content still matches its record but no longer what the look compiles to
+        now (recalibration, a canvas edit, an effect code enabled or disabled): (why, the compiled content's key).
+        None when it's current, or when no T1 look owns the slot here."""
+        owner = self.t1_target(device_id, slot)
+        if owner is None:
+            return None
+        _plan, mt = owner
+        compiled = R.slot_effects(mt.slot_value)
+        if mt.slot_hash and mt.slot_hash != R.slot_hash(readback_value):
+            return "the look now compiles to a different pattern (calibration or design changed)", str(
+                mt.slot_hash
+            )
+        fields = R.effects_differ(compiled, R.slot_effects(readback_value))
+        if fields:
+            wanted = ", ".join(f"{k} {compiled.get(k, 0)}" for k in fields)
+            return f"the look's effect fields changed ({wanted})", f"{mt.slot_hash}:{wanted}"
+        return None
+
+    def invalidate_t1_plans(self) -> None:
+        """Compile inputs changed (capabilities re-read): T1 plans are compiled again when next needed."""
+        self._t1_plans.clear()
+        self._t1_failed.clear()
 
     async def _slot_burst(
         self, batch: list[tuple[str, ModuleTarget, Any, Command]]
@@ -979,17 +1214,29 @@ class CanopyEngine:
         return cmd, "", False
 
     def slot_expectations(self, device_id: str) -> list[tuple[str, str, Tier, str]]:
-        """(slot, expected hash, tier, mode) the true-up checks on this module: T1 slots with a recorded hash
-        (commissioned here, or saved in the registry overlay), and the current plan's T2 slot."""
+        """(slot, expected hash, tier, mode) the true-up checks on this module: slots with a recorded hash
+        (commissioned here, or saved in the registry overlay), and the current plan's T2 slot. A slot recorded as
+        hand-painted in the app is T2 (alert only, never rewritten); a commissioned one is T1 (rewritten on drift)
+        when a canvas mode owns it here."""
         out: dict[str, tuple[str, str, Tier, str]] = {}
         entry = self._entry(device_id)
-        for slot, digest in ((entry.slot_hashes if entry is not None else {}) or {}).items():
-            # A hash saved in the overlay: ours to rewrite only when a canvas (T1) mode owns that slot here.
-            owner = self.t1_target(device_id, slot)
-            out[slot] = (slot, digest, Tier.T1 if owner else Tier.T2, owner[0].mode_id if owner else "")
-        for (dev, slot), record in self.slot_records.items():
-            if dev == device_id:
-                out[slot] = (slot, record["hash"], Tier.T1, record["mode"])
+        slots = set(((entry.slot_hashes if entry is not None else {}) or {}).keys())
+        slots |= {slot for dev, slot in self.slot_records if dev == device_id}
+        for slot in sorted(slots):
+            record = self.recorded_slot(device_id, slot)
+            if record is None:
+                continue
+            owner = self.t1_target(device_id, slot) if record["origin"] == "api" else None
+            mine = self.slot_records.get((device_id, slot))
+            if owner is None and mine is not None and record["origin"] == "api":
+                out[slot] = (slot, record["hash"], Tier.T1, mine["mode"])
+            else:
+                out[slot] = (
+                    slot,
+                    record["hash"],
+                    Tier.T1 if owner else Tier.T2,
+                    owner[0].mode_id if owner else "",
+                )
         plan = self._plan
         if plan is not None and plan.tier in (Tier.T1, Tier.T2) and device_id in plan.modules:
             mt = plan.modules[device_id]
@@ -999,7 +1246,13 @@ class CanopyEngine:
         return list(out.values())
 
     def t1_target(self, device_id: str, slot: str) -> tuple[ModePlan, ModuleTarget] | None:
-        """The T1 module target that owns `slot` on `device_id` (compiling T1 plans lazily after a restart)."""
+        """The T1 module target that owns `slot` on `device_id`, compiled lazily and cached until the registry (its
+        calibration, flags, records) changes, the capabilities are re-read, or the next commissioning — so a drift
+        or stale rewrite always writes what the look compiles to now."""
+        registry = self.deps.registry()
+        if registry is not self._t1_key:  # identity, holding a reference (a bare id() could be reused)
+            self._t1_key = registry
+            self.invalidate_t1_plans()
         for mode_id in self.deps.modes():
             plan = self._t1_plans.get(mode_id)
             if plan is None:
@@ -1021,7 +1274,15 @@ class CanopyEngine:
         return None
 
     async def rewrite_slot(self, device_id: str, slot: str, *, source: str) -> str:
-        """Rewrite one drifted T1 slot (rate-limited by the caller). Returns the command status or why not."""
+        """Rewrite one drifted or stale T1 slot (rate-limited by the caller; one slot write per module at a time).
+        Returns the command status or why not."""
+        async with self._slot_lock(device_id):
+            return await self._rewrite_slot(device_id, slot, source=source)
+
+    async def _rewrite_slot(self, device_id: str, slot: str, *, source: str) -> str:
+        record = self.recorded_slot(device_id, slot)
+        if record is not None and record["origin"] == "app":
+            return "it was hand-painted in the Hubspace app, and those are never rewritten"
         found = self.t1_target(device_id, slot)
         target = self._targets.get(device_id) or self._resolve(device_id)
         if found is None or target is None:
@@ -1085,8 +1346,14 @@ def engine_from_services(
     overlay (`slot_hashes` per device, merged), which needs CONDUCTOR_DATA_DIR."""
 
     def record_slot_hash(device_id: str, slot: str, digest: str) -> None:
+        record_slot(device_id, slot, {"hash": digest, "origin": "api", "effects": None})
+
+    def record_slot(device_id: str, slot: str, record: dict) -> None:
         entry = services.registry.get(device_id)
-        services.update_registry(device_id, {"slot_hashes": {**(entry.slot_hashes or {}), slot: digest}})
+        patch = entry.slot_patch(
+            slot, digest=record["hash"], origin=record.get("origin", "api"), effects=record.get("effects")
+        )
+        services.update_registry(device_id, patch)
 
     return CanopyEngine(
         EngineDeps(
@@ -1104,5 +1371,6 @@ def engine_from_services(
             tier_allowed=tier_allowed or _all_allowed,
             record_slot_hash=record_slot_hash,
             simulated=lambda: bool(services.engine_driver.simulated),
+            record_slot=record_slot,
         )
     )

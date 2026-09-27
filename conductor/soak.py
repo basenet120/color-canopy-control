@@ -21,10 +21,17 @@ Measured (ground truth = `SimDriver.device_view`, what the lights actually show)
 
 Writes `docs/reports/sim-acceptance.md` and exits non-zero when any target fails.
 
-The compiler: `run_soak(compiler=...)` takes any object with `compile(mode_id, tier)`, `ladder(mode_id)` and
-`modes()`. The default tries the looks compiler (`conductor.looks`); when it isn't importable here it falls back to
-the built-in compiler below (strand looks, module-level looks, and simple one-colour-per-module canvas frames) and the
-report says so.
+The world (07 §7 soak validity, review F11): by default the soak runs **the show's own wiring** — `build_services`
+on the virtual clock with a temporary `CONDUCTOR_DATA_DIR` and `conductor.show.ShowWiring`, exactly as the app's
+lifespan builds it: capabilities read from each module's (simulated) profile in the background, the looks compiler,
+the commissioning gate on T1, slot records (hash, origin, effect fields) in the registry overlay, the same ladder and
+tier rules. Only the simulator's conditions (pinned) and one soak-only setting differ: `config/sim/soak.yaml` enables a
+SIMULATED on-device motion code for Golden Hour, so the all-or-none motion re-trigger (07 §6) is measured too. Nothing
+real has been benched; the report says so.
+
+`run_soak(compiler=...)` still takes any object with `compile(mode_id, tier)`, `ladder(mode_id)` and `modes()` and
+then runs the bare engine on it (the older world: every tier allowed, no overlay); `BuiltinCompiler` below is kept for
+that path.
 """
 
 from __future__ import annotations
@@ -33,11 +40,14 @@ import argparse
 import asyncio
 import logging
 import random
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -58,6 +68,11 @@ from conductor.telemetry import Telemetry, percentile
 log = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 REPORT_PATH = ROOT / "docs" / "reports" / "sim-acceptance.md"
+SOAK_SETTINGS = CONFIG_DIR / "sim" / "soak.yaml"
+SHOW_DESCRIPTION = (
+    "the show's own wiring (build_services + conductor.show.ShowWiring → conductor.looks): profiles read in the "
+    "background, the commissioning gate on T1, slot records in the overlay"
+)
 POLL_S = 0.1  # how often a measurement looks at the lights
 WATCH_LIMIT_S = 120.0  # a measurement gives up (and fails) after this long
 
@@ -238,6 +253,89 @@ class _World:
     engine: Any
     modules: list[str]
     addresses: dict[str, str]
+    wiring: Any = None  # ShowWiring (the show's own wiring), when the soak runs it
+    services: Any = None
+    cleanup: Any = None  # a callable removing the temporary data/config directories
+    motion: dict | None = None  # the SIMULATED motion setting in force
+
+
+def _soak_config_dir(motion: dict | None) -> Path:
+    """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml)."""
+    root = Path(tempfile.mkdtemp(prefix="canopy-soak-config-"))
+    config = root / "config"
+    shutil.copytree(CONFIG_DIR, config)
+    if motion:
+        modes_path = config / "modes.yaml"
+        modes = yaml.safe_load(modes_path.read_text(encoding="utf-8"))
+        canvas = modes["modes"][motion["mode"]]["techniques"]["canvas"]
+        canvas["motion_effect"] = {
+            **(canvas.get("motion_effect") or {}),
+            "motionEffect": int(motion["motionEffect"]),
+        }
+        modes_path.write_text(yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        settings_path = config / "conductor.yaml"
+        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        enabled = settings.setdefault("effects", {}).setdefault("enabled", {})
+        enabled.setdefault("motionEffect", {})[int(motion["motionEffect"])] = str(
+            motion.get("note", "SIMULATED")
+        )
+        enabled.setdefault("brightnessEffect", {})
+        settings_path.write_text(
+            yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8"
+        )
+    return config
+
+
+def load_soak_motion(path: Path = SOAK_SETTINGS) -> dict | None:
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        motion = (yaml.safe_load(f) or {}).get("motion")
+    return motion or None
+
+
+async def _build_show(cfg: SoakConfig) -> _World:
+    """The app's own wiring on the virtual clock: build_services + ShowWiring, a temp data dir (the overlay)."""
+    from conductor.services import build_services
+    from conductor.show import ShowWiring
+
+    motion = load_soak_motion()
+    config_dir = _soak_config_dir(motion)
+    data = Path(tempfile.mkdtemp(prefix="canopy-soak-data-"))
+    clock = VirtualClock()
+    services = build_services(
+        {"CONDUCTOR_DATA_DIR": str(data)}, clock=clock, config_dir=config_dir, sim_settings=cfg.sim_settings
+    )
+    services.telemetry.dir = None  # events stay in memory: the soak measures the engine, not disk appends
+    sim = services.sim
+    sim.seed = cfg.seed
+    for rng, name in ((sim._fault_rng, "faults"), (sim._latency_rng, "latency"), (sim._world_rng, "world")):
+        rng.seed(f"{cfg.seed}:{name}")  # the same seeded streams the bare world uses
+    await services.start()
+    wiring = ShowWiring(services)
+    services.extras["show"] = wiring
+    engine = await wiring.start()
+    modules = [d.id for d in services.registry.canopy_modules()]
+
+    def cleanup() -> None:
+        shutil.rmtree(config_dir.parent, ignore_errors=True)
+        shutil.rmtree(data, ignore_errors=True)
+
+    return _World(
+        clock,
+        services.registry,
+        sim,
+        services.executor_for(sim),
+        services.tracker,
+        services.telemetry,
+        engine,
+        modules,
+        {d: f"sim-{d}" for d in modules},
+        wiring=wiring,
+        services=services,
+        cleanup=cleanup,
+        motion=motion,
+    )
 
 
 def _build(cfg: SoakConfig, compiler: Any) -> _World:
@@ -290,8 +388,13 @@ def _all_correct(world: _World, plan: ModePlan) -> bool:
 
 
 async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
-    world = _build(cfg, compiler)
+    world = await _build_show(cfg) if compiler is None else _build(cfg, compiler)
     engine, clock, sim = world.engine, world.clock, world.sim
+    if compiler is None:
+        compiler = SimpleNamespace(modes=world.wiring.mode_ids)  # the schedule only needs the mode ids
+        # the show commissions its slots once every profile is read (as the app does in sim): wait for it
+        while world.wiring.last_commission is None and clock.monotonic() < 600:
+            await clock.sleep(1.0)
     rng = random.Random(f"{cfg.seed}:schedule")
     duration = cfg.hours * 3600.0
     window_s = cfg.sim_settings.http_500_window_s or 43 * 60
@@ -315,6 +418,12 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         "recoveries": {},
         "max_queue": 0,
         "min_write_gap_s": None,
+        "wiring": {
+            "show_wiring": world.wiring is not None,
+            "motion": world.motion,
+            "motion_plans": 0,  # accepted changes that installed a motion plan (all-or-none re-trigger)
+            "tiers": {},  # accepted changes per tier
+        },
     }
     tasks: set[asyncio.Task] = set()
 
@@ -374,6 +483,9 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         source = event.get("source", "")
         if plan is None or source in ("reconciler", "recovery"):
             return
+        results["wiring"]["motion_plans"] += int(bool(plan.motion))
+        tiers = results["wiring"]["tiers"]
+        tiers[str(plan.tier)] = tiers.get(str(plan.tier), 0) + 1
         now = clock.monotonic()
         spawn(watch_change(plan, source, now, in_fault(now, pad_after=60.0) or engine.outage and "resting"))
 
@@ -479,8 +591,11 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         spawn(watch_recovery("outage", clock.monotonic()))
 
     # -- run ------------------------------------------------------------------------------------------------------
-    commission = await engine.commission(source="soak")
-    await engine.start()
+    if world.wiring is not None:
+        commission = world.wiring.last_commission or {"ok": False, "message": "never ran", "modes": {}}
+    else:
+        commission = await engine.commission(source="soak")
+        await engine.start()
     drivers = [asyncio.get_running_loop().create_task(c) for c in (kiosk_changes(), mash(), faults())]
     await at(t0 + duration)
     for task in drivers:
@@ -496,8 +611,13 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
     results["final_correct"] = final_plan is not None and _all_correct(world, final_plan)
     results["final_mode"] = final_plan.mode_id if final_plan else None
     results["final_tier"] = str(final_plan.tier) if final_plan else None
-    await engine.stop()
-    await world.executor.close()
+    if world.wiring is not None:
+        await world.wiring.close()
+        await world.services.close()
+        world.cleanup()
+    else:
+        await engine.stop()
+        await world.executor.close()
     for task in list(tasks):
         task.cancel()
     results["commission"] = {
@@ -636,7 +756,8 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
             f"{s.device_apply_extra_s_max:g} s, {s.throttle_429_rate:.0%} of requests → 429, "
             f"{s.silent_drop_rate:.0%} silent drops, readback semantics `{s.readback_semantics}`."
         ),
-        f"- Compiler: {meta['compiler']}.",
+        f"- World: {meta['compiler']}.",
+        _motion_line(results),
         (
             f"- Faults: one {windows['http_500'] / 60:.0f}-min window of HTTP 500s and one "
             f"{windows['outage'] / 60:.0f}-min internet outage, each with an ops mode change in the middle; "
@@ -702,6 +823,20 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
     return "\n".join(lines)
 
 
+def _motion_line(results: dict) -> str:
+    wiring = results.get("wiring") or {}
+    motion = wiring.get("motion")
+    tiers = ", ".join(f"{k} {n}" for k, n in sorted((wiring.get("tiers") or {}).items())) or "none"
+    if not motion:
+        return f"- Motion: no motion code enabled; accepted changes by tier: {tiers}."
+    return (
+        f"- Motion: **SIMULATED** — `config/sim/soak.yaml` enables motionEffect {motion['motionEffect']} for "
+        f"{motion['mode']} (soak only; nothing has been benched and the simulator doesn't animate). "
+        f"{wiring.get('motion_plans', 0)} accepted changes installed a motion plan (all-or-none re-trigger). "
+        f"Accepted changes by tier: {tiers}."
+    )
+
+
 def load_targets(path: Path = ACCEPTANCE_FILE) -> dict:
     with open(path, encoding="utf-8") as f:
         return (yaml.safe_load(f) or {}).get("targets") or {}
@@ -712,10 +847,10 @@ def run_soak(cfg: SoakConfig | None = None, compiler: Any = None) -> tuple[dict,
     cfg = cfg or SoakConfig()
     wall = RealClock()
     started = wall.monotonic()
-    description = "the compiler passed to run_soak"
-    if compiler is None:
-        compiler, description = default_compiler(load_registry(CONFIG_DIR, None))
+    description = "the compiler passed to run_soak (the bare engine: every tier allowed, no overlay)"
     results = run_virtual(lambda: _soak(cfg, compiler))
+    if results["wiring"]["show_wiring"]:
+        description = SHOW_DESCRIPTION
     verdicts = evaluate(results, cfg.targets or load_targets())
     meta = {
         "generated": datetime.fromtimestamp(wall.now(), UTC).strftime("%Y-%m-%d %H:%M UTC"),

@@ -52,6 +52,9 @@ class ModePlan:
     motion: bool  # re-trigger all modules as one burst or none (07 §6)
     modules: dict[str, ModuleTarget]  # logical device id → target
     notes: list[str] = field(default_factory=list)  # e.g. "2200 K clamped to the device floor 2700 K"
+    # Canopy modules left out of this plan and why (e.g. their profile hasn't been read yet): the engine shows them
+    # as needing attention and drives the others (07 §6: one module's problem never blocks the rest).
+    skipped: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
@@ -61,6 +64,7 @@ class ModePlan:
             "feature": self.feature,
             "motion": self.motion,
             "notes": self.notes,
+            "skipped": self.skipped,
             "modules": {
                 d: {"slot": t.slot, "slot_hash": t.slot_hash, "rows": [r.to_json() for r in t.rows]}
                 for d, t in self.modules.items()

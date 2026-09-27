@@ -68,6 +68,7 @@ class ModuleManager:
             entry=lambda device_id: s.registry.get(device_id),
             publish=s.hub.publish,
             save_calibration=s.update_registry,
+            save_registry=s.update_registry,
             tracker=s.tracker,
             modes=self.modes,
         )

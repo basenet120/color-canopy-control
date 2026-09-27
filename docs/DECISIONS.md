@@ -188,3 +188,61 @@ use differs from it (at most every 30 s).
 **D34 — /ops device list by role and room.** `/api/devices` adds `vignette`, `kind` and `groups` (canopy, bench,
 spares, then rooms in vignettes.yaml order). Module page / Bench / head count only for strands; vignette devices get
 their room page.
+
+## 2026-09-27 — canopy engine, after the P1–P3 adversarial review (engine findings F1–F11)
+
+Numbered D35–E9 so they don't collide with other review branches; the lead may renumber when merging.
+
+**D35 — Capabilities are a background loop, and the first look waits for its first round.** `ShowWiring.start()`
+returns at once; a task reads every module's profile concurrently (15 s timeout each), retries the ones missing with
+backoff 1, 2, 4 … 60 s, and reads again on the engine's outage recovery, the driver's `on_recovery`, a module coming
+back online (a readback with `available: true` after `false`) and `/api/devices?refresh=1`. The idle mode is requested
+after the first round (success or not) rather than by `engine.start()`, so a box whose profiles answer at once doesn't
+send Calm twice. New or changed capabilities re-compile the current mode (source "reconciler"). In sim, commissioning
+waits until every module is read.
+
+**D36 — The safe look assumes conservative capabilities; everything else leaves an unread module out.** Lowcountry
+Calm compiles for a module without a profile with the sibling string's documented white range (2700–6500 K, 04), so
+the safe look can always go out. Every other mode compiles for the modules that were read and lists the rest in
+`ModePlan.skipped` (the engine shows them as needing attention). Copy that counts ("all nine", "270 lights") counts
+the modules actually driven.
+
+**D37 — Slot records carry an origin and effect fields.** `DeviceEntry.slot_origin` ("api" = commissioned, "app" =
+recorded as hand-painted) and `slot_effects` sit next to `slot_hashes`. A hash without an origin is "api" (before this,
+commissioning was the only writer), so an old overlay can never make the "painted in the Hubspace app" copy appear. T2
+needs "app" records; T1 is shown only with "api" records on every module. Commissioning never overwrites an "app" slot
+(protecting 15–20 min of hand-painting per module); going back to T1 for it means removing its record in the overlay
+(runbook). Changing that would need an explicit "forget this record" action.
+
+**D38 — T1 is judged against the commissioned readback hash; stale slots are rewritten once.** The engine's expected
+slot row names only the recorded hash (`rows.slot_hash_expectation`, read by `rows.compare`; the canonical projection
+is unchanged). When the look now compiles to another pattern or other effect codes (recalibration, a design edit, a
+code enabled or disabled), the reconciler rewrites that slot within the existing 10-minute limit — once per compiled
+content, never in a loop — and the expectation, copy and motion flag follow the new record. A slot that already holds
+exactly the current content (e.g. a rewrite whose verification a newer command superseded) is recorded without a
+write. One slot write per module at a time.
+
+**D39 — Motion copy follows the device, and `motion` means "re-trigger as one burst".** Golden Hour's motion copy
+appears only when every module's slot holds the benched code (recorded from readback at commissioning, else the
+header readback). `ModePlan.motion` is set whenever a slot may animate (a code configured and enabled, a slot that
+still holds an effect, a hand-painted slot of a `motion: true` mode whose header animates or is unknown), so copy and
+re-trigger semantics are no longer the same flag. The effect fields are checked on readback apart from the hash;
+only motionEffect/brightnessEffect count (speeds and depth aren't claimed in copy).
+
+**D40 — 503/504 are an outage, 429/403 are throttling.** THROTTLED attempts or readbacks with HTTP 503/504 count toward
+the resting streak like SERVER_ERROR and never toward the throttle downgrade, matching the adapter's own outage
+classification (D15).
+
+**D41 — Upgrades lift past rungs that can't be shown.** When a floor lifts onto a rung that isn't allowed or doesn't
+compile, it keeps lifting to the next usable rung in the same step, so T3 → T1 takes one clean interval (5 min) when T2
+isn't available.
+
+**D42 — Lowcountry Calm never names a Kelvin value it can't show.** A strand look whose copy names its Kelvin value uses
+the configured fallback look (and its copy) when a module's range would clamp that value; without a fallback, the
+copy names the value actually sent. Goodnight's copy names no value, so its 2200 → 2700 K clamp stands.
+
+**D43 — The soak runs the show's wiring, with a SIMULATED motion code.** `make soak` builds `build_services` +
+`ShowWiring` on the virtual clock with a temporary data dir (telemetry kept in memory), so it exercises the capability
+loop, the commissioning gate, overlay records and the real ladder. `config/sim/soak.yaml` enables motionEffect 1 for
+Golden Hour in the soak only (nothing benched; the report labels it SIMULATED) so the all-or-none re-trigger is
+measured. The pinned acceptance conditions are unchanged. `run_soak(compiler=…)` still runs the bare engine.

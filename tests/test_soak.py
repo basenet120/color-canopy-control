@@ -14,7 +14,7 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     assert not failed, failed
     text = report.read_text()
     assert "| Measure | p50 | p95 | max | Target | Result |" in text and "**PASS**" in text
-    assert "config/sim/acceptance.yaml" in text and meta["compiler"] == "conductor.looks.engine_compiler"
+    assert "config/sim/acceptance.yaml" in text and "ShowWiring" in meta["compiler"]
     assert results["commission"]["ok"] and len(results["outages"]) == 2  # the 500 window and the outage
     assert results["max_queue"] <= 18
 

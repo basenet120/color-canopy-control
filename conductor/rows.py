@@ -267,6 +267,8 @@ def _norm(function_class: str, value: Any) -> Any:
         inner = value.get("color-rgb", value)
         return tuple(int(inner.get(k, -1)) for k in ("r", "g", "b"))
     if function_class == FRAME_CLASS:
+        if isinstance(value, Mapping) and isinstance(value.get(SLOT_HASH_KEY), str):
+            return value[SLOT_HASH_KEY]  # an expectation that names only the canonical hash
         return slot_hash(value)
     return value
 
@@ -324,6 +326,43 @@ def slot_hash(value: Any) -> str | None:
     if proj is None:
         return None
     return hashlib.sha256(json.dumps(proj, separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+# An expected slot row that names only the canonical hash (a slot commissioned earlier: the readback hash recorded
+# then is what "correct" means, not a frame compiled now). Never sent — `compare` reads it; it lives in `expect`.
+SLOT_HASH_KEY = "canonicalHash"
+# The effect fields that make a saved pattern animate (0 = static). Not part of the hash (07 §6): verified apart.
+ANIMATING_FIELDS = ("motionEffect", "brightnessEffect")
+
+
+def slot_hash_expectation(slot: str, digest: str) -> StateRow:
+    if slot not in SLOTS:
+        raise PayloadError(f"unknown slot {slot!r}; use one of {', '.join(SLOTS)}")
+    return StateRow(FRAME_CLASS, slot, {SLOT_HASH_KEY: digest})
+
+
+def slot_effects(value: Any) -> dict[str, int] | None:
+    """The header effect fields of a slot object (readback or compiled), or None when it isn't a slot object."""
+    if not isinstance(value, Mapping):
+        return None
+    inner = value.get(FRAME_CLASS, value)
+    if not isinstance(inner, Mapping) or not isinstance(inner.get("frameBuffer"), Mapping):
+        return None
+    return {k: int(inner[k]) for k in EFFECT_FIELDS if isinstance(inner.get(k), int | float)}
+
+
+def animates(effects: Mapping[str, Any] | None) -> bool | None:
+    """Whether these effect fields make the pattern move or pulse (None when unknown)."""
+    if effects is None:
+        return None
+    return any(int(effects.get(k) or 0) != 0 for k in ANIMATING_FIELDS)
+
+
+def effects_differ(expected: Mapping[str, Any] | None, got: Mapping[str, Any] | None) -> list[str]:
+    """The animating effect fields (ANIMATING_FIELDS) whose values differ. [] when either side is unknown."""
+    if not expected or got is None:
+        return []
+    return [k for k in ANIMATING_FIELDS if int(expected.get(k) or 0) != int(got.get(k) or 0)]
 
 
 def payload_bytes(device_id: str, rows: Sequence[StateRow], last_update_ms: int) -> int:
