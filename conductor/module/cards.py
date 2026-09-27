@@ -1,7 +1,8 @@
 """One-tap test cards for Prototype 01, and the paint helpers they share with the Paint tab (04 §13, 06 #7).
 
 A card compiles to either a whole-strand `Look` (T3, always available) or a frame of per-head `FrameEntry`s
-(T1: written into a slot and selected in one PUT). Colours come from `config/recipes.yaml` — never from code — and
+(T1: written into a slot and selected in one PUT). A card's frame has one entry per PHYSICAL head (the module map);
+the session places it at the module's frame offset in the device's full-length frame, every other entry OFF. Colours come from `config/recipes.yaml` — never from code — and
 every value there is UNVERIFIED until the Prototype 01 colour study.
 
 Cards (ids are stable; the page renders each one):
@@ -11,7 +12,7 @@ Cards (ids are stable; the page renders each one):
 - `recipe-compare` left half `rgb_only`, right half `blend`, same target colour; the centre column stays dark
                    as a divider (T1).
 - `thirds`         three bands across X, each with its own colour and brightness, for Mylar density zones (T1).
-- `hue-ramp`       head i at hue 12°·i, for photographing the index map (T1).
+- `hue-ramp`       head i at hue 360°/heads·i (12°·i on 30 heads), for photographing the index map (T1).
 - `index-sweep`    lights head i in sequence — run through the sweep endpoint, one frame write per step (T1).
 - `single-head`    one head on, the rest off (T1).
 - `lowcountry-preview`  one Lowcountry Mode's slice for a chosen canopy position (r0c0 … r2c2), shown on THIS
@@ -29,14 +30,14 @@ from typing import Any
 
 from conductor.capabilities import Capabilities
 from conductor.config import ColorRecipe, RecipesFile
-from conductor.rows import FRAME_FIELDS, FrameEntry, Look, PayloadError
+from conductor.rows import FRAME_FIELDS, OFF_ENTRY, FrameEntry, Look, PayloadError
 
-OFF = FrameEntry(0, 0, 0, 0, 0, 0)
+OFF = OFF_ENTRY
 WHITE_HEAD = FrameEntry(255, 255, 255, 0, 100, 0)  # the sweep / single-head marker: plain RGB white
 WHITE_CARD_KELVINS = (2700, 3000, 4000)
 SHOW_COLORS = ("hd-orange", "amber", "peach", "warm-ivory")
 RECIPE_KINDS = ("rgb_only", "blend")
-HUE_STEP_DEG = 12
+HUE_STEP_DEG = 12  # 360° over the canopy module's 30 heads
 
 
 @dataclass
@@ -102,7 +103,8 @@ def catalog(recipes: RecipesFile, modes: Any = None, canopy: Mapping[str, Any] |
         {
             "id": "hue-ramp",
             "title": "Hue ramp",
-            "description": "Head i at hue 12° × i: photograph it to check the wire order.",
+            "description": "Each head a different hue, once round the rainbow along the cable "
+            "(12° per head on 30 heads): photograph it to check the wire order.",
             "needs_t1": True,
             "options": {},
             "defaults": {},
@@ -217,8 +219,9 @@ def scaled(entry: FrameEntry, pct: int) -> FrameEntry:
     )
 
 
-def hue_entry(index: int) -> FrameEntry:
-    r, g, b = colorsys.hsv_to_rgb(((HUE_STEP_DEG * index) % 360) / 360.0, 1.0, 1.0)
+def hue_entry(index: int, heads: int = 360 // HUE_STEP_DEG) -> FrameEntry:
+    """Head `index` of a hue ramp spread once round the colour wheel over `heads` heads (hue = 360°/heads·i)."""
+    r, g, b = colorsys.hsv_to_rgb(((360.0 / max(heads, 1) * index) % 360) / 360.0, 1.0, 1.0)
     return FrameEntry(round(r * 255), round(g * 255), round(b * 255), 0, 100, 0)
 
 
@@ -428,7 +431,8 @@ def compile_card(
         )
         return Compiled(label, frame=frame, notes=notes)
     if card == "hue-ramp":
-        return Compiled("hue ramp (12° per head)", frame=[hue_entry(i) for i in range(n)])
+        step = 360 / max(n, 1)
+        return Compiled(f"hue ramp ({step:g}° per head)", frame=[hue_entry(i, n) for i in range(n)])
     if card == "single-head":
         index = p.get("index", 0)
         return Compiled(f"single head {index}", frame=single_head(n, index))

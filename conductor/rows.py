@@ -76,6 +76,63 @@ class FrameEntry:
         return cls(**{k: int(d.get(k, getattr(cls, k))) for k in FRAME_FIELDS})
 
 
+# An entry no puck shows: every field 0. Frame entries outside a module's physical heads are written as this, so a
+# padded frame is deterministic (same heads in → same slot hash out).
+OFF_ENTRY = FrameEntry(0, 0, 0, 0, 0, 0)
+
+
+@dataclass(frozen=True)
+class FrameLayout:
+    """Where a module's physical heads sit in the device's framebuffer.
+
+    The controller's framebuffer can be longer than the strand (the real SQHDK03 reports 60 entries — the most
+    pucks one controller supports — with 30 pucks attached, VWBD workshop Sep 27 2026). Puck i is driven by entry
+    `offset + i`; every other entry is written OFF. Which entries drive the pucks is UNVERIFIED beyond the working
+    assumption (entries 0–29): `frame_offset` in the registry corrects it from the bench without code.
+    """
+
+    length: int  # framebuffer entries the device reports
+    heads: int  # physical heads (pucks) on the module
+    offset: int = 0  # the entry that drives puck 0
+
+    def __post_init__(self) -> None:
+        if self.heads < 1 or self.offset < 0 or self.offset + self.heads > self.length:
+            raise PayloadError(
+                f"{self.heads} pucks from entry {self.offset} don't fit a {self.length}-entry framebuffer"
+            )
+
+    @property
+    def end(self) -> int:
+        """One past the last entry that drives a puck."""
+        return self.offset + self.heads
+
+    @property
+    def padded(self) -> bool:
+        """The frame holds entries no puck uses."""
+        return self.length != self.heads
+
+    def place(self, heads: Sequence[FrameEntry]) -> list[FrameEntry]:
+        """A full-length frame: `heads` (one per puck, wire order) at [offset, offset+heads), OFF elsewhere."""
+        if len(heads) != self.heads:
+            raise PayloadError(f"{len(heads)} head colours for a module with {self.heads} pucks; refusing")
+        out = [OFF_ENTRY] * self.length
+        out[self.offset : self.end] = list(heads)
+        return out
+
+    def physical(self, entries: Sequence[FrameEntry]) -> list[FrameEntry]:
+        """The entries that drive the pucks, puck 0 first. PayloadError when the frame is too short."""
+        if len(entries) < self.end:
+            raise PayloadError(
+                f"the frame holds {len(entries)} entries but this module's pucks use entries "
+                f"{self.offset}–{self.end - 1}"
+            )
+        return list(entries[self.offset : self.end])
+
+    def describe(self) -> str:
+        """e.g. "60-entry pattern; pucks use 0–29" (the page's small note)."""
+        return f"{self.length}-entry pattern; pucks use {self.offset}–{self.end - 1}"
+
+
 def frame_value(
     header_from_readback: Mapping[str, Any] | None,
     entries: Sequence[FrameEntry],

@@ -66,8 +66,10 @@ touches real lights, so try every button. Stop the program with **Ctrl+C** in th
 ## 3 · Unlock puck painting (about 10 minutes, once)
 Painting individual pucks only switches on after a short check proves the Hubspace cloud accepts it for **your**
 module. Open **http://localhost:8000/ops/bench/** and, with the module in view:
-1. **Gate A — read-only profile dump.** Changes nothing. Press **Run**. It should say PASS (30 pucks, 3 saved
-   patterns). Press **Copy anonymized JSON** and send it to Alon.
+1. **Gate A — read-only profile dump.** Changes nothing. Press **Run**. It should say PASS (3 saved patterns with
+   room for the 30 pucks). Your kit reports **60 entries** per saved pattern — that's normal: a controller can take
+   up to 60 pucks and says so, and the page uses entries 0–29 for your 30. Press **Copy anonymized JSON** and send
+   it to Alon.
 2. **Gate B — select a slot by API**, then **Gate C — replay slot 1 into slot 2**. Answer the questions on screen
    honestly (e.g. "Did the strand switch to slot 2 within about 2 s?"). When a gate passes, press **Apply flags**.
    If Gate C says slot 2 already matches slot 1, it tells you what to do: run **Hue ramp — rainbow for the index map**
@@ -93,11 +95,14 @@ press **Done**, close it, or leave it for 10 minutes. At the top it says who is 
   - **Recipe compare**: left half RGB-only vs right half RGB + warm white, same target colour
   - **Thirds split**: three bands with their own colour and brightness — compare Mylar densities side by side
   - **Hue ramp**, **Single head**, and the **Index sweep** (lights one puck at a time along the wire; pause/resume;
-    one step every 2 s — use it to check the wiring order)
+    one step every 2 s — use it to check the wiring order). Run the index sweep once on a new kit: if puck 1 lights
+    first and every puck lights in turn, the page has the right half of the 60-entry pattern.
 - **Slots**: the three saved patterns, with a preview of each. If you paint a pattern in the Hubspace app, use
   **"Painted in the Hubspace app — record it"** so the show can use it.
 - **Calibrate**: after the index sweep or a hue-ramp photo, set the start corner / cable path, or **Flip** the order,
   and **Save**. This records how your crew wired the module — please do it once the routing is final.
+  Below that is **Pattern entry that drives head 0** (normally 0). Only change it if the index sweep lights
+  nothing, or lights the wrong half: try **30**, **Save offset**, and run the sweep again. Tell Alon if you had to.
 - **Hold**: freezes the current look and shows its name in big letters — for photos from below and at eye level.
 - **Telemetry** (bottom): how long each change took, and the last error. **Copy anonymized JSON** for Alon.
 

@@ -4,10 +4,12 @@ Rules being implemented (04 "Cloud profile", 07 §6):
 - **Power off** → every head black.
 - **white** → the whole strand at `color-temperature` (Kelvin → RGB) × `brightness`.
 - **color** → the whole strand at `color-rgb` × `brightness`.
-- **individual** → the selected slot's framebuffer (`color-individual/custom` names the slot), entry i on head i:
-  `rgb × colorBrightness` blended additively with `kelvin_to_rgb(cct) × whiteBrightness`, × strand brightness,
-  clamped. Per-puck white on this RGBW product is UNVERIFIED; a device with a `no-white` hint gets no white term.
-  Heads beyond the frame stay dark (a short frame lights only its own entries).
+- **individual** → the selected slot's framebuffer (`color-individual/custom` names the slot), entry `offset + i`
+  on head i (`offset` = the registry's `frame_offset`: a 60-entry controller frame drives 30 pucks from entry 0 by
+  default; entries no puck uses are never drawn): `rgb × colorBrightness` blended additively with
+  `kelvin_to_rgb(cct) × whiteBrightness`, × strand brightness, clamped. Per-puck white on this RGBW product is
+  UNVERIFIED; a device with a `no-white` hint gets no white term. Heads beyond the frame stay dark (a short frame
+  lights only its own entries).
 - **sequence** → firmware animations can't be reproduced, so these are **deterministic, clearly-approximate**
   stills: a named program (preset `custom` + `color-sequence/custom`) shows its decoded CCT and level (research:
   api-model.md, e.g. dinner-party = 2800 K at 62%); a preset shows a 3-colour palette cycled along the heads —
@@ -134,9 +136,13 @@ def _mode(state: Mapping[Key, Any]) -> str:
 
 
 def head_colors(
-    rows: Iterable[StateRow] | Mapping[Key, Any], n_heads: int, caps: Capabilities | None = None
+    rows: Iterable[StateRow] | Mapping[Key, Any],
+    n_heads: int,
+    caps: Capabilities | None = None,
+    offset: int = 0,
 ) -> list[dict]:
-    """Per-head `{"r","g","b"}` approximating what a strand shows for these state rows (see module rules)."""
+    """Per-head `{"r","g","b"}` approximating what a strand shows for these state rows (see module rules): one
+    per physical head; in per-head mode head i shows frame entry `offset + i`."""
     if n_heads <= 0:
         return []
     state = _by_key(rows)
@@ -148,7 +154,7 @@ def head_colors(
         c = _rgb(_scale(_rgb_value(state.get(("color-rgb", None))), level))
         return [dict(c) for _ in range(n_heads)]
     if mode == "individual":
-        return _individual(state, n_heads, level, caps)
+        return _individual(state, n_heads, level, caps, offset)
     if mode == "sequence":
         preset = str(state.get(("color-sequence", "preset")) or "")
         if preset == "custom":
@@ -165,17 +171,17 @@ def head_colors(
 
 
 def _individual(
-    state: Mapping[Key, Any], n_heads: int, level: float, caps: Capabilities | None
+    state: Mapping[Key, Any], n_heads: int, level: float, caps: Capabilities | None, offset: int = 0
 ) -> list[dict]:
     slot = state.get(("color-individual", "custom"))
     entries = frame_entries(state.get((FRAME_CLASS, slot))) or []
     white = not (caps and caps.no_white_hint)
     out = []
     for i in range(n_heads):
-        if i >= len(entries):
+        if not 0 <= offset + i < len(entries):
             out.append(dict(BLACK))
             continue
-        e = entries[i]
+        e = entries[offset + i]
         r, g, b = _scale((e.r, e.g, e.b), e.colorBrightness / 100.0)
         if white and e.cct and e.whiteBrightness:
             wr, wg, wb = _scale(kelvin_to_rgb(e.cct), e.whiteBrightness / 100.0)
@@ -185,9 +191,13 @@ def _individual(
 
 
 def describe_look(
-    rows: Iterable[StateRow] | Mapping[Key, Any], n_heads: int | None = None, caps: Capabilities | None = None
+    rows: Iterable[StateRow] | Mapping[Key, Any],
+    n_heads: int | None = None,
+    caps: Capabilities | None = None,
+    offset: int = 0,
 ) -> str:
     """The look in words, e.g. "white 2700 K at 60%", "slot custom-1 (30 painted heads)",
+    "slot custom-1 (30 painted heads; 60-entry pattern, pucks use 0–29)",
     "preset snowfall (simulated approximation)"."""
     state = _by_key(rows)
     if str(state.get(("power", None), "on")) == "off":
@@ -203,6 +213,12 @@ def describe_look(
         entries = frame_entries(state.get((FRAME_CLASS, slot)))
         if not entries:
             return f"slot {slot} (no pattern stored){at}"
+        if n_heads is not None and len(entries) >= offset + n_heads and len(entries) != n_heads:
+            # A longer controller frame (60 entries for 30 pucks): name the pucks, then the frame.
+            span = f"{offset}–{offset + n_heads - 1}"
+            return (
+                f"slot {slot} ({n_heads} painted heads; {len(entries)}-entry pattern, pucks use {span}){at}"
+            )
         of = f" of {n_heads}" if n_heads is not None and n_heads != len(entries) else ""
         return f"slot {slot} ({len(entries)} painted heads{of}){at}"
     if mode == "sequence":

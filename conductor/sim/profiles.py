@@ -1,15 +1,22 @@
 """Simulator device profiles: device dumps in aioafero's `AferoDevice` shape (see `profiles/README.md`).
 
-Rule being implemented (04 "Cloud profile", 06 #1): until bench Gate A dumps a real SQHDK03, the canopy strand is
-simulated from its closest public sibling — the Hampton Bay 20-segment string — **resized to 30 heads in code**,
-changing every place the head count appears together: the six `"20-segment"` hints (three under
+Rule being implemented (04 "Cloud profile", 06 #1): until a real SQHDK03 dump lands as the fixture, the canopy
+strand is simulated from its closest public sibling — the Hampton Bay 20-segment string — **resized in code**,
+changing every place the frame length appears together: the six `"20-segment"` hints (three under
 `capabilities[].color-individual._opts.categoryValues[].hints`, three under
 `functions[].color-individual.values[].hints`), all three `color-sequence-v2` framebuffers, `default_image` and
 the model name. A profile that doesn't have exactly those six hints is refused rather than half-resized.
 
+**Frame length vs pucks.** The first real SQHDK03 kit (VWBD workshop, Sep 27 2026: 30 pucks attached) reports a
+60-entry framebuffer in every slot — the controller's capacity (up to 60 pucks), not the pucks attached. The default
+profile matches it: 60-entry frames, 30 physical pucks driven by entries 0–29 (`PUCKS`, `PUCK_OFFSET`); entries
+30–59 are stored but light nothing. Which 30 entries really drive the pucks is UNVERIFIED (the working assumption
+is 0–29); the segment hint of the real kit is unknown too, so the simulator's says 60 like its frames.
+
 Profiles:
-- `sqhdk03-sim`  — the sibling string at 30 heads (the canopy default, `DEFAULT_PROFILE`).
-- `string-20seg` — the fixture as-is (the Glow Garden string).
+- `sqhdk03-sim`    — the sibling string at 60 entries with 30 pucks (the canopy default, `DEFAULT_PROFILE`).
+- `sqhdk03-sim-30` — the pre-workshop model: 30 entries, 30 pucks (a controller that reports its detected count).
+- `string-20seg`   — the fixture as-is (the Glow Garden string): 20 entries, 20 heads.
 
 Vignette profiles (P4), **synthesized from aioafero 9.3.0 controller source — UNVERIFIED until a real dump**. No
 public dump exists for these exact models, so each is built in code from what aioafero's controllers read and write
@@ -47,8 +54,12 @@ from conductor.rows import FRAME_CLASS
 PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 SIBLING_FILE = "hampton-bay-string-20seg.json"
 DEFAULT_PROFILE = "sqhdk03-sim"
-SQHDK03_SIM_HEADS = 30
+SQHDK03_SIM_HEADS = 30  # physical pucks on the simulated kit
+SQHDK03_SIM_ENTRIES = 60  # framebuffer entries it reports (the real kit's, VWBD workshop Sep 27 2026)
 SQHDK03_SIM_MODEL = "SQHDK03 (simulated from sibling string)"
+# Profiles whose frame is longer than the strand: name → (physical pucks, entry that drives puck 0). The rest light
+# one head per entry.
+PUCKS: dict[str, tuple[int, int]] = {"sqhdk03-sim": (SQHDK03_SIM_HEADS, 0)}
 HINTS_PER_PROFILE = 6  # 3 capabilities categoryValues + 3 function values
 
 _SEGMENT = re.compile(r"(\d+)-segment")
@@ -335,6 +346,8 @@ def _build(name: str) -> dict:
     if name == "string-20seg":
         return copy.deepcopy(_read(SIBLING_FILE))
     if name == "sqhdk03-sim":
+        return resize_profile(_read(SIBLING_FILE), SQHDK03_SIM_ENTRIES, model=SQHDK03_SIM_MODEL)
+    if name == "sqhdk03-sim-30":
         return resize_profile(_read(SIBLING_FILE), SQHDK03_SIM_HEADS, model=SQHDK03_SIM_MODEL)
     if name in SYNTHESIZED:
         return SYNTHESIZED[name]()
@@ -347,7 +360,15 @@ def _built(name: str) -> dict:
 
 
 def profile_names() -> list[str]:
-    return ["sqhdk03-sim", "string-20seg", *SYNTHESIZED]
+    return ["sqhdk03-sim", "string-20seg", "sqhdk03-sim-30", *SYNTHESIZED]
+
+
+def pucks(name: str, dump: Mapping[str, Any] | None = None) -> tuple[int | None, int]:
+    """(physical heads, the frame entry that drives head 0) of a simulated strand. Heads is None when the profile
+    has no frames; for profiles not in PUCKS every frame entry is a head."""
+    if name in PUCKS:
+        return PUCKS[name]
+    return frame_length(dump if dump is not None else _built(name)), 0
 
 
 def is_synthesized(name: str) -> bool:

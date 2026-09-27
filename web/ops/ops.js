@@ -393,7 +393,11 @@ function capsLine(d) {
   if (d.capabilities) {
     const c = d.capabilities;
     const parts = [];
-    if (c.framebuffer_length != null) parts.push(`${c.framebuffer_length} heads`);
+    if (c.framebuffer_length != null) {
+      // The controller's frame can be longer than the strand (60 entries for 30 pucks): name both.
+      const n = d.expected_heads;
+      parts.push(n != null && n !== c.framebuffer_length ? `${n} heads (${c.framebuffer_length}-entry pattern)` : `${c.framebuffer_length} heads`);
+    }
     parts.push(c.individual ? "per-head colour" : "no per-head colour");
     if (c.slots && c.slots.length) parts.push(`${c.slots.length} slots`);
     return parts.join(" · ");

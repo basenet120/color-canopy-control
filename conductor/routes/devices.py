@@ -158,7 +158,11 @@ def _device_record(services: Any, entry: Any, caps_record: dict | None) -> dict:
         "capabilities_error": (caps_record or {}).get("error"),
         "capabilities_simulated": (caps_record or {}).get("simulated"),
         "capabilities_fetched_at": (caps_record or {}).get("fetched_at"),
-        "head_count_problem": caps.head_count_problem(entry.expected_heads) if caps else None,
+        "head_count_problem": caps.head_count_problem(entry.expected_heads, entry.frame_offset)
+        if caps
+        else None,
+        "frame_offset": entry.frame_offset,
+        "frame_note": caps.frame_note(entry.expected_heads, entry.frame_offset) if caps else None,
     }
 
 
@@ -316,7 +320,9 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
                 for problem in snap["problems"]:
                     add(f"{name}: {problem}", link)
         caps = (caps_cache.get(entry.id) or {}).get("caps")
-        if caps is not None and (problem := caps.head_count_problem(entry.expected_heads)):
+        if caps is not None and (
+            problem := caps.head_count_problem(entry.expected_heads, entry.frame_offset)
+        ):
             add(f"{name}: {problem}", link)
     for alert in AlertBoard.of(services).active():
         link = None

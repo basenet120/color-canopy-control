@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from conductor.drivers.base import StateRow
-from conductor.rows import FRAME_CLASS, SLOTS, frame_entries
+from conductor.rows import FRAME_CLASS, SLOTS, FrameLayout, PayloadError, frame_entries
 
 _SEGMENT_HINT = re.compile(r"^(\d+)-segment$")
 
@@ -55,8 +55,18 @@ class Capabilities:
             return lengths.pop()
         return self.segment_hint
 
-    def head_count_problem(self, expected_heads: int | None) -> str | None:
-        """Plain-English problem if the device's frame length doesn't match the registry's expected heads."""
+    def head_count_problem(self, expected_heads: int | None, offset: int = 0) -> str | None:
+        """Plain-English problem when per-head frames can't reach this module's pucks, else None.
+
+        The device's frame length (framebuffer entries) is not the module's head count: the real SQHDK03 reports a
+        60-entry framebuffer — the most pucks one controller supports — with 30 pucks attached (VWBD workshop,
+        Sep 27 2026). So a problem is only: slots that disagree, no length at all, or a frame SHORTER than the
+        entries the pucks need (`offset` + `expected_heads`). A longer frame is fine (`frame_note` says so).
+
+        Consequence (07 §6): on a controller that always reports its full capacity, a strand that lost pucks — the
+        "only the first 12 light" fault — can no longer be seen from the frame length. Unless bench job
+        `head_count_boot` shows the profile changing, the daily head-count check is visual.
+        """
         if expected_heads is None:
             return None
         lengths = set(self.framebuffer_lengths.values())
@@ -65,9 +75,37 @@ class Capabilities:
         n = self.framebuffer_length
         if n is None:
             return "the device reports no frame length — per-head writes refused"
-        if n != expected_heads:
+        if n < expected_heads + offset:
+            if offset:
+                return (
+                    f"the device's frame holds {n} entries but this module's {expected_heads} pucks need entries "
+                    f"{offset}–{offset + expected_heads - 1}"
+                )
             return f"the device reports {n} heads but this module should have {expected_heads}"
         return None
+
+    def frame_note(self, expected_heads: int | None, offset: int = 0) -> str | None:
+        """An operator note when the frame is longer than the module's pucks (and that is fine), else None."""
+        n = self.framebuffer_length
+        if expected_heads is None or n is None or self.head_count_problem(expected_heads, offset):
+            return None
+        if n == expected_heads:
+            return None
+        return (
+            f"This controller's saved patterns hold {n} entries; this module's {expected_heads} pucks use entries "
+            f"{offset}–{offset + expected_heads - 1} (confirm once with the index sweep or the hue ramp)."
+        )
+
+    def frame_layout(self, expected_heads: int | None, offset: int = 0) -> FrameLayout | None:
+        """Where the pucks sit in this device's frame, or None when per-head frames can't reach them."""
+        n = self.framebuffer_length
+        if n is None or self.head_count_problem(expected_heads, offset):
+            return None
+        heads = expected_heads if expected_heads is not None else n - offset
+        try:
+            return FrameLayout(n, heads, offset)
+        except PayloadError:
+            return None
 
     def to_json(self) -> dict:
         d = asdict(self)
