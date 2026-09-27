@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Canopy Layout</title>
+<link rel="icon" href="data:,">
 <style>
   :root {
     --ground: #14100c;
@@ -15,6 +16,9 @@
     --core: #ffd9a0;
     --alert: #ff5a3c;
     --wire: rgba(255, 190, 120, 0.55);
+    --ok: #5fd38a;
+    --busy: #f6c35b;
+    --unknown: #7d7064;
   }
   * { box-sizing: border-box; }
   body {
@@ -25,20 +29,48 @@
   main { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
   h1 { font: 600 clamp(26px, 4vw, 38px)/1.1 ui-serif, Georgia, serif; margin: 0; text-wrap: balance; }
   .sub { color: var(--muted); margin: 4px 0 0; }
+  .now { margin: 10px 0 0; max-width: 78ch; }
+  .now b { font-weight: 600; }
+  .now .phase { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; color: var(--muted);
+    font: 600 12px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .06em; text-transform: uppercase; }
+  .now .phase::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--unknown); }
+  .now .phase[data-phase="ready"]::before { background: var(--ok); }
+  .now .phase[data-phase="updating"]::before { background: var(--busy); }
+  .now .phase[data-phase="needs_attention"]::before { background: var(--alert); }
+  .feature { color: var(--muted); display: block; }
   .bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
-  .group { display: flex; gap: 6px; align-items: center; }
+  .group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .label { font: 600 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
   button {
     font: 600 13px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink);
     background: var(--plane); border: 1px solid var(--seam); border-radius: 6px; padding: 9px 12px; cursor: pointer;
+    min-height: 36px;
   }
   button[aria-pressed="true"] { background: var(--amber); color: var(--ground); border-color: var(--amber); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
   button:focus-visible { outline: 2px solid var(--core); outline-offset: 2px; }
   .stats { font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted); }
   .stats b { color: var(--ink); font-weight: 600; }
   .stats .bad { color: var(--alert); }
+  .live { font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted); }
+  .live[data-state="open"] { color: var(--ok); }
+  .live[data-state="reconnecting"], .live[data-state="unauthorized"] { color: var(--busy); }
   canvas { width: 100%; height: auto; display: block; border-radius: 10px; background: var(--plane); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; margin: 0; padding: 0; list-style: none;
+    color: var(--muted); font-size: 13px; }
+  .legend li { display: inline-flex; align-items: center; gap: 8px; }
+  [hidden] { display: none !important; }
+  .legend svg { flex: none; }
   .note { color: var(--muted); font-size: 13px; max-width: 78ch; margin: 0; }
+  .engine-note { color: var(--busy); font-size: 13px; margin: 0; }
+  /* the persistent "Simulator" badge (07 §6) — same look as /static/base.css */
+  .sim-badge {
+    position: fixed; z-index: 2147483000;
+    top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 8px);
+    padding: 6px 12px; border-radius: 999px; background: #2E2A26; color: #F7F1E6; border: 2px solid #F96302;
+    font: 700 0.8rem/1.2 system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.06em;
+    text-transform: uppercase; pointer-events: none; user-select: none;
+  }
 </style>
 </head>
 <body>
@@ -46,6 +78,7 @@
   <header>
     <h1>The Color Canopy</h1>
     <p class="sub">Layout, reflected-ceiling view (looking up). 9 modules, 30 Hubspace heads each.</p>
+    <p class="now" id="now" hidden></p>
   </header>
   <div class="bar">
     <div class="group" role="group" aria-label="Orientation scheme">
@@ -57,19 +90,46 @@
       <button id="wire" aria-pressed="false">Wire order</button>
       <button id="nums" aria-pressed="false">Index numbers</button>
     </div>
+    <div class="group" role="group" aria-label="Colours">
+      <span class="label">Colour</span>
+      <button data-view="desired" aria-pressed="false">Desired</button>
+      <button data-view="reported" aria-pressed="false">Reported</button>
+      <button data-view="both" aria-pressed="true">Both</button>
+    </div>
+    <span id="live" class="live" data-state="connecting"></span>
     <div id="stats" class="stats" aria-live="polite"></div>
   </div>
-  <canvas id="canopy" width="1180" height="640" aria-label="Canopy head layout"></canvas>
-  <p class="note">Head positions are derived from VWBD's reflected ceiling plan (10″ pitch, staggered 8/7/8/7). Scheme p14 is deck page 14 (A/B/A across); p18 is the appendix plan (AAA/BBB/AAA) — red marks show where it breaks the 10″ pitch. Wire order is a placeholder until the real routing is calibrated.</p>
+  <canvas id="canopy" width="1180" height="640" aria-label="Canopy head layout with desired and reported colours"></canvas>
+  <ul class="legend" id="legend" aria-label="Legend">
+    <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><defs><radialGradient id="lg-core">
+      <stop offset="0" stop-color="#ffe2c2"/><stop offset=".35" stop-color="#ff9a3c"/><stop offset="1" stop-color="#ff9a3c" stop-opacity="0"/>
+      </radialGradient></defs><circle cx="11" cy="11" r="10" fill="url(#lg-core)"/></svg>
+      <span id="legend-core">Glow: reported (cloud readback)</span></li>
+    <li id="legend-ring"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7.5"
+      fill="none" stroke="#ff9a3c" stroke-width="2.2"/></svg>Ring: desired</li>
+    <li id="legend-mismatch"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M11 4 L17 11 L11 18 L5 11 Z"
+      fill="#ff5a3c" stroke="#14100c" stroke-width="1.5"/></svg>Differs from desired</li>
+    <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="6" fill="none"
+      stroke="#7d7064" stroke-width="1.2" stroke-dasharray="2 2"/></svg>No readback yet</li>
+    <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="5" fill="#5fd38a"/></svg>Module
+      status by its label</li>
+  </ul>
+  <p class="engine-note" id="engine-note" hidden></p>
+  <p class="note" id="readback-note"></p>
+  <p class="note">Head positions are derived from VWBD's reflected ceiling plan (10″ pitch, staggered 8/7/8/7). Scheme p14 is deck page 14 (A/B/A across); p18 is the appendix plan (AAA/BBB/AAA) — red marks show where it breaks the 10″ pitch. On the configured scheme, heads and the wire order follow each module's saved calibration; until a module is calibrated its wire order is a placeholder.</p>
 </main>
-<script>
-const state = { scheme: null, wire: false, nums: false, data: null };
+<script type="module">
+import { api, connectLive, simBadge } from "/static/app.js";
+
+const state = { scheme: null, wire: false, nums: false, view: "both", data: null, heads: null };
 const canvas = document.getElementById("canopy");
 const ctx = canvas.getContext("2d");
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const STATUS = { ready: ["--ok", "Ready"], updating: ["--busy", "Updating"], needs_attention: ["--alert", "Needs attention"] };
+const TIER = { canvas: "T1 · every head painted", slot: "T2 · app-painted slots", modules: "T3 · one colour per module", strand: "whole-strand look" };
 
 async function load(scheme) {
-  const res = await fetch("/api/canopy/layout" + (scheme ? "?scheme=" + encodeURIComponent(scheme) : ""));
+  const res = await fetch("/api/canopy/layout" + (scheme ? "?scheme=" + encodeURIComponent(scheme) : ""), { credentials: "same-origin" });
   if (!res.ok) throw new Error("Layout request failed: " + res.status);
   state.data = await res.json();
   state.scheme = state.data.scheme;
@@ -77,7 +137,43 @@ async function load(scheme) {
   draw();
 }
 
+async function loadHeads() {
+  try {
+    state.heads = await api("/api/canopy/heads");
+  } catch (e) {
+    state.heads = null; // layout only, as before the engine existed
+    const note = document.getElementById("engine-note");
+    note.hidden = false;
+    note.textContent = "Colours unavailable: " + e.message;
+  }
+  renderNow();
+  renderControls();
+  draw();
+}
+
+function hasColour() {
+  return !!(state.heads && state.heads.heads.some(h => h.desired || h.reported));
+}
+
+function renderNow() {
+  const hd = state.heads, now = document.getElementById("now"), note = document.getElementById("engine-note");
+  document.getElementById("readback-note").textContent = hd ? hd.readback_note : "";
+  if (!hd) { now.hidden = true; return; }
+  note.hidden = hd.engine;
+  if (!hd.engine) note.textContent = "Layout only: the canopy engine isn't running, so there's no mode to show.";
+  if (!hd.engine || !hd.mode) { now.hidden = true; return; }
+  now.hidden = false;
+  now.replaceChildren();
+  const b = document.createElement("b"); b.textContent = hd.label || hd.mode;
+  const phase = document.createElement("span"); phase.className = "phase"; phase.dataset.phase = hd.phase || "";
+  phase.textContent = (hd.phase || "").replace("_", " ");
+  const tier = document.createTextNode(hd.tier ? ` · ${TIER[hd.tier] || hd.tier}` : "");
+  const feature = document.createElement("span"); feature.className = "feature"; feature.textContent = hd.feature || "";
+  now.append("Showing ", b, tier, phase, feature);
+}
+
 function renderControls() {
+  if (!state.data) return;
   const box = document.getElementById("schemes");
   box.replaceChildren(...state.data.schemes.map(s => {
     const b = document.createElement("button");
@@ -86,10 +182,39 @@ function renderControls() {
     b.onclick = () => load(s);
     return b;
   }));
-  const d = state.data, bad = d.pitch_violations.length;
-  document.getElementById("stats").innerHTML =
-    `<b>${d.heads.length}</b> heads · <b>${d.modules.length}</b> modules · pitch <b>${d.canopy.pitch_in}″</b> · ` +
-    (bad ? `<span class="bad">${bad} pitch breaks</span>` : `<b>0</b> pitch breaks`);
+  const d = state.data, bad = d.pitch_violations.length, stats = document.getElementById("stats");
+  stats.replaceChildren();
+  const add = (text, cls) => { const e = document.createElement(cls ? "span" : "b"); if (cls) e.className = cls; e.textContent = text; stats.append(e); };
+  add(String(d.heads.length)); stats.append(" heads · "); add(String(d.modules.length)); stats.append(" modules · pitch ");
+  add(`${d.canopy.pitch_in}″`); stats.append(" · ");
+  if (bad) add(`${bad} pitch breaks`, "bad"); else { add("0"); stats.append(" pitch breaks"); }
+  if (hasColour()) {
+    const c = state.heads.counts;
+    stats.append(" · "); add(String(c.match)); stats.append(" match");
+    if (c.mismatch) { stats.append(" · "); add(`${c.mismatch} differ`, "bad"); }
+    if (c.unknown) { stats.append(" · "); add(String(c.unknown)); stats.append(" not read back"); }
+  }
+  for (const b of document.querySelectorAll("[data-view]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.view === state.view));
+    b.disabled = !hasColour();
+  }
+  document.getElementById("legend-ring").hidden = state.view !== "both";
+  document.getElementById("legend-mismatch").hidden = state.view !== "both";
+  document.getElementById("legend-core").textContent =
+    state.view === "desired" ? "Glow: desired (what the look should be)" : "Glow: reported (cloud readback)";
+}
+
+const rgba = (c, a) => `rgba(${c.r}, ${c.g}, ${c.b}, ${a})`;
+const lift = (c, k) => ({ r: c.r + (255 - c.r) * k, g: c.g + (255 - c.g) * k, b: c.b + (255 - c.b) * k });
+
+function glowAt(x, y, r, color) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  if (color) {
+    g.addColorStop(0, rgba(lift(color, 0.35), 1)); g.addColorStop(0.3, rgba(color, 1)); g.addColorStop(1, rgba(color, 0));
+  } else {
+    g.addColorStop(0, css("--core")); g.addColorStop(0.3, css("--amber")); g.addColorStop(1, "rgba(255,154,60,0)");
+  }
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
 }
 
 function draw() {
@@ -102,6 +227,13 @@ function draw() {
   ctx.clearRect(0, 0, cssW, cssH);
   const X = x => pad + x * scale, Y = y => pad + y * scale;
 
+  // Heads: calibrated positions from /api/canopy/heads on the configured scheme; the plain layout otherwise.
+  const hd = state.heads, colours = hasColour();
+  const calibrated = hd && hd.scheme === state.scheme;
+  const byKey = {};
+  if (hd) for (const h of hd.heads) byKey[`${h.module}:${h.index}`] = h;
+  const heads = calibrated ? hd.heads : d.heads;
+
   ctx.font = "600 11px ui-monospace, Menlo, monospace";
   for (const m of d.modules) {
     ctx.strokeStyle = css("--seam"); ctx.lineWidth = 1;
@@ -111,7 +243,7 @@ function draw() {
 
   if (state.wire) {
     const byModule = {};
-    for (const h of d.heads) (byModule[h.module] ||= []).push(h);
+    for (const h of heads) (byModule[h.module] ||= []).push(h);
     ctx.strokeStyle = css("--wire"); ctx.lineWidth = 1.2;
     for (const hs of Object.values(byModule)) {
       hs.sort((a, b) => a.index - b.index);
@@ -123,11 +255,30 @@ function draw() {
   }
 
   const glow = scale * c.pitch_in * 0.32;
-  for (const h of d.heads) {
-    const g = ctx.createRadialGradient(X(h.x), Y(h.y), 0, X(h.x), Y(h.y), glow);
-    g.addColorStop(0, css("--core")); g.addColorStop(0.3, css("--amber")); g.addColorStop(1, "rgba(255,154,60,0)");
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(X(h.x), Y(h.y), glow, 0, Math.PI * 2); ctx.fill();
-    if (state.nums) { ctx.fillStyle = css("--ink"); ctx.fillText(String(h.index), X(h.x) + glow * 0.45, Y(h.y) - glow * 0.45); }
+  for (const h of heads) {
+    const x = X(h.x), y = Y(h.y), info = byKey[`${h.module}:${h.index}`] || {};
+    if (!colours) {
+      glowAt(x, y, glow, null);
+    } else {
+      const core = state.view === "desired" ? info.desired : info.reported;
+      if (core) glowAt(x, y, glow, core);
+      // a hairline at every head so dim or unread heads still show where they are
+      ctx.setLineDash(core ? [] : [2, 2]);
+      ctx.strokeStyle = core ? "rgba(255,236,214,0.16)" : css("--unknown"); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, glow * 0.34, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      if (state.view === "both" && info.desired) {
+        ctx.strokeStyle = rgba(info.desired, 1); ctx.lineWidth = Math.max(1.6, glow * 0.12);
+        ctx.beginPath(); ctx.arc(x, y, glow * 0.66, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (state.view === "both" && info.match === false) {
+        const s = Math.max(4, glow * 0.24), mx = x + glow * 0.62, my = y - glow * 0.62;
+        ctx.fillStyle = css("--alert"); ctx.strokeStyle = css("--ground"); ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(mx, my - s); ctx.lineTo(mx + s, my); ctx.lineTo(mx, my + s); ctx.lineTo(mx - s, my); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+    }
+    if (state.nums) { ctx.fillStyle = css("--ink"); ctx.fillText(String(h.index), x + glow * 0.45, y - glow * 0.45); }
   }
 
   ctx.strokeStyle = css("--alert"); ctx.lineWidth = 2;
@@ -135,19 +286,45 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(X(v.x_left), Y(v.y)); ctx.lineTo(X(v.x_right), Y(v.y)); ctx.stroke();
   }
 
+  const status = {};
+  if (hd) for (const m of hd.modules) status[m.id] = m;
   for (const m of d.modules) {
-    const text = `${m.id} · ${m.orientation}`, x = X(m.col * c.module_width_in) + 4, y = Y(m.row * c.module_height_in) + 4;
-    ctx.fillStyle = css("--ground"); ctx.fillRect(x, y, ctx.measureText(text).width + 10, 18);
-    ctx.fillStyle = css("--muted"); ctx.fillText(text, x + 5, y + 13);
+    const s = status[m.id], st = s && STATUS[s.status];
+    const text = `${m.id} · ${m.orientation}` + (s && hd.engine ? ` · ${st ? st[1] : "Unknown"}` : "");
+    const x = X(m.col * c.module_width_in) + 4, y = Y(m.row * c.module_height_in) + 4;
+    const dot = s && hd.engine ? 12 : 0;
+    ctx.fillStyle = css("--ground"); ctx.fillRect(x, y, ctx.measureText(text).width + 10 + dot, 18);
+    if (dot) {
+      ctx.fillStyle = css(st ? st[0] : "--unknown");
+      ctx.beginPath(); ctx.arc(x + 9, y + 9, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = css("--muted"); ctx.fillText(text, x + 5 + dot, y + 13);
   }
 }
+
+let pending = null;
+function soon() { clearTimeout(pending); pending = setTimeout(loadHeads, 300); }
 
 for (const id of ["wire", "nums"]) {
   const b = document.getElementById(id);
   b.onclick = () => { state[id] = !state[id]; b.setAttribute("aria-pressed", String(state[id])); draw(); };
 }
+for (const b of document.querySelectorAll("[data-view]")) {
+  b.onclick = () => { state.view = b.dataset.view; renderControls(); draw(); };
+}
 window.addEventListener("resize", draw);
-load().catch(e => { document.getElementById("stats").textContent = e.message; });
+load().catch(e => { document.getElementById("stats").textContent = e.message; }).then(loadHeads);
+simBadge();
+connectLive({
+  topics: ["canopy"],
+  onEvent: soon,
+  onStatus: (s) => {
+    const el = document.getElementById("live");
+    el.dataset.state = s;
+    el.textContent = { open: "Live", connecting: "Connecting…", reconnecting: "Reconnecting…", unauthorized: "Signed out — retrying" }[s] || "";
+  },
+});
+setInterval(() => { if (document.visibilityState === "visible") loadHeads(); }, 20000);
 </script>
 </body>
 </html>

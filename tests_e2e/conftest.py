@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -48,10 +49,10 @@ def _wait_healthy(url: str, proc: subprocess.Popen, timeout: float = 30.0) -> No
     raise RuntimeError("the Conductor didn't become healthy in time")
 
 
-@pytest.fixture(scope="session")
-def server(tmp_path_factory) -> Iterator[str]:
+@contextmanager
+def _serve(app: str, data: Path) -> Iterator[str]:
+    """Run `app` (an ASGI import path) under uvicorn on a free port on the simulator; yield its base URL."""
     port = _free_port()
-    data = tmp_path_factory.mktemp("conductor-data")
     env = {
         k: v
         for k, v in os.environ.items()
@@ -70,7 +71,7 @@ def server(tmp_path_factory) -> Iterator[str]:
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "conductor.app:app",
+                app,
                 "--host",
                 "127.0.0.1",
                 "--port",
@@ -90,6 +91,20 @@ def server(tmp_path_factory) -> Iterator[str]:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+@pytest.fixture(scope="session")
+def server(tmp_path_factory) -> Iterator[str]:
+    with _serve("conductor.app:app", tmp_path_factory.mktemp("conductor-data")) as url:
+        yield url
+
+
+@pytest.fixture(scope="session")
+def ops_server(tmp_path_factory) -> Iterator[str]:
+    """The same Conductor with a canopy engine: the real one when the app registers it, else the test-only
+    FakeEngine (tests_e2e/ops_server.py), plus the /ops log tail."""
+    with _serve("tests_e2e.ops_server:app", tmp_path_factory.mktemp("conductor-ops-data")) as url:
+        yield url
 
 
 @pytest.fixture(scope="session")

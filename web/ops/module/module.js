@@ -1176,11 +1176,14 @@ function setupTabs() {
       }
     }),
   );
-  let saved = null;
-  try {
-    saved = localStorage.getItem("module-tab");
-  } catch {
-    saved = null;
+  // A link can ask for a tab (the /ops calibration hub: ?device=<id>&tab=calibrate); else the last one used here.
+  let saved = new URLSearchParams(location.search).get("tab");
+  if (!saved) {
+    try {
+      saved = localStorage.getItem("module-tab");
+    } catch {
+      saved = null;
+    }
   }
   const initial = [...tabs].find((t) => t.dataset.tab === saved);
   if (initial) initial.click();
