@@ -275,3 +275,22 @@ override on a command is the one way to send a chosen lastUpdateTime, and it sti
 
 **D50 — Vignette pages see only look rows.** Tablets and the `vignette:<room>` topic never get telemetry rows (SSID,
 MACs, geo). A revoked enrolled session's sockets are closed, including tickets issued before the revoke.
+
+## 2026-09-27 — first real kit (VWBD's workshop)
+
+**D51 — Read Hubspace replies inside the request context.** aioafero 9.3.0's `bridge.request()` releases the
+response before returning it; reading it again raised ClientConnectionError on a 200 ("Couldn't reach Hubspace"
+on Show devices). The adapter uses `bridge.create_request(method, url, True, …)` and reads the body inside it, under
+the same timeout; status handling stays ours, one HTTP attempt. Found and patched by VWBD; their loopback test with
+real aiohttp is in `tests/test_hubspace_transport.py` (the fake transport can't model release).
+
+**D52 — Frame length ≠ puck count.** The real SQHDK03 reports a fixed 60-entry framebuffer per slot with 30 pucks
+attached (04's "or a fixed 60"). Frames are always written at the device's length; the module's pucks occupy entries
+`frame_offset … frame_offset + expected_heads − 1` (default offset 0, UNVERIFIED — the index sweep confirms it, and
+the Calibrate tab's offset fixes it without code), every other entry is sent OFF so hashes stay stable. The canonical
+slot hash still covers the full frame (07 §6). A frame shorter than the pucks need is still refused. Consequence:
+the 12-puck fault can't be seen from the frame length on this model; the 7 am head-count check says so and asks for
+a visual check. The simulator's default kit now has 60-entry frames driving 30 pucks, like the real one.
+
+**D53 — A client that disconnects mid-request on the accounts routes is a quiet no-op** (499, one INFO line), not a
+traceback.
