@@ -53,9 +53,19 @@ def _wait(predicate, timeout=8.0, interval=0.1):
 
 
 def _ground_truth(client, device=BENCH):
-    """What the simulated lights actually show, per head."""
+    """What the simulated lights actually show, per puck (the 30 pucks the sim's 60-entry frame drives)."""
     services = _services(client)
-    return render.head_colors(services.sim.device_view(f"sim-{device}"), 30)
+    truth = services.sim.puck_colors(f"sim-{device}")
+    assert truth == render.head_colors(services.sim.device_view(f"sim-{device}"), 30)  # entries 0–29
+    return truth
+
+
+def _frame(client, slot, device=BENCH):
+    """The frame the simulated controller holds in `slot` (all its entries)."""
+    from conductor import rows as R
+
+    view = {r.key: r.value for r in _services(client).sim.device_view(f"sim-{device}")}
+    return R.frame_entries(view[(R.FRAME_CLASS, slot)])
 
 
 # ---- lock: open / conflict / take over / close ----------------------------------------------------------------
@@ -499,7 +509,8 @@ def test_hold_pauses_a_running_sweep(app_client):
 def test_slots_read_load_write_and_select(app_client, fast):
     lease, state = _open(app_client)
     assert [s["slot"] for s in state["slots"]] == ["custom-1", "custom-2", "custom-3"]
-    assert all(len(s["heads"]) == 30 and s["length"] == 30 and s["hash"] for s in state["slots"])
+    # the real kit's shape: each slot holds 60 entries, the mini-maps show the 30 pucks
+    assert all(len(s["heads"]) == 30 and s["length"] == 60 and s["hash"] for s in state["slots"])
     read = _post(app_client, "slot", lease, slot="custom-1", action="read").json()["slot"]
     assert read["value"]["color-sequence-v2"]["frameBuffer"]["framebuffer"] and read["hash"]
     loaded = _post(app_client, "slot", lease, slot="custom-1", action="load").json()["state"]
@@ -600,6 +611,68 @@ def test_calibration_is_saved_to_the_overlay_and_reflected_in_the_map(app_client
         wire_order=[[2.5, 5.0]],
     )
     assert bad.status_code == 400 and "exactly once" in bad.json()["detail"]
+
+
+def test_a_60_entry_controller_paints_its_30_pucks_and_the_frame_offset_is_calibrated(app_client, fast):
+    """VWBD workshop, Sep 27 2026: the SQHDK03 reports 60 entries with 30 pucks. The page paints the 30 heads in
+    entries 0–29 (every other entry OFF), says so in a small note, and the Calibrate tab moves the pucks' entries."""
+    from conductor import rows as R
+
+    services = _services(app_client)
+    lease, state = _open(app_client)
+    hc = state["head_count"]
+    assert hc == {**hc, "expected": 30, "reported": 60, "map": 30, "offset": 0, "problem": None}
+    assert hc["pattern"] == "60-entry pattern; pucks use 0–29" and "use entries 0–29" in hc["note"]
+    assert state["t1"]["allowed"] is True and state["capabilities"]["frame_offset"] == 0
+    painted = _post(app_client, "paint", lease, base="off", heads=THREE).json()
+    assert painted["result"]["status"] == "applied"
+    frame = _wait(lambda: (f := _frame(app_client, "custom-3")) and f[0].r == 255 and f)
+    assert len(frame) == 60 and frame[30:] == [R.OFF_ENTRY] * 30
+    assert (frame[0].r, frame[7].g, frame[22].b) == (255, 255, 255)
+    assert painted["state"]["diff"] == [] and len(painted["state"]["heads"]) == 30
+    truth = _wait(lambda: (t := _ground_truth(app_client))[22] == {"r": 0, "g": 0, "b": 255} and t)
+    assert truth[0] == {"r": 255, "g": 0, "b": 0}
+    look = app_client.get(f"/api/module/{BENCH}", params={"refresh": 1}).json()["state"]["reported_look"]
+    assert look.startswith("slot custom-3 (30 painted heads; 60-entry pattern, pucks use 0–29)")
+
+    # Calibrate: the pucks use entries 30–59. Saved to the overlay; nothing is sent.
+    writes = services.sim.stats()["writes"]
+    moved = _post(app_client, "frame-offset", lease, frame_offset=30)
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["head_count"]["pattern"] == "60-entry pattern; pucks use 30–59"
+    assert services.sim.stats()["writes"] == writes and services.registry.get(BENCH).frame_offset == 30
+    assert "frame_offset: 30" in (services.data / "overrides" / "registry.yaml").read_text()
+    single = _post(app_client, "card", lease, card="single-head", params={"index": 0}).json()
+    assert single["result"]["status"] == "applied"
+    frame = _wait(lambda: (f := _frame(app_client, "custom-3")) and f[30].r == 255 and f)
+    assert frame[:30] == [R.OFF_ENTRY] * 30 and frame[31:] == [R.OFF_ENTRY] * 29
+    state = single["state"]
+    assert state["heads"][0]["desired"] == {"r": 255, "g": 255, "b": 255}  # the map shows the pucks' entries
+    # the simulator's pucks are wired to entries 0–29, so this offset lights nothing: what the copy warns about
+    _wait(lambda: _ground_truth(app_client) == [{"r": 0, "g": 0, "b": 0}] * 30)
+
+    too_far = _post(app_client, "frame-offset", lease, frame_offset=31)
+    assert too_far.status_code == 400 and "entry 30 at the most" in too_far.json()["detail"]
+    assert _post(app_client, "frame-offset", lease, frame_offset=-1).status_code == 422
+    assert _post(app_client, "frame-offset", lease, frame_offset=0).json()["head_count"]["offset"] == 0
+    _post(app_client, "close", lease)
+    assert _post(app_client, "frame-offset", lease, frame_offset=0).status_code == 409
+
+
+def test_a_frame_shorter_than_the_pucks_still_refuses_per_head_painting(app_client, fast):
+    """A 20-entry frame can't hold a module's 30 pucks: per-head painting and every per-head card are refused;
+    whole-strand looks still work."""
+    services = _services(app_client)
+    services.update_registry("bench-kit", {"profile": "string-20seg"})
+    services.sim.add_device(f"sim-{BENCH}", account="bench", profile="string-20seg")
+    lease, state = _open(app_client)
+    assert state["head_count"]["problem"] == "the device reports 20 heads but this module should have 30"
+    assert state["t1"]["allowed"] is False and "Per-head painting is off" in state["t1"]["reason"]
+    for card, params in (("hue-ramp", {}), ("single-head", {"index": 0}), ("recipe-compare", {})):
+        r = _post(app_client, "card", lease, card=card, params=params)
+        assert r.status_code == 409 and "should have 30" in r.json()["detail"], card
+    assert _post(app_client, "paint", lease, heads=THREE).status_code == 409
+    assert _post(app_client, "card", lease, card="white", params={"kelvin": 2700}).status_code == 200
 
 
 # ---- telemetry export and the live socket ------------------------------------------------------------------------

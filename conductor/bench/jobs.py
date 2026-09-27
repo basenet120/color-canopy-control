@@ -8,6 +8,11 @@ steps 3–9. Rules every job follows:
   the per-device budget apart (`ctx.budget_s`; whole-strand looks ≥ 2 s apart). The executor enforces the budget
   too — the sleeps here keep the looks visible long enough to judge.
 - Frame writes copy the header and the frame length from the device's **own readback** of that slot.
+- **Frame length ≠ head count.** The real SQHDK03 reports a 60-entry framebuffer with 30 pucks attached (VWBD
+  workshop, Sep 27 2026). Synthetic frames (hue ramp, contrast patterns, rate ramp) are built for the module's
+  physical heads (registry `expected_heads`) and placed at its `frame_offset` in a full-length frame, every other
+  entry OFF; `hue_ramp` with `whole_frame` spreads the ramp over every entry instead, to show which entries the
+  pucks use. Gate C replays a slot as read, untouched.
 - Rows the device doesn't declare are never sent (the device's function list is the truth, 06 #1).
 - A job proposes DeviceFlags only for what it measured; each flag is applied later, and only after the person at
   the bench answers its confirming question "yes" (FLAG_QUESTIONS), and never for a simulated run.
@@ -35,7 +40,7 @@ LOOK_SPACING_S = 2.0  # whole-strand looks: long enough to see each one
 UNPLUGGED_SETTLE_S = 3.0  # wait before the GET in the unplugged test
 CALM_CCT = 2700
 CALM_BRIGHTNESS = 50
-PER_HEAD_LENGTHS = (30, 60)  # Gate A: a 30-entry (or fixed 60-entry) frame keeps the per-head path alive
+DEFAULT_HEADS = 30  # a canopy module's pucks when the registry doesn't say
 BEFORE_HOLD_S = 4.0  # Gate C: how long the BEFORE look holds before the replay, so it can be seen and filmed
 MAX_TRIALS = 100
 MAX_SPACING_S = 30.0  # latency trials: well inside the lock's 10-min idle timeout, and a run stays short
@@ -53,6 +58,10 @@ Q_GATE_C = "Did the lights change from the BEFORE look to exactly {source}'s pat
 Q_UNPLUGGED = "Was the kit switched off at the wall (lights dark) the whole time this ran?"
 Q_HUE_RAMP = (
     "Did every puck show a different colour, running through the rainbow along the strand? Take a photo."
+)
+Q_HUE_RAMP_WHOLE = (
+    "Take a photo. Which part of the rainbow do the pucks show? Red → yellow → green means they use the first "
+    "entries of the pattern; cyan → blue → magenta means the later ones."
 )
 Q_INDEX = "Is puck 1 (the red one you painted first) the puck nearest the controller?"
 Q_LATENCY = "Did you film every trial with the clock page next to the kit?"
@@ -112,6 +121,7 @@ class JobContext(BenchContext, Protocol):
     budget_s: float  # the per-device write budget (executor min_write_interval_s)
     t1_allowed: bool  # per-head frames may be written (simulator, or Gate C proven on this kit)
     expected_heads: int | None  # the registry's head count for this device (None = not set)
+    frame_offset: int  # the registry's frame_offset: the framebuffer entry that drives puck 0
     artifacts: dict[str, Any]  # big outputs saved with the result (Gate A's scrubbed profile)
 
     async def write(
@@ -266,8 +276,10 @@ def colour_name(e: R.FrameEntry) -> str:
     return "other"
 
 
-def hue_ramp_entries(length: int, step_deg: float = 12.0) -> list[R.FrameEntry]:
-    """Hue = step·i at full saturation and brightness, one entry per head."""
+def hue_ramp_entries(length: int, step_deg: float | None = None) -> list[R.FrameEntry]:
+    """Hue = step·i at full saturation and brightness, one entry per head. The default step spreads the ramp once
+    round the colour wheel over `length` (12° for 30 heads)."""
+    step_deg = 360.0 / max(length, 1) if step_deg is None else step_deg
     out = []
     for i in range(length):
         r, g, b = colorsys.hsv_to_rgb(((step_deg * i) % 360) / 360.0, 1.0, 1.0)
@@ -291,14 +303,34 @@ def slot_header(value: Any) -> dict[str, Any] | None:
     return out
 
 
-def contrast_entries(avoid: list[R.FrameEntry]) -> list[R.FrameEntry]:
-    """A frame of the same length that visibly differs from `avoid`: the hue ramp, reversed if that's `avoid`."""
-    n = len(avoid)
-    ramp = hue_ramp_entries(n)
-    for candidate in (ramp, ramp[::-1], [R.FrameEntry(0, 0, 0, 0, 0, 0)] * n):
-        if candidate != avoid:
-            return candidate
-    return ramp
+def contrast_entries(avoid: list[R.FrameEntry], layout: R.FrameLayout | None = None) -> list[R.FrameEntry]:
+    """A frame of the same length that visibly differs from `avoid` ON THE PUCKS: the hue ramp over the physical
+    heads (placed at the layout's offset, OFF elsewhere), reversed if that's what the pucks show now."""
+    layout = layout or R.FrameLayout(len(avoid), len(avoid))
+    shown = layout.physical(avoid)
+    ramp = hue_ramp_entries(layout.heads)
+    for candidate in (ramp, ramp[::-1], [R.OFF_ENTRY] * layout.heads):
+        if candidate != shown:
+            return layout.place(candidate)
+    return layout.place(ramp)
+
+
+def frame_layout(ctx: JobContext, length: int) -> R.FrameLayout:
+    """Where this module's pucks sit in a `length`-entry frame (registry expected_heads + frame_offset).
+
+    When the registry sets no head count, every entry is a head. When the frame is too short for the pucks (a
+    strand that lost pucks, or a wrong offset), the frame is used as-is from entry 0 and a step says so — these
+    are bench diagnostics, and the full frame is then the most useful thing to see."""
+    heads = ctx.expected_heads or length
+    offset = int(getattr(ctx, "frame_offset", 0) or 0)
+    try:
+        return R.FrameLayout(length, heads, offset)
+    except R.PayloadError:
+        ctx.step(
+            f"The frame holds {length} entries, too few for this module's {heads} pucks from entry {offset}: "
+            "using every entry as a head."
+        )
+        return R.FrameLayout(length, length, 0)
 
 
 def contrast_look(caps: Capabilities) -> tuple[str, R.Look] | None:
@@ -379,15 +411,28 @@ async def gate_a(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             obs,
         )
     n = caps.framebuffer_length
-    if len(caps.slots) == 3 and n in PER_HEAD_LENGTHS and len(set(lengths.values())) == 1:
+    # The frame length is the controller's framebuffer, which may be longer than the strand (the real SQHDK03
+    # reports 60 entries with 30 pucks): it must only be long enough for this module's pucks from its offset.
+    expected = ctx.expected_heads or DEFAULT_HEADS
+    offset = int(getattr(ctx, "frame_offset", 0) or 0)
+    problem = caps.head_count_problem(expected, offset)
+    note = caps.frame_note(expected, offset)
+    obs.update({"expected_heads": expected, "frame_offset": offset, "head_count_problem": problem})
+    if note:
+        obs["frame_note"] = note
+        obs["pucks_use_entries"] = [offset, offset + expected - 1]
+    if len(caps.slots) == 3 and problem is None and len(set(lengths.values())) == 1:
+        extra = f" {note}" if note else ""
         return JobResult(
             Verdict.PASS,
-            f"Per-head path is alive: 3 slots with a {n}-entry frame. Download the profile for the simulator.",
+            f"Per-head path is alive: 3 slots with a {n}-entry frame for this module's {expected} pucks.{extra} "
+            "Download the profile for the simulator.",
             obs,
         )
+    why = f"; {problem}" if problem else ""
     return JobResult(
         Verdict.NEEDS_EYES,
-        f"Per-head mode exists, but the shape is unexpected ({len(caps.slots)} slots, frame length {n}). "
+        f"Per-head mode exists, but the shape is unexpected ({len(caps.slots)} slots, frame length {n}{why}). "
         "Send the anonymized JSON and the profile to the build session.",
         obs,
     )
@@ -404,8 +449,12 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     ctx.step(f"Reading {slot}. Nothing is written.")
     rr = await _read_ok(ctx, f"for {slot}")
     value, entries = _slot_entries(rr, slot)
-    first = entries[:4]
-    last = entries[-4:]
+    # The pucks' entries only: on a 60-entry frame with 30 pucks, entries 30–59 drive nothing, so "the last puck"
+    # is entry offset + 29, not entry 59.
+    layout = frame_layout(ctx, len(entries))
+    pucks = layout.physical(entries)
+    first = pucks[:4]
+    last = pucks[-4:]
     first_names = [colour_name(e) for e in first]
     last_names = [colour_name(e) for e in last]
     header = slot_header(value)
@@ -419,6 +468,7 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         "header": header,
         "slot_headers": headers,
         "length": len(entries),
+        "pucks_use_entries": [layout.offset, layout.end - 1],
         "first_4": [_entry_json(e) for e in first],
         "last_4": [_entry_json(e) for e in last],
         "first_4_colours": first_names,
@@ -441,6 +491,17 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             [Q_INDEX],
         )
     obs["order"] = "not found"
+    names = [colour_name(e) for e in entries]
+    found = next((k for k in range(len(names) - 3) if names[k : k + 4] == PATTERN), None)
+    if found is not None:
+        obs["pattern_at_entry"] = found
+        return JobResult(
+            Verdict.NEEDS_EYES,
+            f"The red/green/blue/white pattern starts at frame entry {found}, but this module's pucks are set to "
+            f"use entries {layout.offset}–{layout.end - 1}. If puck 1 is the red one, set the frame offset to "
+            f"{found} on the module page (Calibrate tab) and run this again.",
+            obs,
+        )
     return JobResult(
         Verdict.NEEDS_EYES,
         "The red/green/blue/white pattern isn't at either end of the frame. In the Hubspace app, paint puck 1 "
@@ -670,28 +731,58 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
 
 # ---- hue ramp ----------------------------------------------------------------------------------------------------
 async def hue_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """The rainbow for the index map. Default: hue = 360°/heads · i over the module's physical heads (12° · i for
+    30), placed at its frame offset with every other entry OFF. `whole_frame`: hue = 360°/n · i over all n entries
+    of the device's frame, so a photo shows which part of the frame the pucks actually use."""
     slot = str(params["slot"])
+    whole = bool(params.get("whole_frame"))
     info = await ctx.profile()
     caps = _caps(info)
     _check_slot(caps, slot)
     rr = await _read_ok(ctx, f"for {slot}")
     header, current = _slot_entries(rr, slot)
     length = len(current)
-    entries = hue_ramp_entries(length)
+    layout = frame_layout(ctx, length)
+    if whole:
+        step = 360.0 / length
+        entries = hue_ramp_entries(length)
+        ctx.step(f"Built a hue ramp over all {length} entries of the frame (hue = {step:g}° × entry)")
+    else:
+        step = 360.0 / layout.heads
+        entries = layout.place(hue_ramp_entries(layout.heads))
+        where = (
+            f" in entries {layout.offset}–{layout.end - 1}, the other entries off" if layout.padded else ""
+        )
+        ctx.step(f"Built a hue ramp over the {layout.heads} pucks (hue = {step:g}° × puck){where}")
     value = R.frame_value(header, entries, expected_length=length, cct_range=caps.cct_range)
-    ctx.step(f"Built a {length}-entry hue ramp (hue = 12° × index)")
     rows = _only_declared(ctx, info, [R.slot_write(slot, value), *R.slot_select(slot), R.power(True)])
-    res = await ctx.write(rows, label=f"hue_ramp: {slot}")
+    res = await ctx.write(rows, label=f"hue_ramp: {slot}" + (" (whole frame)" if whole else ""))
     obs: dict[str, Any] = {
         "slot": slot,
         "length": length,
+        "heads": layout.heads,
+        "frame_offset": layout.offset,
+        "whole_frame": whole,
+        "hue_step_deg": round(step, 3),
+        "pucks_use_entries": [layout.offset, layout.end - 1],
         "hash": R.slot_hash(value),
-        "first_4": [_entry_json(e) for e in entries[:4]],
+        "first_4": [_entry_json(e) for e in entries[layout.offset : layout.offset + 4]],
         "write": write_facts(res),
     }
     if problem := _write_problem(res, "The hue ramp"):
         problem.observations.update(obs)
         return problem
+    if whole:
+        half = length // 2
+        return JobResult(
+            Verdict.NEEDS_EYES,
+            f"A {length}-entry hue ramp is in {slot} and selected (entry i at {step:g}° × i). Photograph the "
+            f"strand: pucks running red → yellow → green use entries 0–{half - 1}; cyan → blue → magenta, "
+            f"entries {half}–{length - 1}. Then set the frame offset on the module page if it isn't "
+            f"{layout.offset}.",
+            obs,
+            [Q_HUE_RAMP_WHOLE],
+        )
     return JobResult(
         Verdict.NEEDS_EYES,
         f"The hue ramp is in {slot} and selected. Photograph the whole strand for the index map.",
@@ -745,9 +836,10 @@ async def latency_trials(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     elif ctx.t1_allowed:
         into = b if showing != b else a
         other = a if into == b else b
+        avoid = entries_a if other == a else entries_b
         frame = R.frame_value(
             rr.get(R.FRAME_CLASS, into),
-            contrast_entries(entries_a if other == a else entries_b),
+            contrast_entries(avoid, frame_layout(ctx, len(avoid))),
             expected_length=len(entries_a),
             cct_range=caps.cct_range,
         )
@@ -1071,7 +1163,10 @@ async def active_slot_rewrite(ctx: JobContext, params: dict[str, Any]) -> JobRes
     _check_slot(caps, slot)
     value, entries = _slot_entries(rr, slot)
     frame = R.frame_value(
-        value, contrast_entries(entries), expected_length=len(entries), cct_range=caps.cct_range
+        value,
+        contrast_entries(entries, frame_layout(ctx, len(entries))),
+        expected_length=len(entries),
+        cct_range=caps.cct_range,
     )
     obs: dict[str, Any] = {
         "slot": slot,
@@ -1109,11 +1204,13 @@ async def active_slot_rewrite(ctx: JobContext, params: dict[str, Any]) -> JobRes
     )
 
 
-def _ramp_entries(length: int, i: int) -> list[R.FrameEntry]:
-    """Write i's frame: the hue ramp rotated by i heads, so consecutive writes always differ."""
-    ramp = hue_ramp_entries(length)
-    k = (i + 1) % max(length, 1) or 1
-    return ramp[k:] + ramp[:k]
+def _ramp_entries(layout: R.FrameLayout, i: int) -> list[R.FrameEntry]:
+    """Write i's frame: the hue ramp over the pucks rotated by i heads (placed at the layout's offset, OFF
+    elsewhere), so consecutive writes always differ on the pucks."""
+    heads = layout.heads
+    ramp = hue_ramp_entries(heads)
+    k = (i + 1) % max(heads, 1) or 1
+    return layout.place(ramp[k:] + ramp[:k])
 
 
 async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
@@ -1137,6 +1234,7 @@ async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     rr = await _read_ok(ctx, f"for {slot}")
     header, current = _slot_entries(rr, slot)
     length = len(current)
+    layout = frame_layout(ctx, length)
     spacings = [max(s, ctx.budget_s, RAMP_MIN_SPACING_S) for s in RAMP_SPACINGS_S]
     ctx.step(
         f"{per_step} frame writes into {slot} at each spacing ({', '.join(f'{s:g} s' for s in spacings)}), each "
@@ -1154,7 +1252,7 @@ async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         for _ in range(per_step):
             await _space(ctx, last_sent, spacing)
             value = R.frame_value(
-                header, _ramp_entries(length, n), expected_length=length, cct_range=caps.cct_range
+                header, _ramp_entries(layout, n), expected_length=length, cct_range=caps.cct_range
             )
             sent_hash = R.slot_hash(value)
             res = await ctx.write(
@@ -1278,7 +1376,9 @@ async def head_count_boot(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     if info.raw is not None:
         ctx.artifacts["profile_boot_raw"] = copy.deepcopy(info.raw)
     counts = [caps.segment_hint, *profile_lengths.values(), *readback_lengths.values()]
-    reflects = any(c is not None and c != full for c in counts)
+    # A controller that reports its capacity (the real SQHDK03: 60 entries for a 30-puck kit) still reports it with
+    # strings unplugged; only a count BELOW the full kit's pucks shows the cloud noticed the missing pucks.
+    reflects = any(c is not None and c < full for c in counts)
     obs["profile_reflects_detected_count"] = reflects
     ctx.step(
         "Profile read",
@@ -1299,9 +1399,11 @@ async def head_count_boot(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             "count from the API."
         )
     else:
+        seen = sorted({c for c in counts if c is not None})
         summary = (
-            f"The cloud profile did NOT change: segment hint {caps.segment_hint} and every frame length is still "
-            f"{full} with strings 2–3 unplugged. The 12-puck fault can only be caught visually (07 §6)."
+            f"The cloud profile did NOT change: segment hint {caps.segment_hint} and frame lengths "
+            f"{', '.join(map(str, seen)) or 'none'} with strings 2–3 unplugged (full kit = {full} pucks), never "
+            "fewer than the full kit. The 12-puck fault can only be caught visually (07 §6)."
         )
     return JobResult(Verdict.NEEDS_EYES, summary + sim, obs, [Q_HEAD_BOOT])
 
@@ -1316,7 +1418,8 @@ JOBS: dict[str, Job] = {
                 "Gate A — read-only profile dump",
                 "Reads what the kit says it can do: slots, frame length, colour modes, white range, presets.",
                 writes=False,
-                look_for="Nothing changes on the lights. Pass = 3 slots with a 30-entry frame.",
+                look_for="Nothing changes on the lights. Pass = 3 slots whose saved patterns have room for the "
+                "module's 30 pucks (30 entries, or 60 on the real kit — the controller reports its capacity).",
             ),
             gate_a,
         ),
@@ -1371,10 +1474,14 @@ JOBS: dict[str, Job] = {
             JobSpec(
                 "hue_ramp",
                 "Hue ramp — rainbow for the index map",
-                "Writes a rainbow (each puck a different hue) into slot 3 and selects it.",
+                "Writes a rainbow (each puck a different hue, 12° apart on 30 pucks) into slot 3 and selects it. "
+                "Tick whole_frame to spread it over every entry of the saved pattern instead (60 on the real kit), "
+                "to see which entries the pucks use.",
                 writes=True,
-                look_for="Every puck a different colour, red at one end through the rainbow. Photograph it.",
-                params={"slot": "custom-3"},
+                look_for="Every puck a different colour, red at one end through the rainbow. Photograph it. With "
+                "whole_frame the pucks show only part of the rainbow: red to green = the first half of the "
+                "pattern, cyan to magenta = the second half.",
+                params={"slot": "custom-3", "whole_frame": False},
             ),
             hue_ramp,
         ),

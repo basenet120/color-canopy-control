@@ -31,10 +31,13 @@ def test_devices_list_registry_targets_and_capabilities(app_client):
         assert kit["purposes"][purpose] == {"driver": "sim", "simulated": True, "address": "sim-bench-kit"}
     assert kit["simulated"] is True and kit["status"] == "unknown" and kit["lock"] is None
     caps = kit["capabilities"]
-    assert caps["framebuffer_length"] == 30 and caps["individual"] is True
+    assert caps["framebuffer_length"] == 60 and caps["individual"] is True  # the real kit's 60 entries
     assert caps["slots"] == ["custom-1", "custom-2", "custom-3"]
     assert kit["capabilities_simulated"] is True and kit["capabilities_error"] is None
-    assert kit["head_count_problem"] is None
+    assert kit["head_count_problem"] is None and kit["frame_offset"] == 0  # 60 entries hold the 30 pucks
+    assert kit["frame_note"].startswith(
+        "This controller's saved patterns hold 60 entries; this module's 30 pucks"
+    )
     module = _device(body, "canopy-r1c1")
     assert module["module"] == "r1c1" and module["role"] == "canopy_module"
 
@@ -95,14 +98,23 @@ def test_device_detail_and_unknown_id(app_client):
 
 
 def test_head_count_problem_and_tracker_problems_reach_needs_attention(app_client):
+    """Only a frame SHORTER than the pucks need is a problem: 61 pucks on a 60-entry controller, or 30 pucks from
+    entry 31. A longer frame (60 entries, 30 pucks) is fine."""
     services = app_client.app.state.services
     services.update_registry("bench-kit", {"expected_heads": 29})
+    assert app_client.get("/api/devices/bench-kit").json()["head_count_problem"] is None
+    services.update_registry("bench-kit", {"expected_heads": 30, "frame_offset": 31})
     kit = app_client.get("/api/devices/bench-kit").json()
-    assert kit["head_count_problem"] == "the device reports 30 heads but this module should have 29"
+    assert kit["head_count_problem"] == (
+        "the device's frame holds 60 entries but this module's 30 pucks need entries 31–60"
+    )
+    services.update_registry("bench-kit", {"expected_heads": 61, "frame_offset": 0})
+    kit = app_client.get("/api/devices/bench-kit").json()
+    assert kit["head_count_problem"] == "the device reports 60 heads but this module should have 61"
     services.tracker.flag_problem("sim-canopy-r0c0", "Only 12 of 30 heads detected")
     summary = app_client.get("/api/ops/summary").json()
     messages = [a["message"] for a in summary["attention"]]
-    assert any("reports 30 heads but this module should have 29" in m for m in messages)
+    assert any("reports 60 heads but this module should have 61" in m for m in messages)
     assert any("Only 12 of 30 heads detected" in m for m in messages)
     links = {a["link"] for a in summary["attention"]}
     assert "/ops/module/?device=bench-kit" in links and "/ops/module/?device=canopy-r0c0" in links

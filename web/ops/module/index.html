@@ -52,6 +52,7 @@
     <div class="look-line">
       <div><strong>Lights show:</strong> <span id="reported-look">–</span></div>
       <div id="diff-line" class="muted"></div>
+      <div id="frame-note" class="muted small" hidden></div>
     </div>
 
     <div class="telemetry" id="telemetry" aria-live="polite">
@@ -236,6 +237,17 @@
         <button type="button" id="cal-flip" class="big secondary">Flip wire order</button>
       </div>
       <p class="muted small">Flip puts head 0 at the other end of the cable. Saved for this module only.</p>
+
+      <div class="field" id="offset-field">
+        <span class="field-label">Pattern entry that drives head 0</span>
+        <p class="muted small" id="offset-explain"></p>
+        <div class="offset-row">
+          <input type="number" id="cal-offset" min="0" step="1" inputmode="numeric" aria-label="Frame offset">
+          <button type="button" id="cal-offset-save" class="secondary">Save offset</button>
+        </div>
+        <p class="muted small">Only change this if the index sweep lights nothing, or lights the wrong half. The
+          usual value is 0. Nothing is sent to the lights when you save it.</p>
+      </div>
     </div>
   </section>
 </main>

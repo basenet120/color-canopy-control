@@ -148,6 +148,10 @@ class DeviceEntry(_Strict):
     kind: str | None = None  # vignette device kind: bulb, plug, lock, fan, string, path
     metadevice_id: str | None = None  # the Afero id; set only in the ops overlay
     expected_heads: int | None = Field(None, ge=1, le=90)
+    # The framebuffer entry that drives puck 0. The real SQHDK03 reports 60 entries with 30 pucks attached; the
+    # working assumption (UNVERIFIED) is that entries 0–29 drive the pucks. Set from the module page's Calibrate
+    # tab if the index sweep lights nothing, or the wrong half.
+    frame_offset: int = Field(0, ge=0, le=89)
     orientation: Literal["A", "B"] | None = None
     writable: bool = True
     enabled: bool = True

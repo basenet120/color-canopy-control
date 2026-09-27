@@ -40,19 +40,23 @@ LADDERS = {
 SLOTS = {"sunset": "custom-1", "golden": "custom-3"}
 
 
-def frame_for(mode_id: str, index: int, length: int) -> dict:
+def frame_for(mode_id: str, index: int, length: int, heads: int | None = None) -> dict:
+    """A per-module frame of `length` entries: `heads` pucks painted from entry 0 (all entries when None), the rest
+    OFF — the shape the real compiler writes for the simulator's 60-entry, 30-puck kit."""
     base = {"sunset": (249, 99, 2), "golden": (255, 140, 0)}[mode_id]
+    heads = length if heads is None else heads
     entries = [
         R.FrameEntry(base[0], max(0, base[1] - 3 * index), (i * 7 + index) % 256, 0, 100, 0)
-        for i in range(length)
+        for i in range(heads)
     ]
-    return R.frame_value(None, entries, expected_length=length)
+    return R.frame_value(None, R.FrameLayout(length, heads).place(entries), expected_length=length)
 
 
 @dataclass
 class FakeCompiler:
     module_ids: list[str] = field(default_factory=lambda: list(MODULES))
-    frame_length: int = 30
+    frame_length: int = 60  # the simulator's kit: 60 framebuffer entries …
+    heads: int | None = 30  # … driving 30 pucks (None = one puck per entry)
     t2_hashes: dict[tuple[str, str], str] = field(default_factory=dict)
     broken: set[tuple[str, Tier]] = field(default_factory=set)
     broken_module: str | None = None
@@ -100,7 +104,8 @@ class FakeCompiler:
             if (mode_id, tier) in self.broken and device_id == self.broken_module:
                 rows = [*rows[:-1], StateRow("toggle", "party-mode", "sideways")]  # the cloud answers 400
             if tier is Tier.T1:
-                value = frame_for(mode_id, index, self.frame_length)
+                heads = None if self.heads is None else min(self.heads, self.frame_length)
+                value = frame_for(mode_id, index, self.frame_length, heads)
                 return ModuleTarget(
                     device_id,
                     rows,

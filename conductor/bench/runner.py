@@ -151,6 +151,14 @@ class RunContext:
         except KeyError:
             return None
 
+    @property
+    def frame_offset(self) -> int:
+        """The framebuffer entry that drives puck 0 (registry `frame_offset`, set on the module page)."""
+        try:
+            return int(self.runner.services.registry.get(self.device_id).frame_offset or 0)
+        except KeyError:
+            return 0
+
     async def write(
         self,
         rows: list[StateRow],

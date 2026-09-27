@@ -271,6 +271,18 @@ def test_overlay_patch_validates_and_persists(tmp_path):
     assert reg.get("spare-1").role == "spare"
 
 
+def test_frame_offset_defaults_to_0_and_is_validated(tmp_path):
+    """frame_offset: the framebuffer entry that drives puck 0 (backward-compatible default 0; never negative)."""
+    reg = load_registry(data=tmp_path)
+    assert all(d.frame_offset == 0 for d in reg.devices)
+    reg = save_overlay_patch(reg, "bench-kit", {"frame_offset": 30}, now=0)
+    assert reg.get("bench-kit").frame_offset == 30
+    assert load_registry(data=tmp_path).get("bench-kit").frame_offset == 30  # persisted in the overlay
+    for bad in (-1, 90, "thirty"):
+        with pytest.raises(ConfigError, match="frame_offset"):
+            save_overlay_patch(reg, "bench-kit", {"frame_offset": bad}, now=1)
+
+
 def test_bad_overlay_yaml_is_explained(tmp_path):
     (tmp_path / "overrides").mkdir()
     (tmp_path / "overrides" / "registry.yaml").write_text("devices:\n  bench-kit: {orientation: [\n")
