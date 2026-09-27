@@ -31,7 +31,15 @@ from typing import Any
 
 from conductor import __version__
 from conductor.anonymize import anonymize
-from conductor.bench.jobs import JOBS, PARAM_BOUNDS, Job, JobError, coerce_params, flag_questions
+from conductor.bench.jobs import (
+    CONFIRM_LABELS,
+    JOBS,
+    PARAM_BOUNDS,
+    Job,
+    JobError,
+    coerce_params,
+    flag_questions,
+)
 from conductor.bench.results import BenchResults, fixture_shape, is_run_id
 from conductor.bench_api import JobResult, Verdict
 from conductor.drivers.base import DeviceInfo, Outcome, ReadResult, StateRow
@@ -136,10 +144,27 @@ class RunContext:
         self._touch()
         return await self.target.driver.fetch_profile(self.address, purpose=Purpose.BENCH)
 
+    @property
+    def expected_heads(self) -> int | None:
+        try:
+            return self.runner.services.registry.get(self.device_id).expected_heads
+        except KeyError:
+            return None
+
     async def write(
-        self, rows: list[StateRow], *, label: str, verify: bool = True, expect: list | None = None
+        self,
+        rows: list[StateRow],
+        *,
+        label: str,
+        verify: bool = True,
+        expect: list | None = None,
+        stamp_offset_s: float = 0.0,
+        max_attempts: int | None = None,
     ) -> CommandResult:
-        self.step(f"Sending: {label}", kind="write_start", label=label, t=self.now(), rows=len(rows))
+        detail: dict[str, Any] = {"stamp_offset_s": stamp_offset_s} if stamp_offset_s else {}
+        self.step(
+            f"Sending: {label}", kind="write_start", label=label, t=self.now(), rows=len(rows), **detail
+        )
         result = await self.target.executor.submit(
             Command(
                 self.address,
@@ -150,6 +175,8 @@ class RunContext:
                 verify=verify,
                 expect=expect,
                 source="bench",
+                stamp_offset_s=stamp_offset_s,
+                max_attempts=max_attempts,
             )
         )
         if any(a.outcome is not Outcome.DENIED for a in result.attempts):  # it left the process
@@ -213,6 +240,7 @@ class BenchRunner:
                     "look_for": s.look_for,
                     "params": dict(s.params),
                     "bounds": {k: list(v) for k, v in PARAM_BOUNDS.get(s.name, {}).items()},
+                    "confirm_label": CONFIRM_LABELS.get(s.name),
                 }
             )
         return out

@@ -53,6 +53,11 @@ class Command:
     verify: bool = True
     expect: list[StateRow] | None = None  # rows readback must show; default = rows
     source: str = ""  # kiosk / ops / reconciler / bench / module / idle
+    # Bench only (refused INVALID for any other purpose). `stamp_offset_s` shifts the lastUpdateTime the driver
+    # stamps (send time + offset, −3600…0 s): the stale-clock bench job's "PUT stamped 10 min ago" (07 §10).
+    # `max_attempts` lowers the policy's attempt limit: the rate ramp stops at the first 429/403, never retries.
+    stamp_offset_s: float = 0.0
+    max_attempts: int | None = None
 
 
 @dataclass

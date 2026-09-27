@@ -25,7 +25,9 @@ class SupplementalDriver:
     async def read_state(self, device_id: str, *, purpose: Purpose = Purpose.ENGINE) -> ReadResult:
         raise NotImplementedError("supplemental lighting is a v1 seam, not built")
 
-    async def write(self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose) -> WriteResult:
+    async def write(
+        self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose, stamp_offset_s: float = 0.0
+    ) -> WriteResult:
         raise NotImplementedError("supplemental lighting is a v1 seam, not built")
 
     def account_of(self, device_id: str) -> str:

@@ -116,6 +116,18 @@ async def _bench_runner_gate_c(env: Env, address: str) -> str:
     return str(record["result"]["observations"].get("write", {}).get("status", record["result"]["verdict"]))
 
 
+async def _bench_runner_stale_clock(env: Env, address: str) -> str:
+    """The stale-clock job: its select carries a shifted lastUpdateTime (Command.stamp_offset_s) — same gate."""
+    device_id = env.world.registry.logical_for(address).id
+    with tempfile.TemporaryDirectory() as data:
+        runner = BenchRunner(_BenchServices(env, Path(data)))  # type: ignore[arg-type]
+        try:
+            record = await runner.run("stale_clock_put", device_id, {})
+        except BenchBusy:
+            return "lock_refused"
+    return str(record["result"]["observations"].get("write", {}).get("status", record["result"]["verdict"]))
+
+
 async def _module_page_paint(env: Env, address: str) -> str:
     """/ops/module: open the device (takes its lock) → paint three heads (a T1 frame write + select, one PUT)."""
     import json
@@ -315,6 +327,7 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "executor.burst (mode change)": _executor_burst,
     "driver.write (anything bypassing the executor)": _driver_direct,
     "bench runner (gate_c)": _bench_runner_gate_c,
+    "bench runner (stale_clock_put, shifted stamp)": _bench_runner_stale_clock,
     "module page (paint)": _module_page_paint,
     "module page (lowcountry preview)": _module_page_lowcountry_preview,
     "canopy engine (mode change)": _canopy_mode_change,

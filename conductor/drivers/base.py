@@ -178,9 +178,12 @@ class DeviceDriver(Protocol):
     async def read_state(self, device_id: str, *, purpose: Purpose = Purpose.ENGINE) -> ReadResult:
         """REST readback of the device's state rows. Never raises for HTTP/transport problems."""
 
-    async def write(self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose) -> WriteResult:
-        """Exactly one PUT of `rows` (lastUpdateTime = the driver clock's epoch ms). No retries. Never raises for
-        HTTP/transport problems; a gate refusal comes back as Outcome.DENIED with nothing sent."""
+    async def write(
+        self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose, stamp_offset_s: float = 0.0
+    ) -> WriteResult:
+        """Exactly one PUT of `rows` (lastUpdateTime = the driver clock's epoch ms, plus `stamp_offset_s` — only the
+        stale-clock bench job sets it, through the executor). No retries. Never raises for HTTP/transport problems;
+        a gate refusal comes back as Outcome.DENIED with nothing sent."""
 
     def account_of(self, device_id: str) -> str:
         """The logical account a device belongs to (the executor bounds concurrency per account)."""

@@ -2,7 +2,7 @@
 the app registers it, else tests/fake_engine.FakeEngine via tests_e2e/ops_server.py).
 
 Screenshots: docs/screenshots/ops-phone*.png (390×844), ops-tablet.png (1024×768), ops-calibrate-phone.png,
-visualizer-desktop*.png (1280×800).
+visualizer-desktop*.png (1280×800), visualizer-phone.png (390×844).
 """
 
 from __future__ import annotations
@@ -233,6 +233,21 @@ def test_visualizer_desired_vs_reported(page_at, call, held_module, screenshots)
     page.wait_for_function(
         "document.querySelector('#now').textContent.includes('Lowcountry Calm')", timeout=8000
     )
+
+
+def test_visualizer_on_a_phone(page_at, held_module, screenshots):
+    """The layout at 390×844: every module drawn, nothing wider than the phone."""
+    page = page_at(PHONE)
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto("/visualizer/")
+    page.wait_for_function("document.querySelector('#stats').textContent.includes('match')")
+    assert "270 heads" in page.inner_text("#stats")
+    assert "Golden Hour" in page.inner_text("#now")
+    page.wait_for_function("document.querySelector('#live').dataset.state === 'open'")
+    assert page.evaluate("document.documentElement.scrollWidth") <= PHONE["width"]
+    page.screenshot(path=str(screenshots / "visualizer-phone.png"))
+    assert errors == []
 
 
 def test_visualizer_still_draws_the_layout_without_colours(page_at):
