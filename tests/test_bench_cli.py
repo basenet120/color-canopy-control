@@ -13,7 +13,9 @@ from pathlib import Path
 import pytest
 
 from conductor.bench import cli
-from conductor.bench.jobs import Q_GATE_C
+from conductor.bench.jobs import question
+
+Q_GATE_C = question("gate_c", {"source": "custom-1", "target": "custom-2"})
 
 ROOT = Path(__file__).resolve().parent.parent
 

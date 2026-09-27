@@ -116,6 +116,49 @@ async def _bench_runner_gate_c(env: Env, address: str) -> str:
     return str(record["result"]["observations"].get("write", {}).get("status", record["result"]["verdict"]))
 
 
+async def _module_page_paint(env: Env, address: str) -> str:
+    """/ops/module: open the device (takes its lock) → paint three heads (a T1 frame write + select, one PUT)."""
+    import json
+    import tempfile
+
+    from fake_afero import raw_device_from_fixture
+
+    from conductor.config import ConductorSettings, DeviceFlags, load_recipes
+    from conductor.geometry import load_canopy_config
+    from conductor.module import ModuleSession, SessionDeps
+    from conductor.services import Target
+    from conductor.sim.profiles import load_profile
+
+    world = env.world
+    with tempfile.TemporaryDirectory() as tmp:  # the fake device as a 30-head strand (the module map's size)
+        fixture = Path(tmp) / "sqhdk03.json"
+        fixture.write_text(json.dumps(load_profile("sqhdk03-sim")))
+        world.fake.devices[address] = raw_device_from_fixture(address, fixture)
+    device_id = world.registry.logical_for(address).id
+    # Gate C recorded for the device, so the page may paint: only the gate/lock can stop the spare
+    entry = world.registry.get(device_id).model_copy(
+        update={"flags": DeviceFlags(t1_frames=True), "flags_proven_on": address}
+    )
+    deps = SessionDeps(
+        clock=world.clock,
+        locks=env.locks,
+        telemetry=Telemetry(None, world.clock),
+        settings=ConductorSettings(),
+        recipes=load_recipes(),
+        canopy=load_canopy_config(),
+        entry=lambda _id: entry,
+    )
+    try:
+        session = await ModuleSession.open(
+            deps, Target(device_id, address, world.driver, env.executor), owner="module page · test"
+        )
+    except LockError:
+        return "lock_refused"
+    result = await session.paint_heads(heads=[{"index": i, "r": 255} for i in (0, 7, 22)])
+    await session.close()
+    return str(result["status"])
+
+
 WriterPath = Callable[[Env, str], Awaitable[str]]
 WRITER_PATHS: dict[str, WriterPath] = {
     "executor.submit (engine)": _executor_engine,
@@ -123,11 +166,13 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "executor.burst (mode change)": _executor_burst,
     "driver.write (anything bypassing the executor)": _driver_direct,
     "bench runner (gate_c)": _bench_runner_gate_c,
+    "module page (paint)": _module_page_paint,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
 COVERED_MODULES = {
     "conductor/executor.py": "executor.submit (engine)",
     "conductor/bench/runner.py": "bench runner (gate_c)",
+    "conductor/module/session.py": "module page (paint)",
 }
 ALLOWED = {"denied", "lock_refused", "locked"}
 

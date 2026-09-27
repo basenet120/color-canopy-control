@@ -225,7 +225,20 @@ export async function simBadge(versionJson) {
     }
   }
   if (!v || !(v.mode === "sim" || v.simulated === true)) return null;
+  return setSimBadge(true);
+}
+
+/**
+ * Show (on = true) or remove the persistent "Simulator" badge. For pages whose own target decides it — the
+ * module page drives one device, which may be real while the show engine runs on the simulator (bench mode),
+ * so it follows that device's `simulated` flag rather than /api/version. Returns the badge element, or null.
+ */
+export function setSimBadge(on) {
   let badge = document.querySelector(".sim-badge");
+  if (!on) {
+    if (badge) badge.remove();
+    return null;
+  }
   if (!badge) {
     badge = document.createElement("div");
     badge.className = "sim-badge";

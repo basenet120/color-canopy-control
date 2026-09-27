@@ -10,6 +10,13 @@
   It never calls `driver.write` itself.
 - Every step goes to the WebSocket topic "bench" and to telemetry (kind "bench"), and is saved with the result.
 - Results are written atomically to `<data>/bench/<run_id>.json` after every step (results.py).
+- The lease is touched on every read, profile and sleep (in chunks), so a long wait inside a run never lets the
+  lock idle out mid-run; if the lock was taken over, the run stops with an ERROR at its next step.
+- `stop(run_id)` cancels a run started in the background; the lock is released in `execute`'s `finally`.
+- `writes_sent` counts writes that actually left the process, so an ERROR says whether the kit may have changed.
+- Flags (DeviceFlags) are applied only from a real run whose kit is still the one registered under that id, and
+  are saved with `flags_proven_on` = that kit's address. Changing a confirming answer away from "yes" afterwards
+  puts the flags this run applied back to what they were before (if nothing else changed them since).
 """
 
 from __future__ import annotations
@@ -24,10 +31,10 @@ from typing import Any
 
 from conductor import __version__
 from conductor.anonymize import anonymize
-from conductor.bench.jobs import FLAG_QUESTIONS, JOBS, Job, JobError, coerce_params
+from conductor.bench.jobs import JOBS, PARAM_BOUNDS, Job, JobError, coerce_params, flag_questions
 from conductor.bench.results import BenchResults, fixture_shape, is_run_id
 from conductor.bench_api import JobResult, Verdict
-from conductor.drivers.base import DeviceInfo, ReadResult, StateRow
+from conductor.drivers.base import DeviceInfo, Outcome, ReadResult, StateRow
 from conductor.executor_api import Command, CommandResult
 from conductor.gate import GateDenied, Purpose
 from conductor.locks import Lease, LockError
@@ -37,6 +44,7 @@ log = logging.getLogger(__name__)
 
 SAFE_ERRORS = (JobError, LookupError, GateDenied, LockError, ValueError)
 MAX_ANSWER_CHARS = 2000
+LEASE_TOUCH_S = 60.0  # a sleep inside a run touches the lease at least this often (idle timeout is 10 min)
 
 
 class BenchError(ValueError):
@@ -81,6 +89,21 @@ class RunContext:
     def budget_s(self) -> float:
         return float(self.target.executor.policy.min_write_interval_s)
 
+    @property
+    def t1_allowed(self) -> bool:
+        """Per-head frames may be written: always on the simulator; on a real kit only once Gate C is proven on
+        this very kit (flags bound to its address)."""
+        if self.target.simulated:
+            return True
+        try:
+            entry = self.runner.services.registry.get(self.device_id)
+        except KeyError:
+            return False
+        return entry.flags_for(self.address).t1_frames is True
+
+    def _touch(self) -> None:
+        self.runner.services.locks.touch(self.lease)  # LockError if released, timed out or taken over
+
     def step(self, message: str, **detail: Any) -> None:
         self.runner._step(self.run, message, detail)
 
@@ -88,9 +111,17 @@ class RunContext:
         return self.runner.services.clock.now()
 
     async def sleep(self, seconds: float) -> None:
-        await self.runner.services.clock.sleep(seconds)
+        remaining = max(0.0, float(seconds))
+        while True:
+            chunk = min(remaining, LEASE_TOUCH_S)
+            await self.runner.services.clock.sleep(chunk)
+            remaining -= chunk
+            self._touch()
+            if remaining <= 0:
+                return
 
     async def read(self) -> ReadResult:
+        self._touch()
         rr = await self.target.driver.read_state(self.address, purpose=Purpose.BENCH)
         self.step(
             "Read the device's state" if rr.ok else f"Read failed: {rr.error or rr.outcome}",
@@ -102,6 +133,7 @@ class RunContext:
         return rr
 
     async def profile(self) -> DeviceInfo:
+        self._touch()
         return await self.target.driver.fetch_profile(self.address, purpose=Purpose.BENCH)
 
     async def write(
@@ -120,6 +152,8 @@ class RunContext:
                 source="bench",
             )
         )
+        if any(a.outcome is not Outcome.DENIED for a in result.attempts):  # it left the process
+            self.run.record["writes_sent"] = self.run.record.get("writes_sent", 0) + 1
         t = result.timings
         last = result.attempts[-1] if result.attempts else None
         self.step(
@@ -152,6 +186,7 @@ class Run:
     record: dict[str, Any]
     started_mono: float
     task: asyncio.Task | None = None
+    stop_requested: bool = False
 
 
 class BenchRunner:
@@ -177,6 +212,7 @@ class BenchRunner:
                     "writes": s.writes,
                     "look_for": s.look_for,
                     "params": dict(s.params),
+                    "bounds": {k: list(v) for k, v in PARAM_BOUNDS.get(s.name, {}).items()},
                 }
             )
         return out
@@ -256,8 +292,10 @@ class BenchRunner:
             "steps": [],
             "result": None,
             "answers": {},
-            "flag_questions": FLAG_QUESTIONS.get(job_name, {}),
+            "flag_questions": flag_questions(job_name, coerced),
             "flags_applied": None,
+            "flags_revoked": None,
+            "writes_sent": 0,
             "confirmed_verdict": None,
             "environment": {
                 "mode": str(self.services.gate_settings.mode),
@@ -282,7 +320,12 @@ class BenchRunner:
             self._step(run, f"{label}Started {run.job.spec.title} on {run.target.device_id}", {})
             result = await run.job.run(ctx, dict(run.params))
         except asyncio.CancelledError:
-            result = JobResult(Verdict.ERROR, "The run was stopped before it finished.")
+            why = (
+                "Stopped from the bench page before it finished."
+                if run.stop_requested
+                else "The run was stopped before it finished (the server stopped or restarted)."
+            )
+            result = JobResult(Verdict.ERROR, why)
             raise
         except SAFE_ERRORS as e:
             result = JobResult(Verdict.ERROR, str(e))
@@ -313,6 +356,19 @@ class BenchRunner:
         run = self._runs.get(run_id)
         if run is not None and run.task is not None:
             await asyncio.shield(run.task)
+        return self.get(run_id)
+
+    async def stop(self, run_id: str) -> dict[str, Any]:
+        """Stop a run that is going in the background; returns its saved record (verdict ERROR, lock released)."""
+        record = self.get(run_id)  # BenchError for an unknown run
+        run = self._runs.get(run_id)
+        if run is None or run.task is None or run.task.done():
+            raise BenchRefused(
+                f"That run isn't running (it is {record.get('status')}), so there is nothing to stop."
+            )
+        run.stop_requested = True
+        run.task.cancel()
+        await asyncio.wait({run.task})
         return self.get(run_id)
 
     async def close(self) -> None:
@@ -358,9 +414,22 @@ class BenchRunner:
                 raise BenchError("That question isn't one this run asked.")
             if not isinstance(answer, str) or not answer.strip() or len(answer) > MAX_ANSWER_CHARS:
                 raise BenchError("Answer with yes, no, or a short note.")
+        given = {}
         for question, answer in answers.items():
             text = answer.strip()
-            record["answers"][question] = text.lower() if text.lower() in ("yes", "no") else text
+            given[question] = text.lower() if text.lower() in ("yes", "no") else text
+        # Flags already applied on the strength of a "yes" that is now taken back are undone first (a failure
+        # to save the registry refuses the answer, so the record and the registry never disagree).
+        applied = record.get("flags_applied") or {}
+        needed = record.get("flag_questions") or {}
+        revoke = {
+            flag: (applied.get("previous") or {}).get(flag)
+            for flag in applied.get("flags") or {}
+            if needed.get(flag) in given and given[needed[flag]] != "yes"
+        }
+        if revoke:
+            self._revoke_flags(record, revoke)
+        record["answers"].update(given)
         record["confirmed_verdict"] = self._confirmed(record)
         self.results.save(record)
         self._publish_record(record, "answered")
@@ -385,16 +454,58 @@ class BenchRunner:
             if record["answers"].get(question) != "yes":
                 raise BenchRefused(f"Answer “{question}” with Yes first.")
         device_id = record["device_id"]
-        current = self.services.registry.get(device_id).flags.model_dump()
-        merged = {**current, **proposed}
-        self.services.update_registry(device_id, {"flags": merged})
-        record["flags_applied"] = {"flags": proposed, "at": self.services.clock.now()}
+        address = record.get("address")
+        try:
+            entry = self.services.registry.get(device_id)
+        except KeyError:
+            raise BenchRefused(f"{device_id} isn't in the registry any more.") from None
+        # Bound to the kit that proved them: the device must still resolve to the address this run used.
+        if not address or self.services.registry.address(device_id, record.get("driver") or "") != address:
+            raise BenchRefused(
+                f"This run was on a different kit from the one registered as {device_id} now (it was re-registered "
+                "since). Flags belong to the kit that proved them: run the gate again on this kit."
+            )
+        current = entry.flags_for(address).model_dump()  # flags proven on another kit don't carry over
+        previous = {flag: current.get(flag) for flag in proposed}
+        self.services.update_registry(
+            device_id, {"flags": {**current, **proposed}, "flags_proven_on": address}
+        )
+        record["flags_applied"] = {"flags": proposed, "previous": previous, "at": self.services.clock.now()}
+        record["flags_revoked"] = None
         self.results.save(record)
         self.services.telemetry.record(
             "bench", device_id=device_id, job=record["job"], step="flags applied", detail=proposed
         )
         self._publish_record(record, "flags")
         return record
+
+    def _revoke_flags(self, record: dict[str, Any], revoke: dict[str, bool | None]) -> None:
+        """Put flags this run applied back to their previous values (only where the registry still holds what
+        this run applied, on this kit) and record what was undone."""
+        device_id, address = record["device_id"], record.get("address")
+        applied = record["flags_applied"]
+        try:
+            entry = self.services.registry.get(device_id)
+        except KeyError:
+            entry = None
+        current = entry.flags_for(address).model_dump() if entry else {}
+        undone: dict[str, bool | None] = {}
+        left: dict[str, bool | None] = {}
+        for flag, previous in revoke.items():
+            if entry is not None and current.get(flag) == applied["flags"][flag]:
+                current[flag] = previous
+                undone[flag] = previous
+            else:  # changed since (another run, another kit): not ours to undo
+                left[flag] = current.get(flag)
+        if undone:
+            self.services.update_registry(device_id, {"flags": current, "flags_proven_on": address})
+        remaining = {f: v for f, v in applied["flags"].items() if f not in revoke}
+        record["flags_applied"] = {**applied, "flags": remaining} if remaining else None
+        record["flags_revoked"] = {"flags": undone, "left_as_is": left, "at": self.services.clock.now()}
+        self.services.telemetry.record(
+            "bench", device_id=device_id, job=record["job"], step="flags revoked", detail=undone
+        )
+        self._publish_record(record, "flags")
 
     def anonymized(self, run_id: str) -> dict[str, Any]:
         record = self.get(run_id)
@@ -435,9 +546,19 @@ class BenchRunner:
 
     def _finish(self, run: Run, result: JobResult, ctx: RunContext) -> None:
         record = run.record
+        summary = result.summary
+        if result.verdict is Verdict.ERROR:  # say truthfully whether the kit may have changed
+            sent = record.get("writes_sent", 0)
+            if sent:
+                summary += (
+                    f" {sent} write{'s' if sent != 1 else ''} had already gone out before it stopped, so the kit "
+                    "may have changed: check the steps before running it again."
+                )
+            elif "Nothing was sent" not in summary:
+                summary += " Nothing was sent."
         record["result"] = {
             "verdict": str(result.verdict),
-            "summary": result.summary,
+            "summary": summary,
             "observations": _jsonable(result.observations),
             "ask_human": list(result.ask_human),
             "flags": dict(result.flags),
@@ -498,6 +619,7 @@ class BenchRunner:
                 "answers": record["answers"],
                 "confirmed_verdict": record["confirmed_verdict"],
                 "flags_applied": record["flags_applied"],
+                "flags_revoked": record.get("flags_revoked"),
             },
         )
 

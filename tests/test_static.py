@@ -42,3 +42,12 @@ def test_app_js_behaviour_under_node():
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "app.js ok" in result.stdout
+
+
+def test_module_page_badge_follows_the_open_device_not_the_engine():
+    """bench-ux F4: in bench mode /api/version says simulated (the engine) while the module page drives the real
+    kit. The page must badge only from the open device's own `simulated` flag."""
+    js = (ROOT / "web" / "ops" / "module" / "module.js").read_text()
+    assert not re.search(r"\bsimBadge\(", js), "module.js must not use the global /api/version badge"
+    assert "setSimBadge(st.simulated === true)" in js
+    assert "setSimBadge(false)" in js  # the picker drives nothing

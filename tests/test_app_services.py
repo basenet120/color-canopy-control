@@ -14,3 +14,18 @@ def test_auth_applies_to_new_surfaces(app_client_auth):
     assert app_client_auth.get("/ops/").status_code == 401
     assert app_client_auth.get("/ops/", auth=("crew", "canopy")).status_code == 200
     assert app_client_auth.get("/healthz").status_code == 200
+
+
+def test_shutdown_releases_module_locks_and_stops_bench_runs(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from conductor.app import app
+
+    monkeypatch.setenv("CONDUCTOR_AUTH", "off")
+    monkeypatch.setenv("CONDUCTOR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONDUCTOR_SIM_SPEED", "fast")
+    with TestClient(app) as client:
+        assert client.post("/api/module/bench-kit/open", json={}).status_code == 200
+        services = client.app.state.services
+        assert services.locks.is_locked("sim-bench-kit")
+    assert not services.locks.is_locked("sim-bench-kit")

@@ -4,13 +4,18 @@ and the stored token decrypts only with this runtime's key. Also: the sign-in ru
 passwords, wrong codes and expired pending sign-ins."""
 
 import asyncio
+import contextlib
+import copy
 import json
 import logging
+import logging.config
 
 import pytest
 from cryptography.fernet import Fernet
-from fake_afero import BENCH_MD, FakeAfero, make_world
+from fake_afero import BENCH_MD, FakeAfero, FakeResponse, make_world
+from uvicorn.config import LOGGING_CONFIG
 
+from conductor import redact
 from conductor import rows as R
 from conductor.accounts_api import LoginState
 from conductor.clock import run_virtual
@@ -39,26 +44,70 @@ class Capture(logging.Handler):
         self.lines.append(text)
 
 
-@pytest.fixture
-def all_debug_logs():
+@contextlib.contextmanager
+def production_logging():
+    """Logging exactly as `uvicorn conductor.app:app` sets it up (the Dockerfile CMD and `make run`): uvicorn's
+    LOGGING_CONFIG via dictConfig, then `redact.install()` from the app's lifespan. The root logger has no
+    handlers, so records from conductor.* and aioafero.* go to logging.lastResort. pytest's own capture handlers
+    are taken off the root for the duration so they can't stand in for a production handler."""
     root = logging.getLogger()
-    handler = Capture()
+    uvicorn_names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved_root = (list(root.handlers), list(root.filters), root.level)
+    saved_uvicorn = {
+        n: (list(lg.handlers), list(lg.filters), lg.level, lg.propagate)
+        for n in uvicorn_names
+        for lg in [logging.getLogger(n)]
+    }
+    saved_factory = logging.getLogRecordFactory()
+    saved_last_resort = list(logging.lastResort.filters) if logging.lastResort else []
+    root.handlers.clear()
+    logging.config.dictConfig(copy.deepcopy(LOGGING_CONFIG))
+    redact.install()
+    try:
+        assert root.handlers == []  # the production shape: nothing pre-added to the root
+        yield
+    finally:
+        logging.setLogRecordFactory(saved_factory)
+        if logging.lastResort:
+            logging.lastResort.filters[:] = saved_last_resort
+        root.handlers[:], root.filters[:], _ = saved_root
+        root.setLevel(saved_root[2])
+        for n, (handlers, filters, level, propagate) in saved_uvicorn.items():
+            lg = logging.getLogger(n)
+            lg.handlers[:], lg.filters[:] = handlers, filters
+            lg.setLevel(level)
+            lg.propagate = propagate
+
+
+@contextlib.contextmanager
+def everything_at_debug():
     saved = {name: logging.getLogger(name).level for name in list(logging.root.manager.loggerDict)}
+    root = logging.getLogger()
     saved_root = root.level
     root.setLevel(logging.DEBUG)
-    for name in saved:
-        logging.getLogger(name).setLevel(logging.DEBUG)
-    root.addHandler(handler)
     try:
-        yield handler
+        yield
     finally:
-        root.removeHandler(handler)
         root.setLevel(saved_root)
-        for name, level in saved.items():
-            logging.getLogger(name).setLevel(level)
+        for name in list(logging.root.manager.loggerDict):
+            logging.getLogger(name).setLevel(saved.get(name, logging.NOTSET))
 
 
-def test_full_sign_in_with_emailed_code_leaks_no_secret(tmp_path, all_debug_logs):
+@pytest.fixture
+def all_debug_logs():
+    """Production logging, then (after install) an unfiltered DEBUG handler on the root that formats each record
+    as a stream handler would. install() never saw this handler, so only process-wide redaction protects it."""
+    with production_logging(), everything_at_debug():
+        handler = Capture()
+        root = logging.getLogger()
+        root.addHandler(handler)
+        try:
+            yield handler
+        finally:
+            root.removeHandler(handler)
+
+
+def test_full_sign_in_with_emailed_code_leaks_no_secret(tmp_path, all_debug_logs, capsys):
     key = Fernet.generate_key().decode()
     fake = FakeAfero(email=EMAIL, password=PASSWORD, otp_code=OTP, token_prefix=TOKEN_PREFIX)
 
@@ -100,8 +149,9 @@ def test_full_sign_in_with_emailed_code_leaks_no_secret(tmp_path, all_debug_logs
     assert write.ok and read.ok and fresh.value == "ok"
     assert len(fake.issued) >= 6  # codes + at least two token generations
 
-    sentinels = [PASSWORD, OTP, WRONG_OTP, *fake.issued]
-    logs = "\n".join(all_debug_logs.lines)
+    sentinels = [PASSWORD, OTP, WRONG_OTP, *fake.issued, fake.account_id]
+    captured = capsys.readouterr()
+    logs = "\n".join([*all_debug_logs.lines, captured.out, captured.err])
     assert "afero PUT" in logs and len(all_debug_logs.lines) > 50  # the capture really saw DEBUG traffic
     dumped = json.dumps(docs, default=str)
     files = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
@@ -205,3 +255,41 @@ def test_sign_in_without_a_code_connects_and_disconnect_forgets_the_token(tmp_pa
     assert connected.connected and connected.token_generation == 1 and not connected.simulated
     assert not after.connected and after.token_generation is None
     assert write.outcome.value == "auth"
+
+
+def test_redaction_holds_under_plain_uvicorn_logging(tmp_path, capsys):
+    """F1: with uvicorn's logging config and no root handler, records from conductor.* and aioafero.* reach
+    stderr through logging.lastResort. The account id (which aioafero puts in the URLs it logs), registered
+    tokens and bearer strings must be masked there and on uvicorn's own handlers; uvicorn's access log keeps
+    working."""
+    fake = FakeAfero(token_prefix=TOKEN_PREFIX)
+
+    async def main():
+        w = await make_world(tmp_path, fake=fake)
+        w.fake.script("GET", "/state", *[lambda req: FakeResponse(500, "down", url=req.url)] * 50)
+        await asyncio.sleep(65)  # aioafero's own state polls fail and log the URL at WARNING
+        token = w.store.load("bench")
+        logging.getLogger("conductor.probe").warning("stored token is %s", token)
+        logging.getLogger("aioafero.v1.probe").error("Authorization: Bearer %s", "abcdefghijklmnop.qrs")
+        try:
+            raise RuntimeError(f"failed for account {w.fake.account_id} with {token}")
+        except RuntimeError:
+            logging.getLogger("conductor.probe").exception("with a traceback")
+        logging.getLogger("uvicorn.error").warning("uvicorn saw %s", token)
+        logging.getLogger("uvicorn.access").info(
+            '%s - "%s %s HTTP/%s" %d', "127.0.0.1:5000", "GET", f"/x?refresh_token={token}", "1.1", 200
+        )
+        await w.driver.close()
+        return token
+
+    with production_logging():
+        token = run_virtual(main)
+        captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert "Unable to fetch states" in captured.err  # aioafero's warning really reached stderr
+    assert "stored token is ***" in captured.err and "with a traceback" in captured.err
+    assert "uvicorn saw ***" in captured.err
+    assert '"GET /x?refresh_token=*** HTTP/1.1" 200' in captured.out  # the access formatter still works
+    assert "Logging error" not in text
+    for secret in [fake.account_id, token, *fake.issued, "abcdefghijklmnop.qrs"]:
+        assert secret not in text, f"{secret[:8]}… leaked to stdout/stderr"

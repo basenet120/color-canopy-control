@@ -1,36 +1,61 @@
 # Status
 
-_Last updated: 2026-09-26 — P0 in progress in the cloud build session._
+_Last updated: 2026-09-26 (evening) — P0 and P0b built, reviewed and fixed on the simulator. P1–P3 next._
 
 ## ⚠ Blocked: this session can't push
 The cloud session's git proxy refuses `basenet120/color-canopy-control` ("not in this session's authorized
-repository set"), and no GitHub CLI or repo-attach tool is available here. Everything is committed locally on
-stacked `claude/*` branches and will be pushed the moment access exists. **Alon: add the repo to this session's
-sources** (claude.ai/code → the session → Sources / re-attach the repo with push access), then say "push".
+repository set"), and no GitHub CLI or repo-attach tool is available here. Everything is committed locally on the
+stacked branches below and will be pushed (and the PRs opened) the moment access exists. **Alon: add the repo to
+this session's sources with push access** (claude.ai/code → the session → Sources), then say "push".
 
-## PR stack (merge order)
-Each PR is a `claude/*` branch stacked on the previous one. Please use **merge commits**, not squash.
-1. `claude/p0-contracts` — build plan, decisions log, and the contract modules every P0 agent builds against
-   (clock, live gate, token store, redaction, WS tickets + hub, driver interface, rows/compare/slot hash,
-   capabilities, locks, telemetry, config + registry overlay, executor/accounts/roles/bench contract types). _Local only._
+## PR stack (merge order — please use merge commits, not squash)
+1. `claude/p0-contracts` — build plan, decisions log, and the contract modules (clock, live gate, token store,
+   redaction, WS tickets + hub, driver interface, rows/compare/slot hash, capabilities, locks, telemetry, config +
+   registry overlay, executor/accounts/roles/bench contract types).
+2. `claude/p0-gate-drivers` — SimDriver (pinned fault model), Afero adapter + the choke point (`GatedClientSession`),
+   executor + desired/reported tracker, roles/enrollment/cookie principals, `/ws/live` with tickets, services
+   container + app wiring, writer-path allowlist test, colour recipes.
+3. `claude/p0-bench` — account connect (CLI `python -m conductor.auth login` + hardened `/ops/accounts`), devices API,
+   ops landing page with tester enrollment, bench Gates A–C + index order + hue ramp + latency trials + whole-strand +
+   restore on `/ops/bench` and `python -m conductor.bench`, `/ops/bench/clock`, anonymizer,
+   `docs/runbooks/bench-prototype-01.md`; also the six modes as data (`config/modes.yaml`) and the engine contract.
+4. `claude/p0b-module` — `/ops/module` (the single-module test interface) with Playwright e2e, shutdown hygiene, and
+   the fixes for all 26 findings of the P0 adversarial review (D15–D20).
 
 ## Next step
-P0 wave 1 (running now): SimDriver, Afero adapter + choke point, executor + tracker, roles/enrollment/WebSocket
-routes + shared web assets. Then the services container and wiring, then wave 2: account connect (CLI + page),
-bench Gates A–C + hue ramp + clock page + runbook, and `/ops/module` (P0b).
+**Alon at the bench (once the stack is pushed and merged):** follow `docs/runbooks/bench-prototype-01.md` — on
+staging set `CONDUCTOR_MODE=bench`, `HUBSPACE_LIVE=1`, `HUBSPACE_ACCOUNT_ALLOWLIST=<bench email>`,
+`HUBSPACE_LIVE_UNTIL=2026-10-19`; connect the bench account; register the kit; add its id to
+`HUBSPACE_DEVICE_ALLOWLIST`; run Gate A first and paste the anonymized JSON back into a build session.
+**Build session:** P1 engine + reconciler + soak, P2 looks, P3 kiosk / ops / visualizer (running next).
 
-## Verified (and how)
-- `make test`: 57 passed (contract tests: the 07 §1 truth table, allowlist intersection, `HUBSPACE_LIVE_UNTIL`,
-  account allowlist before any password, the per-request choke-point rule, token store round trip / rotation /
-  0600 / environment binding / bad key, redaction, ticket single-use + expiry, Origin check, frame header copy +
-  length refusal, full state vectors, compare with missing rows, slot hash, capability detection on the fixture,
-  lock exclusivity + idle expiry + allowlist, registry overlay validation + history).
-- `make lint`: clean.
-- The virtual-time loop runs an hour of timers in milliseconds (`tests/test_contracts.py`).
+## Verified in sim (and how)
+- `make test`: 529 passed. `make lint`: clean. `make e2e`: 5 passed (Playwright, Chromium 141, in this sandbox).
+- Container: image built from the repo Dockerfile (via a proxy-CA wrapper, D14) and smoke-tested like CI: `/healthz`
+  open, 401 without credentials, 200 with; every P0 page and `/api/devices` 200; `import aioafero` works.
+- Live gate: the 07 §1 truth table; every writer path (executor engine/bench/burst, direct driver write, bench runner,
+  module page) is refused for a registered-but-not-allowlisted device with **zero requests on the wire**, while the
+  allowlisted control goes out (`tests/test_writer_paths.py`); a grep test proves only `conductor/drivers/afero*.py`
+  touch aioafero/aiohttp; non-allowlisted emails never reach Afero; sim + live is bench-only and on-demand.
+- Credentials: a canary signs in with an emailed code through the HTTP routes against a stub Keycloak with sentinel
+  password/OTP/tokens/account id — none appear in responses, logs (under uvicorn's real logging config) or files.
+- Tester role reaches only `/ops/module` for its granted devices (401/403 elsewhere).
+- Screenshots reviewed by the lead: `docs/screenshots/module-*.png` (phone and tablet).
 
-## UNVERIFIED / needs real hardware
-Everything in `docs/context/04` bench gates. Nothing has touched Afero from this session (it can't reach it, by design).
+## Needs real hardware (UNVERIFIED until the bench)
+The SQHDK03 cloud profile (segment count, slots, `individual`, CCT range, presets), whether Afero accepts slot selects
+(Gate B) and frame writes (Gate C), readback semantics (Gate B unplugged), effect codes, per-puck white, real latency
+and throttling, token rotation behaviour, 401/403 semantics, the index order, iOS Safari cookie/beacon behaviour.
 
-## Decisions needed
-See `docs/DECISIONS.md` (D1–D9) for calls made; `docs/context/06-open-questions.md` for dated decisions
-(vignette surface by Oct 1, Golden Hour technique and kiosk look by Oct 5).
+## Decisions needed from Alon
+- Vignette surface by **Oct 1** (06 #11). Default: thin custom pages in P4, stock app if not solid by Oct 12.
+- Golden Hour technique and kiosk look by **Oct 5** (06 #12–13). Until a motion code is benched, Golden Hour is a
+  static amber glow and its copy says so.
+- Review D1–D20 in `docs/DECISIONS.md`, especially D2 (CLI account connect doesn't need the page flag) and D10
+  (enrollment links need one tap to confirm).
+
+## Top risks
+1. Gate C fails (Afero rejects third-party frames) → Sunset/Garden/Golden Hour drop to T2 (hand-painted slots,
+   ~15–20 min per module) or T3. The ladder and copy handle it; staff time is the cost.
+2. Real throttling behaviour is unknown; the soak's 5 % 429 + 1 % silent drop model is an assumption.
+3. The GitHub push block: nothing reaches Alon until the repo is attached to this session.

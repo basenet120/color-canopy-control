@@ -10,7 +10,8 @@ Event kinds (field `kind`), all with `t` (wall epoch s) and usually `device_id`:
 - `attempt`        attempt n, outcome, http_status, elapsed_s, error
 - `readback`       outcome, http_status, elapsed_s, mismatches, available
 - `gate_denied`    reason, purpose
-- `lock`           action (acquire/release/expire/steal), owner
+- `lock`           action (acquire/release/expire/steal), owner (steal: previous_owner; expire: expired_at)
+- `token`          account, action (ensure_fresh: the pre-burst check, 07 §6), outcome, elapsed_s, error
 - `mode`           mode, tier, source (kiosk/ops/idle/reconciler)
 - `tier`           mode, from, to, reason
 - `alert`          level (info/warn/error), message

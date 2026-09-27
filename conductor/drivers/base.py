@@ -71,11 +71,12 @@ class StateRow:
 
 class Outcome(StrEnum):
     OK = "ok"  # 2xx with a well-formed body
-    THROTTLED = "throttled"  # 429, 403, or aioafero's ExceededMaximumRetries (429/503/504)
+    THROTTLED = "throttled"  # 429, 403, or exhausted 429/503/504 retries; http_status says which
     SERVER_ERROR = "server_error"  # 5xx (other than exhausted 503/504 retries)
     CLIENT_ERROR = "client_error"  # 400 and other 4xx not listed here — the payload was refused
     NOT_FOUND = "not_found"  # 404: unknown device id
-    AUTH = "auth"  # 401 or a dead token (InvalidAuth): re-sign-in required
+    AUTH = "auth"  # a dead token (InvalidAuth), or a 401 that survives a token refresh: re-sign-in required
+    AUTH_STALE = "auth_stale"  # a 401 on a healthy account: the bearer went stale; it is refreshed, so retry
     TIMEOUT = "timeout"
     CONNECTION = "connection"  # transport failure: DNS, reset, internet down
     MALFORMED = "malformed"  # 2xx but the body isn't the expected shape (silent degradation)
@@ -87,7 +88,14 @@ class Outcome(StrEnum):
 
 
 RETRYABLE = frozenset(
-    {Outcome.THROTTLED, Outcome.SERVER_ERROR, Outcome.TIMEOUT, Outcome.CONNECTION, Outcome.MALFORMED}
+    {
+        Outcome.THROTTLED,
+        Outcome.SERVER_ERROR,
+        Outcome.TIMEOUT,
+        Outcome.CONNECTION,
+        Outcome.MALFORMED,
+        Outcome.AUTH_STALE,
+    }
 )
 
 

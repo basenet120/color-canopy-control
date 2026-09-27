@@ -22,6 +22,14 @@ Rules implemented (binding text in `conductor/executor_api.py`):
 - **Gate.** A DENIED write resolves DENIED at once and records `gate_denied` telemetry.
 - **Telemetry.** One `attempt` event per write attempt, one `readback` event per verification GET, one `command`
   event per finished command (timings are wall-clock epoch seconds from the injected clock).
+- **Fresh token before a burst (07 §6).** `burst()` first calls the driver's optional
+  `ensure_fresh_token(account, purpose=…)` once per account in the burst (holding an account slot, since it may send
+  one GET), records a `token` event per account, then enqueues the PUTs. A failed check doesn't stop the burst:
+  the PUTs report what really happened. Drivers without the hook (SimDriver, test fakes) skip this step.
+- **Withdraw.** `withdraw(address, lease_token=…)` (the module page's Hold) resolves the pending command SUPERSEDED
+  and stops an in-flight one before its next send; a write already on the wire can't be recalled, and a command
+  that is only verifying keeps verifying (readback sends nothing).
+- **Shutdown.** `close()` resolves every unfinished command FAILED (pending, sending, retrying or verifying).
 
 Decision (recorded here, see the final report): a command waiting to verify is "in flight". When a newer command
 for the same device arrives, the older one stops verifying (resolves SUPERSEDED) instead of spending account
@@ -80,6 +88,8 @@ class _Job:
     command: Command
     future: asyncio.Future[CommandResult]
     result: CommandResult
+    withdrawn: asyncio.Event = field(default_factory=asyncio.Event)  # set by withdraw(): send nothing more
+    withdraw_reason: str | None = None
 
 
 @dataclass
@@ -129,9 +139,37 @@ class CommandExecutor:
         return await asyncio.shield(future)
 
     async def burst(self, cmds: list[Command]) -> list[CommandResult]:
-        """Submit every command at once (one PUT per device, concurrently) and wait for all results, in order."""
+        """Submit every command at once (one PUT per device, concurrently) and wait for all results, in order.
+
+        First makes sure each account's bearer has >= 15 s left (07 §6), when the driver offers that hook."""
+        await self._prepare_burst(cmds)
         futures = [self._enqueue(c) for c in cmds]
         return list(await asyncio.gather(*(asyncio.shield(f) for f in futures)))
+
+    def withdraw(self, address: str, *, lease_token: str | None = None, reason: str | None = None) -> int:
+        """Send nothing more for `address`'s commands (those presenting `lease_token`, when given).
+
+        The pending command resolves SUPERSEDED unsent; an in-flight one resolves SUPERSEDED before its next
+        attempt (a PUT already on the wire can't be recalled). A command that is already verifying is left to
+        finish: its write was sent and readback is read-only. Returns how many commands were withdrawn."""
+        slot = self._slots.get(address)
+        if slot is None:
+            return 0
+
+        def mine(job: _Job | None) -> bool:
+            return job is not None and (lease_token is None or job.command.lease_token == lease_token)
+
+        count = 0
+        if mine(slot.pending):
+            job, slot.pending = slot.pending, None
+            self._finish(job, CommandStatus.SUPERSEDED, reason)
+            count += 1
+        current = slot.current
+        if mine(current) and not current.future.done() and current.result.timings.acked_at is None:
+            current.withdraw_reason = reason
+            current.withdrawn.set()
+            count += 1
+        return count
 
     def queue_depth(self) -> int:
         """Commands pending or in flight across all devices (never more than 2 per device)."""
@@ -190,7 +228,8 @@ class CommandExecutor:
         return lambda: self._submit_listeners.remove(fn) if fn in self._submit_listeners else None
 
     async def close(self) -> None:
-        """Stop the workers. Commands not yet finished resolve FAILED; nothing further is sent."""
+        """Stop the workers. Commands not yet finished (pending, sending, retrying or verifying) resolve FAILED;
+        nothing further is sent."""
         self._closed = True
         workers = []
         for slot in self._slots.values():
@@ -291,8 +330,9 @@ class CommandExecutor:
                 except Exception:
                     log.exception("executor: unexpected error on %s", slot.address)
                     self._finish(job, CommandStatus.FAILED, "Internal error in the executor; see the logs.")
-                finally:
-                    slot.current = None
+                # Cleared only on the way out of a finished command: when close() cancels this worker mid-command
+                # (sending, retrying, verifying), `current` must still be set for the handler below to resolve it.
+                slot.current = None
         except asyncio.CancelledError:
             if slot.current is not None:
                 self._finish(
@@ -302,17 +342,25 @@ class CommandExecutor:
             raise
 
     async def _attempt(self, slot: _Slot, job: _Job) -> WriteResult | None:
-        """One PUT (caller holds the account slot and has waited for the rate budget). None = resolved LOCKED."""
+        """One PUT (caller holds the account slot and has waited for the rate budget). None = resolved without
+        sending (LOCKED, or withdrawn)."""
         cmd = job.command
         if refusal := self._lock_refusal(cmd):
             self._finish(job, CommandStatus.LOCKED, refusal)
+            return None
+        if job.withdrawn.is_set():
+            self._finish(job, CommandStatus.SUPERSEDED, job.withdraw_reason)
             return None
         n = len(job.result.attempts) + 1
         now_mono, now = self.clock.monotonic(), self.clock.now()
         previous_sent = slot.last_sent
         slot.last_sent = now_mono
         slot.sent.append(now_mono)
-        self._account_sent.setdefault(slot.account, deque()).append(now_mono)
+        account_sent = self._account_sent.setdefault(slot.account, deque())
+        account_sent.append(now_mono)
+        # Keep only the gauge window, whether or not anyone reads the budget (the show runs for 12 days).
+        _prune(slot.sent, now_mono)
+        _prune(account_sent, now_mono)
         if job.result.timings.sent_at is None:
             job.result.timings.sent_at = now
         try:
@@ -365,8 +413,8 @@ class CommandExecutor:
                 return
             backoff = self._backoff(attempts)
             wait = max(backoff, self._rate_remaining(slot))
-            if await self._wait_unless_newer(slot, wait):
-                self._finish(job, CommandStatus.SUPERSEDED, None)
+            if await self._wait_unless_newer(slot, wait, job.withdrawn):
+                self._finish(job, CommandStatus.SUPERSEDED, job.withdraw_reason)
                 return
             await self._wait_rate(slot)
             async with self._request_slot(slot.account):
@@ -442,20 +490,57 @@ class CommandExecutor:
         while (remaining := self._rate_remaining(slot)) > _EPS:
             await self.clock.sleep(remaining)
 
-    async def _wait_unless_newer(self, slot: _Slot, seconds: float) -> bool:
-        """Wait `seconds` on the clock; return True early if a newer command for the device arrives."""
-        if slot.pending is not None:
+    async def _wait_unless_newer(
+        self, slot: _Slot, seconds: float, stop: asyncio.Event | None = None
+    ) -> bool:
+        """Wait `seconds` on the clock; return True early if a newer command for the device arrives (or `stop`
+        is set)."""
+
+        def interrupted() -> bool:
+            return slot.pending is not None or (stop is not None and stop.is_set())
+
+        if interrupted():
             return True
         if seconds <= 0:
             return False
-        sleeper = asyncio.ensure_future(self.clock.sleep(seconds))
-        waiter = asyncio.ensure_future(slot.newer.wait())
+        waits = {asyncio.ensure_future(self.clock.sleep(seconds)), asyncio.ensure_future(slot.newer.wait())}
+        if stop is not None:
+            waits.add(asyncio.ensure_future(stop.wait()))
         try:
-            await asyncio.wait({sleeper, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            sleeper.cancel()
-            waiter.cancel()
-        return slot.pending is not None
+            for w in waits:
+                w.cancel()
+        return interrupted()
+
+    async def _prepare_burst(self, cmds: list[Command]) -> None:
+        """07 §6: before a burst, ask the driver (if it can) for a bearer with >= 15 s left, once per account."""
+        hook = getattr(self.driver, "ensure_fresh_token", None)
+        if hook is None or self._closed:
+            return
+        purposes: dict[str, Purpose] = {}
+        for c in cmds:
+            purposes.setdefault(self._account_of(c.device_id), c.purpose)
+
+        async def one(account: str, purpose: Purpose) -> None:
+            started = self.clock.monotonic()
+            try:
+                async with self._request_slot(account):
+                    outcome = await hook(account, purpose=purpose)
+                error = None
+            except Exception as e:
+                log.exception("ensure_fresh_token raised for account %s", account)
+                outcome, error = Outcome.CONNECTION, f"Internal driver error ({type(e).__name__})."
+            self.telemetry.record(
+                "token",
+                account=account,
+                action="ensure_fresh",
+                outcome=str(outcome),
+                elapsed_s=round(self.clock.monotonic() - started, 3),
+                error=error,
+            )
+
+        await asyncio.gather(*(one(a, p) for a, p in purposes.items()))
 
     @contextlib.asynccontextmanager
     async def _request_slot(self, account: str):

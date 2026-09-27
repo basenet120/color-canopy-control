@@ -431,3 +431,131 @@ def test_close_resolves_unfinished_commands_and_refuses_new_ones():
     assert late.status is CommandStatus.FAILED
     assert len(w.driver.writes) == 1
     assert w.executor.queue_depth() == 0
+
+
+# ---- review fixes: shutdown mid-command, bounded rate history, token freshness before a burst, withdraw -------
+@pytest.mark.parametrize("phase", ["verifying", "retrying"])
+def test_close_during_verify_or_retry_resolves_failed_with_one_command_event(phase):
+    """EXE-1: close() while a command waits to verify (or to retry) must resolve it FAILED, not hang."""
+    w = World(readback_delay_s=5.0, backoff_s=[5.0], max_attempts=3)
+    if phase == "retrying":
+        w.driver.script_write("sim-a", Outcome.THROTTLED)
+    outstanding = []
+    w.executor.add_submit_listener(lambda c: outstanding.append(c))
+    finished = []
+    w.executor.add_listener(finished.append)
+
+    async def main():
+        task = asyncio.create_task(w.executor.submit(cmd()))
+        await asyncio.sleep(1.0)  # acked (0.2 s); now waiting out readback_delay_s / the retry backoff
+        assert w.executor.in_flight("sim-a")
+        await w.executor.close()
+        return await asyncio.wait_for(task, 5.0)
+
+    result = run_virtual(main)
+    assert result.status is CommandStatus.FAILED and "shut down" in result.error
+    events = w.telemetry.recent(kind="command")
+    assert len(events) == 1 and events[0]["status"] == "failed"
+    assert finished == [result] and len(outstanding) == 1  # the tracker hears about the end
+    assert w.executor.queue_depth() == 0
+    assert len(w.driver.writes) == 1
+
+
+def test_rate_history_is_pruned_without_anyone_reading_the_budget():
+    """EXE-2: the per-device and per-account send-time deques stay bounded when /ops never polls budget()."""
+    w = World(readback_delay_s=0.0, readback_interval_s=0.2)
+
+    async def main():
+        for i in range(150):  # ~150 s of writes at the 1 write/s budget, nobody polls budget()
+            await w.executor.submit(cmd(pct=1 + i % 100, verify=False))
+
+    run_virtual(main)
+    slot = w.executor._slots["sim-a"]
+    assert len(w.driver.writes) == 150
+    assert len(slot.sent) <= 61
+    assert len(w.executor._account_sent["acct"]) <= 61
+
+
+class FreshTokenDriver(FakeDriver):
+    """A FakeDriver with the optional `ensure_fresh_token` hook the AferoDriver implements."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.fresh_calls: list[tuple[str, float]] = []
+        self.fresh_outcome = Outcome.OK
+
+    async def ensure_fresh_token(self, account: str, min_left_s: float = 15.0, *, purpose=None) -> Outcome:
+        self.fresh_calls.append((account, self.clock.monotonic()))
+        await self.clock.sleep(0.3)  # one cheap GET that forces a refresh
+        return self.fresh_outcome
+
+
+def test_burst_makes_sure_each_accounts_token_is_fresh_before_any_put():
+    """AF-4: a mode-change burst asks the driver for a token with >= 15 s left, once per account, first."""
+    w = World()
+    w.driver = FreshTokenDriver(w.clock, accounts={"sim-a": "a1", "sim-b": "a1", "sim-c": "a2"})
+    w.executor = CommandExecutor(
+        w.driver, locks=w.locks, telemetry=w.telemetry, clock=w.clock, policy=w.policy
+    )
+
+    async def main():
+        return await w.executor.burst([cmd("sim-a"), cmd("sim-b"), cmd("sim-c")])
+
+    results = run_virtual(main)
+    assert all(r.ok for r in results)
+    assert sorted(a for a, _ in w.driver.fresh_calls) == ["a1", "a2"]
+    last_check = max(t for _, t in w.driver.fresh_calls)
+    assert min(wr.sent_mono for wr in w.driver.writes) >= last_check + 0.3 - EPS
+    events = w.telemetry.recent(kind="token")
+    assert sorted(e["account"] for e in events) == ["a1", "a2"]
+    assert all(e["outcome"] == "ok" for e in events)
+
+
+def test_burst_still_sends_when_the_token_check_fails_and_drivers_without_the_hook_work():
+    w = World()
+    w.driver = FreshTokenDriver(w.clock)
+    w.driver.fresh_outcome = Outcome.AUTH
+    w.executor = CommandExecutor(
+        w.driver, locks=w.locks, telemetry=w.telemetry, clock=w.clock, policy=w.policy
+    )
+    results = run_virtual(lambda: w.executor.burst([cmd("sim-a"), cmd("sim-b")]))
+    assert all(r.ok for r in results)  # the PUTs themselves report what really happened
+    assert [e["outcome"] for e in w.telemetry.recent(kind="token")] == ["auth"]
+
+    plain = World()  # FakeDriver has no hook: nothing is called, nothing recorded
+    results = run_virtual(lambda: plain.executor.burst([cmd("sim-a"), cmd("sim-b")]))
+    assert all(r.ok for r in results) and plain.telemetry.recent(kind="token") == []
+
+
+def test_withdraw_stops_a_retrying_command_and_drops_the_pending_one():
+    """MOD-2: Hold withdraws the page's commands: a throttled command stops retrying, a pending one is never sent."""
+    w = World(backoff_s=[2.0, 2.0], max_attempts=3)
+    w.driver.script_write("sim-a", Outcome.THROTTLED, Outcome.OK)
+
+    async def main():
+        lease = w.locks.acquire("sim-a", "module page · ops")
+        first = asyncio.create_task(w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token=lease.token)))
+        await asyncio.sleep(0.5)  # throttled at 0.2 s; waiting 2 s to retry
+        withdrawn = w.executor.withdraw("sim-a", lease_token=lease.token, reason="Hold is on.")
+        return withdrawn, await first
+
+    withdrawn, first = run_virtual(main)
+    assert withdrawn == 1
+    assert first.status is CommandStatus.SUPERSEDED and first.error == "Hold is on."
+    assert len(w.driver.writes) == 1  # the retry was never sent
+
+
+def test_withdraw_leaves_other_leases_and_verification_alone():
+    w = World(readback_delay_s=1.0)
+
+    async def main():
+        lease = w.locks.acquire("sim-a", "module page · ops")
+        task = asyncio.create_task(w.executor.submit(cmd(purpose=Purpose.BENCH, lease_token=lease.token)))
+        await asyncio.sleep(0.5)  # acked; verifying (the write already went out, readback is read-only)
+        assert w.executor.withdraw("sim-a", lease_token="someone-else", reason="x") == 0
+        w.executor.withdraw("sim-a", lease_token=lease.token, reason="Hold is on.")
+        return await task
+
+    result = run_virtual(main)
+    assert result.status is CommandStatus.APPLIED
+    assert len(w.driver.reads) == 1 and w.driver.reads[0].sent_mono == pytest.approx(0.2 + 1.0)

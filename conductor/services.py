@@ -30,7 +30,7 @@ from conductor.config import (
 from conductor.drivers.base import DeviceDriver
 from conductor.executor import CommandExecutor
 from conductor.gate import GateSettings, LiveGate, Purpose
-from conductor.locks import DeviceLockManager
+from conductor.locks import DeviceLockManager, LockEvent
 from conductor.roles import RoleStore
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
@@ -145,6 +145,12 @@ class Services:
             await self.afero.start()  # schedules background connects; never waits on Afero
 
     async def close(self) -> None:
+        # Stop page sessions and bench runs first so their locks are released and nothing is left pending.
+        for key in ("module_manager", "bench"):
+            owner = self.extras.get(key)
+            closer = getattr(owner, "close_all", None) or getattr(owner, "close", None)
+            if closer is not None:
+                await closer()
         for executor in self.executors.values():
             await executor.close()
         if hasattr(self.accounts, "close"):
@@ -152,6 +158,19 @@ class Services:
         for driver in (self.afero, self.sim):
             if driver is not None:
                 await driver.close()
+
+
+def _record_lock(telemetry: Telemetry, event: LockEvent) -> None:
+    fields: dict[str, Any] = {
+        "device_id": event.device_id,
+        "action": event.action,
+        "owner": event.lease.owner,
+    }
+    if event.previous is not None:
+        fields["previous_owner"] = event.previous.owner
+    if event.expired_at is not None:
+        fields["expired_at"] = event.expired_at
+    telemetry.record("lock", **fields)
 
 
 def build_services(
@@ -231,14 +250,10 @@ def build_services(
         services.lockable,
         clock,
         idle_timeout_s=settings.module_page.lock_idle_timeout_s,
-        on_change=lambda address, lease: telemetry.record(
-            "lock",
-            device_id=address,
-            action="acquire" if lease else "release",
-            owner=lease.owner if lease else None,
-        ),
+        on_change=lambda event: _record_lock(telemetry, event),
     )
     services.hub = WsHub(tickets, hello=services.version)
+    roles.on_session_revoked(services.hub.close_session)  # a revoked phone's open sockets close at once
     for driver in (sim, afero):
         if driver is None:
             continue

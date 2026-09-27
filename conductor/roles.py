@@ -24,7 +24,7 @@ import logging
 import re
 import secrets
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
@@ -158,6 +158,11 @@ class RoleStore:
         self._lock = threading.Lock()
         self._enrollments: dict[str, _Record] = self._load("enrollments.json")
         self._sessions: dict[str, _Record] = self._load("sessions.json")
+        self._revoke_listeners: list[Callable[[str], None]] = []
+
+    def on_session_revoked(self, fn: Callable[[str], None]) -> None:
+        """Call `fn(fingerprint)` after a session is revoked (the WebSocket hub closes that session's sockets)."""
+        self._revoke_listeners.append(fn)
 
     # ---- enrollment -----------------------------------------------------------------------------------------
     def create_enrollment(
@@ -243,6 +248,11 @@ class RoleStore:
             record = self._sessions.pop(digest)
             self._save("sessions.json", self._sessions)
         log.info("session %s (%s %r) revoked", record.fingerprint, record.role.value, record.name)
+        for fn in list(self._revoke_listeners):
+            try:
+                fn(record.fingerprint)
+            except Exception:
+                log.exception("session revoke listener failed")
         return True
 
     def list_sessions(self) -> list[dict]:
