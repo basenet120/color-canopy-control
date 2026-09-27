@@ -239,6 +239,13 @@ class RoleStore:
             return None
         return self._principal(record)
 
+    def session_active(self, fingerprint: str) -> bool:
+        """Is the enrolled session with this fingerprint still valid (not revoked, not expired)? The WebSocket hub
+        asks before a ticket issued to it opens a socket (review V5)."""
+        now = self.clock.now()
+        with self._lock:
+            return any(r.fingerprint == fingerprint and r.expires_at > now for r in self._sessions.values())
+
     def revoke_session(self, fingerprint_or_id: str) -> bool:
         """Revoke by the fingerprint shown on /ops (or the raw session id). Returns False when not found."""
         with self._lock:

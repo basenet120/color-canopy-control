@@ -87,7 +87,13 @@ async function send(body, label) {
     const report = await api(`/api/vignette/${encodeURIComponent(ROOM)}/action`, { method: "POST", body });
     mergeDevices(report.devices);
     const failed = report.results.filter((r) => r.status !== "applied" && r.status !== "superseded");
-    if (failed.length) toast(failed[0].error || `${label} didn't go through. Check the card for why.`, "bad");
+    if (report.skipped && report.skipped.length) {
+      // A group action skips a lamp that can't take it (e.g. unreadable) and still changes the others.
+      const names = report.skipped.map((s) => deviceLabel(s.device_id)).join(", ");
+      toast(`${label}: ${names} skipped — ${report.skipped[0].reason}`, "bad");
+    } else if (failed.length) {
+      toast(failed[0].error || `${label} didn't go through. Check the card for why.`, "bad");
+    }
     return report;
   } catch (err) {
     toast(err.message, "bad");

@@ -24,6 +24,8 @@ accounts and clear the box.
 - [ ] **Full data backup** (registry overlay, calibration, slot hashes, telemetry; the sign-ins inside are
       encrypted and stop working in step 3): `sudo canopy-backup --to /media/<usb stick>`. The stick goes to Alon.
 - [ ] Bench results worth keeping: `/ops/bench/` → **Copy anonymized JSON** for each.
+- [ ] `/ops` → Pages → **Download ops edits** (the overlay plus a diff against `config/devices.yaml` without real
+      ids). It goes to Alon with the stick; the diff part is what gets committed to git.
 
 ## 3. Sign the box out (10 min)
 

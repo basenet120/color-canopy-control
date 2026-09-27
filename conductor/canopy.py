@@ -48,6 +48,10 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   Guest requests, the reconciler and idle hold wait while it runs.
 - **Throttling.** Only a command that still ended THROTTLED (429/403 — not 503/504, an outage) after the executor's
   retries counts toward the hysteresis throttle downgrade (see reconciler.py) — a 429 that a retry cleared never does.
+- **Guest-input pause survives a restart (07 §8, review F3).** Pausing or resuming writes
+  `<data>/state/guest_input.json` atomically; the engine reads it when it is built, so a watchdog restart, a reboot,
+  a release or break-glass hand-back never quietly turns guest input back on. A pause restored at start is alerted
+  on /ops. A file that can't be read counts as paused (staff resume it on /ops), never as resumed.
 - **Modules left out.** A module the plan skipped (`ModePlan.skipped`, e.g. its profile hasn't been read) is shown as
   needing attention; the others are driven.
 
@@ -59,10 +63,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from conductor import rows as R
@@ -77,6 +84,7 @@ from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
+from conductor.tokens import atomic_write
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +109,8 @@ COMMISSION_ROUNDS = (
 PUBLISH_MIN_INTERVAL_S = 0.25  # state pushes are coalesced to at most 4 per second
 EARLY_REASSERT_LIMIT = 3  # per module per change
 HEADER_READ_ATTEMPTS = 3  # the readback a slot write copies its header from
+# The guest-input pause, kept across restarts, under EngineDeps.state_dir (<data>/state).
+GUEST_INPUT_FILE = "guest_input.json"
 
 Compiler = Callable[[str, Tier], ModePlan]
 Ladder = Callable[[str], list[Tier]]
@@ -142,6 +152,8 @@ class EngineDeps:
     simulated: Callable[[], bool] | None = None  # lead: lambda: services.engine_driver.simulated
     # Preferred over record_slot_hash when set: saves hash + origin + effect fields in one overlay write.
     record_slot: SlotRecorder | None = None
+    # <data>/state: where the guest-input pause is kept across restarts (None = memory only: tests, the bare soak)
+    state_dir: Path | None = None
 
 
 @dataclass
@@ -173,6 +185,7 @@ class CanopyEngine:
         self._unresolved: dict[str, str] = {}  # device id → why it has no address
         self._locked: set[str] = set()  # addresses locked at the last look
         self._paused = False
+        self._paused_since: float | None = None  # wall time the current pause started (kept across restarts)
         self._outage: dict | None = None
         self._commissioning = False
         self._stopped = False
@@ -206,6 +219,69 @@ class CanopyEngine:
         self.recovery_listeners: list[Callable[[], Any]] = []  # called when an outage ends (ShowWiring)
         self.stats: dict[str, Any] = {"outages": [], "tier_changes": [], "early_reasserts": 0}
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
+        self._restore_pause()
+
+    # ---- guest-input pause, kept across restarts ------------------------------------------------------------------
+    def _pause_path(self) -> Path | None:
+        state_dir = self.deps.state_dir
+        return Path(state_dir) / GUEST_INPUT_FILE if state_dir is not None else None
+
+    def _restore_pause(self) -> None:
+        """Read the saved pause (if any). Unreadable → paused: a restart must never quietly let guests back in."""
+        path = self._pause_path()
+        if path is None or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(saved, dict) or not isinstance(saved.get("paused"), bool):
+                raise TypeError("no paused flag")
+        except (OSError, ValueError, TypeError) as e:
+            log.warning("guest-input pause file %s is unreadable (%s): keeping guest input paused", path, e)
+            self._paused, self._paused_since = True, self.clock.now()
+            self.telemetry.record(
+                "alert",
+                level="warn",
+                message="Guest input is paused: the saved pause setting couldn't be read after the restart, so "
+                "the Conductor kept guests out to be safe. Press Resume guest input on /ops when ready.",
+                source="restart",
+            )
+            return
+        if not saved["paused"]:
+            return
+        since = saved.get("since")
+        self._paused = True
+        self._paused_since = float(since) if isinstance(since, int | float) else None
+        when = f" since {_clock_time(self._paused_since)}" if self._paused_since else ""
+        who = f" by {saved['source']}" if isinstance(saved.get("source"), str) and saved["source"] else ""
+        self.telemetry.record(
+            "alert",
+            level="warn",
+            message=f"Guest input is still paused after the restart (paused{who}{when}). Press Resume guest input on "
+            "/ops once the checks are done.",
+            source="restart",
+        )
+
+    def _save_pause(self, source: str) -> None:
+        path = self._pause_path()
+        if path is None:
+            return
+        body = {
+            "paused": self._paused,
+            "since": self._paused_since,
+            "source": source,
+            "saved_at": self.clock.now(),
+        }
+        try:
+            atomic_write(path, json.dumps(body).encode(), mode=0o600)
+        except OSError as e:
+            log.exception("couldn't save the guest-input pause to %s", path)
+            self.telemetry.record(
+                "alert",
+                level="warn",
+                message=f"Guest input is {'paused' if self._paused else 'on'}, but that couldn't be saved ({e}): a "
+                "restart would forget it. Check the data volume.",
+                source=source,
+            )
 
     # ---- lifecycle -------------------------------------------------------------------------------------------
     async def start(self, *, apply_initial: bool = True) -> None:
@@ -316,6 +392,8 @@ class CanopyEngine:
     def pause_guest_input(self, paused: bool, *, source: str) -> CanopyState:
         if paused != self._paused:
             self._paused = paused
+            self._paused_since = self.clock.now() if paused else None
+            self._save_pause(source)
             self.telemetry.record(
                 "alert",
                 level="info",
@@ -463,6 +541,7 @@ class CanopyEngine:
             feature=plan.feature if plan else None,
             phase=phase,
             guest_input=not self._paused,
+            paused_since=self._paused_since if self._paused else None,
             cooldown_until=(self.clock.now() + remaining) if remaining > 0 else None,
             changed_at=self._changed_at,
             modules=modules,
@@ -1334,6 +1413,16 @@ class CanopyEngine:
             hub.publish(TOPIC, data)
 
 
+def _clock_time(t: float | None) -> str:
+    """A wall time as the box's local HH:MM (alerts staff read at the venue)."""
+    if t is None:
+        return "?"
+    try:
+        return datetime.fromtimestamp(t, UTC).astimezone().strftime("%H:%M")  # the box's local time
+    except (OverflowError, OSError, ValueError):
+        return "?"
+
+
 def engine_from_services(
     services: Any,
     *,
@@ -1372,5 +1461,6 @@ def engine_from_services(
             record_slot_hash=record_slot_hash,
             simulated=lambda: bool(services.engine_driver.simulated),
             record_slot=record_slot,
+            state_dir=Path(services.data) / "state" if getattr(services, "data", None) else None,
         )
     )

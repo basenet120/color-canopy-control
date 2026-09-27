@@ -1331,6 +1331,14 @@ async function main() {
     return;
   }
   const wanted = new URLSearchParams(location.search).get("device");
+  if (wanted && !devices.some((d) => d.id === wanted)) {
+    // Never fall back to opening (and locking) some other device. A vignette device isn't listed here at all: it
+    // has its room page, and opening it here would take it away from the room's tablet.
+    showPicker(devices, "Pick a module.");
+    banner(`${wanted} can't be opened on this page (it isn't a strand you have access to). Vignette devices are ` +
+      "controlled from their room page.");
+    return;
+  }
   const pick = devices.find((d) => d.id === wanted) || devices.find((d) => d.id === "bench-kit") || devices[0];
   if (!pick) {
     showPicker(devices);

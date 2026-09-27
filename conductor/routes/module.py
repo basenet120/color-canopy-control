@@ -214,6 +214,8 @@ async def device_state(request: Request, device_id: str, _who: Access, refresh: 
     if session is None:
         try:
             return JSONResponse({"ok": True, "state": manager.closed_view(device_id)}, headers=NO_STORE)
+        except ModuleError as e:  # unknown id (404), or a vignette device: its room page, not this one (409)
+            raise _fail(e) from None
         except KeyError:
             raise HTTPException(status_code=404, detail=f"There's no device called {device_id}.") from None
         except LookupError as e:

@@ -15,6 +15,10 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `GET  /api/ops/checklist[?client_ms=]`  the 7 am checklist, each item pass / warn / fail with a plain fix
 - `POST /api/ops/checklist/test-mode-change`  `{mode?, restore?}` one ops mode change, timed to READY (10 s)
 - `GET  /api/ops/logs[?since=&limit=]`  the log tail (redacted; see conductor/logring.py)
+- `GET  /api/ops/overlay[?part=all|yaml|diff]`  the ops overlay (07 §8), as an attachment: the overlay's YAML (to
+  restore under <data>/overrides/registry.yaml) plus a unified diff folding it into config/devices.yaml, to commit
+  back to git. The YAML keeps real metadevice ids (ops only; tester, kiosk and vignette never reach it); the diff
+  leaves them out, because devices.yaml never holds real ids.
 
 Every POST must be JSON from this site (same rule as the module page, D17): a cross-site form can't pause the
 canopy with the ops password cached in someone's browser. Every control publishes `{"kind": "control", ...}` on
@@ -32,18 +36,21 @@ prove what Hubspace stores, not what the pucks show (07 §5). The payload says s
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import logging
 import shutil
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from conductor.config import NOT_FOR_GIT, overlay_diff, overlay_text
 from conductor.drivers.base import StateRow
 from conductor.engine_api import PlanError
 from conductor.gate import Purpose
@@ -325,7 +332,8 @@ async def pause(request: Request, body: PauseBody, _ops: Ops) -> JSONResponse:
     )
     _publish(services, "pause" if body.paused else "resume")
     message = (
-        "Guest input paused: the kiosk shows the canopy is resting and can't change it."
+        "Guest input paused: the kiosk shows the canopy is resting and can't change it. It stays paused across a "
+        "restart until someone presses Resume guest input."
         if body.paused
         else "Guest input resumed: guests can choose a mood again."
     )
@@ -1030,7 +1038,7 @@ def _check_guest_input(services: Any, state: dict | None) -> dict:
             "guest_input",
             title,
             "warn",
-            "Guest input is paused: the kiosk shows the canopy is resting.",
+            "Guest input is paused: the kiosk shows the canopy is resting. (A pause is kept across restarts.)",
             "Press Resume guest input before doors open.",
         )
     detail = "On: guests can choose a mood."
@@ -1225,4 +1233,60 @@ async def logs(request: Request, _ops: Ops, since: int | None = None, limit: int
     return JSONResponse(
         {"records": records, "last_seq": ring.last_seq, "capacity": ring.capacity},
         headers=NO_STORE,
+    )
+
+
+# ---- the ops overlay, to commit back to git (07 §8) --------------------------------------------------------------
+@router.get("/api/ops/overlay")
+async def overlay_download(request: Request, _ops: Ops, part: str = "all") -> PlainTextResponse:
+    """The overlay's YAML and a unified diff against config/devices.yaml, as a download (ops only)."""
+    if part not in ("all", "yaml", "diff"):
+        raise HTTPException(status_code=422, detail="part is all, yaml or diff.")
+    services = services_of(request)
+    registry = services.registry
+    stamp = datetime.fromtimestamp(services.clock.now(), UTC).strftime("%Y%m%dT%H%M%SZ")
+    overlay = overlay_text(registry) if registry.overlay.devices else "devices: {}\n"
+    folded = overlay_diff(registry, Path(services.config_dir))
+    diff = "".join(
+        difflib.unified_diff(
+            folded.before.splitlines(keepends=True),
+            folded.after.splitlines(keepends=True),
+            "a/config/devices.yaml",
+            "b/config/devices.yaml",
+        )
+    )
+    if part == "yaml":
+        body, name, media = overlay, f"registry-overlay-{stamp}.yaml", "application/x-yaml"
+    elif part == "diff":
+        body, name, media = diff, f"devices-yaml-{stamp}.diff", "text/x-diff"
+    else:
+        history = registry.overlay_path.parent / "history" if registry.overlay_path is not None else None
+        versions = (
+            len(list(history.glob("registry-*.yaml"))) if history is not None and history.is_dir() else 0
+        )
+        where = str(registry.overlay_path) if registry.overlay_path is not None else "(no data directory)"
+        head = [
+            f"Color Canopy ops overlay, downloaded {stamp} (07 §8).",
+            f"Overlay file: {where} ({versions} earlier version(s) kept under overrides/history/).",
+            f"Devices edited: {', '.join(sorted(registry.overlay.devices)) or 'none'}.",
+            "",
+            "1. The overlay as it is on this box (restore it under <data>/overrides/registry.yaml). It holds real",
+            "   metadevice ids: keep it off git and out of chat.",
+            "",
+            *(f"    {line}" for line in overlay.splitlines()),
+            "",
+            "2. The same edits folded into config/devices.yaml, to commit back to git (`git apply` this file).",
+            f"   Left out, because devices.yaml never holds real ids: {', '.join(NOT_FOR_GIT)}"
+            + (f" (on {', '.join(folded.left_out)})." if folded.left_out else " (none set)."),
+        ]
+        if folded.problem:
+            head.append(f"   No diff: {folded.problem}. Copy the edits from part 1 by hand.")
+        elif not diff:
+            head.append("   Nothing to commit: every edit is a real id, or there are no edits.")
+        body = "\n".join(head) + "\n\n" + diff
+        name, media = f"canopy-overlay-{stamp}.patch", "text/x-diff"
+    return PlainTextResponse(
+        body,
+        media_type=media,
+        headers={**NO_STORE, "Content-Disposition": f'attachment; filename="{name}"'},
     )

@@ -17,6 +17,9 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     assert "config/sim/acceptance.yaml" in text and "ShowWiring" in meta["compiler"]
     assert results["commission"]["ok"] and len(results["outages"]) == 2  # the 500 window and the outage
     assert results["max_queue"] <= 18
+    # out-of-band changes (the Hubspace app) found by the rolling true-up and undone within 10 s (review gap)
+    assert results["drift_heals"] and max(results["drift_heals"]) <= 10 and results["drift_timeouts"] == 0
+    assert results["read_load"]["true_up_interval_s"] == 5 and "GET/s on the canopy account" in text
 
 
 def test_the_acceptance_conditions_are_the_pinned_ones():

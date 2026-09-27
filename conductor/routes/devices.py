@@ -254,6 +254,14 @@ def runtime_problems(services: Any) -> list[str]:
     return list(dict.fromkeys(p for p in problems if p))
 
 
+def device_page(entry: Any) -> str:
+    """Where /ops sends staff for one device (D34): a vignette device's room page, never the module page — opening
+    that would take the device's exclusive lock away from the room's tablet (review V1). Strands get the module page."""
+    if entry.role == "vignette":
+        return f"/vignette/{entry.vignette}/" if entry.vignette else "/ops/"
+    return f"/ops/module/?device={entry.id}"
+
+
 def _attention(services: Any, accounts: dict) -> list[dict]:
     """Plain-English "Needs attention" items for the /ops landing page, each with a link when there's a fix."""
     items: list[dict] = []
@@ -299,9 +307,9 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
         except LookupError:
             address = None
         name = entry.label or entry.id
+        link = device_page(entry)
         if address:
             snap = services.tracker.snapshot(address)
-            link = f"/ops/module/?device={entry.id}"
             if snap["status"] == "needs_attention":
                 add(f"{name}: {snap['reason'] or 'needs attention'}", link)
             else:  # flagged problems count even before the device has a look
@@ -309,7 +317,7 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
                     add(f"{name}: {problem}", link)
         caps = (caps_cache.get(entry.id) or {}).get("caps")
         if caps is not None and (problem := caps.head_count_problem(entry.expected_heads)):
-            add(f"{name}: {problem}", f"/ops/module/?device={entry.id}")
+            add(f"{name}: {problem}", link)
     for alert in AlertBoard.of(services).active():
         link = None
         if alert.device_id:
@@ -320,7 +328,7 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
                 except KeyError:
                     entry = None
             if entry is not None:
-                link = f"/ops/module/?device={entry.id}"
+                link = device_page(entry)
         message = alert.message + (f" ({alert.count} times)" if alert.count > 1 else "")
         if all(i["message"] != message for i in items):
             items.append(

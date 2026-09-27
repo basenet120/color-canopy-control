@@ -141,3 +141,10 @@ Tell Alon at once if Gate C fails. Then, per module:
   Conductor-written frames for a slot later, remove its entries under `slot_hashes` / `slot_origin` / `slot_effects`
   for that module in the overlay (`/data/overrides/registry.yaml` inside the container, volume `canopy-data`),
   restart, then press Commission slots.
+
+---
+
+**At the end of each install day: keep the edits.** `/ops` → Pages → **Download ops edits** saves one file: the overlay
+as it is on the box (calibration, slot hashes, registered ids, spare swaps — it holds real device ids, so keep it off
+git and out of chat) and a diff that folds the same edits into `config/devices.yaml` *without* the ids. Send the file
+to Alon; the diff part is what gets committed (`git apply`), so a rebuilt box starts from the calibrated registry.

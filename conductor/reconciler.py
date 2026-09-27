@@ -7,8 +7,15 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
   last command FAILED / MISMATCHed without a readback). Motion plans (`plan.motion`) re-trigger every module as one
   burst or none — and only when no module has a command in flight, so it really is one burst. A slot *object* that
   differs is drift, not something a re-send fixes (see Slots).
-- **True-up** every `true_up_interval_s`: read each non-locked module's state (REST, `tracker.note_readback`), check
-  its slot hashes, then re-assert what differs.
+- **True-up, rolling** (review gap: "any wrong module self-heals within 10 s", including a change made outside
+  the Conductor — the Hubspace app, a controller that lost its look, a cloud-side revert). Each non-locked module is
+  read (REST, `tracker.note_readback`) once every `true_up_interval_s`, the reads spread evenly across the modules
+  (9 modules at 5 s → one GET every ~0.56 s, 1.8 GET/s on the canopy account; at most `TRUE_UP_CONCURRENCY` in
+  flight). Reads never count against the write budget. A read that shows the module differs re-sends that module at
+  once (a motion plan: all nine as one burst, via the re-assert); its slot hashes are checked too. A read that
+  failed (a 429, a timeout) is retried once `READ_RETRY_S` later, then waits its turn. A module with a command in
+  flight is skipped (its own verification readback answers). `true_up()` still reads every module at once (the
+  driver's recovery watchdog asks for it).
 - **Hysteresis (07 §6).** Retry first. A module "wrong" (tracker NEEDS_ATTENTION for a reason a tier change could
   fix — not offline, not a dead sign-in, not a live-gate refusal) longer than `downgrade_after_wrong_s` downgrades
   the current mode one rung. So do `downgrade_throttles` **commands that still ended throttled after the executor's
@@ -55,6 +62,10 @@ log = logging.getLogger(__name__)
 
 TICK_S = 0.5
 TRUE_UP_CONCURRENCY = 3  # readbacks in flight at once during a true-up (the executor's burst keeps the rest)
+READ_RETRY_S = 1.0  # a failed rolling true-up read is tried again this soon, once
+# A rolling read checks a module's slot patterns when any of them changed since the last check, and at least this
+# often otherwise (the stale check follows calibration/design edits; hashing three framebuffers every 5 s is waste).
+SLOT_CHECK_INTERVAL_S = 60.0
 
 
 class Reconciler:
@@ -74,9 +85,18 @@ class Reconciler:
         self._no_downgrade_alerted: set[tuple[str, str]] = set()
         self._drift_alerted: dict[tuple[str, str], str] = {}
         self._rewrites: set[asyncio.Task] = set()
+        # rolling true-up: device id → monotonic time its next read is due; reads in flight; failed reads in a row
+        self._read_due: dict[str, float] = {}
+        self._reading: set[str] = set()
+        self._read_failures: dict[str, int] = {}
+        self._reads: set[asyncio.Task] = set()
+        # device id → (when its slots were last checked, {slot: readback value} then)
+        self._slots_seen: dict[str, tuple[float, dict]] = {}
         self.stats: dict[str, int] = {
             "reasserts": 0,
             "true_ups": 0,
+            "true_up_reads": 0,  # rolling true-up GETs (the read load; never counted against the write budget)
+            "drift_resends": 0,  # modules re-sent because a true-up read showed they'd changed
             "probes": 0,
             "slot_rewrites": 0,
             "drift": 0,
@@ -91,12 +111,14 @@ class Reconciler:
         if self._task is not None and not self._task.done():
             return
         now = self.clock.monotonic()
-        self._next_true_up = now + self.settings.true_up_interval_s
+        # A full pass only on request (on_driver_recovery); the rolling reads do the rest.
+        self._next_true_up = None
+        self._read_due.clear()
         self._clean_since = now
         self._task = asyncio.get_running_loop().create_task(self._run(), name="canopy:reconciler")
 
     async def stop(self) -> None:
-        tasks = [t for t in (self._task, *self._rewrites) if t is not None]
+        tasks = [t for t in (self._task, *self._rewrites, *self._reads) if t is not None]
         for task in tasks:
             task.cancel()
         for task in tasks:
@@ -144,7 +166,9 @@ class Reconciler:
         self._throttle_failures.clear()
         self._clean_since = now
         self._next_probe = None
-        self._next_true_up = now + self.settings.true_up_interval_s
+        self._next_true_up = None
+        self._read_due.clear()  # the look goes to every module now; the rolling reads start over, staggered
+        self._read_failures.clear()
 
     def on_driver_recovery(self) -> None:
         """The driver's own watchdog saw Hubspace answer again: probe now (or true-up now when not resting)."""
@@ -181,6 +205,8 @@ class Reconciler:
             await self.reassert()
         if self._next_true_up is not None and now >= self._next_true_up:
             await self.true_up()
+        else:
+            self._rolling_reads(now)
         await self._idle_hold(now)
 
     # ---- re-assert --------------------------------------------------------------------------------------------
@@ -208,6 +234,15 @@ class Reconciler:
         self.stats["reasserts"] += len(sent)
         return sent
 
+    def _readback_differs(self, device_id: str, target: Any) -> bool:
+        """Does the latest readback differ from the look in a row a re-send can fix (not a slot object: drift)?"""
+        engine = self.engine
+        if not engine.tracker.mismatched([target.address]):
+            return False
+        snap = engine.tracker.snapshot(target.address)
+        reported = [StateRow.from_wire(r) for r in snap["reported"] or []]
+        return _rows_differ(list(engine.current_plan().modules[device_id].rows), reported)
+
     def _differs(self, device_id: str, target: Any) -> bool:
         engine = self.engine
         plan = engine.current_plan()
@@ -219,9 +254,83 @@ class Reconciler:
         return engine.last_status.get(address) in (CommandStatus.FAILED, CommandStatus.MISMATCH)
 
     # ---- true-up ----------------------------------------------------------------------------------------------
-    async def true_up(self) -> None:
+    def _rolling_reads(self, now: float) -> None:
+        """Start the true-up reads that are due: each module once per `true_up_interval_s`, staggered."""
+        interval = self.settings.true_up_interval_s
+        active = self.engine.active_modules()
+        ids = [device_id for device_id, _ in active]
+        for gone in [d for d in self._read_due if d not in ids]:
+            del self._read_due[gone]
+            self._read_failures.pop(gone, None)
+        for index, device_id in enumerate(ids):
+            if device_id not in self._read_due:  # new (start, a new plan's module, a released lock): stagger
+                self._read_due[device_id] = now + interval * (index + 1) / len(ids)
+        for device_id, target in active:
+            if len(self._reading) >= TRUE_UP_CONCURRENCY:
+                return
+            due = self._read_due[device_id]
+            if due > now or device_id in self._reading:
+                continue
+            following = due + interval
+            self._read_due[device_id] = following if following > now else now + interval
+            if target.executor.in_flight(target.address):
+                continue  # its own verification readback answers
+            self._reading.add(device_id)
+            task = asyncio.get_running_loop().create_task(
+                self._read_one(device_id, target), name=f"canopy:true-up:{device_id}"
+            )
+            self._reads.add(task)
+            task.add_done_callback(self._reads.discard)
+
+    async def _read_one(self, device_id: str, target: Any) -> None:
         engine = self.engine
-        self._next_true_up = self.clock.monotonic() + self.settings.true_up_interval_s
+        try:
+            self.stats["true_up_reads"] += 1
+            rr = await target.driver.read_state(target.address, purpose=Purpose.ENGINE)
+            engine.tracker.note_readback(target.address, rr)
+            if not rr.ok:
+                failures = self._read_failures[device_id] = self._read_failures.get(device_id, 0) + 1
+                if failures == 1 and device_id in self._read_due:  # one quick retry, then its normal turn
+                    self._read_due[device_id] = min(
+                        self._read_due[device_id], self.clock.monotonic() + READ_RETRY_S
+                    )
+                return
+            self._read_failures.pop(device_id, None)
+            slots = {r.function_instance: r.value for r in rr.rows if r.function_class == R.FRAME_CLASS}
+            seen = self._slots_seen.get(device_id)
+            now = self.clock.monotonic()
+            if seen is None or seen[1] != slots or now - seen[0] >= SLOT_CHECK_INTERVAL_S:
+                self._slots_seen[device_id] = (now, slots)
+                self.check_slots(device_id, target, rr.rows)
+            plan = engine.current_plan()
+            if (
+                plan is None
+                or device_id not in plan.modules
+                or engine.outage is not None
+                or engine.commissioning
+                or engine.stopped
+                or engine.locks.holder(target.address) is not None
+                or target.executor.in_flight(target.address)
+            ):
+                return
+            if not self._readback_differs(device_id, target):
+                # This fresh readback shows the look: an older command's FAILED/MISMATCH no longer means "re-send".
+                if engine.last_status.get(target.address) in (CommandStatus.FAILED, CommandStatus.MISMATCH):
+                    engine.last_status.pop(target.address, None)
+                return
+            self.stats["drift_resends"] += 1
+            if plan.motion:
+                self.schedule_reassert(0.0)  # all nine as one burst, from the loop
+                return
+            sent = engine.send([device_id], source="reconciler", label=f"re-assert (true-up): {plan.mode_id}")
+            self.stats["reasserts"] += len(sent)
+        finally:
+            self._reading.discard(device_id)
+
+    async def true_up(self) -> None:
+        """Read every module now (the driver's recovery watchdog asks for it), then re-assert what differs."""
+        engine = self.engine
+        self._next_true_up = None
         self.stats["true_ups"] += 1
         sem = asyncio.Semaphore(TRUE_UP_CONCURRENCY)
 

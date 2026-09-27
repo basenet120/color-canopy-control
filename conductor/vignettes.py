@@ -22,7 +22,13 @@ Rules being implemented:
 - **Honest status**: the page shows the state tracker's Ready / Updating / Needs attention per device. When the page
   first reads a device, the look it is already showing becomes the desired look (so Ready means the device shows
   what the page shows), unless that look can't be expressed in this page's rows — then the device stays "not
-  checked" until someone changes it.
+  checked" until someone changes it. A device re-registered to a new address (a swapped bulb) is read again before
+  anything is shown or sent: its old address's status and look never stand in for the new one (review V2).
+- **Group actions skip what can't take them** (review V3): the "All lamps" card sends to every lamp that can take the
+  action and lists the rest as skipped with the reason (like a scene); it refuses only when no lamp can.
+- **Tablets see only look rows** (review V7, 07 §4–§5): the page's `desired` / `reported` carry only the rows that
+  define a look (`LOOK_CLASSES`) — never telemetry (wifi-ssid, MAC addresses, geo-coordinates, …), slot pattern
+  objects or driver addresses.
 
 Seams: scenes are data (`config/vignettes.yaml`); the synthesized simulator profiles are UNVERIFIED until real dumps.
 """
@@ -77,6 +83,22 @@ LOCK_SETTLED = {"lock": "locked", "unlock": "unlocked"}  # what the lock reports
 MAIN_OUTLET = "power"  # the outlet key for a plug whose power function has no instance
 DEFAULT_RGB = (249, 99, 2)  # Home Depot orange
 DEFAULT_CCT = 2700
+# The rows a vignette look is made of — all a tablet (and the vignette:<room> topic) is ever shown (review V7).
+LOOK_CLASSES = frozenset(
+    {
+        "power",
+        "color-mode",
+        "color-temperature",
+        "color-rgb",
+        "brightness",
+        "color-sequence",
+        "color-individual",
+        "speed",
+        "fan-speed",
+        "lock-control",
+        "toggle",
+    }
+)
 KIND_NOUN = {
     "bulb": "Lamps",
     "string": "String lights",
@@ -767,7 +789,7 @@ class VignetteService:
         self.looks: dict[str, dict] = {}
         self.records: dict[str, _Record] = {}
         self._addresses: dict[str, tuple[str, str]] = {}  # engine address → (room, device id)
-        self._addresses_for: int | None = None
+        self._addresses_for: Any = None  # the registry the map was built from (identity, holding a reference)
         self._locks: dict[str, asyncio.Lock] = {}
         self._quiet: set[str] = set()
 
@@ -819,15 +841,34 @@ class VignetteService:
     def _lock(self, device_id: str) -> asyncio.Lock:
         return self._locks.setdefault(device_id, asyncio.Lock())
 
+    def _current(self, entry: DeviceEntry) -> tuple[str, bool] | None:
+        """(address, simulated) the device resolves to now, or None when it has no address."""
+        try:
+            target = self.deps.target(entry.id, Purpose.ENGINE)
+        except LookupError:
+            return None
+        return target.address, bool(target.simulated)
+
+    def _fresh(self, entry: DeviceEntry, record: _Record | None) -> bool:
+        """A cached record still describes the device the registry names (not re-registered since: review V2)."""
+        if record is None or record.model is None:
+            return False
+        return self._current(entry) == (record.address, bool(record.simulated))
+
     async def load(self, entry: DeviceEntry, *, refresh: bool = False) -> _Record:
-        """Read the device's profile once (functions + current state) through the engine driver — a GET."""
+        """Read the device's profile once (functions + current state) through the engine driver — a GET. Read again
+        when the device was re-registered to another address since (a swapped bulb)."""
         record = self.records.get(entry.id)
-        if record is not None and record.model is not None and not refresh:
+        if not refresh and self._fresh(entry, record):
             return record
         async with self._lock(entry.id):
             record = self.records.get(entry.id)
-            if record is not None and record.model is not None and not refresh:
+            if not refresh and self._fresh(entry, record):
                 return record
+            if record is not None and record.model is not None and not self._fresh(entry, record):
+                # Re-registered: the old device's look and profile say nothing about the new one.
+                log.info("vignette: %s was re-registered; reading the new device", entry.id)
+                self.looks.pop(entry.id, None)
             record = _Record()
             try:
                 target = self.deps.target(entry.id, Purpose.ENGINE)
@@ -906,13 +947,26 @@ class VignetteService:
     # -- state for the page
     def device_json(self, entry: DeviceEntry) -> dict:
         record = self.records.get(entry.id) or _Record()
+        if record.model is not None and not self._fresh(entry, record):
+            # Re-registered since it was read (review V2): show the new address's status, never the old device's
+            # look or readiness. The next page load or tap reads the new device.
+            current = self._current(entry)
+            record = _Record(
+                error=f"{entry.label or entry.id} was re-registered to a new device. Tap Check again to read it.",
+                address=current[0] if current else None,
+                simulated=current[1] if current else record.simulated,
+            )
         model = record.model
         snap = self.deps.tracker.snapshot(record.address) if self.deps.tracker and record.address else {}
         reported = [StateRow.from_wire(r) for r in snap.get("reported") or []]
         now = look_from_rows(model, reported, default_look(model)) if model and reported else None
         room = self.rooms.rooms.get(entry.vignette or "")
         outlet_labels = room.outlets.get(entry.id, {}) if room else {}
-        look = self.looks.get(entry.id)
+        look = self.looks.get(entry.id) if model is not None else None
+        status = snap.get("status", "unknown")
+        reason = snap.get("reason", "Not checked yet.")
+        if model is None and record.error and status in ("unknown", "ready"):
+            status, reason = "needs_attention", record.error  # never "Ready" for a device the page can't read
         return {
             "id": entry.id,
             "label": entry.label or entry.id,
@@ -924,12 +978,12 @@ class VignetteService:
             "controls": model.controls(outlet_labels) if model else None,
             "look": _look_json(look),
             "now": _look_json(now),
-            "status": snap.get("status", "unknown"),
-            "reason": snap.get("reason", "Not checked yet."),
-            "desired": snap.get("desired"),
-            "reported": snap.get("reported"),
+            "status": status,
+            "reason": reason,
+            "desired": _look_rows(snap.get("desired")),
+            "reported": _look_rows(snap.get("reported")),
             "available": snap.get("available"),
-            "last_command": snap.get("last_command"),
+            "last_command": _command_json(snap.get("last_command")),
             "updated_at": snap.get("updated_at"),
         }
 
@@ -975,7 +1029,7 @@ class VignetteService:
 
     def _address_map(self) -> dict[str, tuple[str, str]]:
         registry = self.deps.registry()
-        if self._addresses_for != id(registry):
+        if self._addresses_for is not registry:  # identity with a reference held: a bare id() can be reused
             self._addresses = {}
             for entry in registry.by_role("vignette"):
                 try:
@@ -983,7 +1037,7 @@ class VignetteService:
                 except LookupError:
                     continue
                 self._addresses[address] = (entry.vignette or "", entry.id)
-            self._addresses_for = id(registry)
+            self._addresses_for = registry
         for device_id, record in self.records.items():  # addresses seen since (an overlay edit, a new id)
             if record.address and record.address not in self._addresses and record.model is not None:
                 entry = registry.get(device_id)
@@ -1044,14 +1098,33 @@ class VignetteService:
         else:
             entries = [self.device(room_id, device_id)]
         compiled: list[tuple[DeviceEntry, Compiled]] = []
+        skipped: list[dict] = []
         for entry in entries:
-            model, _ = await self._ready(entry)
-            look = self.looks.get(entry.id) or default_look(model)
-            compiled.append(
-                (entry, compile_action(model, look, action, value, outlet=outlet, confirm=confirm))
+            try:
+                model, _ = await self._ready(entry)
+                look = self.looks.get(entry.id) or default_look(model)
+                compiled.append(
+                    (entry, compile_action(model, look, action, value, outlet=outlet, confirm=confirm))
+                )
+            except VignetteError as exc:
+                if group is None:
+                    raise
+                # One lamp that can't be read (or can't take this value) never stops the rest (review V3).
+                skipped.append({"device_id": entry.id, "reason": str(exc)})
+        if not compiled:
+            reasons = "; ".join(f"{self._label(s['device_id'])}: {s['reason']}" for s in skipped)
+            raise VignetteError(
+                f"None of the {KIND_NOUN.get(group or '', 'devices').lower()} can do that: {reasons}"
             )
         outcomes = await asyncio.gather(*(self._send(e, c, "vignette") for e, c in compiled))
-        return self._report(room_id, list(outcomes), [])
+        return self._report(room_id, list(outcomes), skipped)
+
+    def _label(self, device_id: str) -> str:
+        try:
+            entry = self.deps.registry().get(device_id)
+        except (KeyError, LookupError):
+            return device_id
+        return entry.label or device_id
 
     async def scene(self, room_id: str, scene_id: str) -> dict:
         """A room scene: each step's settings on its devices, merged per device, then one PUT per device."""
@@ -1101,7 +1174,12 @@ class VignetteService:
         return {
             "ok": all(o.status in ok_statuses for o in outcomes) and not skipped,
             "results": [
-                {"device_id": o.device_id, "status": o.status, "error": o.error, "command": o.result}
+                {
+                    "device_id": o.device_id,
+                    "status": o.status,
+                    "error": o.error,
+                    "command": _command_json(o.result),
+                }
                 for o in outcomes
             ],
             "skipped": skipped,
@@ -1117,6 +1195,27 @@ def _any_simulated(flags: Iterable[bool | None]) -> bool | None:
     return any(known) if known else None
 
 
+def _look_rows(rows: Any) -> list[dict] | None:
+    """Only the rows a look is made of (LOOK_CLASSES): never telemetry, slot patterns or anything else the device
+    reports (review V7)."""
+    if rows is None:
+        return None
+    return [r for r in rows if isinstance(r, Mapping) and r.get("functionClass") in LOOK_CLASSES]
+
+
+def _command_json(command: Mapping[str, Any] | None) -> dict | None:
+    """A command result for a tablet: status, timings, error and mismatched look rows — not the driver address."""
+    if command is None:
+        return None
+    out = {k: v for k, v in command.items() if k != "device_id"}
+    out["mismatches"] = [
+        m
+        for m in out.get("mismatches") or []
+        if isinstance(m, Mapping) and m.get("functionClass") in LOOK_CLASSES
+    ]
+    return out
+
+
 def _look_json(look: Mapping[str, Any] | None) -> dict | None:
     if look is None:
         return None
@@ -1128,6 +1227,7 @@ def _look_json(look: Mapping[str, Any] | None) -> dict | None:
 
 __all__ = [
     "ACTIONS",
+    "LOOK_CLASSES",
     "VIGNETTE_KINDS",
     "Compiled",
     "ConfirmRequired",
