@@ -501,10 +501,12 @@ class SimDriver:
             self._last_error = error
 
     # -- DeviceDriver
-    async def write(self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose) -> WriteResult:
+    async def write(
+        self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose, stamp_offset_s: float = 0.0
+    ) -> WriteResult:
         sent_at = self.clock.now()
         t0 = self.clock.monotonic()
-        stamp = round(sent_at * 1000)
+        stamp = round((sent_at + stamp_offset_s) * 1000)
         self._counts["writes"] += 1
         self._writes_per_device[device_id] += 1
         result = WriteResult(device_id, Outcome.OK, sent_at=sent_at, simulated=True)

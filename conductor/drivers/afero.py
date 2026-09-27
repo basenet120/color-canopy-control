@@ -879,8 +879,12 @@ class AferoDriver:
                 log.exception("afero on_recovery subscriber failed")
 
     # ---- DeviceDriver ----------------------------------------------------------------------------------------
-    async def write(self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose) -> WriteResult:
-        """Exactly one PUT of `rows`; never raises for HTTP/transport problems; DENIED sends nothing."""
+    async def write(
+        self, device_id: str, rows: Sequence[StateRow], *, purpose: Purpose, stamp_offset_s: float = 0.0
+    ) -> WriteResult:
+        """Exactly one PUT of `rows`; never raises for HTTP/transport problems; DENIED sends nothing.
+        `stamp_offset_s` (≤ 0, bench only — the executor refuses it for any other purpose) shifts lastUpdateTime
+        back from the send time: the stale-clock bench job (07 §10)."""
         sent_at = self.clock.now()
         result = WriteResult(device_id=device_id, outcome=Outcome.OK, sent_at=sent_at)
         try:
@@ -900,7 +904,7 @@ class AferoDriver:
             return result
         if self.on_demand:  # the on-demand connect took time: stamp what is actually sent
             sent_at = result.sent_at = self.clock.now()
-        stamp_ms = round(sent_at * 1000)
+        stamp_ms = round((sent_at + stamp_offset_s) * 1000)
         body = {"metadeviceId": device_id, "values": [row.to_wire(stamp_ms) for row in rows]}
         result.bytes_sent = payload_bytes(device_id, rows, stamp_ms)
         reply = await self._send(

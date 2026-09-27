@@ -29,6 +29,9 @@ Rules implemented (binding text in `conductor/executor_api.py`):
 - **Withdraw.** `withdraw(address, lease_token=…)` (the module page's Hold) resolves the pending command SUPERSEDED
   and stops an in-flight one before its next send; a write already on the wire can't be recalled, and a command
   that is only verifying keeps verifying (readback sends nothing).
+- **Bench-only options.** `Command.stamp_offset_s` is passed to `driver.write(..., stamp_offset_s=…)` only when it
+  is non-zero (the stale-clock bench job); `Command.max_attempts` can only lower the policy's limit (the rate ramp
+  never retries a 429). Either on a non-BENCH command resolves INVALID with nothing sent.
 - **Shutdown.** `close()` resolves every unfinished command FAILED (pending, sending, retrying or verifying).
 
 Decision (recorded here, see the final report): a command waiting to verify is "in flight". When a newer command
@@ -57,6 +60,7 @@ from conductor.telemetry import Telemetry
 log = logging.getLogger(__name__)
 
 WINDOW_S = 60.0  # the rate gauges count writes in this trailing window
+MAX_STAMP_OFFSET_S = 3600.0  # a bench command may stamp lastUpdateTime at most an hour in the past
 _EPS = 1e-9
 
 ResultListener = Callable[[CommandResult], None]
@@ -283,6 +287,18 @@ class CommandExecutor:
     def _invalid(cmd: Command) -> str | None:
         if not cmd.rows:
             return "Nothing to send: the command has no rows."
+        offset = cmd.stamp_offset_s
+        if offset or cmd.max_attempts is not None:
+            if cmd.purpose is not Purpose.BENCH:
+                return "Only bench jobs may change the lastUpdateTime stamp or the retry limit; nothing was sent."
+            if not isinstance(offset, (int, float)) or not -MAX_STAMP_OFFSET_S <= offset <= 0:
+                return (
+                    f"A stamp offset must be between −{MAX_STAMP_OFFSET_S:g} and 0 seconds; nothing was sent."
+                )
+            if cmd.max_attempts is not None and (
+                not isinstance(cmd.max_attempts, int) or cmd.max_attempts < 1
+            ):
+                return "max_attempts must be a whole number of at least 1; nothing was sent."
         if not all(isinstance(r, StateRow) for r in cmd.rows):
             return "The command's rows aren't state rows; nothing was sent."
         telemetry_rows = sorted({r.function_class for r in cmd.rows if r.function_class in TELEMETRY_CLASSES})
@@ -363,8 +379,10 @@ class CommandExecutor:
         _prune(account_sent, now_mono)
         if job.result.timings.sent_at is None:
             job.result.timings.sent_at = now
+        # Only a bench command that asks for a shifted stamp passes it (drivers without the option never see it).
+        extra = {"stamp_offset_s": float(cmd.stamp_offset_s)} if cmd.stamp_offset_s else {}
         try:
-            wr = await self.driver.write(cmd.device_id, cmd.rows, purpose=cmd.purpose)
+            wr = await self.driver.write(cmd.device_id, cmd.rows, purpose=cmd.purpose, **extra)
         except Exception as e:
             log.exception("driver.write raised for %s (drivers must classify, not raise)", cmd.device_id)
             wr = WriteResult(
@@ -405,7 +423,10 @@ class CommandExecutor:
                 self._finish(job, CommandStatus.DENIED, reason)
                 return
             attempts = len(job.result.attempts)
-            if not wr.outcome.retryable or attempts >= self.policy.max_attempts:
+            limit = self.policy.max_attempts
+            if cmd.max_attempts is not None:
+                limit = min(limit, cmd.max_attempts)
+            if not wr.outcome.retryable or attempts >= limit:
                 why = _describe(wr.outcome, wr.http_status, wr.error)
                 if wr.outcome.retryable:
                     why = f"Gave up after {attempts} attempts: {why}"

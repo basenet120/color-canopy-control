@@ -1,4 +1,6 @@
-"""The bench jobs: Gates A–C, the index-order read, the hue ramp, latency trials, whole-strand looks and restore.
+"""The bench jobs: Gates A–C, the index-order read, the hue ramp, latency trials, whole-strand looks, the four jobs
+that settle the remaining UNVERIFIED device behaviours (stale-clock PUT, active-slot rewrite, rate ramp, head count at
+boot) and restore.
 
 Sources: `docs/context/04` "Bench gates" and `research/permanent-lights/_synthesis.md` "Prototype 01 bench plan"
 steps 3–9. Rules every job follows:
@@ -18,12 +20,13 @@ import copy
 import math
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Any, Protocol
 
 from conductor import rows as R
 from conductor.bench_api import BenchContext, JobResult, JobSpec, Verdict
 from conductor.capabilities import Capabilities, detect
-from conductor.drivers.base import DeviceInfo, ReadResult, StateRow
+from conductor.drivers.base import DeviceInfo, Outcome, ReadResult, StateRow
 from conductor.executor_api import CommandResult, CommandStatus
 from conductor.telemetry import percentile
 
@@ -36,6 +39,11 @@ PER_HEAD_LENGTHS = (30, 60)  # Gate A: a 30-entry (or fixed 60-entry) frame keep
 BEFORE_HOLD_S = 4.0  # Gate C: how long the BEFORE look holds before the replay, so it can be seen and filmed
 MAX_TRIALS = 100
 MAX_SPACING_S = 30.0  # latency trials: well inside the lock's 10-min idle timeout, and a run stays short
+STALE_LAG_S = 600.0  # stale_clock_put: lastUpdateTime = now − 10 min (07 §10)
+STALE_SETTLE_S = 3.0  # stale_clock_put: wait before the readback (and before the control write)
+RAMP_SPACINGS_S = (5.0, 2.0, 1.0)  # rate_ramp: the spacings, slowest first (04 bench gate #11)
+RAMP_MIN_SPACING_S = 1.0  # rate_ramp: never faster than 1 write/s to the device, whatever the budget says
+MAX_RAMP_WRITES_PER_STEP = 50
 
 # Question templates: `{slot}`, `{source}`, `{target}` are filled from the run's params ("custom-2" → "slot 2"),
 # so the question names the slot the job actually used. FLAG_QUESTIONS is keyed by these templates; use
@@ -48,6 +56,10 @@ Q_HUE_RAMP = (
 )
 Q_INDEX = "Is puck 1 (the red one you painted first) the puck nearest the controller?"
 Q_LATENCY = "Did you film every trial with the clock page next to the kit?"
+Q_STALE_STORED = "Did the strand switch to {slot} after the stale-stamped write?"
+Q_STALE_DROPPED = "Did the lights stay as they were after the first (stale) write, and switch to {slot} only after the second?"
+Q_ACTIVE_REWRITE = "Did the lights change to the new pattern while {slot} stayed selected (no reselect)?"
+Q_HEAD_BOOT = "With strings 2 and 3 unplugged, did only string 1's pucks light when the kit booted?"
 
 # Which answer must be "yes" before a proposed flag may be applied.
 FLAG_QUESTIONS: dict[str, dict[str, str]] = {
@@ -59,6 +71,14 @@ FLAG_QUESTIONS: dict[str, dict[str, str]] = {
 # Bounds for numeric job options (inclusive), checked by coerce_params before a run starts.
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "latency_trials": {"n": (1, MAX_TRIALS), "spacing_s": (0.0, MAX_SPACING_S)},
+    "rate_ramp": {"writes_per_step": (1, MAX_RAMP_WRITES_PER_STEP)},
+    "head_count_boot": {"full_heads": (1, 90)},
+}
+
+# Jobs whose `confirmed` option is a checkbox the person ticks once the kit is set up (the page shows this label).
+CONFIRM_LABELS: dict[str, str] = {
+    "gate_b_unplugged": "I've switched the kit off at the wall",
+    "head_count_boot": "I've booted the kit with strings 2 and 3 unplugged",
 }
 
 
@@ -91,7 +111,21 @@ class JobContext(BenchContext, Protocol):
 
     budget_s: float  # the per-device write budget (executor min_write_interval_s)
     t1_allowed: bool  # per-head frames may be written (simulator, or Gate C proven on this kit)
+    expected_heads: int | None  # the registry's head count for this device (None = not set)
     artifacts: dict[str, Any]  # big outputs saved with the result (Gate A's scrubbed profile)
+
+    async def write(
+        self,
+        rows: list,
+        *,
+        label: str,
+        verify: bool = True,
+        expect: list | None = None,
+        stamp_offset_s: float = 0.0,
+        max_attempts: int | None = None,
+    ) -> CommandResult:
+        """One PUT through the bench executor with this run's lease. `stamp_offset_s` (≤ 0) stamps lastUpdateTime
+        in the past (stale_clock_put only); `max_attempts` caps retries (rate_ramp: 1)."""
 
     async def sim_power(self, on: bool) -> bool:
         """Switch the simulated kit's power (the unplugged test on the simulator). False on a real kit."""
@@ -875,6 +909,403 @@ async def restore(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     return JobResult(Verdict.PASS, f"The kit is back to calm white {cct} K at {CALM_BRIGHTNESS}%.", obs)
 
 
+# ---- the remaining UNVERIFIED device behaviours (07 §6, §10; 04 bench gates #6, #10, #11) ----------------------------
+def _stored_stamps(info: DeviceInfo) -> dict[tuple[str, str | None], int]:
+    """(functionClass, functionInstance) → the lastUpdateTime the cloud holds for that row (from the raw profile:
+    the simulator's `states` list or Afero's `state.values`)."""
+    raw = info.raw if isinstance(info.raw, Mapping) else {}
+    rows = raw.get("states")
+    if not isinstance(rows, list):
+        state = raw.get("state")
+        rows = state.get("values") if isinstance(state, Mapping) else None
+    out: dict[tuple[str, str | None], int] = {}
+    for row in rows or []:
+        stamp = row.get("lastUpdateTime") if isinstance(row, Mapping) else None
+        if isinstance(stamp, int) and not isinstance(stamp, bool):
+            out[(row.get("functionClass"), row.get("functionInstance"))] = stamp
+    return out
+
+
+def _visible_target(caps: Capabilities, rr: ReadResult, wanted: str) -> str:
+    """The slot a select should switch to so the change is visible: `wanted`, or (auto) a slot that isn't
+    selected and, if possible, doesn't hold the pattern that is showing. JobError when there is none."""
+    current = rr.get("color-individual", "custom")
+    showing = _showing(rr)
+    hashes = _hashes(rr)
+    if wanted and wanted != "auto":
+        _check_slot(caps, wanted)
+        if wanted == current:
+            raise JobError(f"{wanted} is already selected, so selecting it again wouldn't show anything.")
+        return wanted
+    choices = [s for s in (caps.slots or list(R.SLOTS)) if s != current]
+    if not choices:
+        raise JobError("There's no other slot to select.")
+    differ = [s for s in choices if not showing or hashes.get(s) != hashes.get(showing)]
+    target = (differ or choices)[0]
+    _check_slot(caps, target)
+    return target
+
+
+async def stale_clock_put(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """07 §10: does a PUT stamped lastUpdateTime = now − 10 min get stored, or answered 200 and dropped?
+    One select stamped STALE_LAG_S in the past, then readback. If it was dropped, the same select with a current
+    stamp follows as the control (so a drop is pinned on the stamp, not on the select)."""
+    info = await ctx.profile()
+    caps = _caps(info)
+    before = await _read_ok(ctx, "before the stale write")
+    target = _visible_target(caps, before, str(params.get("slot") or "auto"))
+    selected_before = before.get("color-individual", "custom")
+    stamps = _stored_stamps(info)
+    stored_stamp = stamps.get(("color-individual", "custom"))
+    obs: dict[str, Any] = {
+        "target": target,
+        "selected_before": selected_before,
+        "color_mode_before": before.get("color-mode"),
+        "lag_s": STALE_LAG_S,
+        "cloud_stamp_before_ms": stored_stamp,
+    }
+    rows = _only_declared(ctx, info, [*R.slot_select(target), R.power(True)])
+    ctx.step(
+        f"Selecting {target} with every row stamped {STALE_LAG_S / 60:g} minutes in the past "
+        "(lastUpdateTime = now − 600 s). Watch the strand."
+    )
+    res = await ctx.write(
+        rows,
+        label=f"stale_clock_put: select {target}, stamped −{STALE_LAG_S:g} s",
+        verify=False,
+        stamp_offset_s=-STALE_LAG_S,
+    )
+    facts = write_facts(res)
+    sent_at = res.timings.sent_at
+    facts["stamp_sent_ms"] = round((sent_at - STALE_LAG_S) * 1000) if sent_at is not None else None
+    obs["write"] = facts
+    if res.status is not CommandStatus.APPLIED:
+        if res.status in (CommandStatus.DENIED, CommandStatus.LOCKED, CommandStatus.INVALID):
+            return JobResult(Verdict.ERROR, f"The stale-stamped select wasn't sent: {res.error}", obs)
+        return JobResult(
+            Verdict.INFO,
+            f"The cloud refused the stale-stamped select ({res.error}). A lagging clock gets an error back, not a "
+            "silent drop — the executor would see and report it. Send the JSON to the build session.",
+            obs,
+        )
+    await ctx.sleep(max(STALE_SETTLE_S, ctx.budget_s))
+    after = await _read_ok(ctx, "after the stale write")
+    shown = after.get("color-individual", "custom")
+    after_info = await ctx.profile()
+    obs.update(
+        {
+            "readback_selected": shown,
+            "cloud_stamp_after_ms": _stored_stamps(after_info).get(("color-individual", "custom")),
+        }
+    )
+    ctx.step("Read back", selected=shown, cloud_stamp_ms=obs["cloud_stamp_after_ms"])
+    if shown == target:
+        obs["stale_write"] = "stored"
+        return JobResult(
+            Verdict.NEEDS_EYES,
+            f"HTTP {facts['http_status']} and readback shows {target}: the cloud STORED a write stamped "
+            f"{STALE_LAG_S / 60:g} minutes in the past, so a lagging clock doesn't get writes dropped (up to "
+            "10 min). Did the lights switch?",
+            obs,
+            [fill(Q_STALE_STORED, {"slot": target})],
+        )
+    obs["stale_write"] = "dropped"
+    ctx.step(
+        f"The cloud answered {facts['http_status']} but readback still shows {shown}: the stale write was "
+        f"dropped. Control: the same select with a current stamp, in {max(STALE_SETTLE_S, ctx.budget_s):g} s."
+    )
+    control = await ctx.write(rows, label=f"stale_clock_put: control select {target}, current stamp")
+    obs["control_write"] = write_facts(control)
+    control_stored = control.status is CommandStatus.APPLIED
+    obs["control_stored"] = control_stored
+    if not control_stored:
+        return JobResult(
+            Verdict.FAIL,
+            f"The stale-stamped select was answered {facts['http_status']} and dropped, but the control select "
+            f"with a current stamp didn't take either ({control.error}), so the stamp isn't proven to be the "
+            "cause. Check the kit and run it again.",
+            obs,
+        )
+    return JobResult(
+        Verdict.NEEDS_EYES,
+        f"A write stamped {STALE_LAG_S / 60:g} minutes in the past was answered HTTP {facts['http_status']} and "
+        f"silently DROPPED; the same select with a current stamp was stored. A lagging venue-box clock would "
+        "lose writes without any error: NTP sync is a hard requirement (07 §10).",
+        obs,
+        [fill(Q_STALE_DROPPED, {"slot": target})],
+    )
+
+
+async def active_slot_rewrite(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """04 bench gate #6: rewrite the slot that is showing with a visibly different frame, WITHOUT reselecting it,
+    then read back and ask whether the lights changed. Settles whether the reconciler's drifted-slot rewrite also
+    needs a reselect."""
+    info = await ctx.profile()
+    caps = _caps(info)
+    if not caps.individual:
+        _check_slot(caps)  # raises the plain "no per-head mode" message
+    if not ctx.t1_allowed:
+        return JobResult(
+            Verdict.ERROR,
+            "Frames written by the Conductor aren't proven on this kit yet, so a 'no' here couldn't be told apart "
+            "from a refused frame. Pass Gate C and apply its flag first. Nothing was sent.",
+        )
+    rr = await _read_ok(ctx, "before the rewrite")
+    showing = _showing(rr)
+    if showing is None:
+        return JobResult(
+            Verdict.ERROR,
+            "The kit isn't showing a slot (it isn't in per-head mode). Run Gate B or the hue ramp first so a slot "
+            "is showing. Nothing was sent.",
+            {"color_mode": rr.get("color-mode"), "selected_slot": rr.get("color-individual", "custom")},
+        )
+    wanted = str(params.get("slot") or "auto")
+    slot = showing if wanted == "auto" else wanted
+    if slot != showing:
+        return JobResult(
+            Verdict.ERROR,
+            f"This test rewrites the slot that is SHOWING ({showing}); {slot} isn't. Leave the slot option on "
+            "auto. Nothing was sent.",
+            {"showing": showing},
+        )
+    _check_slot(caps, slot)
+    value, entries = _slot_entries(rr, slot)
+    frame = R.frame_value(
+        value, contrast_entries(entries), expected_length=len(entries), cct_range=caps.cct_range
+    )
+    obs: dict[str, Any] = {
+        "slot": slot,
+        "length": len(entries),
+        "hash_before": R.slot_hash(value),
+        "hash_written": R.slot_hash(frame),
+    }
+    ctx.step(
+        f"{slot} is showing. Rewriting it with a different pattern (a rainbow, or its reverse) — no select, no "
+        "colour-mode or power rows. Watch the strand."
+    )
+    res = await ctx.write(
+        _only_declared(ctx, info, [R.slot_write(slot, frame)]),
+        label=f"active_slot_rewrite: {slot}, no select",
+    )
+    obs["write"] = write_facts(res)
+    if problem := _write_problem(res, f"The rewrite of {slot}"):
+        problem.observations.update(obs)
+        return problem
+    after = await _read_ok(ctx, "after the rewrite")
+    obs.update(
+        {
+            "hash_after": R.slot_hash(after.get(R.FRAME_CLASS, slot)),
+            "still_selected": after.get("color-individual", "custom") == slot,
+            "color_mode_after": after.get("color-mode"),
+        }
+    )
+    ctx.step("Read back", hash=obs["hash_after"], still_selected=obs["still_selected"])
+    return JobResult(
+        Verdict.NEEDS_EYES,
+        f"HTTP {obs['write']['http_status']}; {slot} reads back as the new pattern and is still selected. Yes = "
+        "rewriting the showing slot re-renders it on its own; No = a slot rewrite must be followed by a reselect.",
+        obs,
+        [fill(Q_ACTIVE_REWRITE, {"slot": slot})],
+    )
+
+
+def _ramp_entries(length: int, i: int) -> list[R.FrameEntry]:
+    """Write i's frame: the hue ramp rotated by i heads, so consecutive writes always differ."""
+    ramp = hue_ramp_entries(length)
+    k = (i + 1) % max(length, 1) or 1
+    return ramp[k:] + ramp[:k]
+
+
+async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """04 bench gate #11: frame writes to one device at 5 s, 2 s, then 1 s spacing (never faster than 1 write/s and
+    never below the executor's budget); each write is read back and compared with what was sent (a 2xx whose
+    readback doesn't show it is a silent drop). No retries: it stops at the first 429/403, or any other failure."""
+    per_step = int(params["writes_per_step"])
+    lo, hi = PARAM_BOUNDS["rate_ramp"]["writes_per_step"]
+    if not lo <= per_step <= hi:
+        return JobResult(Verdict.ERROR, f"Pick between {lo:g} and {hi:g} writes per step. Nothing was sent.")
+    slot = str(params["slot"])
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, slot)
+    if not ctx.t1_allowed:
+        return JobResult(
+            Verdict.ERROR,
+            "The ramp writes frames, and frames written by the Conductor aren't proven on this kit yet. Pass Gate C "
+            "and apply its flag first. Nothing was sent.",
+        )
+    rr = await _read_ok(ctx, f"for {slot}")
+    header, current = _slot_entries(rr, slot)
+    length = len(current)
+    spacings = [max(s, ctx.budget_s, RAMP_MIN_SPACING_S) for s in RAMP_SPACINGS_S]
+    ctx.step(
+        f"{per_step} frame writes into {slot} at each spacing ({', '.join(f'{s:g} s' for s in spacings)}), each "
+        "read back. Stops at the first 429/403 (no retries)."
+    )
+    writes: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]] = []
+    stop_reason: str | None = None
+    throttled = False
+    last_sent: float | None = None
+    n = 0
+    for spacing in spacings:
+        step = {"spacing_s": spacing, "writes": 0, "stored": 0, "silent_drops": 0, "unverified": 0}
+        steps.append(step)
+        for _ in range(per_step):
+            await _space(ctx, last_sent, spacing)
+            value = R.frame_value(
+                header, _ramp_entries(length, n), expected_length=length, cct_range=caps.cct_range
+            )
+            sent_hash = R.slot_hash(value)
+            res = await ctx.write(
+                [R.slot_write(slot, value)],
+                label=f"rate_ramp {n + 1}: {spacing:g} s spacing",
+                verify=False,
+                max_attempts=1,
+            )
+            n += 1
+            last_sent = res.timings.sent_at or ctx.now()
+            facts = write_facts(res)
+            entry: dict[str, Any] = {
+                "n": n,
+                "spacing_s": spacing,
+                "status": facts["status"],
+                "http_status": facts["http_status"],
+                "sent_at": facts["sent_at"],
+                "ack_ms": facts["ack_ms"],
+                "sent_hash": sent_hash,
+            }
+            writes.append(entry)
+            step["writes"] += 1
+            if res.status is not CommandStatus.APPLIED:
+                status = facts["http_status"]
+                last = res.attempts[-1] if res.attempts else None
+                throttled = status in (429, 403) or (last is not None and last.outcome is Outcome.THROTTLED)
+                stop_reason = (
+                    f"throttled (HTTP {status}) at {spacing:g} s spacing, write {n}"
+                    if throttled
+                    else f"write {n} failed at {spacing:g} s spacing: {res.error}"
+                )
+                break
+            back = await ctx.read()
+            got = R.slot_hash(back.get(R.FRAME_CLASS, slot)) if back.ok else None
+            entry["readback"] = "unverified" if not back.ok else ("stored" if got == sent_hash else "dropped")
+            step[
+                {"stored": "stored", "dropped": "silent_drops", "unverified": "unverified"}[entry["readback"]]
+            ] += 1
+        if stop_reason:
+            break
+    gaps = [
+        round(b["sent_at"] - a["sent_at"], 3) for a, b in pairwise(writes) if a["sent_at"] and b["sent_at"]
+    ]
+    drops = sum(s["silent_drops"] for s in steps)
+    obs: dict[str, Any] = {
+        "slot": slot,
+        "length": length,
+        "writes_sent": len(writes),
+        "silent_drops": drops,
+        "unverified": sum(s["unverified"] for s in steps),
+        "min_gap_s": min(gaps) if gaps else None,
+        "throttled": throttled,
+        "stopped": stop_reason,
+        "steps": steps,
+        "writes": writes,
+    }
+    per = "; ".join(
+        f"{s['spacing_s']:g} s: {s['stored']}/{s['writes']} stored, {s['silent_drops']} dropped"
+        for s in steps
+    )
+    if throttled:
+        return JobResult(
+            Verdict.FAIL,
+            f"Hubspace throttled this device: {stop_reason}. The ramp stopped there. {per}. Send the JSON to the "
+            "build session: the per-device budget must stay slower than this.",
+            obs,
+        )
+    if stop_reason:
+        return JobResult(Verdict.ERROR, f"The ramp stopped: {stop_reason}. {per}.", obs)
+    if drops:
+        return JobResult(
+            Verdict.INFO,
+            f"No throttling down to 1 write/s, but {drops} of {len(writes)} writes were answered 2xx and not "
+            f"stored (silent drops). {per}.",
+            obs,
+        )
+    return JobResult(
+        Verdict.PASS,
+        f"All {len(writes)} frame writes stored and read back, no 429/403, down to 1 write/s. {per}.",
+        obs,
+    )
+
+
+async def head_count_boot(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """07 §6 / 04 bench gate #10: does the cloud profile reflect the head count the controller detects at boot?
+    The person boots the kit with strings 2–3 unplugged (the '12-puck fault' stand-in); read-only, this dumps the
+    segment hints and all three framebuffer lengths (profile and readback) and compares them with the full kit."""
+    if not params.get("confirmed"):
+        return JobResult(
+            Verdict.ERROR,
+            "First: switch the kit off at the wall, unplug strings 2 and 3 (leave only string 1 on the "
+            "controller), switch it back on and wait for it to boot and reconnect (about 30 s). Then tick “I've "
+            "booted the kit with strings 2 and 3 unplugged” and run this again (in a terminal: --param "
+            "confirmed=1). Nothing was sent.",
+        )
+    full = int(params["full_heads"])
+    ctx.step("Reading the profile and the state. Nothing is written.")
+    info = await ctx.profile()
+    caps = _caps(info)
+    rr = await _read_ok(ctx, "for the framebuffer lengths")
+    hints: dict[str, list[str]] = {}
+    for fn in info.functions:
+        if fn.get("functionClass") != "color-individual":
+            continue
+        for v in fn.get("values") or []:
+            if isinstance(v, Mapping):
+                hints[str(v.get("name"))] = [str(h) for h in v.get("hints") or []]
+    profile_lengths = dict(sorted(caps.framebuffer_lengths.items()))
+    readback_lengths = {
+        s: len(entries) for s in R.SLOTS if (entries := R.frame_entries(rr.get(R.FRAME_CLASS, s))) is not None
+    }
+    obs: dict[str, Any] = {
+        "full_heads": full,
+        "expected_heads": ctx.expected_heads,
+        "segment_hint": caps.segment_hint,
+        "hints": hints,
+        "profile_framebuffer_lengths": profile_lengths,
+        "readback_framebuffer_lengths": readback_lengths,
+        "available": rr.available,
+    }
+    if info.raw is not None:
+        ctx.artifacts["profile_boot_raw"] = copy.deepcopy(info.raw)
+    counts = [caps.segment_hint, *profile_lengths.values(), *readback_lengths.values()]
+    reflects = any(c is not None and c != full for c in counts)
+    obs["profile_reflects_detected_count"] = reflects
+    ctx.step(
+        "Profile read",
+        segment_hint=caps.segment_hint,
+        profile_lengths=profile_lengths,
+        readback_lengths=readback_lengths,
+    )
+    ctx.step("Now switch the kit off, plug strings 2 and 3 back in, switch it on, and run Gate A.")
+    sim = (
+        " SIMULATED: the simulator doesn't model the head-count fault, so this proves nothing."
+        if ctx.simulated
+        else ""
+    )
+    if reflects:
+        summary = (
+            f"The cloud profile CHANGED with strings 2–3 unplugged (segment hint {caps.segment_hint}, frame lengths "
+            f"{profile_lengths}, readback {readback_lengths}; full kit = {full}): the 7 am check can read the head "
+            "count from the API."
+        )
+    else:
+        summary = (
+            f"The cloud profile did NOT change: segment hint {caps.segment_hint} and every frame length is still "
+            f"{full} with strings 2–3 unplugged. The 12-puck fault can only be caught visually (07 §6)."
+        )
+    return JobResult(Verdict.NEEDS_EYES, summary + sim, obs, [Q_HEAD_BOOT])
+
+
 # ---- the catalogue -----------------------------------------------------------------------------------------------
 JOBS: dict[str, Job] = {
     j.spec.name: j
@@ -969,6 +1400,58 @@ JOBS: dict[str, Job] = {
                 look_for="Each look holds for about 2 seconds. Watch evenness, dropouts and colour.",
             ),
             whole_strand,
+        ),
+        Job(
+            JobSpec(
+                "stale_clock_put",
+                "Stale clock — a write stamped 10 minutes ago",
+                "Selects another slot with lastUpdateTime set 10 minutes in the past, then reads back: was it stored "
+                "or answered 200 and dropped? If dropped, the same select with a current stamp follows.",
+                writes=True,
+                look_for="Film the strand with the clock page. Note whether it switches after the first write, "
+                "after the second (only sent if the first was dropped), or not at all.",
+                params={"slot": "auto"},
+            ),
+            stale_clock_put,
+        ),
+        Job(
+            JobSpec(
+                "active_slot_rewrite",
+                "Rewrite the showing slot — no reselect",
+                "Rewrites the slot that is showing with a visibly different pattern, without selecting it again, "
+                "and reads it back.",
+                writes=True,
+                look_for="A slot must be showing first (run Gate B or the hue ramp). Watch whether the lights "
+                "change to the new pattern on their own.",
+                params={"slot": "auto"},
+            ),
+            active_slot_rewrite,
+        ),
+        Job(
+            JobSpec(
+                "rate_ramp",
+                "Rate ramp — how fast before Hubspace throttles",
+                "Frame writes into one slot at 5 s, 2 s, then 1 s spacing (never faster than 1 per second), each "
+                "read back to catch silent drops. Stops at the first 429/403; no retries.",
+                writes=True,
+                look_for="About 1½ minutes with the defaults. If slot 3 is showing, the rainbow steps along with "
+                "every write. Nothing to answer: the numbers are the result.",
+                params={"writes_per_step": 10, "slot": "custom-3"},
+            ),
+            rate_ramp,
+        ),
+        Job(
+            JobSpec(
+                "head_count_boot",
+                "Head count at boot — strings 2–3 unplugged",
+                "After you boot the kit with only string 1 attached, reads the segment hints and all three frame "
+                "lengths: does the cloud notice the missing pucks?",
+                writes=False,
+                look_for="Before running: kit off at the wall, unplug strings 2 and 3, back on, wait 30 s. "
+                "Count the lit pucks. Afterwards plug them back in, power-cycle, and run Gate A.",
+                params={"confirmed": False, "full_heads": 30},
+            ),
+            head_count_boot,
         ),
         Job(
             JobSpec(

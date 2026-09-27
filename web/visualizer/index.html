@@ -290,9 +290,12 @@ function draw() {
   if (hd) for (const m of hd.modules) status[m.id] = m;
   for (const m of d.modules) {
     const s = status[m.id], st = s && STATUS[s.status];
-    const text = `${m.id} · ${m.orientation}` + (s && hd.engine ? ` · ${st ? st[1] : "Unknown"}` : "");
-    const x = X(m.col * c.module_width_in) + 4, y = Y(m.row * c.module_height_in) + 4;
     const dot = s && hd.engine ? 12 : 0;
+    // On a narrow screen the label shortens to fit its module (the dot still carries the status colour).
+    const room = c.module_width_in * scale - 8 - 10 - dot;
+    const full = `${m.id} · ${m.orientation}` + (s && hd.engine ? ` · ${st ? st[1] : "Unknown"}` : "");
+    const text = [full, `${m.id} · ${m.orientation}`, m.id].find((t) => ctx.measureText(t).width <= room) || m.id;
+    const x = X(m.col * c.module_width_in) + 4, y = Y(m.row * c.module_height_in) + 4;
     ctx.fillStyle = css("--ground"); ctx.fillRect(x, y, ctx.measureText(text).width + 10 + dot, 18);
     if (dot) {
       ctx.fillStyle = css(st ? st[0] : "--unknown");
