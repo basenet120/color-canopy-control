@@ -125,12 +125,15 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
   - One-off soaks with all nine modules on the 60-entry profile: 9/9 mapped and 9/9 unmapped.
   - Every new regression test was checked to fail on the old code.
   - `framemap.frame_indices` matched Paris's original rule on 200,000 random inputs.
-  - `claude/record-map`: **1014 passed** with `test_deploy.py` excluded (984 + 30 in `tests/test_bench_map.py`).
-    Lint clean, JS 19/19, tracker check OK; the soak wasn't rerun (nothing in the show path changed). Each of 18
-    guards (the proof rule's refusals, the revoke, the show re-read, the yes/no question) was removed in turn, and a
-    named test failed each time. By hand on a local simulator server, with two probes marked real by the test
-    seam: the `/ops/bench` card gave the reason, showed **Apply map** after the Yes, recorded the map (`/api/devices`
-    then said mapped), and a No took it back.
+  - `claude/record-map`: **1028 passed** with `test_deploy.py` excluded (984 + 44 in `tests/test_bench_map.py`).
+    Lint clean, JS 19/19, tracker check OK; the soak wasn't rerun (nothing in the show path changed). After the
+    review fixes, each of 33 guards was removed in turn, and a named test failed each time. They cover the proof
+    rule's refusals (including a later Yes/No probe of part of 30–59), the per-kit filter on the partner run, the
+    re-check after the profile read, the bench-target match, the revoke and every entry it reaches, the show re-read
+    after apply and after a revoke, the yes/no question, and the same-site/JSON guard. Before the review fixes, by
+    hand on a local simulator server with two probes marked real by the test seam: the `/ops/bench` card gave the
+    reason, showed **Apply map** after the Yes, recorded the map (`/api/devices` then said mapped), and a No took it
+    back. That check wasn't repeated after the fixes.
 
 ## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
 1. ~~The show path ignores the framebuffer mapping~~ **Done in `claude/show-path-mapping` (D57)**, in the simulator
@@ -180,11 +183,12 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    timestamp. `tests_e2e` wasn't run for this merge (see Verified).
 9. ~~No in-app way to record a kit's map~~ **Done in `claude/record-map` (D58)**, in the simulator only. **Apply map**
    on an address probe's result card records the identity map, only when all of these hold: Gate C on that very kit,
-   and its newest markers run and newest 30–59 run both answered Yes. Anything else is refused with the reason. It
-   writes the ops overlay only (NOT_FOR_GIT) and sends nothing to the lights. Those two `address_probe_safe` runs
-   now ask yes/no questions (Paris's job: its writes and restore are unchanged), so probes saved before this branch
-   don't count. It has never run against a real kit. The runbooks (§5a, install day, controller swap) use the
-   button.
+   and its newest markers run and newest 30–59 run both answered Yes (and any later Yes/No probe of part of 30–59
+   too). Anything else is refused with the reason. It writes the ops overlay only (NOT_FOR_GIT) and sends nothing to
+   the lights itself; on a canopy module a running show then re-reads it and sends its current look again, through
+   the map. Those two `address_probe_safe` runs now ask yes/no questions (Paris's job: its writes and restore are
+   unchanged), so probes saved before this branch don't count. It has never run against a real kit. The runbooks
+   (§5a, install day, controller swap) use the button.
 
 ## Next step
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab

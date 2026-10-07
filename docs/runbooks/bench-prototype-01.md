@@ -210,13 +210,18 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
 4. **Apply map** on either result card. The card says what it will record, or why not. It shows only when all of
    these hold (D58):
    - Gate C is applied on this very kit;
+   - this kit's registry entry expects 30 heads (`expected_heads`), the module's head count;
    - this kit's newest markers run is answered **Yes**;
-   - its newest 30–59 run is answered **Yes**;
-   - both runs saw the same frame length, and the kit still reports it.
+   - its newest 30–59 run is answered **Yes**, and so is every Yes/No probe of part of 30–59 run after it;
+   - both runs saw the same frame length.
 
-   It records exactly the plain map (entries 0–29 → heads 1–30, 30–59 unused), for this kit only, in the ops overlay
-   (never git). It sends nothing to the lights. Any No, or markers anywhere else, means no map: tell Alon, and don't
-   edit one in by hand. Changed your mind? Answering No on either run takes the map back.
+   When you tap it, it reads the kit's frame length once more. If the kit now reports a different length, the tap is
+   refused and nothing is saved: run both probes again. It records exactly the plain map (entries 0–29 → heads 1–30,
+   30–59 unused), for this kit only, in the ops overlay (never git). Apply map itself sends nothing to the lights,
+   but if this kit is a canopy module and the show is running, the show then re-reads it and sends its current look
+   to the canopy again, now through the map. Any No, or markers anywhere else, means no map: tell Alon, and don't
+   edit one in by hand. Changed your mind? Answering No on either run takes the map back, also from a module a
+   controller swap carried it to.
 5. Only then any paired or gradient test.
 
 Never copy Kingston's flags or map to another controller. A whole-strand colour response or a 30-puck count is not

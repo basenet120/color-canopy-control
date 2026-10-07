@@ -370,7 +370,8 @@ device D at controller address A only when all of these hold (the proof rule, ac
   and is answered **Yes** to "Counting from the controller, was head 1 red, head 2 green and head 30 blue, with every
   other head dark?";
 - (c) D's newest real probe at A of every entry from the module's head count to the last (30–59) is answered **Yes**
-  to "… did every head stay dark (nothing lit) while entries 30–59 were held?";
+  to "… did every head stay dark (nothing lit) while entries 30–59 were held?", and so is every Yes/No probe at A of
+  only part of that range (e.g. 45–59) run after it;
 - (d) both runs saw the same frame length L (each run checked that every slot agreed), the kit still reports L when the
   map is applied (one profile read, a GET), and the module map's head count (30) equals the registry's
   `expected_heads`.
@@ -379,16 +380,23 @@ The map is then exactly the identity, `{frame_length: L, indices: [0 … heads �
 refused with a plain reason, and no permutation is ever inferred. That covers a No (markers seen elsewhere, reversed
 order, a lit head past the heads), a missing or unanswered probe, a simulated run, a run from a kit that was
 re-registered since, and a changed frame length; the reason ends in "tell Alon" where the kit itself looks wrong.
-The newest probe of each kind is the one that counts. Other details:
-- the map goes into the ops overlay only (NOT_FOR_GIT), and only on that explicit action, never automatically;
+The newest probe of each kind is the one that counts, so a probe of part of 30–59 run before the justifying 30–59
+run is superseded by it. Other details:
+- the map goes into the ops overlay only (NOT_FOR_GIT), and only on that explicit action, never automatically. The
+  POST is refused (403/415) unless it is JSON from this site, like the module and ops writes;
 - both runs record what they justified, when, and the map it replaced. Taking back a Yes on either run puts that
-  previous map back, but only if the registry still holds exactly what was applied;
+  previous map back on every registry entry that still holds exactly what was applied: the run's device, and a
+  module a controller swap carried it to;
 - applying or revoking drops the show's cached profile of that module and reads it again, as a controller swap does,
   so `/ops`, the attention list, the 7 am check and T1 pick it up at once;
-- applying sends nothing to the lights.
+- Apply map itself sends nothing to the lights. But on a canopy module the show counts its re-read as new
+  capabilities, so a running show then sends its current look to the canopy again (its own writes, through its
+  executor and the live gate), now through the map. A revoke does the same.
 
 So that (b) and (c) can be answered Yes or No, `address_probe_safe` now asks those two questions for a markers run
 and for a range wholly past the module's heads. Every other range keeps Paris's free-text question, and the job's
 writes and restore are unchanged. Probes saved before this change asked the free-text question, so they don't count.
-A later probe answered No blocks a new Apply map but doesn't remove a map already recorded; taking back the Yes on a
-run that recorded it does. Simulator only so far: the flow has never run against a real kit.
+A newer markers or 30–59 probe, or a later Yes/No probe of part of 30–59, that isn't answered Yes blocks a new
+Apply map. None of them removes a map already recorded; taking back the Yes on a run that recorded it does. Lower
+ranges keep the free-text question, so Apply map doesn't read them. Simulator only so far: the flow has never run
+against a real kit.
