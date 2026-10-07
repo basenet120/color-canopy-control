@@ -210,6 +210,7 @@ function announce(result, res) {
 async function loadDevices() {
   const list = await api("/api/module");
   S.role = list.role;
+  $("showcase-link").hidden = S.role !== "ops"; // the Studio is ops-only
   S.canTakeOver = !!list.can_take_over;
   return list.devices;
 }
@@ -1201,6 +1202,9 @@ function renderSlots() {
   const root = $("slots");
   const st = S.state;
   const t1 = st.t1.allowed;
+  // The module's mapped heads; a controller pattern of another length (60 entries on a 30-head kit) is named too.
+  const heads = st.map.heads.length;
+  const pattern = (slot) => (slot.length != null && slot.length !== heads ? ` (${slot.length}-entry pattern)` : "");
   root.replaceChildren(
     ...st.slots.map((slot) => {
       const origin = slot.recorded_origin === "app" ? "hand-painted (app)" : "commissioned";
@@ -1215,7 +1219,7 @@ function renderSlots() {
         { class: `slot-card${slot.active ? " active" : ""}` },
         h("h3", {}, shortLabel(slot.slot), slot.active ? h("span", { class: "pill ready", text: "Showing" }) : ""),
         miniMap(st.map.heads, slot.heads),
-        h("div", { class: "meta", text: `${slot.length ?? "?"} heads · hash ${slot.hash ?? "–"}${recorded}` }),
+        h("div", { class: "meta", text: `${heads} heads${pattern(slot)} · hash ${slot.hash ?? "–"}${recorded}` }),
         h(
           "div",
           { class: "button-grid" },

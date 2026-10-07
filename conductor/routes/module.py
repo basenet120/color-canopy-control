@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
@@ -54,6 +55,7 @@ def _no_cross_site(request: Request) -> None:
 
 
 router = APIRouter(dependencies=[Depends(_no_cross_site)])
+log = logging.getLogger(__name__)
 NO_STORE = {"Cache-Control": "no-store"}
 SIM_NOTICE = "SIMULATED — no real lights were driven."
 
@@ -123,6 +125,7 @@ async def paired_whole(
     try:
         result = await asyncio.shield(task)
     except ModuleError as e:
+        log.warning("studio: paired whole-module command refused (HTTP %s): %s", e.status, e.message)
         raise _fail(e) from None
     return JSONResponse(result, headers=NO_STORE)
 
@@ -167,6 +170,7 @@ async def paired_gradient(
     try:
         result = await asyncio.shield(task)
     except ModuleError as e:
+        log.warning("studio: paired gradient %s refused (HTTP %s): %s", body.action, e.status, e.message)
         raise _fail(e) from None
     return JSONResponse(result, headers=NO_STORE)
 

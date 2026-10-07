@@ -3,8 +3,10 @@
 - `GET /api/devices[?refresh=1]` — every enabled registry device: identity (id, label, role, account, module,
   vignette room + kind, orientation, expected heads, flags, metadevice id), where each purpose's writes go ({driver,
   simulated, address}), the tracker's status + reason for the engine address, who holds its lock, capabilities
-  detected from the device's own profile, and any head-count problem. Plus `groups`: the /ops device list's sections
-  in order — canopy modules, bench, spares, then each vignette room (with its /vignette/<room>/ link).
+  detected from the device's own profile, and any head-count problem (`conductor.framemap.head_check`; `mapped` is
+  true when the kit's own controller map applies, D54, and `frame_length` is the controller's). Plus `groups`: the
+  /ops device list's sections in order — canopy modules, bench, spares, then each vignette room (with its
+  /vignette/<room>/ link).
 - `GET /api/devices/{id}[?refresh=1]` — the same record plus the tracker's full snapshot.
 - `GET /api/ops/summary` — version, "Needs attention" items, accounts, locks, the executor's rate budget per
   driver, and simulator statistics when the engine runs on the simulator. "Needs attention" includes the canopy
@@ -28,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from conductor import __version__
 from conductor.alerts import AlertBoard
 from conductor.capabilities import Capabilities, detect
+from conductor.framemap import HeadCheck, head_check, module_heads
 from conductor.gate import GateDenied, Purpose
 from conductor.roles_api import Principal
 from conductor.routes.accounts import accounts_summary, same_origin
@@ -130,6 +133,7 @@ def _device_record(services: Any, entry: Any, caps_record: dict | None) -> dict:
     bench = _purpose_target(services, entry.id, Purpose.BENCH)
     snapshot = services.tracker.snapshot(engine["address"]) if engine["address"] else None
     caps: Capabilities | None = (caps_record or {}).get("caps")
+    check = _head_check(services, entry, caps_record)
     md = entry.metadevice_id
     allowlist = services.gate.effective_allowlist()
     return {
@@ -158,8 +162,18 @@ def _device_record(services: Any, entry: Any, caps_record: dict | None) -> dict:
         "capabilities_error": (caps_record or {}).get("error"),
         "capabilities_simulated": (caps_record or {}).get("simulated"),
         "capabilities_fetched_at": (caps_record or {}).get("fetched_at"),
-        "head_count_problem": caps.head_count_problem(entry.expected_heads) if caps else None,
+        "head_count_problem": check.problem if check else None,
+        "mapped": bool(check and check.mapped),
+        "frame_length": caps.framebuffer_length if caps else None,
     }
+
+
+def _head_check(services: Any, entry: Any, caps_record: dict | None) -> HeadCheck | None:
+    """The mapping-aware head check for the device the capabilities were read from (None without capabilities)."""
+    caps = (caps_record or {}).get("caps")
+    if caps is None:
+        return None
+    return head_check(entry, caps_record.get("address"), caps, module_heads(services.config_dir))
 
 
 STRAND_GROUPS = (
@@ -315,9 +329,9 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
             else:  # flagged problems count even before the device has a look
                 for problem in snap["problems"]:
                     add(f"{name}: {problem}", link)
-        caps = (caps_cache.get(entry.id) or {}).get("caps")
-        if caps is not None and (problem := caps.head_count_problem(entry.expected_heads)):
-            add(f"{name}: {problem}", link)
+        check = _head_check(services, entry, caps_cache.get(entry.id))
+        if check is not None and check.problem:
+            add(f"{name}: {check.problem}", link)
     for alert in AlertBoard.of(services).active():
         link = None
         if alert.device_id:

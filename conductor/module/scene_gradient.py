@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import secrets
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from conductor.module.pair import PAIR_IDS, validate_action
 from conductor.module.session import ModuleError
 from conductor.tokens import atomic_write
 
+log = logging.getLogger(__name__)
 SLOT = "custom-1"
 CONTROL_KEYS = [
     ("power", None),
@@ -27,6 +29,8 @@ CONTROL_KEYS = [
     ("color-individual", "custom"),
     ("color-rgb", None),
 ]
+# The dark reset is a full RGB look, so it also writes these; they are backed up when the readback has them.
+OPTIONAL_CONTROL_KEYS = [("speed", "color-sequence"), ("toggle", "party-mode")]
 
 
 def _path(data):
@@ -75,12 +79,21 @@ def _check_binding(record, sessions):
             raise ModuleError("The gradient backup belongs to a different registered controller.")
 
 
+def _ids(sessions):
+    return ", ".join(s.device_id for s in sessions)
+
+
 def _state_replies(sessions, results):
     return {s.device_id: {"result": r, "state": s.snapshot()} for s, r in zip(sessions, results)}
 
 
-async def _send_wave(sessions, fn):
+async def _send_wave(sessions, fn, phase):
     results = await asyncio.gather(*(fn(s) for s in sessions), return_exceptions=True)
+    for s, r in zip(sessions, results):
+        if isinstance(r, ModuleError):
+            log.warning("scene gradient: %s refused on %s: %s", phase, s.device_id, r.message)
+        elif isinstance(r, BaseException):
+            log.error("scene gradient: %s failed on %s", phase, s.device_id, exc_info=r)
     return [
         {"status": "failed", "error": str(r) if isinstance(r, ModuleError) else "Module command failed."}
         if isinstance(r, BaseException)
@@ -123,7 +136,7 @@ async def restore(sessions, data):
         )
         return await s._send(rows, "scene gradient: restore original active look")
 
-    results = await _send_wave(sessions, restore_one)
+    results = await _send_wave(sessions, restore_one, "restore")
     exact = all(
         r.get("status") == "applied"
         and s._slot_value(SLOT) == record["modules"][s.device_id]["original"]
@@ -137,6 +150,10 @@ async def restore(sessions, data):
         record["pending"] = False
         record["restored_at"] = time.time()
         _save(data, record)
+    else:
+        log.warning(
+            "scene gradient: restore on %s not confirmed exactly; the backup stays pending", _ids(sessions)
+        )
     return {
         "ok": exact,
         "phase": "restored",
@@ -176,7 +193,10 @@ async def apply(sessions, colors, brightness, label, data, *, sleep=asyncio.slee
                 "address": s.address,
                 "original": copy.deepcopy(s._slot_value(SLOT)),
                 "all_slots": {slot: copy.deepcopy(s._slot_value(slot)) for slot in s.caps.slots},
-                "controls": [StateRow(k[0], k[1], copy.deepcopy(old[k])).to_json() for k in CONTROL_KEYS],
+                "controls": [
+                    StateRow(k[0], k[1], copy.deepcopy(old[k])).to_json()
+                    for k in CONTROL_KEYS + [k for k in OPTIONAL_CONTROL_KEYS if k in old]
+                ],
                 "allowed": [],
             }
         folder = _path(data).parent
@@ -202,7 +222,7 @@ async def apply(sessions, colors, brightness, label, data, *, sleep=asyncio.slee
     _save(data, record)  # durable recovery information exists before the first physical command
     phase = "reset_failed"
     try:
-        reset = await _send_wave(sessions, lambda s: s.whole(look=dark))
+        reset = await _send_wave(sessions, lambda s: s.whole(look=dark), "dark reset")
         if not all(r.get("status") == "applied" for r in reset):
             raise ModuleError("The dark reset was not confirmed on both modules.")
         await sleep(max(s.deps.settings.executor.min_write_interval_s for s in sessions))
@@ -218,7 +238,7 @@ async def apply(sessions, colors, brightness, label, data, *, sleep=asyncio.slee
                 extra=[R.brightness(brightness)],
             )
 
-        results = await _send_wave(sessions, paint)
+        results = await _send_wave(sessions, paint, "gradient write")
         exact = all(
             r.get("status") == "applied" and s._slot_value(SLOT) == candidates[s.device_id]
             for s, r in zip(sessions, results)
@@ -226,9 +246,17 @@ async def apply(sessions, colors, brightness, label, data, *, sleep=asyncio.slee
         if not exact:
             raise ModuleError("The gradient was not confirmed on both modules.")
     except (Exception, asyncio.CancelledError) as error:
+        log.warning(
+            "scene gradient: %s on %s (%s); restoring the backup",
+            phase,
+            _ids(sessions),
+            error.message if isinstance(error, ModuleError) else type(error).__name__,
+            exc_info=None if isinstance(error, ModuleError | asyncio.CancelledError) else error,
+        )
         try:
             rolled_back = await asyncio.shield(restore(sessions, data))
-        except Exception:  # noqa: BLE001 - any failed rollback gets the same operator message; the cause is chained
+        except Exception:  # every failed rollback gets one operator message; the cause is chained
+            log.exception("scene gradient: restoring the backup after %s failed on %s", phase, _ids(sessions))
             raise ModuleError(
                 "The gradient stopped and restoration needs attention. Its fresh backup is saved; reconnect both and choose Restore previous look."
             ) from error

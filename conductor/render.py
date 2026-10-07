@@ -4,7 +4,8 @@ Rules being implemented (04 "Cloud profile", 07 §6):
 - **Power off** → every head black.
 - **white** → the whole strand at `color-temperature` (Kelvin → RGB) × `brightness`.
 - **color** → the whole strand at `color-rgb` × `brightness`.
-- **individual** → the selected slot's framebuffer (`color-individual/custom` names the slot), entry i on head i:
+- **individual** → the selected slot's framebuffer (`color-individual/custom` names the slot), entry i on head i
+  (entry `indices[i]` through a kit's proven controller map, D54):
   `rgb × colorBrightness` blended additively with `kelvin_to_rgb(cct) × whiteBrightness`, × strand brightness,
   clamped. Per-puck white on this RGBW product is UNVERIFIED; a device with a `no-white` hint gets no white term.
   Heads beyond the frame stay dark (a short frame lights only its own entries).
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 import colorsys
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from conductor.capabilities import Capabilities
@@ -157,9 +158,14 @@ def _mode(state: Mapping[Key, Any]) -> str:
 
 
 def head_colors(
-    rows: Iterable[StateRow] | Mapping[Key, Any], n_heads: int, caps: Capabilities | None = None
+    rows: Iterable[StateRow] | Mapping[Key, Any],
+    n_heads: int,
+    caps: Capabilities | None = None,
+    indices: Sequence[int] | None = None,
 ) -> list[dict]:
-    """Per-head `{"r","g","b"}` approximating what a strand shows for these state rows (see module rules)."""
+    """Per-head `{"r","g","b"}` approximating what a strand shows for these state rows (see module rules).
+    `indices`: a kit's proven controller map (D54, `framemap.frame_indices`): head i shows frame entry
+    `indices[i]` of a painted slot."""
     if n_heads <= 0:
         return []
     state = _by_key(rows)
@@ -171,7 +177,7 @@ def head_colors(
         c = _rgb(_scale(_rgb_value(state.get(("color-rgb", None))), level))
         return [dict(c) for _ in range(n_heads)]
     if mode == "individual":
-        return _individual(state, n_heads, level, caps)
+        return _individual(state, n_heads, level, caps, indices)
     if mode == "sequence":
         preset = str(state.get(("color-sequence", "preset")) or "")
         if preset == "custom":
@@ -198,17 +204,22 @@ def head_colors(
 
 
 def _individual(
-    state: Mapping[Key, Any], n_heads: int, level: float, caps: Capabilities | None
+    state: Mapping[Key, Any],
+    n_heads: int,
+    level: float,
+    caps: Capabilities | None,
+    indices: Sequence[int] | None = None,
 ) -> list[dict]:
     slot = state.get(("color-individual", "custom"))
     entries = frame_entries(state.get((FRAME_CLASS, slot))) or []
     white = not (caps and caps.no_white_hint)
     out = []
     for i in range(n_heads):
-        if i >= len(entries):
+        j = indices[i] if indices is not None else i
+        if j >= len(entries):
             out.append(dict(BLACK))
             continue
-        e = entries[i]
+        e = entries[j]
         r, g, b = _scale((e.r, e.g, e.b), e.colorBrightness / 100.0)
         if white and e.cct and e.whiteBrightness:
             wr, wg, wb = _scale(kelvin_to_rgb(e.cct), e.whiteBrightness / 100.0)

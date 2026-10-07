@@ -129,7 +129,7 @@ a directional motionEffect code is bench-enabled.
 in `/etc/canopy/box.env`. The data volume is external so no compose command can delete it. Break-glass means stopping
 the Conductor (`canopy-stop`, held through reboots until `canopy-start`), because merely pausing guest input lets the
 reconciler undo app edits. Three spare kits are registry entries on the canopy account; registering a spare's device
-as a module moves it off the spare and carries only bench flags that same kit proved. The cold spare restores
+as a module moves it off the spare and carries only bench flags and the controller map (D57) that same kit proved. The cold spare restores
 `/data` with `--skip-tokens` and signs in fresh (07 §3: never copy tokens between runtimes). The venue env example sets
 `HUBSPACE_LIVE_UNTIL=2026-11-02` (end of Home Depot's authorization window, pending the letter).
 
@@ -294,7 +294,7 @@ a visual check. The simulator's default kit now has 60-entry frames driving 30 p
 _Mechanism superseded by D54 (2026-10-07): no `frame_offset`, no frame-offset field on the Calibrate tab, and the
 default simulator kit is back to 30 entries. Still true: Kingston reports 60 entries with 30 pucks, and frames shorter
 than the pucks are refused. Unused entries are written OFF only through a kit's mapping. The 7 am check, composer and
-compiler are back to frame = heads until the port in STATUS gap 1. Whether the 12-puck fault shows in the cloud is
+compiler read each kit's map since D57. Whether the 12-puck fault shows in the cloud is
 unbenched (gate 10)._
 
 **D53 — A client that disconnects mid-request on the accounts routes is a quiet no-op** (499, one INFO line), not a
@@ -311,19 +311,17 @@ lives in the ops overlay (NOT_FOR_GIT) and never transfers between kits (D25). I
 device's id and the frame length, head count and slot lengths agree. Unmapped entries are written OFF, and readback is
 mapped back through the same indices. Without a mapping the frame must equal the heads. Kingston's map was watched on
 the lights on Sep 28: entries 0–29 drive pucks 1–30 from the controller end, and 30–59 drive nothing. Slot writes now
-check every requested effect field as well as the colour hash; hash-only checks stay colour-only. **Known gap:** only
-the module page and the Studio read the mapping. Bench jobs address raw controller entries (they need only that kit's
-T1 flag) and never read or save a map. The show engine's T1 compile and composer, `/api/devices`,
-the attention list and the 7 am head-count check do not. A real 60-entry module is flagged there, and T1 canvas looks
-can't use it, until the mapping is ported into those paths.
+check every requested effect field as well as the colour hash; hash-only checks stay colour-only. Bench jobs address raw controller entries (they need
+only that kit's T1 flag) and never read or save a map. The show path read no map at first; D57 closed that gap.
 
 **D55 — Bounded commissioning jobs restore what they touch and promote nothing.** `gate_c_safe` copies a slot into
 Custom 1 or 2 (never Custom 3), holds it for a bounded time, then restores the frame, the slot selection and the active
 look as three separate commands. A single combined restore left String light 1 in Custom mode (run f613f6, CLOUD readback).
 `address_probe_safe` defaults to Custom 2, refuses Custom 3 and restores exactly. `effect_probe` tests one effect code
 for 2–20 s and restores the slot, but not the previous look. No job enables or names an effect code or saves a map;
-`effects.enabled` stays empty. The original `address_probe` still defaults to Custom 3 and leaves its pattern there, so
-use the safe job on any slot that holds a pattern someone saved.
+`effects.enabled` stays empty. The original `address_probe` defaulted to Custom 3 and left its pattern there, so it is **no longer a runnable job**
+(decided 2026-10-07). The bench page, CLI and runner refuse it; the function survives only inside `address_probe_safe`,
+which tracks and restores what it touched.
 
 **D56 — The Studio (`/ops/showcase/`) is Paris's six-scene home, and `/` redirects to it.** Six scene palettes
 (Lowcountry Calm … The Goodnight Glow) are drawn on the saved 270-head canopy. They live in
@@ -339,5 +337,26 @@ use the safe job on any slot that holds a pattern someone saved.
 The gradient has never been sent to real hardware, because preflight blocks the uncommissioned String light 1. The
 Studio is wired to VWBD's two kits: `bench-kit` (label "Kingston test…") and `shop-string-1` (label "String light 1…"),
 the second only in VWBD's private overlay. Anywhere else the live Studio refuses to connect and only `?preview=1`
-works. **Open (Alon):** today `/` redirects to the Studio in every mode, including the venue box and staging, where
-it can't connect.
+works. So `/` redirects to the Studio only when the runtime environment (`CONDUCTOR_ENV`, else Railway's
+environment name) starts with `workshop`: Paris's laptop, live or practice. Everywhere else (venue box, staging,
+local) it goes to `/visualizer/` as before (decided 2026-10-07).
+
+**D57 — The show path reads each kit's own map (closes D54's gap).** One rule, `conductor/framemap.py`
+`frame_indices`, decides whether a saved `framebuffer_mapping` applies: `proven_on` is that device's own address, its
+`frame_length` is the one length every slot reports, and it maps exactly the module's heads. `ModuleSession` uses the
+same rule; on 200,000 random inputs it matched Paris's original. Every consumer uses it:
+- **The show engine:** the T1 composer and compiler write head *i* to entry `indices[i]` and every other entry OFF, so
+  the full-frame slot hash stays deterministic.
+- **The checks:** `/api/devices`, the attention list and the 7 am check. A mapped kit passes, and its 60-entry frame
+  is noted as controller capacity, with the head check visual. A longer frame with no map says the kit has no proven
+  map yet and points to runbook §5a. A short frame keeps the plug-in / power-cycle fix. Mixed slot lengths or slots
+  with no readback get Refresh.
+- **Previews:** `/ops` and the plan previews read heads through the map.
+
+Without a valid map, the Conductor's T1 frames are refused for that kit, but whole-strand looks and app-painted T2
+slots still work. A controller swap carries a spare's map only when the map was proven on that same kit. The swap
+also drops the show's cached profile of the old controller, so the carried map is never judged against it.
+
+Effect start/restart on the module page keeps the unmapped entries as read. Paint, cards, sweep and preview still
+write them OFF. An opt-in `sqhdk03-sim-60` profile models the real kit; the default simulator stays at 30 entries.
+Recording a map is still an offline overlay edit (STATUS gap 9).

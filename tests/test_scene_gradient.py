@@ -47,6 +47,8 @@ class Session:
                 ("color-mode", None): "color",
                 ("color-individual", "custom"): "custom-2",
                 ("color-rgb", None): {"color-rgb": {"r": 255, "g": 155, "b": 196}},
+                ("speed", "color-sequence"): 4,
+                ("toggle", "party-mode"): "on",
             }
         )
         self.original = copy.deepcopy(self.state)
@@ -84,9 +86,8 @@ class Session:
         return {"status": "applied"}
 
     async def whole(self, look):
-        return await self._send(
-            [R.color_mode("color"), R.brightness(look["brightness"]), R.color_rgb(*look["rgb"])], "dark"
-        )
+        # What ModuleSession.whole sends for a look: the full state vector (speed 0 and party mode off included).
+        return await self._send(R.full_state_vector(R.Look.from_json(look)), "dark")
 
     async def _write_frame(self, slot, frame, label, effects, extra):
         value = R.frame_value(
@@ -139,6 +140,41 @@ class GradientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(s.state, s.original)
             self.assertFalse(any(r.key == (R.FRAME_CLASS, "custom-3") for rows in s.writes for r in rows))
 
+    async def test_restore_brings_back_the_speed_and_party_mode_the_dark_reset_overwrote(self):
+        await self.apply()
+        for s in self.sessions:
+            self.assertEqual(s.state[("speed", "color-sequence")], 0)
+            self.assertEqual(s.state[("toggle", "party-mode")], "off")
+        first = self.sessions[0]
+        send = first._send
+
+        async def without_speed(rows, label):  # a restore that loses the speed is not reported as exact
+            return await send([r for r in rows if r.function_class != "speed"], label)
+
+        first._send = without_speed
+        self.assertFalse((await G.restore(self.sessions, self.data))["ok"])
+        self.assertTrue(G.status(self.data)["pending"])
+        first._send = send
+        self.assertTrue((await G.restore(self.sessions, self.data))["ok"])
+        self.assertTrue(all(s.state == s.original for s in self.sessions))
+
+    async def test_a_backup_saved_without_speed_and_party_mode_still_restores(self):
+        await self.apply()
+        path = self.data / "studio-gradients" / "active.json"
+        record = json.loads(path.read_text())
+        for saved in record["modules"].values():
+            saved["controls"] = [
+                c for c in saved["controls"] if c["functionClass"] not in ("speed", "toggle")
+            ]
+        path.write_text(json.dumps(record))
+        self.assertTrue((await G.restore(self.sessions, self.data))["ok"])
+        self.assertFalse(G.status(self.data)["pending"])
+        for s in self.sessions:
+            restored = {k: v for k, v in s.state.items() if k[0] not in ("speed", "toggle")}
+            self.assertEqual(
+                restored, {k: v for k, v in s.original.items() if k[0] not in ("speed", "toggle")}
+            )
+
     async def test_new_scene_retains_first_backup(self):
         await self.apply()
         self.colors.reverse()
@@ -164,6 +200,25 @@ class GradientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["rolled_back"])
         self.assertTrue(all(s.state == s.original for s in self.sessions))
+
+    async def test_a_failed_reset_is_logged_and_rolled_back(self):
+        async def broken(look):
+            raise RuntimeError("boom")
+
+        self.sessions[1].whole = broken
+        with self.assertLogs("conductor.module.scene_gradient", "WARNING") as logs:
+            result = await self.apply()
+        self.assertEqual(
+            (result["ok"], result["phase"], result["rolled_back"]), (False, "reset_failed", True)
+        )
+        self.assertTrue(all(s.state == s.original for s in self.sessions))
+        text = "\n".join(logs.output)
+        self.assertIn(
+            f"ERROR:conductor.module.scene_gradient:scene gradient: dark reset failed on {G.PAIR_IDS[1]}",
+            text,
+        )
+        self.assertIn("RuntimeError: boom", text)
+        self.assertIn("reset_failed on bench-kit, shop-string-1 (The dark reset was not confirmed", text)
 
     async def test_controller_swap_and_invalid_input_send_nothing(self):
         for colors, brightness in [([[1, 2, 3]] * 29, 30), (self.colors, 0), (self.colors, True)]:

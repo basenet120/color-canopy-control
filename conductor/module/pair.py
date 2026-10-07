@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from conductor import rows as R
 from conductor.module import cards as C
 from conductor.module.session import ModuleError
 
 PAIR_IDS = ("bench-kit", "shop-string-1")
+log = logging.getLogger(__name__)
 
 
 def validate_action(sessions, action):
@@ -39,11 +41,15 @@ def validate_action(sessions, action):
             raise ModuleError(str(e), 400) from None
 
 
-async def _wave(sessions, action):
+async def _wave(sessions, action, phase):
     results = await asyncio.gather(*(s.whole(**action) for s in sessions), return_exceptions=True)
     out = {}
     for session, result in zip(sessions, results):
         if isinstance(result, BaseException):
+            if isinstance(result, ModuleError):
+                log.warning("studio pair: %s refused on %s: %s", phase, session.device_id, result.message)
+            else:
+                log.error("studio pair: %s failed on %s", phase, session.device_id, exc_info=result)
             result = {
                 "status": "failed",
                 "error": result.message
@@ -61,15 +67,16 @@ async def apply_pair(sessions, action, *, restart=False, sleep=asyncio.sleep):
         look = action.get("look") or {}
         if look.get("kind") != "preset":
             raise ModuleError("A coordinated restart needs a built-in preset.", 400)
-        dark = {"look": {"kind": "rgb", "rgb": [0, 0, 0], "brightness": look["brightness"]}}
+        # A preset sent without a brightness runs at the look's default; the dark reset uses the same level.
+        dark = {"look": {"kind": "rgb", "rgb": [0, 0, 0], "brightness": C.look_from_json(look).brightness}}
         validate_action(sessions, dark)
-        reset = await _wave(sessions, dark)
+        reset = await _wave(sessions, dark, "dark reset")
         if not all(x["result"]["status"] == "applied" for x in reset.values()):
             return {"ok": False, "phase": "reset", "modules": reset, "motion_phase_verified": False}
         # Both resets have completed; let both per-device rate windows clear before the next wave.
         await sleep(max(s.deps.settings.executor.min_write_interval_s for s in sessions))
         validate_action(sessions, action)
-    modules = await _wave(sessions, action)
+    modules = await _wave(sessions, action, "whole-module action")
     sent = [x["result"].get("timings", {}).get("sent_at") for x in modules.values()]
     return {
         "ok": all(x["result"]["status"] == "applied" for x in modules.values()),

@@ -233,6 +233,57 @@ def test_a_spare_kit_swaps_in_for_a_module_and_brings_its_bench_flags(app_client
     assert r.status_code == 409 and "already registered as spare-3" in r.json()["detail"]
 
 
+def test_a_swapped_in_spare_brings_the_controller_map_proven_on_it(app_client, tmp_path):
+    """The show reads each kit's own controller map (D54), so a swap moves it with the kit, as it moves the flags —
+    only a map proven on that very kit (D25); the module's old map stays bound to the dead kit."""
+    services = app_client.app.state.services
+
+    def register(md: str, device_id: str):
+        return app_client.post(
+            "/api/accounts/canopy/register", json={"metadevice_id": md, "device_id": device_id}
+        )
+
+    def mapping(proven_on: str) -> dict:
+        return {"frame_length": 60, "indices": list(range(30)), "proven_on": proven_on}
+
+    assert register("md-dead-0005", "canopy-r1c1").status_code == 200
+    services.update_registry("canopy-r1c1", {"framebuffer_mapping": mapping("md-dead-0005")})
+    assert register("md-spare-0001", "spare-1").status_code == 200
+    services.update_registry("spare-1", {"framebuffer_mapping": mapping("md-spare-0001")})
+    r = register("md-spare-0001", "canopy-r1c1")
+    assert r.status_code == 200 and r.json()["map_carried"] is True
+    assert "its controller map came with it" in r.json()["message"]
+    assert services.registry.get("canopy-r1c1").framebuffer_mapping.proven_on == "md-spare-0001"
+    overlay = yaml.safe_load((tmp_path / "data" / "overrides" / "registry.yaml").read_text())
+    assert overlay["devices"]["canopy-r1c1"]["framebuffer_mapping"]["proven_on"] == "md-spare-0001"
+
+    # a map proven on another kit never moves (D25): the module keeps its own, bound to the dead kit
+    assert register("md-dead-0006", "canopy-r0c0").status_code == 200
+    services.update_registry("canopy-r0c0", {"framebuffer_mapping": mapping("md-dead-0006")})
+    assert register("md-spare-0002", "spare-2").status_code == 200
+    services.update_registry("spare-2", {"framebuffer_mapping": mapping("md-somewhere-else")})
+    r = register("md-spare-0002", "canopy-r0c0")
+    assert r.status_code == 200 and r.json()["map_carried"] is False
+    assert "controller map" not in r.json()["message"]
+    assert services.registry.get("canopy-r0c0").framebuffer_mapping.proven_on == "md-dead-0006"
+
+
+def test_a_swap_drops_the_shows_cached_profile_of_the_old_controller(app_client_show):
+    """After a swap the show must not judge the carried map against the dead controller's cached profile: it drops
+    that module's capabilities and reads the new kit's at once."""
+    services = app_client_show.app.state.services
+    wiring = services.extras["show"]
+    refreshed: list[list[str] | None] = []
+    wiring.request_refresh = lambda ids=None: refreshed.append(ids)
+    sentinel = object()
+    wiring.caps["canopy-r1c1"] = sentinel
+    r = app_client_show.post(
+        "/api/accounts/canopy/register", json={"metadevice_id": "md-new-0001", "device_id": "canopy-r1c1"}
+    )
+    assert r.status_code == 200
+    assert wiring.caps.get("canopy-r1c1") is not sentinel and refreshed == [["canopy-r1c1"]]
+
+
 # ---- the /ops/accounts form --------------------------------------------------------------------------------------
 def test_form_is_off_without_the_flag(app_client):
     r = _form(app_client, {"account": "bench", "email": EMAIL, "password": PASSWORD})

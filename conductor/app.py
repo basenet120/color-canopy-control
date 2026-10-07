@@ -157,8 +157,12 @@ def canopy_layout(scheme: str | None = None) -> dict:
 
 
 @app.get("/", include_in_schema=False)
-def root() -> RedirectResponse:
-    return RedirectResponse("/ops/showcase/")
+def root(request: Request) -> RedirectResponse:
+    # The Studio is home only on the VWBD workshop laptop (CONDUCTOR_ENV=workshop, or workshop-sim in practice
+    # mode); the venue box, staging and a local run keep the visualizer.
+    services = getattr(request.app.state, "services", None)
+    environment = services.gate_settings.environment if services is not None else "local"
+    return RedirectResponse("/ops/showcase/" if environment.startswith("workshop") else "/visualizer/")
 
 
 app.include_router(core.router)

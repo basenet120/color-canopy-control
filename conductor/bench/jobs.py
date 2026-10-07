@@ -73,7 +73,6 @@ FLAG_QUESTIONS: dict[str, dict[str, str]] = {
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "gate_c_safe": {"brightness": (1, 100), "duration_s": (4.0, 120.0), "before_duration_s": (4.0, 60.0)},
     "effect_probe": {"code": (1, 255), "speed": (0, 100), "duration_s": (2.0, 20.0)},
-    "address_probe": {"start": (0, 255), "count": (1, 256), "brightness": (1, 100)},
     "address_probe_safe": {
         "start": (0, 255),
         "count": (1, 256),
@@ -817,6 +816,9 @@ async def address_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
 
     This diagnostic retains the controller's full frame length. It does not change the module map or
     promote a mapping flag; the observer must identify which physical heads respond.
+
+    Not a runnable job: it leaves its pattern in the slot, so only `address_probe_safe` calls it, inside a
+    context that tracks what it writes and restores it.
     """
     if not ctx.t1_allowed:
         return JobResult(
@@ -1705,7 +1707,7 @@ JOBS: dict[str, Job] = {
                 "Gate A — read-only profile dump",
                 "Reads what the kit says it can do: slots, frame length, colour modes, white range, presets.",
                 writes=False,
-                look_for="Nothing changes on the lights. Pass = 3 slots with a 30-entry frame.",
+                look_for="Nothing changes on the lights. Pass = 3 slots with a 30- or 60-entry frame.",
             ),
             gate_a,
         ),
@@ -1783,18 +1785,6 @@ JOBS: dict[str, Job] = {
                 params={"slot": "custom-3"},
             ),
             hue_ramp,
-        ),
-        Job(
-            JobSpec(
-                "address_probe",
-                "Address probe — locate individual lights",
-                "After Gate C, lights one address or a consecutive range in a saved slot; all other entries are off.",
-                writes=True,
-                look_for="After a brief whole-strand look, count which physical heads light from the controller end. "
-                "Addresses start at 0. The prior slot pattern is saved with the run; the probe stays visible.",
-                params={"slot": "custom-3", "start": 0, "count": 1, "color": "red", "brightness": 40},
-            ),
-            address_probe,
         ),
         Job(
             JobSpec(

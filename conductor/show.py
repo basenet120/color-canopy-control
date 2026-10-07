@@ -9,7 +9,11 @@
   capabilities arrive the current mode is compiled again — or, before the first look, the idle mode is shown. The
   reads also fill `services.extras["capabilities"]` (the cache /api/devices and the checklist use) when the bench
   target is the same device.
-- The compile context is rebuilt per change from the live registry (calibration, flags, recorded slot hashes).
+- The compile context is rebuilt per change from the live registry (calibration, flags, recorded slot hashes) and
+  each module's engine address, so a kit's controller map (D54) applies only on the kit it was proven on.
+- **Head count** (`conductor.framemap.head_check`): a module whose frame can't take per-head looks is flagged on the
+  tracker (NEEDS_ATTENTION). A module with its own proven controller map is healthy; a longer frame without one is
+  flagged as controller capacity with no proven map (D54), not as missing pucks.
 - **Tier rules** (04 ladder, 07 §6): the looks compiler refuses T1 without Gate C (`flags.t1_frames`) and T2 without
   hashes recorded as hand-painted in the Hubspace app; on top of that a T1 mode is only *shown* once every module's
   slot has a hash recorded by commissioning (origin "api"), so the kiosk never selects a slot that was never
@@ -28,6 +32,7 @@ from typing import Any
 
 from conductor.capabilities import Capabilities, detect
 from conductor.engine_api import Tier
+from conductor.framemap import head_check, module_heads
 from conductor.gate import Purpose
 
 log = logging.getLogger(__name__)
@@ -105,7 +110,7 @@ class ShowWiring:
             for r in info.states
             if r.function_class == "color-sequence-v2" and r.function_instance
         }
-        problem = caps.head_count_problem(entry.expected_heads)
+        problem = head_check(entry, target.address, caps, module_heads(services.config_dir)).problem
         previous = self._head_problems.pop(entry.id, None)
         if previous and previous != problem:
             services.tracker.clear_problem(
@@ -232,12 +237,15 @@ class ShowWiring:
 
         services = self.services
         simulated = services.engine_driver.simulated
+        addresses = {
+            entry.id: services.registry.address(entry.id, services.engine_driver.name)
+            for entry in services.registry.canopy_modules()
+        }
         flags = None
         if not simulated:
             flags = {}
             for entry in services.registry.canopy_modules():
-                address = services.registry.address(entry.id, services.engine_driver.name)
-                flags[entry.id] = entry.flags_for(address)
+                flags[entry.id] = entry.flags_for(addresses[entry.id])
         return CompileContext.from_settings(
             registry=services.registry,
             capabilities=self.caps,
@@ -246,6 +254,7 @@ class ShowWiring:
             flags=flags,
             modes=self.modes_file,
             config_dir=services.config_dir,
+            addresses=addresses,
         )
 
     def compile(self, mode_id: str, tier: Tier) -> Any:

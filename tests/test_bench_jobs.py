@@ -17,6 +17,7 @@ from conductor.bench.jobs import (
     FLAG_QUESTIONS,
     JOBS,
     LOOK_SPACING_S,
+    PARAM_BOUNDS,
     coerce_params,
     colour_name,
     hue_ramp_entries,
@@ -469,6 +470,22 @@ def test_unknown_jobs_devices_and_params_are_refused(tmp_path):
     assert bench(tmp_path, body) is None
 
 
+def test_the_original_address_probe_is_not_a_runnable_job(tmp_path):
+    """Retired from the catalogue (it leaves its pattern in the slot): only address_probe_safe calls it, and
+    restores what it wrote. Refused like any unknown job, before the lock is taken or anything is sent."""
+
+    async def body(services, runner):
+        with pytest.raises(BenchError, match="no bench job called 'address_probe'"):
+            runner.prepare("address_probe", "bench-kit", {})
+        with pytest.raises(BenchError):
+            await runner.run("address_probe", "bench-kit")
+        return services.locks.holder(ADDRESS), services.sim.stats()
+
+    holder, stats = bench(tmp_path, body)
+    assert holder is None and stats["writes"] == 0
+    assert "address_probe" not in JOBS and "address_probe" not in PARAM_BOUNDS
+
+
 def test_coerce_params():
     spec = JOBS["latency_trials"].spec
     assert coerce_params(spec, {"n": "4", "spacing_s": "2.5"})["n"] == 4
@@ -488,7 +505,6 @@ def test_every_job_is_listed_with_a_spec():
         "gate_c",
         "gate_c_safe",
         "hue_ramp",
-        "address_probe",
         "address_probe_safe",
         "effect_probe",
         "latency_trials",
