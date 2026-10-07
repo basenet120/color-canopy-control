@@ -70,10 +70,11 @@ On `/ops/bench/` → pick **Module N**, film the module with the clock page if A
 - [ ] **Hue ramp** into `custom-2` (only if Gate C says slot 2 already matches slot 1), then **Gate C** → answer →
       **Apply flags** (`t1_frames`).
 - [ ] If Gate C fails on the platform (not just one kit), painted modes can't use frames: see the note at the end.
-- [ ] **Map a 60-entry kit** (D57): after its own Gate C, run its own bounded address probes and record its
-      `framebuffer_mapping` (`bench-prototype-01.md` §5a). Recording is still an offline overlay edit with the
-      Conductor stopped. Batch all nine maps into one stop. Without a map, that module's painted looks are
-      whole-strand only.
+- [ ] **Map a 60-entry kit** (D57, D58): after its own Gate C, run **Address probe — bounded** with
+      `pattern=markers` (answer: head 1 red, head 2 green, head 30 blue, nothing else?), then with `start=30 count=30`
+      (answer: everything stayed dark?), then tap **Apply map** on either result card (`bench-prototype-01.md` §5a,
+      step 4). The card says what it records, or why not. A No anywhere means no map: tell Alon. Without a map, that
+      module's painted looks are whole-strand only.
 
 ## 6. Calibrate each module's wire order (about 5 min each)
 

@@ -28,7 +28,8 @@ and ideally passed Gates B and C then. If a spare wasn't onboarded, step 3 cover
 5. **Gates, only if the flags didn't come along** (5 min): `/ops/bench/` → Module N → Gate B → Apply flags; Gate C
    → Apply flags (`install-day-commissioning.md` step 5). Without them this module shows painted modes at module
    level only. **If the map didn't come along** on a 60-entry kit, map it per `bench-prototype-01.md` §5a
-   (`gate_c_safe` → `address_probe_safe` → record the map). Until then its painted looks are whole-strand only.
+   (`gate_c_safe` → Apply flags → the markers and 30–59 `address_probe_safe` runs → **Apply map**). Until then its
+   painted looks are whole-strand only.
 6. **Recalibrate** (5 min): `/ops/calibrate/` → Module N → hue ramp → photo → check or flip the wire order → Save →
    close the page. A new controller may number the pucks from the other end. If a map came with the controller onto
    this module's strings, check the markers against it before trusting it.

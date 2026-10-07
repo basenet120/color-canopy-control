@@ -359,4 +359,36 @@ also drops the show's cached profile of the old controller, so the carried map i
 
 Effect start/restart on the module page keeps the unmapped entries as read. Paint, cards, sweep and preview still
 write them OFF. An opt-in `sqhdk03-sim-60` profile models the real kit; the default simulator stays at 30 entries.
-Recording a map is still an offline overlay edit (STATUS gap 9).
+Recording a map was still an offline overlay edit (STATUS gap 9) until D58.
+
+**D58 — A kit's map is recorded in the app from its own two answered address probes, and only as the identity
+(closes STATUS gap 9).** **Apply map** on an `address_probe_safe` result card on `/ops/bench` (also
+`POST /api/bench/runs/{id}/map` and `python -m conductor.bench map <run_id>`) records `framebuffer_mapping` for
+device D at controller address A only when all of these hold (the proof rule, accepted by Alon on 2026-10-07):
+- (a) Gate C is proven on A: `flags_for(A).t1_frames` is true;
+- (b) D's newest markers probe at A (entry 0 red, 1 green, 29 blue) is a real run that finished with an exact restore
+  and is answered **Yes** to "Counting from the controller, was head 1 red, head 2 green and head 30 blue, with every
+  other head dark?";
+- (c) D's newest real probe at A of every entry from the module's head count to the last (30–59) is answered **Yes**
+  to "… did every head stay dark (nothing lit) while entries 30–59 were held?";
+- (d) both runs saw the same frame length L (each run checked that every slot agreed), the kit still reports L when the
+  map is applied (one profile read, a GET), and the module map's head count (30) equals the registry's
+  `expected_heads`.
+
+The map is then exactly the identity, `{frame_length: L, indices: [0 … heads − 1], proven_on: A}`. Anything else is
+refused with a plain reason, and no permutation is ever inferred. That covers a No (markers seen elsewhere, reversed
+order, a lit head past the heads), a missing or unanswered probe, a simulated run, a run from a kit that was
+re-registered since, and a changed frame length; the reason ends in "tell Alon" where the kit itself looks wrong.
+The newest probe of each kind is the one that counts. Other details:
+- the map goes into the ops overlay only (NOT_FOR_GIT), and only on that explicit action, never automatically;
+- both runs record what they justified, when, and the map it replaced. Taking back a Yes on either run puts that
+  previous map back, but only if the registry still holds exactly what was applied;
+- applying or revoking drops the show's cached profile of that module and reads it again, as a controller swap does,
+  so `/ops`, the attention list, the 7 am check and T1 pick it up at once;
+- applying sends nothing to the lights.
+
+So that (b) and (c) can be answered Yes or No, `address_probe_safe` now asks those two questions for a markers run
+and for a range wholly past the module's heads. Every other range keeps Paris's free-text question, and the job's
+writes and restore are unchanged. Probes saved before this change asked the free-text question, so they don't count.
+A later probe answered No blocks a new Apply map but doesn't remove a map already recorded; taking back the Yes on a
+run that recorded it does. Simulator only so far: the flow has never run against a real kit.
