@@ -98,7 +98,7 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 
 ## Verified in sim on the merged tree (and how) — 2026-10-07, macOS, Python 3.12
 - `make lint`: clean.
-- `uv run pytest`: **996 passed**, 20 failed, all in `tests/test_deploy.py`. That is the Linux-only venue installer
+- `uv run pytest`: **998 passed**, 18 failed, all in `tests/test_deploy.py`. That is the Linux-only venue installer
   run on macOS; it fails identically on Paris's tree, he changed nothing under `deploy/`, and CI runs ubuntu-24.04.
 - Paris's own suites: 72 Python tests pass; `node --test tests/*.test.mjs` 19 pass; `node tests/validate_live_import.cjs`
   passes (88 base cases, 22 variants).
@@ -143,8 +143,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    - The Studio's motion-demo copy says blocks "travel"; the evidence says only "moved to different heads" (D56).
    - The Gate A card in `jobs.py` says "30-entry frame" (60 passes too).
    - `soak.py`'s report says no effect code has been benched (code 1 has one bounded run).
-8. **CI and the e2e suite:** PR #9's first CI run failed once in the Test step and passed on re-run. Which test failed
-   is unknown; if CI fails again, read the job log first. `tests_e2e` wasn't run for this merge (see Verified).
+8. **CI and the e2e suite:** `main` CI was red from Sep 27 (PRs #9 and #10, and the first run of this PR) on two
+   `test_deploy.py` watchdog tests. Their stub `systemctl` reported a start 1 µs after boot, so a runner booted
+   < 120 s earlier put the watchdog inside its start-up grace and it exited silently. The stub now reports no
+   timestamp. `tests_e2e` wasn't run for this merge (see Verified).
 
 ## Next step
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
