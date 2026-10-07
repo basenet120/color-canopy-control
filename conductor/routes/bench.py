@@ -15,7 +15,8 @@
   runs and until the matching question is answered "yes".
 - `GET  /api/bench/runs/{id}/map` — what Apply map would record from this address probe and why, or why not
   (`{ready, reason, mapping, runs}`). `POST` records it: the kit's identity controller map, in the ops overlay, from
-  its own two answered probes (D58). Refused (409) unless the proof rule holds; it sends nothing to the lights.
+  its own two answered probes (D58). Refused (409) unless the proof rule holds, and (403/415) unless it is JSON from
+  this site. It sends nothing to the lights itself; a running show then re-reads the module (and re-sends its look).
 - `GET  /api/bench/time` — the server's clock in epoch ms (the clock page estimates its offset from it).
 """
 

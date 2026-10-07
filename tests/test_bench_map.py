@@ -144,7 +144,8 @@ def test_apply_map_records_exactly_the_identity_map_in_the_ops_overlay_and_write
     assert out["proposal"]["runs"] == {"markers": markers, "dark": dark}
     reason = out["proposal"]["reason"]
     assert "entries 0–29 drive heads 1–30" in reason and "30–59 drive nothing" in reason
-    assert "sends nothing to the lights" in reason and markers in reason and dark in reason
+    assert "sends nothing to the lights itself" in reason and markers in reason and dark in reason
+    assert "the show then re-reads it and sends its current look to the canopy again" in reason
     assert out["mapping"] == IDENTITY  # exactly the identity, proven on this kit's own address
     assert out["indices"] == list(range(30)) and out["check"] == "mapped"  # the one validity rule accepts it
     assert out["writes"] == 0  # applying a map sends nothing to any device
@@ -544,7 +545,7 @@ def test_a_revoke_puts_back_the_map_that_was_there_before(tmp_path):
 
 
 # ---- the show picks it up at once (end to end, opt-in 60-entry profile) ---------------------------------------------
-def test_the_shows_head_check_flips_from_no_map_to_mapped_after_apply(tmp_path):
+def test_the_shows_head_check_flips_to_mapped_after_apply_and_back_after_a_revoke(tmp_path):
     module, address = "canopy-r1c1", "sim-canopy-r1c1"
     canvas = "rainbow-row-sunset"
 
@@ -564,6 +565,7 @@ def test_the_shows_head_check_flips_from_no_map_to_mapped_after_apply(tmp_path):
         await probe(services, runner, MARKERS, device_id=module)
         dark = await probe(services, runner, DARK, device_id=module)
         writes = services.sim.stats()["writes"]
+        to_module = services.sim.stats()["writes_per_device"].get(address, 0)
         await runner.apply_map(dark)
         sent = services.sim.stats()["writes"] - writes
         ok = await _until(
@@ -571,23 +573,45 @@ def test_the_shows_head_check_flips_from_no_map_to_mapped_after_apply(tmp_path):
             lambda: module in wiring.caps and not services.tracker.snapshot(address)["problems"],
             60,
         )
+        # the show then sends its current look again, now through the map (the copy on /ops/bench says so)
+        resent = await _until(
+            services.clock, lambda: services.sim.stats()["writes_per_device"].get(address, 0) > to_module, 60
+        )
         after = {
             "ok": ok,
             "check": framemap.head_check(services.registry.get(module), address, wiring.caps[module], heads),
             "plan": wiring.compile(canvas, Tier.T1).modules[module],
             "sent": sent,
+            "resent": resent,
+        }
+        runner.answer(dark, {runner.get(dark)["result"]["ask_human"][0]: "no"})  # taken back
+        flagged = await _until(
+            services.clock,
+            lambda: (
+                module in wiring.caps
+                and capacity_problem(60, 30) in services.tracker.snapshot(address)["problems"]
+            ),
+            60,
+        )
+        revoked = {
+            "flagged": flagged,
+            "check": framemap.head_check(services.registry.get(module), address, wiring.caps[module], heads),
         }
         await wiring.close()
         await services.close()
-        return before, after
+        return before, after, revoked
 
-    before, after = run_virtual(main)
+    before, after, revoked = run_virtual(main)
     assert before["check"].kind == "no_map" and capacity_problem(60, 30) in before["problems"]
     assert "no proven map" in before["t1"]
-    assert after["sent"] == 0  # the apply itself wrote nothing (the show may write afterwards, as it should)
+    assert after["sent"] == 0  # apply_map itself wrote nothing to any device
     assert after["ok"] is not None and after["check"].kind == "mapped"
+    # the show's own re-send (its executor, its live gate) after it re-read the module
+    assert after["resent"] is not None
     # T1 through the map: the full controller frame
     assert len(R.frame_entries(after["plan"].slot_value)) == 60
+    # after the revoke the show re-reads the module at once: flagged again on the tracker (/ops, the 7 am check)
+    assert revoked["flagged"] is not None and revoked["check"].kind == "no_map"
 
 
 # ---- the routes and the CLI ----------------------------------------------------------------------------------------

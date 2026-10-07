@@ -19,8 +19,9 @@
   puts the flags this run applied back to what they were before (if nothing else changed them since).
 - A kit's controller map (`framebuffer_mapping`, D54) is recorded only by `apply_map`, from that kit's own two
   answered `address_probe_safe` runs (the proof rule, D58), and only ever as the identity map. It writes the ops
-  overlay and reads the kit's profile once; it sends nothing to the lights. Taking back a "yes" on either run puts
-  the previous map back (if nothing else changed it since).
+  overlay and reads the kit's profile once; it sends nothing to the lights itself, but a running show then re-reads
+  that module and, if it is a canopy module, sends its current look again through the map. Taking back a "yes" on
+  either run puts the previous map back (if nothing else changed it since).
 """
 
 from __future__ import annotations
@@ -569,7 +570,8 @@ class BenchRunner:
                 f"entries {heads}–{length - 1} drive nothing ({length}-entry controller), for this kit only. "
                 f"Proof: Gate C on this kit, and its markers probe ({runs['markers']}) and its "
                 f"{_probe_name('dark', heads)} ({runs['dark']}), both answered Yes. It reads the kit's frame length "
-                "once more first, and sends nothing to the lights."
+                "once more first and sends nothing to the lights itself. If this kit is a canopy module in a running "
+                "show, the show then re-reads it and sends its current look to the canopy again, through this map."
             ),
             "mapping": mapping,
             "runs": runs,
@@ -577,7 +579,8 @@ class BenchRunner:
 
     async def apply_map(self, run_id: str) -> dict[str, Any]:
         """Record the kit's identity map from its two answered probes (D58) in the ops overlay. One profile read
-        checks the kit still reports the probes' frame length; nothing is sent to the lights."""
+        checks the kit still reports the probes' frame length; this sends nothing to the lights (the show's re-read
+        afterwards may: `_reread_show`)."""
         record = self.get(run_id)
         self._map_proof(record)  # refused before the kit is read
         caps = await self._current_caps(record["device_id"], record["address"], record.get("driver") or "")
@@ -819,7 +822,9 @@ class BenchRunner:
 
     def _reread_show(self, device_id: str) -> None:
         """The show caches each module's profile and judges its map from it: drop the cache and read it again now,
-        as a controller swap does, so /ops, the 7 am check and T1 pick the change up at once."""
+        as a controller swap does, so /ops, the 7 am check and T1 pick the change up at once. For a canopy module
+        the re-read counts as new capabilities, so the running show sends its current look again (its own writes,
+        through its executor and the live gate)."""
         if (wiring := self.services.extras.get("show")) is not None:
             wiring.caps.pop(device_id, None)
             wiring.request_refresh([device_id])
