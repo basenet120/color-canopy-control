@@ -322,8 +322,9 @@ Custom 1 or 2 (never Custom 3), holds it for a bounded time, then restores the f
 look as three separate commands. A single combined restore left String light 1 in Custom mode (run f613f6, CLOUD readback).
 `address_probe_safe` defaults to Custom 2, refuses Custom 3 and restores exactly. `effect_probe` tests one effect code
 for 2–20 s and restores the slot, but not the previous look. No job enables or names an effect code or saves a map;
-`effects.enabled` stays empty. The original `address_probe` still defaults to Custom 3 and leaves its pattern there, so
-use the safe job on any slot that holds a pattern someone saved.
+`effects.enabled` stays empty. The original `address_probe` defaulted to Custom 3 and left its pattern there, so it is **no longer a runnable job**
+(decided 2026-10-07). The bench page, CLI and runner refuse it; the function survives only inside `address_probe_safe`,
+which tracks and restores what it touched.
 
 **D56 — The Studio (`/ops/showcase/`) is Paris's six-scene home, and `/` redirects to it.** Six scene palettes
 (Lowcountry Calm … The Goodnight Glow) are drawn on the saved 270-head canopy. They live in
@@ -339,5 +340,6 @@ use the safe job on any slot that holds a pattern someone saved.
 The gradient has never been sent to real hardware, because preflight blocks the uncommissioned String light 1. The
 Studio is wired to VWBD's two kits: `bench-kit` (label "Kingston test…") and `shop-string-1` (label "String light 1…"),
 the second only in VWBD's private overlay. Anywhere else the live Studio refuses to connect and only `?preview=1`
-works. **Open (Alon):** today `/` redirects to the Studio in every mode, including the venue box and staging, where
-it can't connect.
+works. So `/` redirects to the Studio only when the runtime environment (`CONDUCTOR_ENV`, else Railway's
+environment name) starts with `workshop`: Paris's laptop, live or practice. Everywhere else (venue box, staging,
+local) it goes to `/visualizer/` as before (decided 2026-10-07).

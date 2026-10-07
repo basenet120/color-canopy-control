@@ -13,6 +13,9 @@ canon (D54). One kit, Kingston, is commissioned for per-head frames. The show en
    It also carries PR #10's STATUS commit, so **#10 is superseded**. PRs #1–#9 were already merged on Sep 27, and their
    remote branches are fully merged and can be deleted. **Merging this redeploys Railway staging.** Check the pre-deploy
    item under Next step first.
+2. **`claude/review-fixes` → after #11**: fixes for the bugs the merge review found in Paris's Studio and bench code,
+   the two decisions (home redirect, retiring the original `address_probe`), route-level Studio tests, writer-path
+   coverage for the new jobs and Studio paths, and true copy (see Known gaps 2–4 and 7).
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -113,30 +116,36 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    modules they flag every module, and T1 canvas looks can't use them. Fix: port Paris's `framebuffer_mapping` into
    those paths. Main's removed 929c0d2 shows the shape, including the "the length is capacity, check the heads by eye"
    wording.
-2. **`/` redirects to the Studio in every mode**, including the venue box and staging, where it can't connect (D56).
-   Decide whether to keep it there or redirect only in the VWBD workshop.
-3. **Bugs in Paris's code** (fixes drafted in review, not applied):
-   - the scene-gradient restore loses preset speed and party-mode yet reports `ok`;
+2. ~~`/` redirects to the Studio in every mode~~ **Decided and done (`claude/review-fixes`, D56):** the Studio is home
+   only when `CONDUCTOR_ENV` starts with `workshop`; elsewhere `/` goes to `/visualizer/`.
+3. **Bugs in Paris's code.**
+   Fixed in `claude/review-fixes`, each with a regression test that fails on the old code:
+   - the gradient restore now keeps preset speed and party-mode;
+   - a paired restart with no brightness uses the preset's level instead of returning HTTP 500;
+   - pair and gradient errors are logged (device and phase, never credentials);
+   - slot cards show the mapped head count;
+   - the Presentation link is hidden from testers;
+   - the original `address_probe` is retired (D55).
+
+   Still open:
    - Start/Restart effect on a mapped kit rewrites entries 30–59 to OFF. That shifts the slot hash of an app-recorded
      T2 slot if the app fills those entries, which is unknown because no hand-painted app pattern has been dumped
      yet;
-   - `effect_probe` ends on the probed slot instead of the previous look;
-   - the original `address_probe` defaults to Custom 3 and never restores it;
-   - a paired restart with a preset that has no brightness → HTTP 500;
+   - `effect_probe` ends on the probed slot instead of the previous look. It needs a bench check of whether
+     re-entering individual mode reloads the header;
    - a pending gradient record can block the feature (manual recovery: inspect
      `<CONDUCTOR_DATA_DIR>/studio-gradients/active.json`; the `backup-*.json` files keep the originals);
-   - pair and gradient errors aren't logged;
-   - module-page slot cards say "60 heads" on a 30-head mapped kit;
-   - the "Presentation view" link shows for tester-role users.
-4. **Test gaps:**
-   - no route-level tests for `/api/studio/pair/*`;
-   - the writer-path allowlist test doesn't list the new jobs;
-   - Paris's JS tests and the tracker check aren't in `make test` or CI.
+   - whether real Afero readbacks include speed and party-mode, which the gradient fix backs up only when present, is
+     unverified on hardware.
+4. **Test gaps.** `claude/review-fixes` adds route-level Studio tests (14) and writer-path coverage for `gate_c_safe`,
+   `address_probe_safe`, `effect_probe` and both Studio write paths: a non-allowlisted device gets zero requests.
+   Still open: Paris's JS tests and the tracker check aren't in `make test` or CI.
 5. **The kit builder** (`scripts/make_workshop_kit.py`) would not ship `TEST-CENTER.html`, `tests/`, `tools/` or
    Paris's docs. Until it does, VWBD keeps working from Paris's own folder rather than a freshly built kit.
 6. **The simulator still models the 30-entry sibling string.** The real Gate A dump now exists
    (`docs/bench-capability-check/gate-a-result.json`) but isn't the SQHDK03 fixture yet.
-7. **Stale text in Paris's own files** (left as canon; fix with the next change to each):
+7. **Stale text in Paris's own files.** All four items below are fixed in `claude/review-fixes`. Still stale:
+   `config/sim/soak.yaml`'s header comment says no motion code has been benched.
    - `workshop/README.md` points to the Oct 2 handoff and says painting unlocks after the original Gate C. On a
      60-entry kit painting also needs the kit's own map: commission per runbook §5a (`gate_c_safe` → `address_probe_safe`
      → record the map).
@@ -154,7 +163,7 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    registry after the redeploy.
 2. Alon merges this PR. Then `git pull` in the main checkout (it was 84 commits behind) and delete the merged
    `claude/*` remote branches.
-3. Decide gap 2 (home redirect) and the `address_probe` default slot. Then make one small fix-up PR for gaps 3–4.
+3. Merge `claude/review-fixes` after #11 (gaps 2–4 and 7).
 4. **Port the mapping into the show path (gap 1).** This is required before the canopy's T1 looks can run on real kits
    at install (Oct 20–23); feature freeze target Oct 12. 07 §6 (binding) still says only "frame length = the device's
    framebuffer length". Alon words the mapping rule into it as part of the port.
@@ -181,7 +190,6 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - iOS Safari: enrollment cookies, beacon on page close, Guided Access.
 
 ## Decisions Alon owes
-- **Home redirect** (gap 2, D56) and the **`address_probe` default slot** (D55).
 - **Golden Hour technique and kiosk look** (06 #12–13, was due Oct 5). The new input is the bounded code-1 movement on
   Kingston; there is no direction or multi-controller phase data yet.
 - **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback

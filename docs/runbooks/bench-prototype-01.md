@@ -192,9 +192,8 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
   (entry 0 red, 1 green, 29 blue — a 60-entry kit with 30 pucks only) or a range (`start`, `count`, one colour),
   everything else off, for 4–120 s (default 60) at 30% by default, then restores exactly. Needs that kit's own T1
   (Gate C applied), and the slot's pattern must have no effect running. It never saves a map.
-- **Address probe — original** (`address_probe`). A range of addresses only (no markers), 40 % by default, no timed hold, and the same T1 rule, but it **defaults to Custom 3
-  and leaves its pattern in the slot** (the old one is only saved with the run). Don't run it on a slot holding a
-  saved pattern you care about; use the bounded one.
+- **Address probe — original** (`address_probe`): **retired** (D55). It defaulted to Custom 3 and left its pattern
+  in the slot, so the bench no longer offers it. Use the bounded probe above.
 - **Custom effect test** (`effect_probe`). One code (`motionEffect` or `brightnessEffect`, 1–255, speed 0–100) on
   a rainbow or separated blocks, 2–20 s at 30%; needs T1; Custom 3 by default. Afterwards it writes the slot's
   original pattern and header back, but the lights end on **that slot** at the previous brightness, not on the look
