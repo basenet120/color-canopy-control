@@ -24,6 +24,7 @@ command result (timings, HTTP result, readback) plus the updated state, and says
 from __future__ import annotations
 
 import json
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
@@ -35,6 +36,9 @@ from conductor.module import ModuleError, ModuleManager, ModuleSession
 from conductor.roles_api import Principal, Role
 from conductor.routes.accounts import same_origin
 from conductor.routes.deps import principal_of, require_device_access, services_of
+from conductor.routes.deps import require_ops
+from conductor.module.pair import PAIR_IDS, apply_pair
+from conductor.module import scene_gradient
 
 
 def _no_cross_site(request: Request) -> None:
@@ -84,6 +88,75 @@ class WholeBody(LeaseBody):
     look: dict[str, Any] | None = None
     power: bool | None = None
     brightness: int | None = None
+
+
+class PairBody(_Body):
+    leases: dict[str, str] = Field(min_length=2, max_length=2)
+    look: dict[str, Any] | None = None
+    power: bool | None = None
+    brightness: int | None = None
+    restart: bool = False
+
+
+@router.post('/api/studio/pair/whole')
+async def paired_whole(request: Request, body: PairBody, _who: Annotated[Principal, Depends(require_ops)]) -> JSONResponse:
+    if set(body.leases) != set(PAIR_IDS):
+        raise HTTPException(400, 'Only the two registered shop modules may be paired.')
+    sessions = [_session(request, key, body.leases[key]) for key in PAIR_IDS]
+    services = services_of(request)
+    lock = services.extras.setdefault('studio_pair_lock', asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(409, 'A paired command is already running. Wait for both readbacks.')
+    async def perform():
+        async with lock:
+            return await apply_pair(sessions, {'look': body.look, 'power': body.power, 'brightness': body.brightness}, restart=body.restart)
+    task = asyncio.create_task(perform())
+    pending = services.extras.setdefault('studio_pair_tasks', set())
+    pending.add(task)
+    task.add_done_callback(pending.discard)
+    try:
+        result = await asyncio.shield(task)
+    except ModuleError as e:
+        raise _fail(e) from None
+    return JSONResponse(result, headers=NO_STORE)
+
+
+class GradientBody(_Body):
+    leases: dict[str, str] = Field(min_length=2, max_length=2)
+    action: Literal['apply', 'restore'] = 'apply'
+    colors: list[list[int]] = Field(default_factory=list, max_length=30)
+    brightness: int = Field(40, ge=1, le=100)
+    label: str = Field('Scene gradient', max_length=80)
+
+
+@router.get('/api/studio/pair/gradient')
+async def gradient_status(request: Request, _who: Annotated[Principal, Depends(require_ops)]) -> JSONResponse:
+    return JSONResponse(scene_gradient.status(services_of(request).data), headers=NO_STORE)
+
+
+@router.post('/api/studio/pair/gradient')
+async def paired_gradient(request: Request, body: GradientBody, _who: Annotated[Principal, Depends(require_ops)]) -> JSONResponse:
+    if set(body.leases) != set(PAIR_IDS):
+        raise HTTPException(400, 'Use the two registered shop modules.')
+    sessions = [_session(request, key, body.leases[key]) for key in PAIR_IDS]
+    services = services_of(request)
+    lock = services.extras.setdefault('studio_pair_lock', asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(409, 'A paired command is already running. Wait for both readbacks.')
+    async def perform():
+        async with lock:
+            if body.action == 'restore':
+                return await scene_gradient.restore(sessions, services.data)
+            return await scene_gradient.apply(sessions, body.colors, body.brightness, body.label, services.data)
+    task = asyncio.create_task(perform())
+    pending = services.extras.setdefault('studio_pair_tasks', set())
+    pending.add(task)
+    task.add_done_callback(pending.discard)
+    try:
+        result = await asyncio.shield(task)
+    except ModuleError as e:
+        raise _fail(e) from None
+    return JSONResponse(result, headers=NO_STORE)
 
 
 class CardBody(LeaseBody):

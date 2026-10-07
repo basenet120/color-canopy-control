@@ -1,0 +1,61 @@
+{
+  "schema": "color-canopy-commissioning-evidence-v1",
+  "packaged_date": "2026-10-02",
+  "observed_date": "2026-09-28",
+  "logical_device": "bench-kit",
+  "device_id_sha256": "3a1b0e4e780767310dcfa97f8214146997cf2d3c6ff61832fa28d457d86d78d6",
+  "hash_input": "UTF-8 bytes of the registered metadevice_id after stripping surrounding whitespace; no newline",
+  "expected_heads": 30,
+  "proven_capability": {
+    "t1_frames": true
+  },
+  "mapping": {
+    "frame_length": 60,
+    "indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+    ]
+  },
+  "evidence": [
+    "bench-capability-check/gate-c-result.json",
+    "bench-capability-check/address-probe-20260928T170508-address_probe-3d96bf.json",
+    "bench-capability-check/address-probe-20260928T170550-address_probe-7c9304.json",
+    "bench-capability-check/address-probe-20260928T170634-address_probe-e17efc.json",
+    "bench-capability-check/address-probe-20260928T170729-address_probe-86cd2c.json"
+  ],
+  "limitations": [
+    "Evidence record only: does not authenticate, register, authorize or modify a runtime.",
+    "Carry over only for the identical registered device after matching this digest and fresh 60-entry slot readback.",
+    "No t2_select or readback_device_level proof is asserted by this transfer.",
+    "No custom motion/brightness effect code has been physically proven or enabled.",
+    "Intermediate heads were not individually swept; panel geometry remains unverified."
+  ]
+}

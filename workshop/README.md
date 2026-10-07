@@ -1,3 +1,11 @@
+# Current distribution — October 2, 2026
+
+Start with [VWBD-HANDOFF.md](VWBD-HANDOFF.md) for the current setup, completed physical tests, repairs and next test. This is the updated user-supplied ZIP baseline, not the initial untested kit. The Windows browser workflow is supported; a phone app is not required for these continuing tests.
+
+The original workshop guide follows for background. Its simulator-first tutorial is optional.
+
+---
+
 # Color Canopy — Prototype 01 test program (workshop kit)
 
 This program lets you control **one Color Canopy test module** — one Hampton Bay Hubspace permanent-light kit, 30 pucks —

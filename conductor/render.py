@@ -8,11 +8,10 @@ Rules being implemented (04 "Cloud profile", 07 §6):
   `rgb × colorBrightness` blended additively with `kelvin_to_rgb(cct) × whiteBrightness`, × strand brightness,
   clamped. Per-puck white on this RGBW product is UNVERIFIED; a device with a `no-white` hint gets no white term.
   Heads beyond the frame stay dark (a short frame lights only its own entries).
-- **sequence** → firmware animations can't be reproduced, so these are **deterministic, clearly-approximate**
-  stills: a named program (preset `custom` + `color-sequence/custom`) shows its decoded CCT and level (research:
-  api-model.md, e.g. dinner-party = 2800 K at 62%); a preset shows a 3-colour palette cycled along the heads —
-  from a small table for well-known presets, otherwise hashed from the name. Descriptions say "simulated
-  approximation" so no surface passes them off as what Hubspace is doing.
+- **sequence** → deterministic starting frames for known presets, with separate metadata for the browser's
+  illustrative animation. RGB fades/jumps begin red; rainbow gradients use matching adjacent pairs observed
+  on the bench. Unknown presets/programs are neutral grey, never invented name-derived colors. The browser
+  identifies these as unsynchronized previews, not measured LED frames.
 
 Colours are `{"r", "g", "b"}` dicts of 0–255 ints. No animation, no time: the same rows always render the same.
 """
@@ -20,7 +19,6 @@ Colours are `{"r", "g", "b"}` dicts of 0–255 ints. No animation, no time: the 
 from __future__ import annotations
 
 import colorsys
-import hashlib
 import math
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -48,6 +46,11 @@ PROGRAMS: dict[str, tuple[int, int]] = {
 
 # Approximate palettes for well-known presets (decoded holiday fades: christmas red/green, rainbow r/g/b).
 KNOWN_PRESETS: dict[str, tuple[RGB, RGB, RGB]] = {
+    "rainbow-road": ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
+    "rainbow-roll": ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
+    "gradient-rainbow": ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
+    "fade-3": ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
+    "jump-3": ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
     "christmas": ((255, 0, 0), (0, 200, 0), (255, 180, 110)),
     "rainbow": ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
     "halloween": ((255, 100, 0), (140, 0, 255), (255, 60, 0)),
@@ -116,17 +119,26 @@ def _rgb_value(value: Any) -> RGB:
 
 
 def preset_palette(name: str) -> tuple[RGB, RGB, RGB]:
-    """A deterministic 3-colour stand-in for a firmware preset (known table first, else hashed from the name)."""
-    if name in KNOWN_PRESETS:
-        return KNOWN_PRESETS[name]
-    digest = hashlib.sha256(name.encode()).digest()
-    out = []
-    for i in range(3):
-        hue = digest[i] / 256.0
-        sat = 0.65 + digest[3 + i] / 255.0 * 0.35
-        r, g, b = colorsys.hsv_to_rgb(hue, sat, 1.0)
-        out.append((_clamp(r * 255), _clamp(g * 255), _clamp(b * 255)))
-    return (out[0], out[1], out[2])
+    """Known palette, or neutral grey when no color model exists. Never invent colors from a name."""
+    return KNOWN_PRESETS.get(name, ((96, 96, 96),) * 3)
+
+
+def sequence_preview(rows: Iterable[StateRow] | Mapping[Key, Any]) -> dict | None:
+    """Describe an illustrative preview, never a stream of measured LED animation frames."""
+    state = _by_key(rows)
+    if str(state.get(("power", None), "on")) == "off" or _mode(state) != "sequence":
+        return None
+    name = str(state.get(("color-sequence", "preset")) or "unknown")
+    styles = {"gradient-rainbow": "gradient", "rainbow-road": "travel",
+              "rainbow-roll": "pulse-rainbow", "fade-3": "fade-black", "jump-3": "jump"}
+    style = styles.get(name, "palette" if name in KNOWN_PRESETS else "unavailable")
+    if name == "custom":
+        name = str(state.get(("color-sequence", "custom")) or "unknown program")
+        style = "program" if name in PROGRAMS else "unavailable"
+    return {"name": name, "style": style, "brightness": _level(state),
+            "speed": max(-10, min(10, _int(state.get(("speed", "color-sequence")), 0))),
+            "animated": style in {"travel", "pulse-rainbow", "fade-black", "jump"},
+            "available": style != "unavailable", "approximate": True, "synchronized": False}
 
 
 def _mode(state: Mapping[Key, Any]) -> str:
@@ -153,10 +165,18 @@ def head_colors(
         preset = str(state.get(("color-sequence", "preset")) or "")
         if preset == "custom":
             program = str(state.get(("color-sequence", "custom")) or "")
-            kelvin, pct = PROGRAMS.get(program, (2700, 50))
+            if program not in PROGRAMS:
+                return [_rgb(_scale((96, 96, 96), level)) for _ in range(n_heads)]
+            kelvin, pct = PROGRAMS[program]
             c = _rgb(_scale(kelvin_to_rgb(kelvin), pct / 100.0))  # the program sets its own level
             return [dict(c) for _ in range(n_heads)]
         palette = preset_palette(preset or "unknown")
+        if preset in {"gradient-rainbow", "rainbow-road", "rainbow-roll"}:
+            pairs = max(1, math.ceil(n_heads / 2))
+            return [_rgb(_scale(tuple(c * 255 for c in colorsys.hsv_to_rgb(
+                (i // 2) / pairs, 1.0, 1.0)), level)) for i in range(n_heads)]
+        if preset in {"fade-3", "jump-3"}:
+            return [_rgb(_scale(palette[0], level)) for _ in range(n_heads)]
         return [_rgb(_scale(palette[i % 3], level)) for i in range(n_heads)]
     # white (and any mode we don't model) → tunable white
     kelvin = _int(state.get(("color-temperature", None)), 2700)
@@ -188,7 +208,7 @@ def describe_look(
     rows: Iterable[StateRow] | Mapping[Key, Any], n_heads: int | None = None, caps: Capabilities | None = None
 ) -> str:
     """The look in words, e.g. "white 2700 K at 60%", "slot custom-1 (30 painted heads)",
-    "preset snowfall (simulated approximation)"."""
+    "preset snowfall (on-screen preview is approximate)"."""
     state = _by_key(rows)
     if str(state.get(("power", None), "on")) == "off":
         return "off"
@@ -203,16 +223,17 @@ def describe_look(
         entries = frame_entries(state.get((FRAME_CLASS, slot)))
         if not entries:
             return f"slot {slot} (no pattern stored){at}"
-        of = f" of {n_heads}" if n_heads is not None and n_heads != len(entries) else ""
-        return f"slot {slot} ({len(entries)} painted heads{of}){at}"
+        if n_heads is not None and n_heads != len(entries):
+            return f"slot {slot} ({len(entries)} controller entries; {n_heads} heads on the map){at}"
+        return f"slot {slot} ({len(entries)} painted heads){at}"
     if mode == "sequence":
         preset = str(state.get(("color-sequence", "preset")) or "unknown")
         if preset == "custom":
             program = str(state.get(("color-sequence", "custom")) or "unknown")
             if program in PROGRAMS:
                 kelvin, pct = PROGRAMS[program]
-                return f"program {program}: {kelvin} K at {pct}% (simulated approximation)"
-            return f"program {program} (simulated approximation)"
-        return f"preset {preset}{at} (simulated approximation)"
+                return f"program {program}: {kelvin} K at {pct}% (on-screen preview is approximate)"
+            return f"program {program} (on-screen preview is approximate)"
+        return f"preset {preset}{at} (on-screen preview is approximate)"
     kelvin = _int(state.get(("color-temperature", None)), 2700)
     return f"white {kelvin} K at {level}%"

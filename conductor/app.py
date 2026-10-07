@@ -158,7 +158,7 @@ def canopy_layout(scheme: str | None = None) -> dict:
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    return RedirectResponse("/visualizer/")
+    return RedirectResponse("/ops/showcase/")
 
 
 app.include_router(core.router)

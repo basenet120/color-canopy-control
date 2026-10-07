@@ -7,11 +7,11 @@ Rules implemented here:
   live gate sees the right purpose for writes, reads, token refreshes and aioafero's own background polling.
   Writes are also pre-checked with `LiveGate.check_write` so a refused write sends *nothing* — not even a token
   refresh.
-- **One `write()` = one PUT**, sent with `bridge.request("put", …/metadevices/{id}/state, json=…,
+- **One `write()` = one PUT**, sent with `bridge.create_request("put", …/metadevices/{id}/state, True, json=…,
   headers={host: semantics2.afero.net, content-type: application/json; charset=utf-8})` inside
   `asyncio.wait_for(…, 8)`. `lastUpdateTime` is stamped in epoch **milliseconds** from the injected clock.
-- **No hidden retries.** `aioafero.v1.v1_const.MAX_RETRIES` is forced to 1 at import and again before every send
-  (aioafero reads it at call time); the executor owns retries.
+- **No hidden retries.** Adapter calls use `create_request`, which sends once. For aioafero's own calls,
+  `aioafero.v1.v1_const.MAX_RETRIES` is forced to 1 at import and again before every send; the executor owns retries.
 - **Nothing raises for HTTP or transport problems.** Results are classified into `Outcome`: gate refusal →
   DENIED; `ExceededMaximumRetries`, 403 (`HTTPForbidden`, the observed throttling signature), 429/503/504 →
   THROTTLED, with the real status on `http_status`; `InvalidAuth` → AUTH; 404 → NOT_FOUND; other 4xx →
@@ -749,11 +749,18 @@ class AferoDriver:
         force_single_attempt()
         start = self.clock.monotonic()
         invalid_auth = False
+
+        async def request_bytes() -> tuple[int, bytes]:
+            # Read before the context releases the response. aioafero 9.3.0's request() reads and releases
+            # it before returning, so reading that response again raises ClientConnectionError even on 200.
+            # create_request preserves auth and the gated session, and performs exactly one HTTP attempt.
+            async with bridge.create_request(method, url, True, **kwargs) as response:
+                return response.status, await response.read()
+
         with capture_exchange() as seen:
             try:
                 with purpose_scope(purpose):
-                    response = await asyncio.wait_for(bridge.request(method, url, **kwargs), SEND_TIMEOUT_S)
-                    body = await response.read()
+                    status, body = await asyncio.wait_for(request_bytes(), SEND_TIMEOUT_S)
             except REQUEST_ERRORS as exc:
                 outcome, error = classify_exception(exc)
                 invalid_auth = isinstance(exc, InvalidAuth)
@@ -764,8 +771,8 @@ class AferoDriver:
                         error = classify_status(status)[1] or error
                 reply = _Reply(outcome, status, b"", error, self.clock.monotonic() - start)
             else:
-                outcome, error = classify_status(response.status)
-                reply = _Reply(outcome, response.status, body or b"", error, self.clock.monotonic() - start)
+                outcome, error = classify_status(status)
+                reply = _Reply(outcome, status, body or b"", error, self.clock.monotonic() - start)
             finally:
                 self._persist_rotation(link, bridge)
         if bridge is not link.bridge:

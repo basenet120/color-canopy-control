@@ -65,11 +65,16 @@ Q_HEAD_BOOT = "With strings 2 and 3 unplugged, did only string 1's pucks light w
 FLAG_QUESTIONS: dict[str, dict[str, str]] = {
     "gate_b": {"t2_select": Q_GATE_B},
     "gate_c": {"t1_frames": Q_GATE_C},
+    "gate_c_safe": {"t1_frames": Q_GATE_C},
     "gate_b_unplugged": {"readback_device_level": Q_UNPLUGGED},
 }
 
 # Bounds for numeric job options (inclusive), checked by coerce_params before a run starts.
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
+    "gate_c_safe": {"brightness": (1, 100), "duration_s": (4.0, 120.0), "before_duration_s": (4.0, 60.0)},
+    "effect_probe": {"code": (1, 255), "speed": (0, 100), "duration_s": (2.0, 20.0)},
+    "address_probe": {"start": (0, 255), "count": (1, 256), "brightness": (1, 100)},
+    "address_probe_safe": {"start": (0, 255), "count": (1, 256), "brightness": (1, 100), "duration_s": (4.0, 120.0)},
     "latency_trials": {"n": (1, MAX_TRIALS), "spacing_s": (0.0, MAX_SPACING_S)},
     "rate_ramp": {"writes_per_step": (1, MAX_RAMP_WRITES_PER_STEP)},
     "head_count_boot": {"full_heads": (1, 90)},
@@ -575,6 +580,7 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     - the human is asked whether the lights changed from the BEFORE look to exactly the source's pattern.
     """
     source, target = str(params["source"]), str(params["target"])
+    before_hold = float(params.get('before_duration_s', BEFORE_HOLD_S))
     if source == target:
         return JobResult(Verdict.ERROR, "Pick two different slots: the source is copied INTO the target.")
     info = await ctx.profile()
@@ -630,14 +636,14 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     obs["before_look"] = before_name
     ctx.step(
         f"BEFORE: switching the lights to {before_name} (not {source}'s pattern). Watch the strand: it holds "
-        f"for about {BEFORE_HOLD_S:g} s, then {target} is rewritten with {source}'s pattern and selected."
+        f"for about {before_hold:g} s, then {target} is rewritten with {source}'s pattern and selected."
     )
     res = await ctx.write(_only_declared(ctx, info, before_rows), label=f"gate_c: BEFORE look {before_name}")
     obs["before_write"] = write_facts(res)
     if problem := _write_problem(res, f"The BEFORE look ({before_name})"):
         problem.observations.update(obs)
         return problem
-    await ctx.sleep(max(BEFORE_HOLD_S, ctx.budget_s))
+    await ctx.sleep(max(before_hold, ctx.budget_s))
     rows = _only_declared(
         ctx, info, [R.slot_write(target, copy.deepcopy(value)), *R.slot_select(target), R.power(True)]
     )
@@ -666,6 +672,81 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         [question("gate_c", params)],
         {"t1_frames": True},
     )
+
+
+async def _restore_touched(ctx, original, touched, label):
+    # A frame write can reselect individual mode. Restore storage, then its
+    # selector, then the original active look in separate verified commands.
+    frames = [StateRow(*k, copy.deepcopy(original[k])) for k in touched if k[0] == R.FRAME_CLASS]
+    if frames:
+        await ctx.write(frames, label=label + ': restore fresh original slot')
+        await ctx.sleep(ctx.budget_s)
+    if ('color-individual', 'custom') in touched:
+        await ctx.write(R.slot_select(original[('color-individual', 'custom')]), label=label + ': restore slot selection')
+        await ctx.sleep(ctx.budget_s)
+    controls = [StateRow(*k, copy.deepcopy(original[k])) for k in sorted(touched, key=lambda k:(k[0] == 'color-mode', k[0]))
+                if k[0] not in (R.FRAME_CLASS, 'color-individual')]
+    return await ctx.write(controls, label=label + ': restore previous active look')
+
+
+async def gate_c_safe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Bounded Gate C with an exact, freshly captured target-slot restoration.
+
+    Custom 3 may be the read-only source, but is never the write target. The
+    ordinary Gate C proof and human confirmation still apply independently.
+    """
+    source, target = str(params['source']), str(params['target'])
+    if target not in ('custom-1', 'custom-2') or source == target:
+        return JobResult(Verdict.ERROR, 'Use distinct slots; the temporary target must be Custom 1 or 2.')
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, source, target)
+    before = await _read_ok(ctx, 'before the bounded replay')
+    original = {r.key: copy.deepcopy(r.value) for r in before.rows}
+    source_value, _ = _slot_entries(before, source)
+    target_value, _ = _slot_entries(before, target)
+    if R.slot_hash(source_value) == R.slot_hash(target_value):
+        return JobResult(Verdict.ERROR, 'Source and target already match; a replay would prove nothing.')
+    if ('brightness', None) not in original or ('brightness', None) not in _declared(info):
+        return JobResult(Verdict.ERROR, 'A current brightness readback is required. Nothing was sent.')
+    ctx.artifacts['gate_c_safe_before'] = {'slot': target, 'value': copy.deepcopy(target_value),
+                                         'controls': [r.to_json() for r in before.rows if r.function_class != R.FRAME_CLASS]}
+    touched = set()
+    class TrackedContext:
+        def __getattr__(self, name): return getattr(ctx, name)
+        async def write(self, rows, **kw):
+            if any(r.key not in original for r in rows):
+                raise JobError('A setting has no original readback to restore.')
+            touched.update(r.key for r in rows)
+            return await ctx.write(rows, **kw)
+    tracked = TrackedContext()
+    result = None
+    restored = None
+    try:
+        level = await tracked.write([R.brightness(int(params['brightness']))], label='gate_c_safe: observation brightness')
+        result = _write_problem(level, 'Setting the observation brightness')
+        if result is None:
+            await ctx.sleep(ctx.budget_s)
+            result = await gate_c(tracked, params)
+            if result.verdict is Verdict.NEEDS_EYES:
+                ctx.step(f"Observe the replay for {float(params['duration_s']):g} seconds; then the original pattern returns.")
+                await ctx.sleep(float(params['duration_s']))
+    finally:
+        if touched:
+            restored = await _restore_touched(ctx, original, touched, 'gate_c_safe')
+    if restored is not None:
+        if problem := _write_problem(restored, 'Restoring the original slot and controls'):
+            return problem
+        after = await _read_ok(ctx, 'after restoring the bounded replay')
+        exact = all(after.get(*k) == original[k] for k in touched)
+        untouched_slots = all(after.get(R.FRAME_CLASS, s) == before.get(R.FRAME_CLASS, s) for s in caps.slots)
+        if not exact or not untouched_slots:
+            return JobResult(Verdict.FAIL, 'The bounded replay ended, but exact restoration was not confirmed.',
+                             {'restored': exact, 'all_slots_unchanged': untouched_slots})
+        result.observations.update({'restore': write_facts(restored), 'all_slots_unchanged': True,
+                                    'custom_3_written': False, 'duration_s': float(params['duration_s'])})
+        result.summary += ' The temporary target and previous controls have been restored exactly.'
+    return result
 
 
 # ---- hue ramp ----------------------------------------------------------------------------------------------------
@@ -698,6 +779,204 @@ async def hue_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         obs,
         [Q_HUE_RAMP],
     )
+
+
+# ---- address probe ----------------------------------------------------------------------------------------------
+async def address_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Identify framebuffer addresses without assuming one entry equals one physical head.
+
+    This diagnostic retains the controller's full frame length. It does not change the module map or
+    promote a mapping flag; the observer must identify which physical heads respond.
+    """
+    if not ctx.t1_allowed:
+        return JobResult(Verdict.ERROR, "Run and physically confirm Gate C on this kit before probing addresses.")
+    slot = str(params["slot"])
+    start, count, brightness = (int(params[k]) for k in ("start", "count", "brightness"))
+    color = str(params["color"]).lower()
+    pattern = str(params.get('pattern', 'range'))
+    colors = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255)}
+    if color not in colors or not 1 <= brightness <= 100 or pattern not in ('range', 'markers'):
+        return JobResult(Verdict.ERROR, "Use red, green or blue and brightness 1–100. Nothing was sent.")
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, slot)
+    rr = await _read_ok(ctx, "before the address probe")
+    header, current = _slot_entries(rr, slot)
+    length = len(current)
+    if start < 0 or count < 1 or start + count > length:
+        return JobResult(Verdict.ERROR, f"Select addresses within 0–{length - 1}. Nothing was sent.")
+    if caps.framebuffer_length != length or len(set(caps.framebuffer_lengths.values())) > 1:
+        return JobResult(Verdict.ERROR, "The slot lengths disagree. Nothing was sent.")
+    effects = R.slot_effects(header) or {}
+    if any(effects.get(k) != 0 for k in ("motionEffect", "brightnessEffect")):
+        return JobResult(Verdict.ERROR, "Choose a static slot with both effect codes zero before probing addresses.")
+    before = contrast_look(caps)
+    if before is None:
+        return JobResult(Verdict.ERROR, "No declared whole-strand look is available for a clean slot reselect.")
+    entries = [R.FrameEntry(0, 0, 0, 0, 0, 0)] * length
+    entries[start:start + count] = [R.FrameEntry(*colors[color], 0, 100, 0)] * count
+    if pattern == 'markers':
+        if length != 60 or ctx.expected_heads != 30:
+            return JobResult(Verdict.ERROR, 'The three-marker test requires a 60-entry controller and the declared 30-head bench strand.')
+        entries = [R.FrameEntry(0, 0, 0, 0, 0, 0)] * length
+        for i, rgb in [(0, colors['red']), (1, colors['green']), (29, colors['blue'])]:
+            entries[i] = R.FrameEntry(*rgb, 0, 100, 0)
+    value = R.frame_value(header, entries, expected_length=length, cct_range=caps.cct_range)
+    requested = [R.slot_write(slot, value), *R.slot_select(slot), R.power(True), R.brightness(brightness)]
+    if not {row.key for row in requested}.issubset(_declared(info)):
+        return JobResult(Verdict.ERROR, "The device does not declare every required probe control. Nothing was sent.")
+    # Saved with the run so the previous slot can be recovered after calibration.
+    ctx.artifacts["address_probe_before"] = {"slot": slot, "value": copy.deepcopy(header)}
+    obs = {"slot": slot, "length": length, "start": start, "count": count, "color": color,
+           "brightness": brightness, "previous_hash": R.slot_hash(header), "hash": R.slot_hash(value), "pattern": pattern}
+    if pattern == 'markers': obs['markers'] = {0: 'red', 1: 'green', 29: 'blue'}
+    ctx.step("Saved the slot; changing to a whole-strand look before reselecting the probe", **obs)
+    res = await ctx.write(_only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range)),
+                          label="address_probe: before look")
+    if problem := _write_problem(res, "The before look"):
+        return problem
+    await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+    probe_label = '0 red, 1 green, 29 blue' if pattern == 'markers' else f'{start}–{start + count - 1} {color}'
+    res = await ctx.write(requested, label=f"address_probe: {probe_label}")
+    obs["write"] = write_facts(res)
+    if problem := _write_problem(res, "The address probe"):
+        problem.observations.update(obs)
+        return problem
+    return JobResult(
+        Verdict.NEEDS_EYES,
+        f"Controller addresses lit: {probe_label}; all other entries are off. "
+        "The original slot is saved with this run. No physical mapping has been assumed.",
+        obs,
+        ["How many physical heads lit, and where are they when counted from the controller?"],
+    )
+
+
+async def address_probe_safe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """A held address probe with exact restoration; it never certifies a map."""
+    if str(params['slot']) not in ('custom-1', 'custom-2'):
+        return JobResult(Verdict.ERROR, 'Use Custom 1 or 2 for temporary address tests; Custom 3 is protected.')
+    before = await _read_ok(ctx, 'before the bounded address probe')
+    original = {r.key: copy.deepcopy(r.value) for r in before.rows}
+    touched = set()
+    class TrackedContext:
+        def __getattr__(self, name): return getattr(ctx, name)
+        async def write(self, rows, **kw):
+            if any(r.key not in original for r in rows):
+                raise JobError('A setting has no original readback to restore.')
+            touched.update(r.key for r in rows)
+            return await ctx.write(rows, **kw)
+    result = None
+    restored = None
+    try:
+        result = await address_probe(TrackedContext(), params)
+        if result.verdict is Verdict.NEEDS_EYES:
+            detail = 'markers 0 red, 1 green, 29 blue' if params.get('pattern') == 'markers' else f"addresses {params['start']} through {params['start'] + params['count'] - 1}"
+            ctx.step(f"Observe {detail} for {params['duration_s']:g} seconds.")
+            await ctx.sleep(float(params['duration_s']))
+    finally:
+        if touched:
+            restored = await _restore_touched(ctx, original, touched, 'address_probe_safe')
+    if restored is not None:
+        if problem := _write_problem(restored, 'Restoring the address probe'):
+            return problem
+        after = await _read_ok(ctx, 'after restoring the address probe')
+        exact = all(after.get(*k) == v for k, v in original.items() if k in touched or k[0] == R.FRAME_CLASS)
+        if not exact:
+            return JobResult(Verdict.FAIL, 'The address probe ended, but exact restoration was not confirmed.')
+        result.observations.update({'restore': write_facts(restored), 'all_slots_unchanged': True, 'custom_3_written': False})
+        result.summary += ' Original slot and controls restored exactly. No map was saved.'
+    return result
+
+
+# ---- timed custom-effect commissioning -------------------------------------------------------------------------
+async def effect_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Explore one explicitly selected code, without enabling it for ordinary controls.
+
+    The candidate's meaning is unknown until observed. A static rainbow first proves the frame; only one
+    effect field is then changed. The original slot header and entries are restored after the bounded test.
+    """
+    if not ctx.t1_allowed:
+        return JobResult(Verdict.ERROR, "Physically confirm Gate C before testing custom effects.")
+    slot, field = str(params['slot']), str(params['field'])
+    pattern = str(params.get('pattern', 'rainbow'))
+    code, speed, duration = int(params['code']), int(params['speed']), float(params['duration_s'])
+    if (pattern not in ('rainbow', 'blocks') or field not in ('motionEffect', 'brightnessEffect') or not 1 <= code <= 255
+            or not 0 <= speed <= 100 or not math.isfinite(duration) or not 2 <= duration <= 20):
+        return JobResult(Verdict.ERROR, "Choose one effect field, code 1–255, speed 0–100 and duration 2–20 s.")
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, slot)
+    rr = await _read_ok(ctx, 'before the effect test')
+    original, entries = _slot_entries(rr, slot)
+    if len(entries) != caps.framebuffer_length or len(set(caps.framebuffer_lengths.values())) > 1:
+        return JobResult(Verdict.ERROR, "Slot lengths disagree; no effect test was sent.")
+    before = contrast_look(caps)
+    if before is None:
+        return JobResult(Verdict.ERROR, "No whole-strand look is available for a clean slot reselect.")
+    test_entries = hue_ramp_entries(len(entries))
+    if pattern == 'blocks':
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+        test_entries = [R.FrameEntry(*colors[(i // 10) % 3]) if i % 10 < 3
+                        else R.FrameEntry(0, 0, 0, 0, 0, 0) for i in range(len(entries))]
+    static = R.frame_value(original, test_entries, expected_length=len(entries),
+                           effects={'motionEffect': 0, 'brightnessEffect': 0}, cct_range=caps.cct_range)
+    candidate = R.frame_value(static, R.frame_entries(static), expected_length=len(entries),
+                              effects={field: code, 'motionSpeed' if field == 'motionEffect' else 'brightnessSpeed': speed},
+                              cct_range=caps.cct_range)
+    def slot_rows(value):
+        return [R.slot_write(slot, value), *R.slot_select(slot), R.power(True), R.brightness(30)]
+    if not {r.key for r in slot_rows(candidate)}.issubset(_declared(info)):
+        return JobResult(Verdict.ERROR, "The device does not declare all required effect controls.")
+    ctx.artifacts['effect_probe_before'] = {'slot': slot, 'value': copy.deepcopy(original)}
+    obs = {'slot': slot, 'field': field, 'code': code, 'speed': speed, 'duration_s': duration,
+           'length': len(entries), 'pattern': pattern, 'original_hash': R.slot_hash(original), 'automatically_enabled': False,
+           'expected_effects': R.slot_effects(candidate),
+           'reselected_from_whole_strand': True}
+    result = None
+    try:
+        res = await ctx.write(_only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range)),
+                              label='effect_probe: before look')
+        result = _write_problem(res, 'The before look')
+        if result is None:
+            await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+            res = await ctx.write(slot_rows(static), label=f'effect_probe: static {pattern}')
+            result = _write_problem(res, 'The static pattern')
+        if result is None:
+            await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+            # Some controllers may reload effect headers only when entering individual mode.
+            # Keep that behavior separate from whether rewriting an already active slot works.
+            res = await ctx.write(_only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range)),
+                                  label='effect_probe: leave slot before candidate')
+            result = _write_problem(res, 'Leaving the static slot')
+        if result is None:
+            await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+            res = await ctx.write(slot_rows(candidate), label=f'effect_probe: candidate {field} {code}')
+            obs['write'] = write_facts(res)
+            obs['reported_effects'] = R.slot_effects(res.readback.get(R.FRAME_CLASS, slot)) if res.readback else None
+            result = _write_problem(res, 'The candidate effect')
+            ctx.step(f'Observe candidate {field} {code} for {duration:g} seconds; behavior is unverified.')
+            # A cloud mismatch can still physically animate, so restoration happens regardless.
+            await ctx.sleep(duration)
+    finally:
+        restore_rows = [R.slot_write(slot, copy.deepcopy(original)), *R.slot_select(slot), R.power(True)]
+        if caps.brightness_range:
+            level = rr.get('brightness')
+            if isinstance(level, int) and 1 <= level <= 100:
+                restore_rows.append(R.brightness(level))
+        restored = await ctx.write(restore_rows, label='effect_probe: restore original slot and header')
+        obs['restore'] = write_facts(restored)
+        obs['restore_effects'] = R.slot_effects(restored.readback.get(R.FRAME_CLASS, slot)) if restored.readback else None
+    if problem := _write_problem(restored, 'Restoring the original pattern'):
+        problem.observations.update(obs)
+        return problem
+    if result is not None:
+        result.observations.update(obs)
+        result.ask_human = ['What changed during the timed effect test, if anything?']
+        return result
+    return JobResult(Verdict.NEEDS_EYES,
+                     f'Tested candidate {field} {code} at speed {speed}; original slot restored. '
+                     'This code is not automatically enabled or assigned a behavior name.',
+                     obs, ['What did the colors do during the timed test: travel, pulse, flash, or stay still?'])
 
 
 # ---- latency trials ----------------------------------------------------------------------------------------------
@@ -1369,6 +1648,17 @@ JOBS: dict[str, Job] = {
         ),
         Job(
             JobSpec(
+                "gate_c_safe",
+                "Gate C — bounded replay with exact restoration",
+                "Replays a source into Custom 1 or 2, holds briefly for observation, then restores its fresh original value and previous controls.",
+                writes=True,
+                look_for="Observe the BEFORE look and replay. Original patterns return automatically; Custom 3 is never written.",
+                params={"source": "custom-3", "target": "custom-1", "brightness": 30, "duration_s": 8.0, "before_duration_s": 4.0},
+            ),
+            gate_c_safe,
+        ),
+        Job(
+            JobSpec(
                 "hue_ramp",
                 "Hue ramp — rainbow for the index map",
                 "Writes a rainbow (each puck a different hue) into slot 3 and selects it.",
@@ -1377,6 +1667,42 @@ JOBS: dict[str, Job] = {
                 params={"slot": "custom-3"},
             ),
             hue_ramp,
+        ),
+        Job(
+            JobSpec(
+                "address_probe",
+                "Address probe — locate individual lights",
+                "After Gate C, lights one address or a consecutive range in a saved slot; all other entries are off.",
+                writes=True,
+                look_for="After a brief whole-strand look, count which physical heads light from the controller end. "
+                "Addresses start at 0. The prior slot pattern is saved with the run; the probe stays visible.",
+                params={"slot": "custom-3", "start": 0, "count": 1, "color": "red", "brightness": 40},
+            ),
+            address_probe,
+        ),
+        Job(
+            JobSpec(
+                "address_probe_safe",
+                "Address probe — bounded with exact restoration",
+                "Holds one controller address or a range, then restores the original slot and look. Requires its own Gate C proof.",
+                writes=True,
+                look_for="Count responding physical heads from the controller. No address map is inferred or saved.",
+                params={"slot": "custom-2", "start": 0, "count": 1, "color": "red", "brightness": 30, "duration_s": 60.0, "pattern": "range"},
+            ),
+            address_probe_safe,
+        ),
+        Job(
+            JobSpec(
+                "effect_probe",
+                "Custom effect test — timed candidate",
+                "Tests one unverified effect code on a rainbow or separated color blocks at 30%, then restores the original slot.",
+                writes=True,
+                look_for="Watch the static rainbow first, then the candidate effect. Report actual behavior; "
+                "this does not enable or name the code. The original slot is restored within 20 seconds plus network time.",
+                params={"slot": "custom-3", "field": "motionEffect", "code": 1, "speed": 30, "duration_s": 15.0,
+                        "pattern": "rainbow"},
+            ),
+            effect_probe,
         ),
         Job(
             JobSpec(

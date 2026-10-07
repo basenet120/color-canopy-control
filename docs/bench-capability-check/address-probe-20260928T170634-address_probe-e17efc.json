@@ -1,0 +1,157 @@
+{
+  "note": "Anonymized bench result from the Color Canopy Conductor: ids, MACs, SSIDs, emails, names and locations are replaced with placeholders.",
+  "run_id": "20260928T170634-address_probe-e17efc",
+  "job": "address_probe",
+  "title": "Address probe — locate individual lights",
+  "device_id": "bench-kit",
+  "address": "device-2",
+  "simulated": false,
+  "driver": "afero",
+  "status": "finished",
+  "started": 1790615194.9367738,
+  "finished": 1790615201.564095,
+  "params": {
+    "slot": "custom-3",
+    "start": 29,
+    "count": 1,
+    "color": "blue",
+    "brightness": 40
+  },
+  "steps": [
+    {
+      "n": 1,
+      "t": 1790615194.945,
+      "elapsed_s": 0.016,
+      "message": "Started Address probe — locate individual lights on bench-kit",
+      "detail": {}
+    },
+    {
+      "n": 2,
+      "t": 1790615195.37,
+      "elapsed_s": 0.438,
+      "message": "Read the device's state",
+      "detail": {
+        "kind": "read",
+        "outcome": "ok",
+        "http_status": 200,
+        "elapsed_ms": 156
+      }
+    },
+    {
+      "n": 3,
+      "t": 1790615195.376,
+      "elapsed_s": 0.438,
+      "message": "Saved the slot; changing to a whole-strand look before reselecting the probe",
+      "detail": {
+        "slot": "custom-3",
+        "length": 60,
+        "start": 29,
+        "count": 1,
+        "color": "blue",
+        "brightness": 40,
+        "previous_hash": "bbd4cfd781346e59",
+        "hash": "babe61b246db451b"
+      }
+    },
+    {
+      "n": 4,
+      "t": 1790615195.378,
+      "elapsed_s": 0.438,
+      "message": "Sending: address_probe: before look",
+      "detail": {
+        "kind": "write_start",
+        "label": "address_probe: before look",
+        "t": 1790615195.3782568,
+        "rows": 6
+      }
+    },
+    {
+      "n": 5,
+      "t": 1790615196.794,
+      "elapsed_s": 1.86,
+      "message": "address_probe: before look: applied",
+      "detail": {
+        "kind": "write",
+        "label": "address_probe: before look",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790615195.3821075,
+        "acked_at": 1790615195.5842865,
+        "verified_at": 1790615196.793098
+      }
+    },
+    {
+      "n": 6,
+      "t": 1790615198.804,
+      "elapsed_s": 3.875,
+      "message": "Sending: address_probe: 29–29 blue",
+      "detail": {
+        "kind": "write_start",
+        "label": "address_probe: 29–29 blue",
+        "t": 1790615198.8041751,
+        "rows": 5
+      }
+    },
+    {
+      "n": 7,
+      "t": 1790615201.553,
+      "elapsed_s": 6.625,
+      "message": "address_probe: 29–29 blue: applied",
+      "detail": {
+        "kind": "write",
+        "label": "address_probe: 29–29 blue",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790615198.807152,
+        "acked_at": 1790615199.2365186,
+        "verified_at": 1790615201.5528257
+      }
+    }
+  ],
+  "result": {
+    "verdict": "needs_eyes",
+    "summary": "Only controller addresses 29–29 are set to blue; all other entries are off. The original slot is saved with this run. No physical mapping has been assumed.",
+    "observations": {
+      "slot": "custom-3",
+      "length": 60,
+      "start": 29,
+      "count": 1,
+      "color": "blue",
+      "brightness": 40,
+      "previous_hash": "bbd4cfd781346e59",
+      "hash": "babe61b246db451b",
+      "write": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790615198.807152,
+        "ack_ms": 429,
+        "verified_ms": 2746,
+        "mismatches": [],
+        "error": null
+      }
+    },
+    "ask_human": [
+      "How many physical heads lit, and where are they when counted from the controller?"
+    ],
+    "flags": {}
+  },
+  "answers": {
+    "How many physical heads lit, and where are they when counted from the controller?": "Yes — only the thirtieth, last head is blue"
+  },
+  "flag_questions": {},
+  "flags_applied": null,
+  "flags_revoked": null,
+  "writes_sent": 2,
+  "confirmed_verdict": null,
+  "environment": {
+    "mode": "bench",
+    "version": "0.1.0",
+    "bench_live": true
+  },
+  "artifacts": [
+    "address_probe_before"
+  ]
+}

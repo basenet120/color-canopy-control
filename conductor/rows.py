@@ -296,7 +296,8 @@ def compare(expected: Iterable[StateRow], reported: Iterable[StateRow]) -> list[
 
     Every expected row must be present — a missing row is a mismatch, never a match (fetch_device_states can
     drop malformed rows or return [] on a 200). Extra reported rows are tolerated. Telemetry rows are ignored.
-    Values are normalized (CCT as int, RGB as a tuple, slot objects by canonical hash).
+    Values are normalized (CCT as int, RGB as a tuple, slot colors by canonical hash). Full slot writes
+    also verify every requested effect field; a hash-only expectation intentionally checks colors only.
     """
     got = {r.key: r.value for r in reported}
     out = []
@@ -306,7 +307,13 @@ def compare(expected: Iterable[StateRow], reported: Iterable[StateRow]) -> list[
         if row.key not in got:
             out.append(Mismatch(row.function_class, row.function_instance, row.value, None, missing=True))
             continue
-        if _norm(row.function_class, row.value) != _norm(row.function_class, got[row.key]):
+        differs = _norm(row.function_class, row.value) != _norm(row.function_class, got[row.key])
+        if row.function_class == FRAME_CLASS:
+            expected_effects = slot_effects(row.value)
+            reported_effects = slot_effects(got[row.key]) or {}
+            if expected_effects:
+                differs |= any(reported_effects.get(k) != v for k, v in expected_effects.items())
+        if differs:
             out.append(Mismatch(row.function_class, row.function_instance, row.value, got[row.key]))
     return out
 

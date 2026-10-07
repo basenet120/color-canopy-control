@@ -29,7 +29,7 @@ import logging
 import secrets
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from conductor import render
@@ -224,9 +224,27 @@ class ModuleSession:
         floor = max(1.0, float(self.target.executor.policy.min_write_interval_s))
         return max(floor, float(requested or self.deps.settings.module_page.sweep_step_s))
 
+    def frame_indices(self) -> list[int] | None:
+        mapping = self.entry.framebuffer_mapping
+        if mapping is None:
+            return None
+        if (mapping.proven_on == self.address
+                and mapping.frame_length == self.caps.framebuffer_length
+                and len(mapping.indices) == self.n == (self.entry.expected_heads or self.n)
+                and len(set(self.caps.framebuffer_lengths.values())) == 1):
+            return list(mapping.indices)
+        return None
+
     def head_count(self) -> dict:
         expected = self.entry.expected_heads or self.n
         reported = self.caps.framebuffer_length
+        indices = self.frame_indices()
+        if indices is not None:
+            return {"expected": expected, "reported": reported, "map": self.n, "problem": None,
+                    "mapped": True, "controller_addresses": indices}
+        if self.entry.framebuffer_mapping is not None:
+            return {"expected": expected, "reported": reported, "map": self.n,
+                    "problem": "the saved controller-address mapping does not match this kit, frame length or module map"}
         problem = self.caps.head_count_problem(expected)
         if problem is None and reported != self.n:
             problem = f"the device reports {reported} heads but this module's map has {self.n}"
@@ -244,7 +262,9 @@ class ModuleSession:
         if self.entry.flags_for(self.target.address).t1_frames is True:  # proven on THIS kit
             return (
                 True,
-                "Bench Gate C passed: frames written by the Conductor (T1) are proven on this device.",
+                "Bench Gate C passed: frames written by the Conductor (T1) are proven on this device."
+                + (f" {self.n} physical heads are mapped into its {self.caps.framebuffer_length}-entry buffer."
+                   if self.frame_indices() is not None else ""),
             )
         return False, (
             "Painting is off until bench Gate C proves that frames written by the Conductor show up on this "
@@ -322,9 +342,32 @@ class ModuleSession:
         entries = R.frame_entries(self._slot_value(slot))
         if entries is None:
             raise ModuleError(f"There's no readback of {slot} yet. Tap Read on the Slots tab first.")
+        indices = self.frame_indices()
+        if indices is not None:
+            if len(entries) != self.caps.framebuffer_length:
+                raise ModuleError(f"{slot} no longer matches the calibrated controller frame.")
+            return [entries[i] for i in indices]
         if len(entries) != self.n:
             raise ModuleError(f"{slot} holds {len(entries)} heads but this module has {self.n}.")
         return entries
+
+    def _controller_frame(self, frame: Sequence[R.FrameEntry]) -> list[R.FrameEntry]:
+        if len(frame) != self.n:
+            raise R.PayloadError(f"paint has {len(frame)} heads but this module has {self.n}")
+        indices = self.frame_indices()
+        if indices is None:
+            return list(frame)
+        result = [C.OFF] * self.caps.framebuffer_length
+        for i, address in enumerate(indices):
+            result[address] = frame[i]
+        return result
+
+    def _head_colors(self, state: Mapping[Key, Any]) -> list[dict]:
+        indices = self.frame_indices()
+        if indices is not None and state.get(("color-mode", None)) == "individual":
+            full = render.head_colors(state, self.caps.framebuffer_length, self.caps)
+            return [full[i] for i in indices]
+        return render.head_colors(state, self.n, self.caps)
 
     # ---- sending -----------------------------------------------------------------------------------------------
     async def _send(self, rows: Sequence[StateRow], label: str) -> dict:
@@ -398,7 +441,7 @@ class ModuleSession:
         try:
             value = R.frame_value(
                 header,
-                list(frame),
+                self._controller_frame(frame),
                 expected_length=self.caps.framebuffer_length,
                 effects=effects,
                 cct_range=self.caps.cct_range,
@@ -543,9 +586,14 @@ class ModuleSession:
         mode = modes.modes[mode_id]
         # This device, as it hangs (its own orientation and calibration), placed at the chosen position.
         entry = self.entry.model_copy(update={"module": position, "orientation": self.cal.orientation})
+        # Compose in physical-head space; _write_frame expands into the controller buffer exactly once.
+        compose_caps = self.caps
+        if self.frame_indices() is not None:
+            compose_caps = replace(self.caps, segment_hint=self.n,
+                                   framebuffer_lengths={s: self.n for s in self.caps.framebuffer_lengths})
         ctx = CompileContext(
             registry=[entry],
-            capabilities={self.device_id: self.caps},
+            capabilities={self.device_id: compose_caps},
             slot_readback={self.device_id: {s: self._slot_value(s) for s in self.caps.slots}},
             effects_enabled=self.effects_enabled(),
             recorded_hashes={},
@@ -940,7 +988,7 @@ class ModuleSession:
                     if recorded.get(slot)
                     else None,
                     "length": len(entries) if entries is not None else None,
-                    "heads": render.head_colors(state, self.n, self.caps),
+                    "heads": self._head_colors(state),
                     "active": mode == "individual" and selected == slot,
                     "effects": {k: inner.get(k) for k in R.EFFECT_FIELDS}
                     if isinstance(inner, Mapping)
@@ -961,8 +1009,9 @@ class ModuleSession:
     def snapshot(self) -> dict:
         n = self.n
         reported = self._reported_state()
-        desired_colors = render.head_colors(self.desired_state, n, self.caps)
-        reported_colors = render.head_colors(reported, n, self.caps)
+        desired_colors = self._head_colors(self.desired_state)
+        reported_colors = self._head_colors(reported)
+        mismatches = R.compare([StateRow(k[0], k[1], v) for k, v in self.desired_state.items()], self.reported_rows)
         heads = [
             {
                 "index": i,
@@ -1011,6 +1060,20 @@ class ModuleSession:
             "desired_look": render.describe_look(self.desired_state, n, caps),
             "reported_look": render.describe_look(reported, n, caps) if reported else "no readback yet",
             "reported_at": self.reported_at,
+            "reported_controls": {
+                "power": reported.get(("power", None)),
+                "brightness": reported.get(("brightness", None)),
+                "color_mode": reported.get(("color-mode", None)),
+                "preset": reported.get(("color-sequence", "preset")),
+                "speed": reported.get(("speed", "color-sequence")),
+                "slot": reported.get(("color-individual", "custom")),
+                "cct": reported.get(("color-temperature", None)),
+                "rgb": reported.get(("color-rgb", None)),
+            },
+            "preview": {"desired": render.sequence_preview(self.desired_state),
+                        "reported": render.sequence_preview(reported)},
+            "settings_mismatches": [f"{m.function_class}/{m.function_instance}" if m.function_instance
+                                    else m.function_class for m in mismatches],
             "read_error": self.last_read_error,
             "busy": self.in_flight > 0,
             "paint_slot": self.paint_slot,
