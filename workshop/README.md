@@ -86,7 +86,8 @@ module. Open **http://localhost:8000/ops/bench/** and, with the module in view:
 **A 60-entry kit also needs its own map.** If Gate A reports 60 entries per slot for 30 pucks (like Kingston), Gate C
 alone doesn't switch painting on: commission that kit with **Gate C — bounded replay** (`gate_c_safe`) → **Address
 probe — bounded** (`address_probe_safe`) → record that kit's own map, as in `docs/bench-prototype-01.md` §5a. Never
-copy another kit's flags or map.
+copy another kit's flags or map. The bench no longer offers **Address probe — original** (`address_probe`); use the
+bounded one.
 
 If Gate C fails, tell Alon — you can still test whole-module colours and saved patterns painted in the Hubspace app.
 

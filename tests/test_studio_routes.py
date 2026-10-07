@@ -96,9 +96,12 @@ def _services(c):
 
 
 def _fast(c) -> None:
-    """Short readback waits and rate budget, as in test_module_api's `fast` (these tests aren't about timing)."""
-    policy = _services(c).settings.executor
+    """Short readback waits and rate budget, as in test_module_api's `fast` (these tests aren't about timing).
+    The simulated cloud enforces the same budget (429 + a counted violation for a write that comes too soon)."""
+    services = _services(c)
+    policy = services.settings.executor
     policy.readback_delay_s, policy.readback_interval_s, policy.min_write_interval_s = 0.05, 0.05, 0.1
+    services.sim.settings = services.sim.settings.with_(per_device_min_interval_s=policy.min_write_interval_s)
 
 
 def _writes(c) -> int:
