@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from conductor import rows as R
+from conductor.framemap import MAP_MISMATCH, capacity_problem
 from tests.test_module_api import THREE, _open, _post, _services, _wait
 
 BENCH = "bench-kit"
@@ -45,7 +46,9 @@ def _stored(client, slot):
 def test_a_60_entry_controller_without_a_map_refuses_per_head_frames(app_client, fast):
     _sixty(app_client)
     lease, state = _open(app_client)
-    assert state["head_count"]["reported"] == 60 and "60 heads" in state["head_count"]["problem"]
+    assert state["head_count"]["reported"] == 60 and state["head_count"]["problem"] == capacity_problem(
+        60, 30
+    )
     assert state["t1"]["allowed"] is False
     assert _post(app_client, "paint", lease, heads=THREE).status_code == 409
 
@@ -53,7 +56,7 @@ def test_a_60_entry_controller_without_a_map_refuses_per_head_frames(app_client,
 def test_another_kits_map_is_never_used(app_client, fast):
     _sixty(app_client, {"frame_length": 60, "indices": INDICES, "proven_on": "a-different-kit"})
     lease, state = _open(app_client)
-    assert "mapping does not match" in state["head_count"]["problem"] and state["t1"]["allowed"] is False
+    assert state["head_count"]["problem"] == MAP_MISMATCH and state["t1"]["allowed"] is False
     assert _post(app_client, "paint", lease, heads=THREE).status_code == 409
 
 

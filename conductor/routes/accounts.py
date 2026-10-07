@@ -10,7 +10,8 @@ that without a CORS preflight, which we never grant, so the ops Basic credential
 - `GET  /api/accounts/{account}/devices` — what the connected account can see (read-only discovery), each device
   marked with the registry id it is registered as, or read-only when it isn't registered/allowlisted (07 §1).
 - `POST /api/accounts/{account}/register` `{metadevice_id, device_id}` — put the id in the ops overlay. An id
-  registered to a spare kit moves to a non-spare entry (controller swap), taking the bench flags that kit proved.
+  registered to a spare kit moves to a non-spare entry (controller swap), taking the bench flags that kit proved
+  and its controller map (`framebuffer_mapping`, D54) when it was proven on that kit.
 Gate refusals come back as 403 with the gate's plain reason. Every response here is `Cache-Control: no-store`.
 A client that goes away while its request body is still being read (`starlette.requests.ClientDisconnect`) is a
 quiet no-op: nothing was acted on (every route reads its body before doing anything; the form still counts it as
@@ -431,6 +432,10 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
         # Bench flags belong to the kit that proved them (D19), so they move with it.
         patch["flags"] = spare.flags.model_dump()
         patch["flags_proven_on"] = metadevice_id
+    mapping = spare.framebuffer_mapping if spare is not None else None
+    if mapping is not None and mapping.proven_on == metadevice_id:
+        # So does its controller map (D54): the show reads each kit's own (D25).
+        patch["framebuffer_mapping"] = mapping.model_dump()
     try:
         if spare is not None and spare.metadevice_id == metadevice_id:
             # Two entries can't hold one id: release it from the spare first. If the next step fails, the kit is
@@ -457,6 +462,8 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
         )
     if spare is not None:
         carried = "its bench flags came with it" if "flags" in patch else "it has no bench flags yet"
+        if "framebuffer_mapping" in patch:
+            carried += "; its controller map came with it"
         message = (
             f"Moved from {spare.id} to {entry.id} ({carried}). Calibrate it and press Commission slots. "
             + message
@@ -468,6 +475,7 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
             "replaced": previous if previous and previous != metadevice_id else None,
             "moved_from": spare.id if spare is not None else None,
             "flags_carried": "flags" in patch,
+            "map_carried": "framebuffer_mapping" in patch,
             "allowlisted": allowlisted,
             "simulated": simulated,
             "message": message,

@@ -31,7 +31,8 @@ Rules implemented:
 - **A kit's controller map (D54).** With `addresses` (the show), a module whose `framebuffer_mapping` was proven on
   the device at its address (`conductor.framemap.frame_indices`) takes T1 frames of its full controller length: its
   heads at their mapped entries, every other entry OFF. A saved map that doesn't match the kit, or a longer frame with
-  no map, refuses T1 (whole-strand tiers still compile). Without `addresses` no map is consulted.
+  no map, refuses T1 with `conductor.framemap.head_check`'s reason (whole-strand tiers and app-painted T2 slots still
+  compile). Without `addresses` no map is consulted.
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
   kit's map when it has one).
 """
@@ -539,7 +540,10 @@ def _canvas(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
     indices = {d.id: ctx.frame_indices(d, caps[d.id]) for d in devices}
     for d in devices:
         if ctx.addresses is not None and d.framebuffer_mapping is not None and indices[d.id] is None:
-            raise PlanError(f"{d.id}: {framemap.MAP_MISMATCH}")
+            check = framemap.head_check(
+                d, ctx.addresses.get(d.id), caps[d.id], len(panel_lattice(ctx.canopy))
+            )
+            raise PlanError(f"{d.id}: {check.problem}")  # a saved map that isn't valid always has a problem
     placements = [
         placement_for(ctx.canopy, d, frame_length=caps[d.id].framebuffer_length, indices=indices[d.id])
         for d in devices

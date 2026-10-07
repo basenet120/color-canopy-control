@@ -240,14 +240,10 @@ class ModuleSession:
                 "mapped": True,
                 "controller_addresses": indices,
             }
+        check = framemap.head_check(self.entry, self.address, self.caps, self.n)  # the /ops wording (D54)
         if self.entry.framebuffer_mapping is not None:
-            return {
-                "expected": expected,
-                "reported": reported,
-                "map": self.n,
-                "problem": "the saved controller-address mapping does not match this kit, frame length or module map",
-            }
-        problem = self.caps.head_count_problem(expected)
+            return {"expected": expected, "reported": reported, "map": self.n, "problem": check.problem}
+        problem = check.problem if check.kind == "no_map" else self.caps.head_count_problem(expected)
         if problem is None and reported != self.n:
             problem = f"the device reports {reported} heads but this module's map has {self.n}"
         return {"expected": expected, "reported": reported, "map": self.n, "problem": problem}

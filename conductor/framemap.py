@@ -16,17 +16,19 @@ from typing import Any
 
 from conductor.geometry import load_canopy_config, panel_lattice
 
-MAP_MISMATCH = (
-    "the saved controller map doesn't match this kit (D54): per-head looks are refused, whole-strand looks still "
-    "work"
+# What still runs without a map: only the Conductor's own frames (T1) need one (compile._slot never consults it).
+_STILL_WORKS = (
+    "the Conductor's per-head frames (T1) are refused; whole-strand looks and slots painted in the Hubspace app "
+    "still work"
 )
+MAP_MISMATCH = f"the saved controller map doesn't match this kit (D54): {_STILL_WORKS}"
 
 
 def capacity_problem(frame_length: int, heads: int) -> str:
     """A frame longer than the heads with no proven map: the controller's capacity, not extra or missing pucks."""
     return (
         f"the controller reports {frame_length} entries for {heads} heads and this kit has no proven map yet (D54): "
-        "per-head looks are refused, whole-strand looks still work"
+        + _STILL_WORKS
     )
 
 
@@ -68,20 +70,22 @@ class HeadCheck:
 
 
 def head_check(entry: Any, address: str | None, caps: Any, heads: int) -> HeadCheck:
-    """The mapping-aware head-count check for the device at `address` (see `frame_indices`)."""
+    """The mapping-aware head-count check for the device at `address` (see `frame_indices`). Slots that disagree,
+    no length or fewer entries than heads keep their own text (and 7 am fix) even with a saved map: no map explains
+    them. A saved map that isn't valid always gives a problem."""
     if frame_indices(entry, address, caps, heads) is not None:
         return HeadCheck(kind="mapped")
-    if entry.framebuffer_mapping is not None:
-        return HeadCheck(MAP_MISMATCH, "map_mismatch")
     n, expected = caps.framebuffer_length, entry.expected_heads
     mixed = len(set(caps.framebuffer_lengths.values())) > 1
+    short = not mixed and n is not None and expected is not None and n < expected
+    problem = caps.head_count_problem(expected)
+    if problem is not None and (mixed or n is None or short):
+        return HeadCheck(problem, "short" if short else "other")
+    if entry.framebuffer_mapping is not None:
+        return HeadCheck(MAP_MISMATCH, "map_mismatch")
     if not mixed and unmapped_capacity(n, expected, heads):
         return HeadCheck(capacity_problem(n, expected), "no_map")
-    problem = caps.head_count_problem(expected)
-    if problem is None:
-        return HeadCheck()
-    short = not mixed and n is not None and expected is not None and n < expected
-    return HeadCheck(problem, "short" if short else "other")
+    return HeadCheck(problem, "other") if problem is not None else HeadCheck()
 
 
 @lru_cache(maxsize=4)

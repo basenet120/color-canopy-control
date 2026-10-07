@@ -13,11 +13,14 @@ controller (`sqhdk03-sim-60`: the real SQHDK03's frame length with 30 pucks atta
 
 from __future__ import annotations
 
+import pytest
 from test_engine_review2 import _boot, _hold, _until
 
+from conductor import framemap
 from conductor import rows as R
-from conductor.capabilities import detect
+from conductor.capabilities import Capabilities, detect
 from conductor.clock import run_virtual
+from conductor.config import DeviceEntry
 from conductor.engine_api import CanopyPhase, PlanError, Tier
 from conductor.framemap import MAP_MISMATCH, capacity_problem
 from conductor.looks import CompileContext, compile_mode
@@ -227,6 +230,61 @@ def test_the_7am_check_never_says_power_cycle_for_a_kit_that_only_lacks_its_map(
     item = _heads_item(app_client)
     assert item["status"] == "fail" and NO_MAP in item["detail"]
     assert COMMISSION in item["fix"] and "power-cycle" not in item["fix"] and "cut" not in item["fix"]
+
+
+def test_a_mapped_kit_with_fewer_entries_than_heads_still_gets_the_power_cycle_fix(app_client):
+    """A saved map can't explain a short frame: the kit keeps today's text and fix, and T1 is refused with it."""
+    services = app_client.app.state.services
+    _sixty(services, "canopy-r0c0", _map("sim-canopy-r0c0", range(30)), profile="string-20seg")
+    device = next(
+        d
+        for d in app_client.get("/api/devices", params={"refresh": 1}).json()["devices"]
+        if d["id"] == "canopy-r0c0"
+    )
+    assert device["head_count_problem"] == SHORT and device["mapped"] is False
+    item = _heads_item(app_client)
+    assert item["status"] == "fail" and SHORT in item["detail"] and MAP_MISMATCH not in item["detail"]
+    assert "power-cycle" in item["fix"] and "Never cut" in item["fix"] and COMMISSION not in item["fix"]
+    caps30 = detect(*profile_parts("sqhdk03-sim"))
+    caps = {e.id: caps30 for e in services.registry.canopy_modules()}
+    caps["canopy-r0c0"] = detect(*profile_parts("string-20seg"))
+    ctx = CompileContext(
+        registry=services.registry,
+        capabilities=caps,
+        config_dir=services.config_dir,
+        addresses={e.id: f"sim-{e.id}" for e in services.registry.canopy_modules()},
+    )
+    with pytest.raises(PlanError) as refused:
+        compile_mode(CANVAS_MODE, Tier.T1, ctx)
+    assert str(refused.value) == f"canopy-r0c0: {SHORT}"
+
+
+def test_the_one_rule_needs_every_slot_to_report_one_length():
+    """Slots that disagree void a map even when the segment hint equals its frame length — and keep their own text
+    (and fix), as do a short frame and no length at all; only a map that fails on its own terms is MAP_MISMATCH."""
+    entry = DeviceEntry(
+        id=MODULE, role="canopy_module", account="canopy", expected_heads=30, framebuffer_mapping=_map()
+    )
+    lengths = {"custom-1": 60, "custom-2": 30, "custom-3": 60}
+    mixed = Capabilities(segment_hint=60, framebuffer_lengths=lengths)
+    assert mixed.framebuffer_length == 60 and framemap.frame_indices(entry, ADDRESS, mixed, 30) is None
+    check = framemap.head_check(entry, ADDRESS, mixed, 30)
+    assert (check.kind, check.problem) == (
+        "other",
+        "slots report different frame lengths [30, 60] — per-head writes refused",
+    )
+    no_length = framemap.head_check(entry, ADDRESS, Capabilities(), 30)
+    assert (no_length.kind, no_length.problem) == (
+        "other",
+        "the device reports no frame length — per-head writes refused",
+    )
+    sixty = Capabilities(segment_hint=60, framebuffer_lengths=dict.fromkeys(lengths, 60))
+    assert framemap.head_check(entry, ADDRESS, sixty, 30).mapped
+    assert framemap.head_check(entry, "sim-canopy-r0c0", sixty, 30) == framemap.HeadCheck(
+        MAP_MISMATCH, "map_mismatch"
+    )
+    unmapped = entry.model_copy(update={"framebuffer_mapping": None})
+    assert framemap.head_check(unmapped, ADDRESS, mixed, 30).kind == "other"
 
 
 def test_the_7am_check_passes_a_mapped_kit_and_says_the_head_check_is_visual(app_client):
