@@ -10,8 +10,8 @@ Rules implemented here:
 - **One `write()` = one PUT**, sent with `bridge.create_request("put", …/metadevices/{id}/state, True, json=…,
   headers={host: semantics2.afero.net, content-type: application/json; charset=utf-8})` inside
   `asyncio.wait_for(…, 8)`. `lastUpdateTime` is stamped in epoch **milliseconds** from the injected clock.
-- **No hidden retries.** `aioafero.v1.v1_const.MAX_RETRIES` is forced to 1 at import and again before every send
-  (aioafero reads it at call time); the executor owns retries.
+- **No hidden retries.** Adapter calls use `create_request`, which sends once. For aioafero's own calls,
+  `aioafero.v1.v1_const.MAX_RETRIES` is forced to 1 at import and again before every send; the executor owns retries.
 - **Nothing raises for HTTP or transport problems.** Results are classified into `Outcome`: gate refusal →
   DENIED; `ExceededMaximumRetries`, 403 (`HTTPForbidden`, the observed throttling signature), 429/503/504 →
   THROTTLED, with the real status on `http_status`; `InvalidAuth` → AUTH; 404 → NOT_FOUND; other 4xx →
@@ -751,11 +751,9 @@ class AferoDriver:
         invalid_auth = False
 
         async def request_bytes() -> tuple[int, bytes]:
-            # Read the body *inside* the request context. aioafero 9.3.0's request() reads and then releases the
-            # response before returning it, and reading a released response again raises ClientConnectionError
-            # ("Connection closed") even on a 200 — found on the real kit at VWBD's workshop. create_request keeps
-            # aioafero's bearer injection and our gated session, and makes exactly one HTTP attempt (the executor
-            # owns retries); its status handling is ours (classify_status), so 403/429/503/504 stay THROTTLED.
+            # Read before the context releases the response. aioafero 9.3.0's request() reads and releases
+            # it before returning, so reading that response again raises ClientConnectionError even on 200.
+            # create_request preserves auth and the gated session, and performs exactly one HTTP attempt.
             async with bridge.create_request(method, url, True, **kwargs) as response:
                 return response.status, await response.read()
 

@@ -11,7 +11,7 @@ from conductor.engine_api import PlanError
 from conductor.geometry import build_layout, load_canopy_config
 from conductor.looks import canvas_heads, compose_canvas, evaluate, head_positions, load_modes, placement_for
 from conductor.looks.schema import BandCanvas, GradientCanvas, PathwayCanvas
-from conductor.rows import OFF_ENTRY, FrameEntry
+from conductor.rows import FrameEntry
 
 CANOPY = load_canopy_config()
 RECIPES = load_recipes()
@@ -20,8 +20,6 @@ MODULES = load_registry().canopy_modules()
 
 
 def _placements(entries=MODULES, frame_length=30):
-    """Placements on a controller whose frame is `frame_length` entries (30 = one entry per puck; the real SQHDK03
-    reports 60 for its 30 pucks)."""
     return [placement_for(CANOPY, e, frame_length=frame_length) for e in entries]
 
 
@@ -50,22 +48,12 @@ def test_every_one_of_the_270_heads_is_covered_exactly_once():
     assert {(h.device_id, h.index): (h.x, h.y) for h in heads} == layout
 
 
-@pytest.mark.parametrize("length", [30, 60])
 @pytest.mark.parametrize("mode_id", ["rainbow-row-sunset", "garden-gathering", "golden-hour"])
-def test_each_module_gets_a_full_length_frame_and_composition_is_deterministic(mode_id, length):
-    """30 pucks in the device's frame: entries 0–29 hold the canvas, any further entries (the real kit's 60-entry
-    frame) are OFF — the same pucks either way, and the same frame every time."""
-    frames = compose_canvas(
-        _canvas(mode_id), canopy=CANOPY, recipes=RECIPES, placements=_placements(frame_length=length)
-    )
+def test_each_module_gets_a_30_entry_frame_and_composition_is_deterministic(mode_id):
+    frames = compose_canvas(_canvas(mode_id), canopy=CANOPY, recipes=RECIPES, placements=_placements())
     assert sorted(frames) == sorted(e.id for e in MODULES)
-    assert all(len(f) == length and all(isinstance(x, FrameEntry) for x in f) for f in frames.values())
-    assert all(f[30:] == [OFF_ENTRY] * (length - 30) for f in frames.values())
-    thirty = compose_canvas(_canvas(mode_id), canopy=CANOPY, recipes=RECIPES, placements=_placements())
-    assert all(frames[d][:30] == thirty[d] for d in frames)  # the pucks' colours don't depend on the length
-    again = compose_canvas(
-        _canvas(mode_id), canopy=CANOPY, recipes=RECIPES, placements=_placements(frame_length=length)
-    )
+    assert all(len(f) == 30 and all(isinstance(x, FrameEntry) for x in f) for f in frames.values())
+    again = compose_canvas(_canvas(mode_id), canopy=CANOPY, recipes=RECIPES, placements=_placements())
     assert again == frames
     for frame in frames.values():
         for e in frame:
@@ -141,17 +129,10 @@ def test_a_calibrated_wire_order_changes_which_frame_index_holds_which_colour():
     assert reversed_frame == plain[::-1]
 
 
-def test_head_count_guard_refuses_a_frame_shorter_than_the_pucks():
+def test_head_count_guard_refuses_a_frame_of_the_wrong_length():
     canvas = _canvas("rainbow-row-sunset")
     with pytest.raises(PlanError, match="reports 29 heads but this module should have 30"):
         compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=_placements(frame_length=29))
-    # a longer frame is fine (the controller reports its capacity), but not one too short from the offset
-    compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=_placements(frame_length=60))
-    high = MODULES[0].model_copy(update={"frame_offset": 30})
-    with pytest.raises(PlanError, match="reports 59 heads but this module should have 30 from entry 30"):
-        compose_canvas(
-            canvas, canopy=CANOPY, recipes=RECIPES, placements=_placements([high], frame_length=59)
-        )
     with pytest.raises(PlanError, match="reports no frame length"):
         compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=_placements(frame_length=None))
     sixty = MODULES[0].model_copy(update={"expected_heads": 60})
@@ -162,21 +143,6 @@ def test_head_count_guard_refuses_a_frame_shorter_than_the_pucks():
     twice = [placement_for(CANOPY, MODULES[0], frame_length=30)] * 2
     with pytest.raises(PlanError, match="both claim canopy position r0c0"):
         compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=twice)
-
-
-def test_frame_offset_moves_the_pucks_within_the_frame_never_on_the_canopy():
-    """frame_offset 30 on a 60-entry frame: puck i is entry 30 + i, entries 0–29 OFF; canvas positions unchanged."""
-    canvas = _two_stop("x")
-    entry = MODULES[0]
-    low = compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=_placements([entry], 60))[
-        entry.id
-    ]
-    moved = entry.model_copy(update={"frame_offset": 30})
-    high = compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=_placements([moved], 60))[
-        entry.id
-    ]
-    assert high[:30] == [OFF_ENTRY] * 30 and high[30:] == low[:30] and low[30:] == [OFF_ENTRY] * 30
-    assert canvas_heads(CANOPY, _placements([moved], 60)) == canvas_heads(CANOPY, _placements([entry], 60))
 
 
 def test_pathway_is_bright_on_the_path_and_dim_on_the_base():

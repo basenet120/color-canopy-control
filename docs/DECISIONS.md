@@ -291,6 +291,53 @@ the Calibrate tab's offset fixes it without code), every other entry is sent OFF
 slot hash still covers the full frame (07 §6). A frame shorter than the pucks need is still refused. Consequence:
 the 12-puck fault can't be seen from the frame length on this model; the 7 am head-count check says so and asks for
 a visual check. The simulator's default kit now has 60-entry frames driving 30 pucks, like the real one.
+_Mechanism superseded by D54 (2026-10-07): no `frame_offset`, no frame-offset field on the Calibrate tab, and the
+default simulator kit is back to 30 entries. Still true: Kingston reports 60 entries with 30 pucks, and frames shorter
+than the pucks are refused. Unused entries are written OFF only through a kit's mapping. The 7 am check, composer and
+compiler are back to frame = heads until the port in STATUS gap 1. Whether the 12-puck fault shows in the cloud is
+unbenched (gate 10)._
 
 **D53 — A client that disconnects mid-request on the accounts routes is a quiet no-op** (499, one INFO line), not a
 traceback.
+
+## 2026-10-07 — Paris's VWBD field work merged as canon
+
+**D54 — Paris's VWBD source is canon; a per-kit `framebuffer_mapping` replaces D52's `frame_offset`.** Paris worked
+on the real kits at VWBD from Sep 28 to Oct 7, on a fork of the workshop kit (1eb8551). Alon made that source canonical.
+Where it and main both changed a file, Paris's whole file won. Main's post-fork frame-layout work (929c0d2: `FrameLayout`,
+`frame_offset`, the Calibrate tab's frame-offset field, the 60-entry default simulator) came out as one unit. D51's fix (Paris's version) and D53
+stay. Per-head painting (module page, Studio) reaches a kit's pucks only through `framebuffer_mapping {frame_length, indices, proven_on}`. That field
+lives in the ops overlay (NOT_FOR_GIT) and never transfers between kits (D25). It applies only when `proven_on` is that
+device's id and the frame length, head count and slot lengths agree. Unmapped entries are written OFF, and readback is
+mapped back through the same indices. Without a mapping the frame must equal the heads. Kingston's map was watched on
+the lights on Sep 28: entries 0–29 drive pucks 1–30 from the controller end, and 30–59 drive nothing. Slot writes now
+check every requested effect field as well as the colour hash; hash-only checks stay colour-only. **Known gap:** only
+the module page and the Studio read the mapping. Bench jobs address raw controller entries (they need only that kit's
+T1 flag) and never read or save a map. The show engine's T1 compile and composer, `/api/devices`,
+the attention list and the 7 am head-count check do not. A real 60-entry module is flagged there, and T1 canvas looks
+can't use it, until the mapping is ported into those paths.
+
+**D55 — Bounded commissioning jobs restore what they touch and promote nothing.** `gate_c_safe` copies a slot into
+Custom 1 or 2 (never Custom 3), holds it for a bounded time, then restores the frame, the slot selection and the active
+look as three separate commands. A single combined restore left String light 1 in Custom mode (run f613f6, CLOUD readback).
+`address_probe_safe` defaults to Custom 2, refuses Custom 3 and restores exactly. `effect_probe` tests one effect code
+for 2–20 s and restores the slot, but not the previous look. No job enables or names an effect code or saves a map;
+`effects.enabled` stays empty. The original `address_probe` still defaults to Custom 3 and leaves its pattern there, so
+use the safe job on any slot that holds a pattern someone saved.
+
+**D56 — The Studio (`/ops/showcase/`) is Paris's six-scene home, and `/` redirects to it.** Six scene palettes
+(Lowcountry Calm … The Goodnight Glow) are drawn on the saved 270-head canopy. They live in
+`web/ops/showcase/demo-model.mjs`; `config/modes.yaml` is unchanged. The Studio adds:
+- ops-only paired control of the two shop modules (`POST /api/studio/pair/whole`: both sessions preflighted, separate
+  leases, one shared lock);
+- a paired per-head scene gradient (`GET/POST /api/studio/pair/gradient`). It needs each kit's own T1 proof and
+  mapping, keeps a durable Custom 1 backup under the data dir, and never writes Custom 3;
+- a one-tap Kingston motion demo. It runs the bench `effect_probe` (code 1, speed 30, 20 s, on Custom 3; it ends on
+  Custom 3 per D55) and is gated on Kingston's T1 flag and map. Its copy says blocks "travel between light heads", but
+  the evidence is only that they "moved to different heads"; direction is unverified.
+
+The gradient has never been sent to real hardware, because preflight blocks the uncommissioned String light 1. The
+Studio is wired to VWBD's two kits: `bench-kit` (label "Kingston test…") and `shop-string-1` (label "String light 1…"),
+the second only in VWBD's private overlay. Anywhere else the live Studio refuses to connect and only `?preview=1`
+works. **Open (Alon):** today `/` redirects to the Studio in every mode, including the venue box and staging, where
+it can't connect.

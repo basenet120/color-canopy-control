@@ -97,15 +97,10 @@ def test_every_mode_compiles_at_every_tier_of_its_ladder(mode_id, tier):
             assert R.slot_select(slot)[0] in target.rows
             # readback of exactly this plan (rows + the slot object) matches `expect`, slot object included
             assert R.compare(target.expect, [*target.rows, R.slot_write(slot, target.slot_value)]) == []
-            # The simulator is the real kit's shape: a 60-entry frame, the 30 pucks in entries 0–29, the rest OFF.
-            frame = R.frame_entries(target.slot_value)
-            assert len(frame) == 60 and frame[30:] == [R.OFF_ENTRY] * 30
-            assert all(e != R.OFF_ENTRY for e in frame[:30]), "every puck is painted"
-            drifted = R.slot_write(slot, R.frame_value(None, [R.FrameEntry()] * 60, expected_length=60))
+            drifted = R.slot_write(slot, R.frame_value(None, [R.FrameEntry()] * 30, expected_length=30))
             assert R.compare(target.expect, [*target.rows, drifted]), "a drifted slot must be a mismatch"
             write = [R.slot_write(slot, target.slot_value), *R.slot_select(slot), R.power(True)]
-            # 04 measured ~3.4 KB for 30 entries; the real kit's 60-entry frame is ~5 KB, still one PUT.
-            assert R.payload_bytes(METADEVICE_ID, write, 1_790_000_000_000) < 6144
+            assert R.payload_bytes(METADEVICE_ID, write, 1_790_000_000_000) < 4096  # 04: ~3.4 KB
 
 
 def test_ladder_is_read_from_the_modes_file():
@@ -300,45 +295,6 @@ def test_a_wrong_head_count_refuses_t1_but_t3_still_compiles():
     with pytest.raises(PlanError, match="reports 12 heads but this module should have 30"):
         compile_mode("rainbow-row-sunset", Tier.T1, _ctx(short))
     assert compile_first("rainbow-row-sunset", _ctx(short)).tier is Tier.T3
-
-
-def test_frame_length_is_not_the_head_count_a_longer_frame_pads_with_off_at_the_offset():
-    """The real SQHDK03 reports 60 entries for 30 pucks: T1 paints the 30 physical heads at the module's
-    frame_offset and writes every other entry OFF (deterministic, so the slot hash is stable); a 30-entry
-    controller still gets exactly its 30; a frame shorter than the pucks need from the offset is refused."""
-    base = compile_mode("rainbow-row-sunset", Tier.T1, _ctx())
-    again = compile_mode("rainbow-row-sunset", Tier.T1, _ctx())
-    for device_id, target in base.modules.items():
-        assert target.slot_hash == again.modules[device_id].slot_hash  # same heads in → same hash out
-    assert any("60-entry saved pattern" in n and "0–29" in n for n in base.notes)
-
-    thirty = _caps(framebuffer_lengths={s: 30 for s in R.SLOTS})
-    slot_30 = {s: R.frame_value(None, [R.FrameEntry()] * 30, expected_length=30) for s in R.SLOTS}
-    plan_30 = compile_mode(
-        "rainbow-row-sunset", Tier.T1, _ctx(thirty, slot_readback={m.id: slot_30 for m in MODULES})
-    )
-    for device_id, target in plan_30.modules.items():
-        heads = base.modules[device_id]
-        assert R.frame_entries(target.slot_value) == R.frame_entries(heads.slot_value)[:30]
-        assert target.preview == heads.preview  # the same 30 pucks either way
-    assert not any("saved pattern" in n for n in plan_30.notes)
-
-    shifted = [m.model_copy(update={"frame_offset": 30}) for m in MODULES]
-    ctx = _ctx()
-    ctx.registry = shifted
-    plan_hi = compile_mode("rainbow-row-sunset", Tier.T1, ctx)
-    for device_id, target in plan_hi.modules.items():
-        frame = R.frame_entries(target.slot_value)
-        assert frame[:30] == [R.OFF_ENTRY] * 30
-        assert frame[30:] == R.frame_entries(base.modules[device_id].slot_value)[:30]
-        assert target.preview == base.modules[device_id].preview  # previews show the pucks, wherever they sit
-
-    for short in (29, 45):  # 45 entries are too few for 30 pucks from entry 30
-        caps = _caps(framebuffer_lengths={s: short for s in R.SLOTS})
-        ctx = _ctx(caps)
-        ctx.registry = shifted if short == 45 else MODULES
-        with pytest.raises(PlanError, match=f"reports {short} heads but this module should have 30"):
-            compile_mode("rainbow-row-sunset", Tier.T1, ctx)
 
 
 def test_a_device_without_capabilities_or_individual_mode_is_refused_plainly():

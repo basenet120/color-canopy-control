@@ -1,0 +1,14 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const app = path.resolve(__dirname, '..');
+const html = fs.readFileSync(path.join(app, 'TEST-CENTER.html'), 'utf8');
+const caseData = html.match(/<script[^>]*id="case-data"[^>]*>([\s\S]*?)<\/script>/)[1];
+const program = html.match(/<script>\s*('use strict';[\s\S]*?)<\/script>/)[1];
+const data = JSON.parse(fs.readFileSync(path.join(app, 'docs/live-workshop-2026-09-28.test-center.json'), 'utf8'));
+const sandbox = {document: {getElementById: id => ({textContent: caseData})}, data};
+vm.createContext(sandbox);
+vm.runInContext(program.slice(0, program.indexOf('let state,')) + '\nglobalThis.validated = validate(data);', sandbox);
+if (JSON.stringify(sandbox.validated) !== JSON.stringify(data)) throw Error('Importer would alter the saved data.');
+const session = data.sessions[0];
+console.log(`Tracker import verified: ${Object.keys(session.results).length - session.variants.length} base cases, ${session.variants.length} variants.`);

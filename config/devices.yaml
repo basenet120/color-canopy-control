@@ -22,7 +22,7 @@ accounts:
 device_defaults:
   canopy_module:
     model: SQHDK03
-    profile: sqhdk03-sim  # simulator profile (conductor/sim/profiles): the real kit's 60-entry frames, 30 pucks
+    profile: sqhdk03-sim  # simulator profile (conductor/sim/profiles); the sibling string resized to 30
     expected_heads: 30
     writable: true
 

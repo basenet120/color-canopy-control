@@ -5,11 +5,19 @@
 // WebSocket topic "module:<id>"; every action also returns the fresh state.
 
 import { api, connectLive, copyJSON, fmtMs, setSimBadge } from "/static/app.js";
+import { previewFrame, previewKey, previewNotice } from "./preset-preview.js?v=preview-motion-2";
 
 const HEARTBEAT_MS = 30000;
 const SVGNS = "http://www.w3.org/2000/svg";
 const OFF = { r: 0, g: 0, b: 0, cct: 0, colorBrightness: 0, whiteBrightness: 0 };
 const SHOWN = { "top-left": "bottom-right", "top-right": "bottom-left", "bottom-left": "top-right", "bottom-right": "top-left" };
+const PRESET_LABELS = {
+  'rainbow-road': 'rainbow-road — travelling colors',
+  'rainbow-roll': 'rainbow-roll — pulses in place',
+  'gradient-rainbow': 'gradient-rainbow — static color pairs',
+  'fade-3': 'fade-3 — RGB fades through black',
+  'jump-3': 'jump-3 — sharp RGB changes',
+};
 
 const S = {
   deviceId: null,
@@ -25,6 +33,13 @@ const S = {
   interacted: false,
   live: null,
   heartbeatTimer: null,
+  refreshTimer: null,
+  previewRaf: null,
+  previewKey: null,
+  previewStarted: 0,
+  previewElapsed: 0,
+  previewRate: 1,
+  previewPaused: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false,
   inflight: 0,
   built: false,
   recipeKind: "blend",
@@ -260,6 +275,33 @@ async function openDevice(id, { steal = false } = {}) {
   applyState(res.state);
   startLive();
   startHeartbeat();
+  startReadback();
+}
+
+function startReadback() {
+  clearTimeout(S.refreshTimer);
+  const device = S.deviceId, session = S.sessionId, lease = S.lease;
+  const current = () => S.lease === lease && S.sessionId === session && S.deviceId === device;
+  const refresh = async () => {
+    if (!current()) return;
+    try {
+      if (!document.hidden && !S.inflight && !S.state?.busy) {
+        const reply = await api(`/api/module/${encodeURIComponent(device)}?refresh=1`);
+        if (!current()) return;
+        if (!reply.state?.open || reply.state.session_id !== session) {
+          lost('This module session ended. Open it again to continue.');
+          return;
+        }
+        applyState(reply.state);
+        $('readback-note').textContent = reply.state.read_error ? 'Readback needs attention.' : 'Settings refreshed every 5 seconds while this page is visible.';
+      }
+    } catch {
+      if (current()) $('readback-note').textContent = 'Could not refresh settings; the viewport is showing the last report.';
+    } finally {
+      if (current()) S.refreshTimer = setTimeout(refresh, 5000);
+    }
+  };
+  S.refreshTimer = setTimeout(refresh, 5000);
 }
 
 function startHeartbeat() {
@@ -298,6 +340,8 @@ function startLive() {
 }
 
 function releaseBeacon() {
+  clearTimeout(S.refreshTimer);
+  cancelAnimationFrame(S.previewRaf);
   if (!S.lease || !S.deviceId) return;
   const url = `/api/module/${encodeURIComponent(S.deviceId)}/close`;
   const body = JSON.stringify({ lease: S.lease });
@@ -330,6 +374,8 @@ async function closeDevice() {
 function stopSession() {
   S.lease = null;
   clearInterval(S.heartbeatTimer);
+  clearTimeout(S.refreshTimer);
+  cancelAnimationFrame(S.previewRaf);
   if (S.live) {
     S.live.close();
     S.live = null;
@@ -349,6 +395,17 @@ function lost(message) {
 
 // ---- state ----------------------------------------------------------------------------------------------------
 function applyState(st) {
+  const key = previewKey(st.preview?.reported) + previewKey(st.preview?.desired);
+  if (key !== S.previewKey) {
+    S.previewKey = key;
+    S.previewStarted = performance.now();
+    S.previewElapsed = 0;
+    S.previewRate = 1;
+    try {
+      const saved = Number(localStorage.getItem(previewRateKey(st)));
+      if (Number.isFinite(saved) && saved >= 0.25 && saved <= 4) S.previewRate = saved;
+    } catch { /* A preview correction is optional when browser storage is unavailable. */ }
+  }
   S.state = st;
   setSimBadge(st.simulated === true);
   if (!S.dirty || S.draft.length !== st.heads.length) {
@@ -357,6 +414,61 @@ function applyState(st) {
   }
   if (!S.built) buildControls(st);
   renderAll();
+  startPreviewAnimation();
+}
+
+function previewSeconds(now) {
+  return S.previewElapsed + (S.previewPaused ? 0 : (now - S.previewStarted) / 1000 * S.previewRate);
+}
+
+function previewRateKey(state = S.state) {
+  return `module-preview-rate:${S.deviceId}:${previewKey(state?.preview?.reported)}`;
+}
+
+function setPreviewRate(rate) {
+  if (!Number.isFinite(rate) || rate < 0.25 || rate > 4) return;
+  const now = performance.now();
+  S.previewElapsed = previewSeconds(now);
+  S.previewStarted = now;
+  S.previewRate = rate;
+  try { localStorage.setItem(previewRateKey(), String(rate)); } catch { /* Optional local preference. */ }
+  startPreviewAnimation();
+}
+
+function paintPreviewFrame(now) {
+  if (!S.state) return;
+  const elapsed = previewSeconds(now), st = S.state;
+  const shown = previewFrame(st.preview?.reported, st.heads.length, elapsed);
+  const wanted = previewFrame(st.preview?.desired, st.heads.length, elapsed);
+  if (!shown && !wanted) return;
+  $('map').querySelectorAll('g[data-index]').forEach(group => {
+    const i = Number(group.dataset.index), data = st.heads[i], draft = S.draft[i];
+    const dirty = draft && !sameEntry(draft, data.paint);
+    const color = shown?.[i] || data.reported;
+    group.querySelector('.core').setAttribute('fill', css(color));
+    if (!dirty) group.querySelector('.ring').setAttribute('stroke', css(wanted?.[i] || data.desired));
+    const number = group.querySelector('.num');
+    if (number && !dirty) number.setAttribute('fill', luminance(color) > 140 ? '#111' : '#fff');
+  });
+}
+
+function startPreviewAnimation() {
+  cancelAnimationFrame(S.previewRaf);
+  const preview = S.state?.preview?.reported;
+  $('preview-note').textContent = previewNotice(preview, S.previewPaused);
+  $('preview-toggle').hidden = !preview?.animated;
+  $('preview-toggle').textContent = S.previewPaused ? 'Play preview' : 'Pause preview';
+  $('preview-rate-controls').hidden = !preview?.animated;
+  $('preview-rate').value = S.previewRate;
+  $('preview-rate-out').textContent = `${S.previewRate.toFixed(2)}×`;
+  if (!S.lease || document.hidden || S.previewPaused || !(preview?.animated || S.state?.preview?.desired?.animated)) return;
+  let last = 0;
+  const frame = now => {
+    if (!S.lease || document.hidden || S.previewPaused) return;
+    if (now - last >= 50) { paintPreviewFrame(now); last = now; }
+    S.previewRaf = requestAnimationFrame(frame);
+  };
+  S.previewRaf = requestAnimationFrame(frame);
 }
 
 function renderAll() {
@@ -390,7 +502,7 @@ function renderStatus() {
   if (st.busy || S.inflight) {
     pill.className = "pill updating";
     pill.textContent = "Updating";
-  } else if (st.diff.length || st.read_error || (last && !["applied", "superseded"].includes(last.status))) {
+  } else if (st.diff.length || st.settings_mismatches?.length || st.read_error || (last && !["applied", "superseded"].includes(last.status))) {
     pill.className = "pill attention";
     pill.textContent = "Needs attention";
   } else {
@@ -470,6 +582,7 @@ function renderMap() {
   }
   const n = S.selection.size;
   $("selection-count").textContent = n ? `${n} selected` : "Tap heads to select · drag to select an area";
+  paintPreviewFrame(performance.now());
 }
 
 function svgPoint(evt) {
@@ -558,17 +671,17 @@ function renderLook() {
   if (st.read_error) {
     line.textContent = `Readback problem: ${st.read_error}`;
     line.className = "bad";
+  } else if (st.preview?.reported || st.preview?.desired) {
+    const mismatch = st.settings_mismatches || [];
+    line.textContent = mismatch.length ? `Settings differ from what we sent: ${mismatch.join(', ')}.` : 'Preset settings match the last cloud readback. Observe the real light to verify the animation.';
+    line.className = mismatch.length ? 'bad' : 'muted';
   } else if (st.diff.length) {
     line.textContent = `${st.diff.length} head(s) differ from what we sent: ${st.diff.slice(0, 12).join(", ")}${st.diff.length > 12 ? "…" : ""}`;
     line.className = "bad";
   } else {
-    line.textContent = st.reported_at ? "Every head matches what we sent." : "";
+    line.textContent = st.reported_at ? "Reported color settings match what we sent; physical color is not measured." : "";
     line.className = "muted";
   }
-  // A controller frame longer than the module (60 entries for 30 pucks): say which entries the pucks use.
-  const note = $("frame-note");
-  note.textContent = st.head_count.pattern || "";
-  note.hidden = !st.head_count.pattern || String(st.reported_look).includes("-entry pattern");
 }
 
 // ---- telemetry --------------------------------------------------------------------------------------------------
@@ -682,7 +795,7 @@ function buildControls(st) {
     $("m-speed").min = caps.speed_range[0];
     $("m-speed").max = caps.speed_range[1];
   }
-  $("m-preset").replaceChildren(...caps.presets.map((p) => h("option", { value: p, text: p })));
+  $("m-preset").replaceChildren(...caps.presets.map((p) => h("option", { value: p, text: PRESET_LABELS[p] || p })));
   $("m-program").replaceChildren(...caps.programs.map((p) => h("option", { value: p, text: p })));
   $("m-preset-btn").disabled = !caps.presets.length;
   $("m-program-btn").disabled = !caps.programs.length;
@@ -1075,16 +1188,6 @@ function renderSweep() {
 }
 
 // ---- Slots --------------------------------------------------------------------------------------------------------
-// "30 heads", or for a longer controller frame "60-entry pattern · pucks use 0–29" (the mini-map shows the pucks).
-function slotLength(st, slot) {
-  const n = st.map.heads.length;
-  if (slot.length == null) return "? heads";
-  if (slot.length === n) return `${n} heads`;
-  const off = st.head_count.offset ?? 0;
-  if (slot.length >= off + n) return `${slot.length}-entry pattern · pucks use ${off}–${off + n - 1}`;
-  return `${slot.length} entries — too short for ${n} heads`;
-}
-
 function miniMap(heads, colors) {
   const map = S.state.map;
   const svg = s("svg", { viewBox: `-2 -2 ${map.width_in + 4} ${map.height_in + 4}`, role: "img", "aria-label": "Slot pattern" });
@@ -1112,7 +1215,7 @@ function renderSlots() {
         { class: `slot-card${slot.active ? " active" : ""}` },
         h("h3", {}, shortLabel(slot.slot), slot.active ? h("span", { class: "pill ready", text: "Showing" }) : ""),
         miniMap(st.map.heads, slot.heads),
-        h("div", { class: "meta", text: `${slotLength(st, slot)} · hash ${slot.hash ?? "–"}${recorded}` }),
+        h("div", { class: "meta", text: `${slot.length ?? "?"} heads · hash ${slot.hash ?? "–"}${recorded}` }),
         h(
           "div",
           { class: "button-grid" },
@@ -1220,18 +1323,6 @@ function renderCalibration() {
     : `a hop of ${map.longest_hop_in}″ is longer than the ${map.puck_spacing_in}″ cable — check the routing`;
   status.textContent = `${saved}: orientation ${cal.orientation}, along ${path}, head 0 at the ${cal.start_corner_as_shown.replace("-", " ")}${flipped}; ${hop}.`;
   status.className = `cal-status${map.hops_fit ? "" : " bad"}`;
-  // Frame offset: which entry of the device's saved pattern drives head 0.
-  const hc = S.state.head_count;
-  const length = hc.reported;
-  const input = $("cal-offset");
-  if (document.activeElement !== input) input.value = String(hc.offset ?? 0);
-  input.max = length != null ? String(Math.max(0, length - hc.map)) : "";
-  const last = (hc.offset ?? 0) + hc.map - 1;
-  $("offset-explain").textContent =
-    length == null
-      ? "The device hasn't reported how long its saved patterns are yet."
-      : `This device's saved patterns hold ${length} entries; the ${hc.map} heads use entries ${hc.offset ?? 0}–${last}.` +
-        (hc.problem ? ` ${hc.problem}.` : "");
 }
 
 function setupCalibration() {
@@ -1251,14 +1342,6 @@ function setupCalibration() {
     start_corner: S.cal.orientation === "B" ? SHOWN[S.cal.corner_shown] : S.cal.corner_shown,
   });
   $("cal-save").addEventListener("click", () => act("calibration", body(), { label: "Calibration saved" }));
-  $("cal-offset-save").addEventListener("click", () => {
-    const value = Number($("cal-offset").value);
-    if (!Number.isInteger(value) || value < 0) {
-      toast("The offset is a whole number, 0 or more.", "error");
-      return;
-    }
-    act("frame-offset", { frame_offset: value }, { label: `Frame offset ${value} saved` });
-  });
   $("cal-flip").addEventListener("click", () => {
     const order = S.state.map.heads.map((x) => [x.ax, x.ay]);
     act("calibration", { ...body(), wire_order: order, flip: true }, { label: "Wire order flipped and saved" });
@@ -1350,6 +1433,16 @@ async function main() {
   setupCalibration();
   setupHold();
   setupTelemetryButtons();
+  $('preview-toggle').addEventListener('click', () => {
+    const now = performance.now();
+    S.previewElapsed = previewSeconds(now);
+    S.previewStarted = now;
+    S.previewPaused = !S.previewPaused;
+    startPreviewAnimation();
+  });
+  $('preview-rate').addEventListener('input', event => setPreviewRate(Number(event.target.value)));
+  $('preview-rate-reset').addEventListener('click', () => setPreviewRate(1));
+  document.addEventListener('visibilitychange', startPreviewAnimation);
   trackTopbar();
   $("switch-btn").addEventListener("click", closeDevice);
   window.addEventListener("pagehide", releaseBeacon);

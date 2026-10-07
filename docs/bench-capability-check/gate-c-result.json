@@ -1,0 +1,200 @@
+{
+  "note": "Anonymized bench result from the Color Canopy Conductor: ids, MACs, SSIDs, emails, names and locations are replaced with placeholders.",
+  "run_id": "20260928T170250-gate_c-0b272e",
+  "job": "gate_c",
+  "title": "Gate C — replay slot 1 into slot 2",
+  "device_id": "bench-kit",
+  "address": "device-2",
+  "simulated": false,
+  "driver": "afero",
+  "status": "finished",
+  "started": 1790614970.4433742,
+  "finished": 1790614978.972744,
+  "params": {
+    "source": "custom-2",
+    "target": "custom-3"
+  },
+  "steps": [
+    {
+      "n": 1,
+      "t": 1790614970.446,
+      "elapsed_s": 0.0,
+      "message": "Started Gate C — replay slot 1 into slot 2 on bench-kit",
+      "detail": {}
+    },
+    {
+      "n": 2,
+      "t": 1790614970.839,
+      "elapsed_s": 0.391,
+      "message": "Read the device's state",
+      "detail": {
+        "kind": "read",
+        "outcome": "ok",
+        "http_status": 200,
+        "elapsed_ms": 203
+      }
+    },
+    {
+      "n": 3,
+      "t": 1790614970.842,
+      "elapsed_s": 0.391,
+      "message": "Read custom-2 (60 entries) and custom-3",
+      "detail": {
+        "source_hash": "2dca78b903ffc99c",
+        "target_hash": "483cd9bd80d41c48",
+        "showing": "custom-3"
+      }
+    },
+    {
+      "n": 4,
+      "t": 1790614970.844,
+      "elapsed_s": 0.391,
+      "message": "BEFORE: switching the lights to custom-1 (not custom-2's pattern). Watch the strand: it holds for about 4 s, then custom-3 is rewritten with custom-2's pattern and selected.",
+      "detail": {}
+    },
+    {
+      "n": 5,
+      "t": 1790614970.846,
+      "elapsed_s": 0.391,
+      "message": "Sending: gate_c: BEFORE look custom-1",
+      "detail": {
+        "kind": "write_start",
+        "label": "gate_c: BEFORE look custom-1",
+        "t": 1790614970.8464067,
+        "rows": 3
+      }
+    },
+    {
+      "n": 6,
+      "t": 1790614973.384,
+      "elapsed_s": 2.938,
+      "message": "gate_c: BEFORE look custom-1: applied",
+      "detail": {
+        "kind": "write",
+        "label": "gate_c: BEFORE look custom-1",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790614970.8489618,
+        "acked_at": 1790614971.0417151,
+        "verified_at": 1790614973.381824
+      }
+    },
+    {
+      "n": 7,
+      "t": 1790614977.41,
+      "elapsed_s": 6.953,
+      "message": "Sending: gate_c: copy custom-2 → custom-3 + select",
+      "detail": {
+        "kind": "write_start",
+        "label": "gate_c: copy custom-2 → custom-3 + select",
+        "t": 1790614977.40977,
+        "rows": 4
+      }
+    },
+    {
+      "n": 8,
+      "t": 1790614978.812,
+      "elapsed_s": 8.359,
+      "message": "gate_c: copy custom-2 → custom-3 + select: applied",
+      "detail": {
+        "kind": "write",
+        "label": "gate_c: copy custom-2 → custom-3 + select",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790614977.419955,
+        "acked_at": 1790614977.6423388,
+        "verified_at": 1790614978.801981
+      }
+    },
+    {
+      "n": 9,
+      "t": 1790614978.96,
+      "elapsed_s": 8.516,
+      "message": "Read the device's state",
+      "detail": {
+        "kind": "read",
+        "outcome": "ok",
+        "http_status": 200,
+        "elapsed_ms": 157
+      }
+    },
+    {
+      "n": 10,
+      "t": 1790614978.968,
+      "elapsed_s": 8.516,
+      "message": "Read back custom-3",
+      "detail": {
+        "hash": "2dca78b903ffc99c",
+        "match": true
+      }
+    }
+  ],
+  "result": {
+    "verdict": "needs_eyes",
+    "summary": "HTTP 200, and custom-3 reads back identical to custom-2. The lights went from the BEFORE look (custom-1) to custom-3: do they now show exactly custom-2's pattern?",
+    "observations": {
+      "source": "custom-2",
+      "target": "custom-3",
+      "length": 60,
+      "source_hash": "2dca78b903ffc99c",
+      "target_hash_before": "483cd9bd80d41c48",
+      "selected_before": "custom-3",
+      "color_mode_before": "individual",
+      "before_look": "custom-1",
+      "before_write": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790614970.8489618,
+        "ack_ms": 193,
+        "verified_ms": 2533,
+        "mismatches": [],
+        "error": null
+      },
+      "write": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790614977.419955,
+        "ack_ms": 222,
+        "verified_ms": 1382,
+        "mismatches": [],
+        "error": null
+      },
+      "target_hash": "2dca78b903ffc99c",
+      "hashes_match": true
+    },
+    "ask_human": [
+      "Did the lights change from the BEFORE look to exactly slot 2's pattern?"
+    ],
+    "flags": {
+      "t1_frames": true
+    }
+  },
+  "answers": {
+    "Did the lights change from the BEFORE look to exactly slot 2's pattern?": "yes"
+  },
+  "flag_questions": {
+    "t1_frames": "Did the lights change from the BEFORE look to exactly slot 2's pattern?"
+  },
+  "flags_applied": {
+    "flags": {
+      "t1_frames": true
+    },
+    "previous": {
+      "t1_frames": null
+    },
+    "at": 1790615034.1863818
+  },
+  "flags_revoked": null,
+  "writes_sent": 2,
+  "confirmed_verdict": "pass",
+  "environment": {
+    "mode": "bench",
+    "version": "0.1.0",
+    "bench_live": true
+  },
+  "artifacts": []
+}

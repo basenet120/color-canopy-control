@@ -1,0 +1,167 @@
+{
+  "note": "Anonymized bench result from the Color Canopy Conductor: ids, MACs, SSIDs, emails, names and locations are replaced with placeholders.",
+  "run_id": "20260928T163552-gate_a-48a4c8",
+  "job": "gate_a",
+  "title": "Gate A — read-only profile dump",
+  "device_id": "bench-kit",
+  "address": "device-2",
+  "simulated": false,
+  "driver": "afero",
+  "status": "finished",
+  "started": 1790613352.285253,
+  "finished": 1790613352.6660347,
+  "params": {},
+  "steps": [
+    {
+      "n": 1,
+      "t": 1790613352.292,
+      "elapsed_s": 0.016,
+      "message": "Started Gate A — read-only profile dump on bench-kit",
+      "detail": {}
+    },
+    {
+      "n": 2,
+      "t": 1790613352.297,
+      "elapsed_s": 0.016,
+      "message": "Reading the device's profile (functions and state). Nothing is written.",
+      "detail": {}
+    },
+    {
+      "n": 3,
+      "t": 1790613352.653,
+      "elapsed_s": 0.375,
+      "message": "Profile read",
+      "detail": {
+        "model": "TBD",
+        "slots": [
+          "custom-1",
+          "custom-2",
+          "custom-3"
+        ],
+        "framebuffer_lengths": {
+          "custom-1": 60,
+          "custom-2": 60,
+          "custom-3": 60
+        },
+        "color_modes": [
+          "circadian-rhythm",
+          "white",
+          "individual",
+          "color",
+          "sequence"
+        ]
+      }
+    }
+  ],
+  "result": {
+    "verdict": "pass",
+    "summary": "Per-head path is alive: 3 slots with a 60-entry frame. Download the profile for the simulator.",
+    "observations": {
+      "model": "TBD",
+      "device_class": "light",
+      "segment_hint": 60,
+      "framebuffer_lengths": {
+        "custom-1": 60,
+        "custom-2": 60,
+        "custom-3": 60
+      },
+      "framebuffer_length": 60,
+      "slot_count": 3,
+      "slots": [
+        "custom-1",
+        "custom-2",
+        "custom-3"
+      ],
+      "color_modes": [
+        "circadian-rhythm",
+        "white",
+        "individual",
+        "color",
+        "sequence"
+      ],
+      "individual_mode": true,
+      "no_white_hint": false,
+      "cct_range": [
+        2200,
+        6500
+      ],
+      "cct_step": 100,
+      "rgb": true,
+      "presets": [
+        "double-rainbow-static",
+        "red-shift",
+        "fade-3",
+        "july-4th",
+        "valentines-day",
+        "prism",
+        "rainbow-rudolf",
+        "cross-faded",
+        "may-tricks",
+        "rainbow-roll",
+        "halloween",
+        "fade-7",
+        "jump-3",
+        "easter-eggs-six",
+        "st-patricks-day",
+        "christmas-static",
+        "vote-of-confidence-six",
+        "snafu",
+        "snowfall",
+        "diwali",
+        "gradient-rainbow",
+        "christmas-effect",
+        "hanukkah",
+        "white-star",
+        "home-depot",
+        "jump-7",
+        "clean-white-move",
+        "effervescent",
+        "mistletoe",
+        "under-the-sea",
+        "cinco-de-mayo",
+        "rainbow-road",
+        "penguin-disco"
+      ],
+      "programs": [
+        "sleep",
+        "diwali-fade",
+        "sound-to-sleep",
+        "cinco-de-mayo-fade",
+        "st-patricks-day-fade",
+        "halloween-fade",
+        "easter-fade",
+        "wake-up",
+        "hanukkah-fade"
+      ],
+      "speed_range": [
+        -10,
+        10
+      ],
+      "restore_values": [
+        "not-restored",
+        "restored",
+        "partial-restore"
+      ],
+      "party_mode": true,
+      "brightness_instances": 1,
+      "function_count": 26,
+      "warnings": []
+    },
+    "ask_human": [],
+    "flags": {}
+  },
+  "answers": {},
+  "flag_questions": {},
+  "flags_applied": null,
+  "flags_revoked": null,
+  "writes_sent": 0,
+  "confirmed_verdict": "pass",
+  "environment": {
+    "mode": "bench",
+    "version": "0.1.0",
+    "bench_live": true
+  },
+  "artifacts": [
+    "profile_raw"
+  ]
+}

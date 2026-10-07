@@ -2,8 +2,7 @@
 
 Rules being implemented:
 - **One simulated device per enabled registry entry**, addressed `sim-<id>` (D1), on the entry's account, serving
-  the entry's profile (default `sqhdk03-sim`: the sibling string resized to the real kit's 60-entry frames, with
-  30 simulated pucks driven by entries 0–29 — `SimDevice.pucks` / `puck_offset`; `puck_colors` is what they show).
+  the entry's profile (default `sqhdk03-sim`: the sibling string resized to 30 heads).
 - **One write = one PUT.** `write()` stamps `lastUpdateTime` with the driver clock in epoch **milliseconds**, builds
   the exact wire body the Afero adapter would send, and hands it to the cloud model (`SimCloud.accept_wire`). It
   never retries and never raises for HTTP/transport problems — every failure is an `Outcome` (drivers/base.py).
@@ -52,7 +51,7 @@ from conductor.drivers.base import (
 )
 from conductor.gate import Purpose
 from conductor.rows import EFFECT_FIELDS, FRAME_CLASS, FRAME_FIELDS, HEADER_COPY_FIELDS
-from conductor.sim.profiles import DEFAULT_PROFILE, device_info, frame_length, load_profile, pucks
+from conductor.sim.profiles import DEFAULT_PROFILE, device_info, frame_length, load_profile
 from conductor.sim.settings import READBACK_SEMANTICS, SimSettings
 from conductor.telemetry import percentile
 
@@ -101,9 +100,6 @@ class SimDevice:
             (fn.get("functionClass"), fn.get("functionInstance")): fn for fn in self.functions
         }
         self.frame_length = frame_length(self.dump)
-        # The strand's physical pucks and the frame entry that drives puck 0: a 60-entry controller frame drives the
-        # 30 simulated pucks from entry 0 (the working assumption for the real kit); other entries light nothing.
-        self.pucks, self.puck_offset = pucks(profile, self.dump)
         self.cloud: dict[Key, Any] = {}
         self.cloud_times: dict[Key, int] = {}
         for s in self.dump.get("states") or []:
@@ -636,14 +632,6 @@ class SimDriver:
             view[("power", None)] = "off"
         return _rows(view)
 
-    def puck_colors(self, address: str) -> list[dict]:
-        """What each simulated puck shows right now (ground truth): one `{"r","g","b"}` per physical puck, from the
-        frame entries that drive them (`SimDevice.puck_offset` on). Entries no puck uses are never shown."""
-        from conductor.render import head_colors  # render imports capabilities; keep the driver import-light
-
-        device = self.cloud.device(address)
-        return head_colors(self.device_view(address), device.pucks or 0, None, device.puck_offset)
-
     def cloud_view(self, address: str) -> list[StateRow]:
         """What the cloud has stored for a device (no faults, no latency)."""
         return _rows(self.cloud.device(address).cloud)
@@ -656,8 +644,6 @@ class SimDriver:
             "account": device.account,
             "profile": device.profile,
             "frame_length": device.frame_length,
-            "pucks": device.pucks,
-            "puck_offset": device.puck_offset,
             "available": device.available,
             "pending_updates": len(device.pending),
             "applied_at": device.applied_at,

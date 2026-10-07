@@ -418,7 +418,8 @@ def _stubs(tmp_path: Path, *, healthy: bool, active: bool = True, synced: bool =
 echo "$*" >> {calls}
 case "$1" in
 is-active) exit {0 if active else 3} ;;
-show) echo 1 ;;  # ActiveEnterTimestampMonotonic: started long ago (no start-up grace)
+show) echo 0 ;;  # no ActiveEnterTimestampMonotonic → no start-up grace. (A real early timestamp would put a CI
+# runner booted < 120 s ago inside the grace window and the watchdog would exit silently — the old flake.)
 esac
 exit 0
 """,

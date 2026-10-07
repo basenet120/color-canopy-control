@@ -136,6 +136,29 @@ class DeviceFlags(_Strict):
     readback_device_level: bool | None = None  # Gate B unplugged test: does readback reflect the device?
 
 
+class FramebufferMapping(_Strict):
+    """Observed physical-head to controller-entry mapping, valid only for the commissioned kit."""
+
+    frame_length: int = Field(ge=1, le=256)
+    indices: list[int] = Field(min_length=1, max_length=90)
+    proven_on: str = Field(min_length=1, max_length=80)
+
+    @field_validator("indices", mode="before")
+    @classmethod
+    def _whole_indices(cls, values):
+        if not isinstance(values, list) or any(type(v) is not int for v in values):
+            raise ValueError("indices must be whole controller addresses")
+        return values
+
+    @model_validator(mode="after")
+    def _valid_indices(self):
+        if len(set(self.indices)) != len(self.indices) or any(
+            i < 0 or i >= self.frame_length for i in self.indices
+        ):
+            raise ValueError("indices must be unique addresses inside the controller frame")
+        return self
+
+
 class DeviceEntry(_Strict):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,40}$")
     role: Role
@@ -148,10 +171,7 @@ class DeviceEntry(_Strict):
     kind: str | None = None  # vignette device kind: bulb, plug, lock, fan, string, path
     metadevice_id: str | None = None  # the Afero id; set only in the ops overlay
     expected_heads: int | None = Field(None, ge=1, le=90)
-    # The framebuffer entry that drives puck 0. The real SQHDK03 reports 60 entries with 30 pucks attached; the
-    # working assumption (UNVERIFIED) is that entries 0–29 drive the pucks. Set from the module page's Calibrate
-    # tab if the index sweep lights nothing, or the wrong half.
-    frame_offset: int = Field(0, ge=0, le=89)
+    framebuffer_mapping: FramebufferMapping | None = None
     orientation: Literal["A", "B"] | None = None
     writable: bool = True
     enabled: bool = True
@@ -369,7 +389,7 @@ def overlay_text(registry: Registry) -> str:
 
 # Fields the overlay may hold that never go into git (devices.yaml: "never with real ids in git"): the Afero
 # metadevice id, and the address of the kit that proved the bench flags (also a metadevice id).
-NOT_FOR_GIT = ("metadevice_id", "flags_proven_on")
+NOT_FOR_GIT = ("metadevice_id", "flags_proven_on", "framebuffer_mapping")
 
 
 @dataclass

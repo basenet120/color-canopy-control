@@ -1,113 +1,201 @@
 # Status
 
-_Last updated: 2026-09-27 — P0 through P4 built on the simulator, three adversarial review rounds fixed, ready for the
-bench kit. Nothing has touched real Hubspace hardware yet._
+_Last updated: 2026-10-07. Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into `main` as
+canon (D54). One kit, Kingston, is commissioned for per-head frames. The show engine is not yet mapping-aware (gap
+1 below)._
 
-## ⚠ Blocked: this session can't push
-The cloud session's git proxy refuses `basenet120/color-canopy-control` ("not in this session's authorized repository
-set"), and there is no GitHub CLI or repo-attach tool here. All work is committed locally on the stacked branches
-below. **Alon: attach the repo to this session with push access** (claude.ai/code → the session → Sources), then say
-"push" — the branches go up and the PRs open in order. Until then CI (incl. the gitleaks scan) has not run.
+## PR stack (merge order — merge commits, not squash)
+1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
+   - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
+     (`1eb8551`);
+   - a merge into `main` that resolves every conflict in Paris's favour.
 
-## PR stack (merge order — please use merge commits, not squash)
-Each branch is stacked on the previous one; every cut point was verified green locally (ruff + pytest).
-1. `claude/p0-contracts` — build plan, decisions log, the contract modules.
-2. `claude/p0-gate-drivers` — SimDriver, Afero adapter + choke point, executor + tracker, roles/enrollment/WS tickets,
-   services container, writer-path allowlist test.
-3. `claude/p0-bench` — account connect (CLI + hardened page), devices API, ops landing, bench Gates A–C + friends,
-   clock page, anonymizer, bench runbook; the modes as data and the engine contract.
-4. `claude/p0b-module` — `/ops/module` (single-module test interface) + e2e; fixes for the 26 P0 review findings.
-5. `claude/p1-engine-looks` — P1 canopy engine, reconciler, idle hold, commissioning, `make soak`; P2 looks
-   (modes schema, canvas composer, compiler, module-page mode preview).
-6. `claude/p3-surfaces` — `/kiosk`, full `/ops` (7 am checklist, log tail, calibration hub, enrollment), visualizer
-   desired vs reported, engine wiring into the app.
-7. `claude/p35-p4-venue-vignettes` — P3.5 venue box (`deploy/venue`, release/freeze, ten runbooks), P4 vignette pages
-   and device coverage, and the fixes for the 18 P1–P3 and 15 final-round review findings + 8 completeness gaps.
+   It also carries PR #10's STATUS commit, so **#10 is superseded**. PRs #1–#9 were already merged on Sep 27, and their
+   remote branches are fully merged and can be deleted. **Merging this redeploys Railway staging.** Check the pre-deploy
+   item under Next step first.
 
-## First real kit — VWBD's workshop, Sep 27 (branch `claude/hardware-fixes`)
-- **Fixed:** "Couldn't reach Hubspace" on Show devices — the adapter re-read a released response (D51; VWBD's patch +
-  loopback test, 7 fail → 13 pass).
-- **Learned:** the real SQHDK03 reports **60-entry** saved patterns with 30 pucks; per-puck painting now works on it
-  (D52). UNVERIFIED: that entries 0–29 drive the pucks — run the index sweep once; the Calibrate tab has the offset.
-- **Verified on hardware (by VWBD):** sign-in + token refresh, discovery + registration, slot select (Slots tab),
-  whole-strand test cards. Not yet: frame writes (Gate C), per-puck painting on the real kit.
-- **Wanted:** Gate A's "Copy anonymized JSON" from the real kit → becomes the simulator's real profile.
-- Verified in sim after the change: 960 tests, 35 e2e, soak 9/9 PASS.
+## What the consolidation did
+- **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
+  folder; manifest verified, 234 files). The baseline kit inside it is byte-identical to `1eb8551`, so this was a true
+  three-way merge.
+- **Paris wins:** the 12 files changed on both sides take Paris's whole file (`afero.py`, `session.py`, `rows.py`,
+  `render.py`, `config.py`, `bench/jobs.py`, `routes/module.py`, the module page, `workshop/README.md`,
+  `tests/test_hubspace_transport.py`). His 60 new files keep their kit paths:
+  - the Studio (`web/ops/showcase/`, `conductor/module/pair.py`, `scene_gradient.py`) and the module page's
+    `preset-preview.js`;
+  - root docs (`VWBD-HANDOFF.md`, `CONNECTION-REPAIR.md`, `VIEWPORT-REPAIR.md`, `VALIDATION.md`, `LOCAL-TESTING.md`,
+    `FORK.md`, `VWBD-CLIENT-PROMPT.txt`, `MANIFEST.sha256`). `VWBD-HANDOFF.md` and `MANIFEST.sha256` are Oct 2
+    records and historical: the handoff's pending motion test was answered by run ed22fc, and the current state is
+    this file and runbook §5a;
+  - the standalone tracker `TEST-CENTER.html` (and `open-test-center.bat`);
+  - `docs/*.md|json` and `docs/bench-capability-check/` evidence;
+  - `tools/update_studio_geometry.py` and `workshop/validated-windows-requirements.txt`;
+  - his unittest and JS tests in `tests/`.
+- **Taken out:** main's superseded frame-layout design (929c0d2: `FrameLayout`, `frame_offset`, the Calibrate tab's
+  frame-offset field, the 60-entry default simulator, their tests and 21 screenshots) went back to `1eb8551` (D54). Every kit path (`conductor/`,
+  `config/`, `web/`, `workshop/`) now equals Paris's tree, except the two kept main changes below.
+- **Kept from main:** D51 (the same fix Paris made; his version kept), D53 (accounts-route disconnects) with its
+  tests, the ops.js frame-length label, and `.gitleaksignore`.
+- **Tests:**
+  - five existing repo tests updated. Four assert Paris's intentional changes: preset previews no longer invent
+    colours from preset names, and the module page imports a second vendored file, `preset-preview.js`. The fifth,
+    the job-list test, gains the four new jobs;
+  - added: a test that a frame shorter than the module's pucks still refuses per-head painting, and three SimDriver
+    end-to-end tests of `gate_c_safe` / `address_probe_safe` through the real runner and executor (exact restore,
+    three separate restore commands, ≥ 1 s apart).
+- **Lint:** `ruff --fix` plus `ruff format` over Paris's files. The format is AST-identical, checked for every file.
+  One `# noqa: BLE001` with a reason.
+- **Docs:**
+  - 07 §4, 04 and ERRATA now prescribe `bridge.create_request` (D51); following the old text would bring back the
+    "Couldn't reach Hubspace" bug;
+  - 04, 06 and the bench runbook updated from VWBD's evidence;
+  - D52 marked superseded; D54–D56 added; README's home URL corrected.
+- **Not merged, on purpose:** Paris's private runtime (`workshop.env`, which holds the secret key and page password,
+  and `workshop-data/`, which holds an encrypted Hubspace token, device ids, backups and telemetry). It stays on
+  VWBD's laptop. `NEW STUFF FROM PARIS/` is gitignored.
 
-## Workshop kit for VWBD (branch `claude/workshop-kit`, PR 8 after the stack)
-`uv run python scripts/make_workshop_kit.py` builds `dist/color-canopy-workshop-kit-<commit>.zip` (~570 KB, committed
-files only; no research, context docs or settings). VWBD unzips it on a shop laptop and runs `start.command` (Mac) or
-`start.bat` (Windows): bench mode on one laptop, only their test account and their registered module allowed, a
-simulator practice mode, and `workshop/README.md` walks them through connect → Gates A–C → the Prototype 01 tests on
-`/ops/module`. Verified: from a fresh unzip on Linux, setup + simulator + every page. UNVERIFIED: macOS and Windows
-starters (not runnable here) and the real-module path (needs the kit). Alternative with no install: once the stack is
-merged, staging in bench mode + a tester link from /ops (the original P0b design).
+## What is true on real hardware (Oct 7) — keep the evidence types separate
+Two 30-head shop modules at VWBD, each on its own controller:
+- **Kingston test** = `bench-kit`.
+- **String light 1** = `shop-string-1`, which exists only in VWBD's private overlay.
 
-## Next step (Alon, at the bench)
-1. Attach the repo (above); merge the stack in order as CI goes green.
-2. Staging: `CONDUCTOR_MODE=bench`, `HUBSPACE_LIVE=1`, `HUBSPACE_ACCOUNT_ALLOWLIST=<bench email>`,
-   `HUBSPACE_LIVE_UNTIL=2026-10-19` (keep `CONDUCTOR_SECRET_KEY` and `CONDUCTOR_BASIC_AUTH`).
-3. Follow `docs/runbooks/bench-prototype-01.md`: connect the bench account (`python -m conductor.auth login
-   --server https://conductor-staging-b94b.up.railway.app`, or `/ops/accounts` with `CONDUCTOR_ACCOUNT_CONNECT=1`),
-   register the kit, put its id in `HUBSPACE_DEVICE_ALLOWLIST`, open `/ops/bench/clock` on a second screen, and run
-   **Gate A first**. Paste its "Copy anonymized JSON" into a build session — it becomes the real SQHDK03 fixture.
-4. Then Gates B, B-unplugged, C, the hue ramp, latency trials, and the four new jobs (stale clock, active-slot
-   rewrite, rate ramp, head-count boot). Give VWBD a tester link from `/ops` → "Set up a device" for `/ops/module`.
+Earlier, Sep 27, before Paris's fork work: VWBD reported sign-in and token refresh, discovery and registration, and
+whole-strand test cards working on the first real kit, plus a Slots-tab select. That report has no run record, so the
+select isn't counted as physical.
 
-## Verified in sim (and how) — 2026-09-27
-- `make lint` clean; `make test` **923 passed**; `make e2e` **34 passed** (Playwright/Chromium in this sandbox).
-- `make soak` against the pinned `config/sim/acceptance.yaml`, through the show's own wiring — **every target PASS**
-  (`docs/reports/sim-acceptance.md`): all nine correct after a change p95 3.5 s (≤ 5); queue depth max 18 (never
-  grows); silent drops healed ≤ 3.1 s and changes made outside the Conductor detected + healed ≤ 6.1 s (≤ 10); 0 tier
-  downgrades at 5 % throttling; look re-applied 5.2 s after the 30-min outage and 8.9 s after the 43-min 500 window
-  (≤ 60); writes to one device never < 1.0 s apart. 8 simulated hours in 54 s wall.
-- Container: the repo Dockerfile builds (via a proxy-CA wrapper in this sandbox, D14) and passes the CI smoke checks;
-  every surface (`/kiosk`, `/ops`, `/ops/bench`, `/ops/module`, `/vignette/<room>`, checklist, overlay) answers 200
-  with credentials and 401 without.
-- Live gate: every writer path (engine burst, reconciler, idle hold, commissioning, module page incl. recording a
-  hand-painted slot, bench runner, vignette actions/scenes, direct driver writes) is refused for a registered but
-  non-allowlisted device with zero requests on the wire; only `conductor/drivers/afero*.py` touch aioafero/aiohttp;
-  sim + live is bench-only and on demand; `HUBSPACE_LIVE_UNTIL` enforced.
-- Credentials: a canary signs in (with an emailed code) through the HTTP routes against a stub Keycloak using sentinel
-  password/OTP/tokens/account id; none appear in responses, logs (under uvicorn's real logging config), the /ops log
-  tail or files. Tokens are Fernet-encrypted, bound to runtime + account, rotated atomically.
-- Roles: a tester reaches only `/ops/module` for granted devices; a kiosk only `/kiosk`; a vignette tablet only its
-  room; revoked sessions lose their sockets.
-- Screenshots reviewed by the lead (`docs/screenshots/`): kiosk (1024×768, 1280×800, 1920×1080, updating, resting),
-  module page (phone, tablet, hold), ops (phone, tablet, attention), calibrate, visualizer (desktop, phone), bench and
-  clock (phone), accounts (phone), vignettes (all four rooms, iPad).
+Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md`, `docs/bench-capability-check/`,
+`docs/vwbd-*.json`, and the package's `CHANGELOG.txt` and `evidence/`.
+
+**Kingston:**
+- **Physical (seen on the lights at VWBD):**
+  - power off/on; dimming 50→20 % in warm white, and up to 100 %; 2200 K and 6500 K at 50 %; whole-strand red,
+    green and blue;
+  - Rainbow Road travels between heads; Rainbow Roll flashes in place; Gradient Rainbow shows static pairs; Fade 3
+    passes through black; Jump 3 at +5 gives sharp RGB changes;
+  - Gate C T1 frame write (red→green);
+  - address map: 0 → head 1, 1 → head 2, 29 → head 30, 30–59 → nothing; the head-15 marker; a red→purple→blue
+    30-head painted gradient;
+  - motion code 1 at speed 30 moved separated blocks (bounded: 20 s at 30 %, Oct 2).
+- **Cloud (Afero readback):**
+  - Gate A dump: 3 slots × 60 entries, CCT 2200–6500, speed −10…10, 33 presets, 9 programs;
+  - full effect-header readback;
+  - exact slot restores after every test.
+
+**String light 1:**
+- **Physical:** whole-RGB responded in the 90 s red/blue identification ("one red and one blue"); an earlier 20 s plain
+  blue wasn't seen ("didnt see a change").
+- **Custom frames: NOT confirmed.**
+  - Run `9603dd` was answered "No — whitish pinkish".
+  - Run `20261007T010607-gate_c_safe-30ed44` shows a cloud match and an exact restore, but its physical question is
+    unanswered.
+  - No T1 flag and no map. Never copy Kingston's.
+
+**Both kits together:**
+- **Physical:** after one paired Rainbow Road burst, both showed a rainbow; phase alignment is unknown ("hard to tell").
+  The 0 ms host send skew is host timing, not proof the strands started together.
+- **The paired per-head gradient has never been sent to hardware:** preflight correctly blocks String light 1.
+  Golden Hour's 30-colour gradient was shown on screen only.
+
+## Verified in sim on the merged tree (and how) — 2026-10-07, macOS, Python 3.12
+- `make lint`: clean.
+- `uv run pytest`: **998 passed**, 18 failed, all in `tests/test_deploy.py`. That is the Linux-only venue installer
+  run on macOS; it fails identically on Paris's tree, he changed nothing under `deploy/`, and CI runs ubuntu-24.04.
+- Paris's own suites: 72 Python tests pass; `node --test tests/*.test.mjs` 19 pass; `node tests/validate_live_import.cjs`
+  passes (88 base cases, 22 variants).
+- `uv run python -m conductor.soak`: **9/9 PASS** (`docs/reports/sim-acceptance.md` regenerated): p95 3.48 s,
+  queue ≤ 18, heals ≤ 6.1 s, 0 tier downgrades, writes to one device ≥ 1.0 s apart.
+- **Not run:** `make e2e`. The pinned Playwright needs `chromium_headless_shell-1194`, which isn't installed on this
+  Mac. The screenshots are the pre-VWBD set; regenerate them when e2e runs.
+
+## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
+1. **The show path ignores the framebuffer mapping (high, before install).** The T1 compiler and composer,
+   `/api/devices`, the attention list and the 7 am head-count check still assume frame length = heads. On real 60-entry
+   modules they flag every module, and T1 canvas looks can't use them. Fix: port Paris's `framebuffer_mapping` into
+   those paths. Main's removed 929c0d2 shows the shape, including the "the length is capacity, check the heads by eye"
+   wording.
+2. **`/` redirects to the Studio in every mode**, including the venue box and staging, where it can't connect (D56).
+   Decide whether to keep it there or redirect only in the VWBD workshop.
+3. **Bugs in Paris's code** (fixes drafted in review, not applied):
+   - the scene-gradient restore loses preset speed and party-mode yet reports `ok`;
+   - Start/Restart effect on a mapped kit rewrites entries 30–59 to OFF. That shifts the slot hash of an app-recorded
+     T2 slot if the app fills those entries, which is unknown because no hand-painted app pattern has been dumped
+     yet;
+   - `effect_probe` ends on the probed slot instead of the previous look;
+   - the original `address_probe` defaults to Custom 3 and never restores it;
+   - a paired restart with a preset that has no brightness → HTTP 500;
+   - a pending gradient record can block the feature (manual recovery: inspect
+     `<CONDUCTOR_DATA_DIR>/studio-gradients/active.json`; the `backup-*.json` files keep the originals);
+   - pair and gradient errors aren't logged;
+   - module-page slot cards say "60 heads" on a 30-head mapped kit;
+   - the "Presentation view" link shows for tester-role users.
+4. **Test gaps:**
+   - no route-level tests for `/api/studio/pair/*`;
+   - the writer-path allowlist test doesn't list the new jobs;
+   - Paris's JS tests and the tracker check aren't in `make test` or CI.
+5. **The kit builder** (`scripts/make_workshop_kit.py`) would not ship `TEST-CENTER.html`, `tests/`, `tools/` or
+   Paris's docs. Until it does, VWBD keeps working from Paris's own folder rather than a freshly built kit.
+6. **The simulator still models the 30-entry sibling string.** The real Gate A dump now exists
+   (`docs/bench-capability-check/gate-a-result.json`) but isn't the SQHDK03 fixture yet.
+7. **Stale text in Paris's own files** (left as canon; fix with the next change to each):
+   - `workshop/README.md` points to the Oct 2 handoff and says painting unlocks after the original Gate C. On a
+     60-entry kit painting also needs the kit's own map: commission per runbook §5a (`gate_c_safe` → `address_probe_safe`
+     → record the map).
+   - The Studio's motion-demo copy says blocks "travel"; the evidence says only "moved to different heads" (D56).
+   - The Gate A card in `jobs.py` says "30-entry frame" (60 passes too).
+   - `soak.py`'s report says no effect code has been benched (code 1 has one bounded run).
+8. **CI and the e2e suite:** `main` CI was red from Sep 27 (PRs #9 and #10, and the first run of this PR) on two
+   `test_deploy.py` watchdog tests. Their stub `systemctl` reported a start 1 µs after boot, so a runner booted
+   < 120 s earlier put the watchdog inside its start-up grace and it exited silently. The stub now reports no
+   timestamp. `tests_e2e` wasn't run for this merge (see Verified).
+
+## Next step
+1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
+   frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
+   registry after the redeploy.
+2. Alon merges this PR. Then `git pull` in the main checkout (it was 84 commits behind) and delete the merged
+   `claude/*` remote branches.
+3. Decide gap 2 (home redirect) and the `address_probe` default slot. Then make one small fix-up PR for gaps 3–4.
+4. **Port the mapping into the show path (gap 1).** This is required before the canopy's T1 looks can run on real kits
+   at install (Oct 20–23); feature freeze target Oct 12. 07 §6 (binding) still says only "frame length = the device's
+   framebuffer length". Alon words the mapping rule into it as part of the port.
+5. At VWBD, with an observer and fresh full-slot backups, for String light 1: its own `gate_c_safe` physical answer →
+   its own bounded `address_probe_safe` runs → record its own map → only then a live paired gradient. Don't clear the
+   preflight to make a demo work.
+6. Turn the Gate A dump into the simulator's SQHDK03 fixture (gap 6).
 
 ## Needs real hardware (UNVERIFIED)
-- The SQHDK03 cloud profile (Gate A): segment count, slots, `individual`, CCT range, presets, programs.
-- Afero accepting slot selects (Gate B) and frame writes (Gate C); readback semantics with the kit unplugged.
-- Effect codes (every code disabled until benched → Golden Hour is a static amber glow and says so).
-- Per-puck white / colour recipes through Mylar (Prototype 01); index order and wire routing (calibration).
+- **The other kits.** Kingston is the only kit with a T1 flag and a map. Every canopy module needs its own Gate C and
+  address map at install (~5 min each; D25, D54).
+- Formal Gate B (slot select). No recorded run shows a slot select on the lights (the Sep 27 Slots-tab report has no
+  run record); Gate C's BEFORE select was confirmed by readback only (CLOUD). Also readback semantics with the kit unplugged.
+- **Effect codes:** only code 1 has been tried, bounded. Vendor name, direction, period and phase restart are
+  unknown, and `effects.enabled` stays empty, so Golden Hour remains a static glow and says so. Two-controller phase
+  alignment is unmeasured.
+- Per-puck white and colour recipes through Mylar (Prototype 01); per-entry CCT/white fields; the hue ramp; 1–10 %
+  dimming smoothness.
 - Real latency, throttling (writes and the 1.8 GET/s true-up reads), token rotation, 401/403 semantics.
-- Stale-clock writes, rewriting the showing slot, the 12-puck fault (the four new bench jobs settle them).
-- Vignette device profiles (synthesized from aioafero's controller source) and the deadbolt readback.
-- The venue box itself: systemd, the Chromium snap kiosk + resting page, install from a tag, BIOS/UPS/NTP, cold spare.
-- iOS Safari: enrollment cookies, beacon on page close, Guided Access. gitleaks (runs in CI only).
+- Stale-clock writes, rewriting the showing slot, the 12-puck fault. Whether that fault shows in the cloud (frame
+  length, `connected-light-count`) is unbenched (gate 10); until then the check is visual.
+- Vignette device profiles and the deadbolt readback.
+- The venue box itself: systemd, the Chromium kiosk and resting page, install from a tag, BIOS/UPS/NTP, cold spare.
+- iOS Safari: enrollment cookies, beacon on page close, Guided Access.
 
 ## Decisions Alon owes
-- **Vignette surface — Oct 1** (06 #11). Built: thin `/vignette/<room>` pages. The Oct 12 fallback criteria are in
-  D26: any room failing them goes to the stock Hubspace app in Guided Access.
-- **Golden Hour technique and kiosk look — Oct 5** (06 #12–13). Kiosk screenshots are ready for the client
-  (`docs/screenshots/kiosk-*.png`). Golden Hour needs a benched directional motion code to claim movement.
-- **Authorization letter** from Home Depot before any show-account writes (06 #20); `HUBSPACE_LIVE_UNTIL=2026-11-02`
-  in the venue env example assumes its window.
+- **Home redirect** (gap 2, D56) and the **`address_probe` default slot** (D55).
+- **Golden Hour technique and kiosk look** (06 #12–13, was due Oct 5). The new input is the bounded code-1 movement on
+  Kingston; there is no direction or multi-controller phase data yet.
+- **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback
+  criteria are in D26.
+- **Authorization letter** from Home Depot before any show-account writes (06 #20).
 - **A second named person** with the show-account password and inbox (`docs/runbooks/outages.md`).
-- Gates B/C run on **all nine** modules at install (~5 min each), because flags are bound to each kit (D25).
-- Skim D1–D50 in `docs/DECISIONS.md`; most worth a look: D2 (CLI connect without the page flag), D10 (enrollment
-  links need a confirm tap), D15 (sim + live is on demand), D44 (5 s rolling true-up reads).
+- Skim D51–D56 in `docs/DECISIONS.md`.
 
 ## Top risks
-1. **Gate C fails** (Afero rejects third-party frames) → painted modes fall to T2 (hand-paint in the app, ~15–20 min
-   per module, then "record it" on `/ops/module`) or T3. Copy follows automatically; staff time is the cost.
-2. **Real throttling** differs from the soak's 5 % 429 + 1 % silent-drop model, or the rolling true-up reads get
-   throttled — the rate-ramp job and the venue box measure it; the interval is one config value.
-3. **Push access** — nothing reaches Alon, CI or staging until the repo is attached to this session.
-4. **Venue box untested on real hardware** before Oct 8 — do the runbook's dry-run steps (`venue-box.md` §4) on the
-   real mini PC as soon as it arrives.
-5. Sandbox note: on Sep 27 an install-script test escaped its stubs and ran `apt-get install chrony` and
-   `systemctl enable` inside this disposable cloud container only (no repo, device or external-service impact). The
-   test now pins PATH and refuses installs outside its temp dir.
+1. **The show path isn't mapping-aware** (gap 1). Without the port, T1 canvas modes on real 60-entry kits are refused,
+   and the 7 am check fails every module.
+2. **Gate C per kit:** proven on Kingston only, and String light 1's custom-frame tests are a NO followed by an
+   unanswered run. Any canopy kit that fails Gate C falls back to T2 (hand-paint in the app, ~15–20 min per module,
+   then "record it" on `/ops/module`) or T3.
+3. **Real throttling** may differ from the soak's model; the rate-ramp job and the venue box measure it.
+4. **The venue box is untested on real hardware.** Do the dry-run steps in `venue-box.md` §4 as soon as the mini PC
+   arrives.

@@ -1,0 +1,243 @@
+{
+  "note": "Anonymized bench result from the Color Canopy Conductor: ids, MACs, SSIDs, emails, names and locations are replaced with placeholders.",
+  "run_id": "20260928T173528-effect_probe-a43afa",
+  "job": "effect_probe",
+  "title": "Custom effect test — timed candidate",
+  "device_id": "bench-kit",
+  "address": "device-2",
+  "simulated": false,
+  "driver": "afero",
+  "status": "finished",
+  "started": 1790616928.4473827,
+  "finished": 1790616963.4886007,
+  "params": {
+    "slot": "custom-3",
+    "field": "motionEffect",
+    "code": 1,
+    "speed": 30,
+    "duration_s": 20.0
+  },
+  "steps": [
+    {
+      "n": 1,
+      "t": 1790616928.455,
+      "elapsed_s": 0.0,
+      "message": "Started Custom effect test — timed candidate on bench-kit",
+      "detail": {}
+    },
+    {
+      "n": 2,
+      "t": 1790616929.228,
+      "elapsed_s": 0.781,
+      "message": "Read the device's state",
+      "detail": {
+        "kind": "read",
+        "outcome": "ok",
+        "http_status": 200,
+        "elapsed_ms": 562
+      }
+    },
+    {
+      "n": 3,
+      "t": 1790616929.233,
+      "elapsed_s": 0.781,
+      "message": "Sending: effect_probe: before look",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: before look",
+        "t": 1790616929.2328827,
+        "rows": 6
+      }
+    },
+    {
+      "n": 4,
+      "t": 1790616930.591,
+      "elapsed_s": 2.141,
+      "message": "effect_probe: before look: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: before look",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616929.2372758,
+        "acked_at": 1790616929.4132168,
+        "verified_at": 1790616930.589482
+      }
+    },
+    {
+      "n": 5,
+      "t": 1790616932.605,
+      "elapsed_s": 4.156,
+      "message": "Sending: effect_probe: static rainbow",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: static rainbow",
+        "t": 1790616932.6049607,
+        "rows": 5
+      }
+    },
+    {
+      "n": 6,
+      "t": 1790616933.956,
+      "elapsed_s": 5.5,
+      "message": "effect_probe: static rainbow: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: static rainbow",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616932.6157734,
+        "acked_at": 1790616932.8123438,
+        "verified_at": 1790616933.9547794
+      }
+    },
+    {
+      "n": 7,
+      "t": 1790616935.984,
+      "elapsed_s": 7.531,
+      "message": "Sending: effect_probe: leave slot before candidate",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: leave slot before candidate",
+        "t": 1790616935.9837446,
+        "rows": 6
+      }
+    },
+    {
+      "n": 8,
+      "t": 1790616937.374,
+      "elapsed_s": 8.922,
+      "message": "effect_probe: leave slot before candidate: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: leave slot before candidate",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616935.9894392,
+        "acked_at": 1790616936.1767023,
+        "verified_at": 1790616937.3716238
+      }
+    },
+    {
+      "n": 9,
+      "t": 1790616939.403,
+      "elapsed_s": 10.953,
+      "message": "Sending: effect_probe: candidate motionEffect 1",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: candidate motionEffect 1",
+        "t": 1790616939.403113,
+        "rows": 5
+      }
+    },
+    {
+      "n": 10,
+      "t": 1790616942.014,
+      "elapsed_s": 13.563,
+      "message": "effect_probe: candidate motionEffect 1: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: candidate motionEffect 1",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616939.4067194,
+        "acked_at": 1790616939.6088536,
+        "verified_at": 1790616942.0128314
+      }
+    },
+    {
+      "n": 11,
+      "t": 1790616942.024,
+      "elapsed_s": 13.578,
+      "message": "Observe candidate motionEffect 1 for 20 seconds; behavior is unverified.",
+      "detail": {}
+    },
+    {
+      "n": 12,
+      "t": 1790616962.04,
+      "elapsed_s": 33.594,
+      "message": "Sending: effect_probe: restore original slot and header",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: restore original slot and header",
+        "t": 1790616962.0403497,
+        "rows": 5
+      }
+    },
+    {
+      "n": 13,
+      "t": 1790616963.478,
+      "elapsed_s": 35.031,
+      "message": "effect_probe: restore original slot and header: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: restore original slot and header",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616962.0517213,
+        "acked_at": 1790616962.3207335,
+        "verified_at": 1790616963.4784892
+      }
+    }
+  ],
+  "result": {
+    "verdict": "needs_eyes",
+    "summary": "Tested candidate motionEffect 1 at speed 30; original slot restored. This code is not automatically enabled or assigned a behavior name.",
+    "observations": {
+      "slot": "custom-3",
+      "field": "motionEffect",
+      "code": 1,
+      "speed": 30,
+      "duration_s": 20.0,
+      "length": 60,
+      "original_hash": "facecf3bf130ef67",
+      "automatically_enabled": false,
+      "reselected_from_whole_strand": true,
+      "write": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616939.4067194,
+        "ack_ms": 202,
+        "verified_ms": 2606,
+        "mismatches": [],
+        "error": null
+      },
+      "restore": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790616962.0517213,
+        "ack_ms": 269,
+        "verified_ms": 1427,
+        "mismatches": [],
+        "error": null
+      }
+    },
+    "ask_human": [
+      "What did the colors do during the timed test: travel, pulse, flash, or stay still?"
+    ],
+    "flags": {}
+  },
+  "answers": {
+    "What did the colors do during the timed test: travel, pulse, flash, or stay still?": "After full mode reset, user saw slight flashing but no clear movement between heads."
+  },
+  "flag_questions": {},
+  "flags_applied": null,
+  "flags_revoked": null,
+  "writes_sent": 5,
+  "confirmed_verdict": null,
+  "environment": {
+    "mode": "bench",
+    "version": "0.1.0",
+    "bench_live": true
+  },
+  "artifacts": [
+    "effect_probe_before"
+  ]
+}
