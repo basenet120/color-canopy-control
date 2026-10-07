@@ -615,23 +615,45 @@ def test_the_map_routes_preview_refuse_and_apply(app_client):
     r = app_client.get(f"/api/bench/runs/{dark}/map")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     assert r.json()["ready"] is False and "simulator" in r.json()["reason"]
-    r = app_client.post(f"/api/bench/runs/{dark}/map")
+    r = app_client.post(f"/api/bench/runs/{dark}/map", json={})
     assert r.status_code == 409 and "simulator" in r.json()["detail"]
     assert services.registry.get(KIT).framebuffer_mapping is None
 
     answer_yes_as_real(app_client, (markers, dark))
     r = app_client.get(f"/api/bench/runs/{markers}/map")
     assert r.json()["ready"] is True and r.json()["mapping"] == IDENTITY
-    r = app_client.post(f"/api/bench/runs/{markers}/map")
+    r = app_client.post(f"/api/bench/runs/{markers}/map", json={})
     assert r.status_code == 200 and r.json()["map_applied"]["mapping"] == IDENTITY
     assert services.registry.get(KIT).framebuffer_mapping.model_dump() == IDENTITY
-    assert app_client.post(f"/api/bench/runs/{markers}/map").status_code == 409  # already recorded
+    assert app_client.post(f"/api/bench/runs/{markers}/map", json={}).status_code == 409  # already recorded
     # the kit's id inside the recorded map is scrubbed from the copyable export too
     export = app_client.get(f"/api/bench/runs/{markers}/anonymized")
     assert export.json()["map_applied"]["mapping"]["indices"] == IDENTITY["indices"]
     assert ADDRESS not in export.text
     assert app_client.get("/api/bench/runs/not-a-run/map").status_code == 404
-    assert app_client.post("/api/bench/runs/not-a-run/map").status_code == 404
+    assert app_client.post("/api/bench/runs/not-a-run/map", json={}).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"Origin": "https://evil.example", "Content-Type": "application/json"}, 403),
+        ({"Referer": "https://evil.example/page", "Content-Type": "application/json"}, 403),
+        ({"Content-Type": "application/x-www-form-urlencoded"}, 415),
+        ({"Content-Type": "text/plain"}, 415),
+    ],
+)
+def test_apply_map_refuses_a_cross_site_or_non_json_post(app_client, headers, status):
+    services = app_client.app.state.services
+    sixty(services)
+    markers, dark = run_over_http(app_client, MARKERS), run_over_http(app_client, DARK)
+    answer_yes_as_real(app_client, (markers, dark))
+    body = "{}" if headers["Content-Type"] == "application/json" else "x=1"
+    r = app_client.post(f"/api/bench/runs/{dark}/map", headers=headers, content=body)
+    assert r.status_code == status
+    assert services.registry.get(KIT).framebuffer_mapping is None
+    same_site = {"Origin": "http://testserver", "Content-Type": "application/json"}
+    assert app_client.post(f"/api/bench/runs/{dark}/map", headers=same_site, content="{}").status_code == 200
 
 
 def test_taking_back_a_yes_after_a_controller_swap_takes_the_map_back_where_the_kit_is_now(app_client):

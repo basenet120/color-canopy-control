@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from conductor.bench.runner import BenchBusy, BenchError, BenchRefused, runner_of
 from conductor.config import ConfigError
 from conductor.roles_api import Principal
+from conductor.routes.accounts import same_origin
 from conductor.routes.deps import require_ops, services_of
 
 router = APIRouter(prefix="/api/bench")
@@ -54,6 +55,16 @@ def _runner(request: Request):
 
 def _json(data: Any, status_code: int = 200) -> JSONResponse:
     return JSONResponse(data, status_code=status_code, headers=NO_STORE)
+
+
+def _same_site_json(request: Request) -> None:
+    """Refuse a cross-site or non-JSON write (403/415), as the module, ops and vignette routes do."""
+    headers = request.headers
+    if ("origin" in headers or "referer" in headers) and not same_origin(headers):
+        raise HTTPException(status_code=403, detail="Refused: this request came from another site.")
+    media_type = (headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(status_code=415, detail="Send JSON (Content-Type: application/json).")
 
 
 def _get(request: Request, run_id: str) -> dict:
@@ -162,6 +173,7 @@ async def run_map_proposal(request: Request, run_id: str, _ops: Ops) -> JSONResp
 
 @router.post("/runs/{run_id}/map")
 async def run_map(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
+    _same_site_json(request)
     _get(request, run_id)
     try:
         record = await _runner(request).apply_map(run_id)
