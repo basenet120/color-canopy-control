@@ -11,6 +11,7 @@ evidence, so the seam (as in the apply_flags tests) rewrites a saved run as non-
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from pathlib import Path
@@ -345,6 +346,111 @@ def test_refused_when_the_markers_recorded_are_not_0_1_and_29(tmp_path):
 
     reason, _, _ = _refused(tmp_path, setup)
     assert "lit entries [0, 1, 28], not 0, 1 and 29" in reason
+
+
+@pytest.mark.parametrize(("start", "count", "answer"), [(30, 10, "no"), (45, 15, "no"), (30, 10, None)])
+def test_a_later_probe_of_part_of_the_upper_range_must_be_answered_yes_too(tmp_path, start, count, answer):
+    async def setup(services, runner):
+        sixty(services)
+        await probe(services, runner, MARKERS)
+        dark = await probe(services, runner, DARK)
+        await probe(services, runner, {"start": start, "count": count, "duration_s": 4.0}, answer)
+        return dark
+
+    reason, refused, _ = _refused(tmp_path, setup)
+    entries = f"entries {start}–{start + count - 1}"
+    if answer == "no":  # a head lit past the heads, after the 30–59 run that said nothing did
+        assert entries in reason and "answered “no”" in reason
+        assert "tell Alon" in reason and "tell Alon" in refused
+    else:
+        assert reason.startswith("Answer “Once the before look ended") and entries in reason
+
+
+def test_an_older_probe_of_part_of_the_upper_range_is_superseded_by_a_newer_full_one(tmp_path):
+    async def body(services, runner):
+        sixty(services)
+        await probe(services, runner, MARKERS)
+        await probe(services, runner, {"start": 30, "count": 10, "duration_s": 4.0}, "no")
+        dark = await probe(services, runner, DARK)  # the newest look at 30–59: nothing lit
+        return runner.map_proposal(dark)
+
+    proposal = bench(tmp_path, body)
+    assert proposal["ready"] is True and proposal["mapping"] == IDENTITY
+
+
+def test_refused_when_the_partner_probe_ran_on_this_device_s_previous_controller(tmp_path):
+    async def setup(services, runner):
+        sixty(services)
+        markers = await probe(services, runner, MARKERS)
+        # the markers run was on the controller this id had before; only the 30–59 run is on this kit
+        edit_saved(services, markers, lambda saved: saved.update(address="sim-old-controller"))
+        return await probe(services, runner, DARK)
+
+    reason, refused, _ = _refused(tmp_path, setup)
+    assert "Run the markers probe on this kit too" in reason
+    assert "Run the markers probe on this kit too" in refused
+
+
+@pytest.mark.parametrize("verdict", ["fail", "error"])
+def test_a_probe_that_did_not_finish_says_so_and_does_not_count(tmp_path, verdict):
+    async def body(services, runner):
+        sixty(services)
+        markers = await probe(services, runner, MARKERS, None)
+        edit_saved(  # exact restore not confirmed (FAIL), or stopped short (ERROR): no question was asked
+            services,
+            markers,
+            lambda s: s["result"].update(verdict=verdict, observations={}, ask_human=[]),
+        )
+        dark = await probe(services, runner, DARK)
+        return refusal(runner, markers), refusal(runner, dark)
+
+    own, partner = bench(tmp_path, body)
+    assert "didn't finish with an exact restore and a Yes/No question" in own and "neither" not in own
+    assert "Run the markers probe on this kit too" in partner and "Only a run that finished" in partner
+
+
+def test_refused_when_bench_jobs_here_reach_another_kit_than_the_probes(tmp_path):
+    async def body(services, runner):
+        sixty(services)
+        markers = await probe(services, runner, MARKERS)
+        dark = await probe(services, runner, DARK)
+        # the probes ran on the real kit (afero); bench jobs on this Conductor reach only the simulated one
+        services.update_registry(KIT, {"metadevice_id": "kit-a-0001", "flags_proven_on": "kit-a-0001"})
+        for run_id in (markers, dark):
+            edit_saved(services, run_id, lambda saved: saved.update(address="kit-a-0001", driver="afero"))
+        return await refused_apply(runner, dark), services.registry.get(KIT).framebuffer_mapping
+
+    refused, mapping = bench(tmp_path, body)
+    assert "don't reach the kit these probes ran on" in refused and mapping is None
+
+
+def test_a_no_answered_while_apply_map_reads_the_kit_refuses_it(tmp_path, monkeypatch):
+    async def body(services, runner):
+        sixty(services)
+        markers = await probe(services, runner, MARKERS)
+        dark = await probe(services, runner, DARK)
+        driver = services.target(KIT, Purpose.BENCH).driver
+        reading, release = asyncio.Event(), asyncio.Event()
+        fetch = driver.fetch_profile
+
+        async def held(*args, **kwargs):
+            reading.set()
+            await release.wait()
+            return await fetch(*args, **kwargs)
+
+        monkeypatch.setattr(driver, "fetch_profile", held)
+        applying = asyncio.ensure_future(runner.apply_map(dark))
+        await reading.wait()  # apply_map is reading the kit's profile
+        answered = runner.answer(markers, {Q_MARKERS: "no"})
+        release.set()
+        with pytest.raises(BenchRefused) as e:
+            await applying
+        return str(e.value), answered, services.registry.get(KIT).framebuffer_mapping
+
+    refused, answered, mapping = bench(tmp_path, body)
+    assert "answered “no”" in refused and "tell Alon" in refused
+    # nothing was recorded, so the No had nothing to take back
+    assert mapping is None and answered["map_revoked"] is None
 
 
 def test_the_newest_probe_of_each_kind_is_the_one_that_counts(tmp_path):

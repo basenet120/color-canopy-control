@@ -628,8 +628,9 @@ class BenchRunner:
 
         All on the kit at this run's address: Gate C (T1) applied there; its latest markers probe answered Yes
         (head 1 red, head 2 green, head 30 blue, nothing else); its latest probe of entries heads…L−1 answered Yes
-        (nothing lit); both saw the same frame length L (the job checked every slot agreed); and the module's head
-        count = the registry's `expected_heads`. Anything else is refused: no permutation is ever inferred."""
+        (nothing lit), and so is every Yes/No probe of part of that range run after it; both saw the same frame length
+        L (the job checked every slot agreed); and the module's head count = the registry's `expected_heads`.
+        Anything else is refused: no permutation is ever inferred."""
         if record.get("job") != MAP_JOB:
             raise BenchRefused("Only the bounded address probe (address_probe_safe) can record a map.")
         if record.get("simulated"):
@@ -660,12 +661,22 @@ class BenchRunner:
                 "these probes can't be read as its map. Tell Alon."
             )
         kind = _probe_kind(record, heads)
+        params = record.get("params") or {}
+        if (
+            kind is None
+            and _yes_no_question(record, heads) is None
+            and (params.get("pattern") == "markers" or int(params.get("start", 0)) >= heads)
+        ):
+            raise BenchRefused(
+                "This probe didn't finish with an exact restore and a Yes/No question, so it can't count towards a "
+                f"map. Run the markers probe or the {_probe_name('dark', heads)} again."
+            )
         if kind is None:
             raise BenchRefused(
                 f"A map is recorded from two probes: the markers pattern, and a range from entry {heads} to the "
                 "controller's last entry. This run is neither."
             )
-        latest = self._latest_probes(device_id, address, driver, heads)
+        latest, later = self._latest_probes(device_id, address, driver, heads)
         newest = latest[kind[0]]
         if newest is not None and newest["run_id"] != record["run_id"]:
             raise BenchRefused(
@@ -675,7 +686,10 @@ class BenchRunner:
         for name, run in latest.items():
             probe = _probe_name(name, heads)
             if run is None:
-                raise BenchRefused(f"Run the {probe} on this kit too, and answer it.")
+                raise BenchRefused(
+                    f"Run the {probe} on this kit too, and answer it. Only a run that finished with an exact restore "
+                    "and asked Yes or No counts."
+                )
             if run.get("simulated"):
                 raise BenchRefused(f"The {probe} ({run['run_id']}) was simulated, so it proves nothing.")
             question = _probe_kind(run, heads)[1]
@@ -687,6 +701,20 @@ class BenchRunner:
                     f"The {probe} ({run['run_id']}) was answered “{answer}”, so this kit doesn't show entries "
                     f"0–{heads - 1} on heads 1–{heads} in order with the rest dark. No map can be recorded from "
                     "here: tell Alon."
+                )
+        for run in later:  # a newer look at part of entries heads…L−1 must say nothing lit there either
+            question = _yes_no_question(run, heads)
+            obs = run["result"]["observations"]
+            entries = f"entries {obs['start']}–{obs['start'] + obs.get('count', 0) - 1}"
+            answer = run["answers"].get(question)
+            if answer is None:
+                raise BenchRefused(
+                    f"Answer “{question}” on the later probe of {entries} ({run['run_id']}) first."
+                )
+            if answer != "yes":
+                raise BenchRefused(
+                    f"A later probe of {entries} ({run['run_id']}) was answered “{answer}”, so a head lit past head "
+                    f"{heads}. No map can be recorded from here: tell Alon."
                 )
         markers, dark = latest["markers"], latest["dark"]
         length = markers["result"]["observations"].get("length")
@@ -704,9 +732,13 @@ class BenchRunner:
         mapping = {"frame_length": length, "indices": list(range(heads)), "proven_on": address}
         return mapping, {"markers": markers["run_id"], "dark": dark["run_id"]}
 
-    def _latest_probes(self, device_id: str, address: str, driver: str, heads: int) -> dict[str, Any]:
-        """The newest finished markers probe and dark-range probe on the kit at `address` (None if there is none)."""
+    def _latest_probes(
+        self, device_id: str, address: str, driver: str, heads: int
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The newest finished markers probe and dark-range probe on the kit at `address` (None if there is none),
+        and the Yes/No probes of only part of the range past the heads that ran after that dark-range probe."""
         latest: dict[str, Any] = {"markers": None, "dark": None}
+        later: list[dict[str, Any]] = []
         for summary in self.results.list(MAP_SEARCH_RUNS):
             if summary.get("job") != MAP_JOB or summary.get("device_id") != device_id:
                 continue
@@ -716,7 +748,9 @@ class BenchRunner:
             kind = _probe_kind(run, heads)
             if kind is not None and latest[kind[0]] is None:
                 latest[kind[0]] = run
-        return latest
+            elif kind is None and latest["dark"] is None and _yes_no_question(run, heads) is not None:
+                later.append(run)
+        return latest, later
 
     async def _current_caps(self, device_id: str, address: str, driver: str) -> Capabilities:
         """The kit's capabilities now, from one profile read through the bench driver (a GET, never a write)."""
@@ -901,21 +935,34 @@ def _probe_name(kind: str, heads: int) -> str:
     return "markers probe" if kind == "markers" else f"probe of entries {heads} onwards"
 
 
+def _yes_no_question(record: dict[str, Any], heads: int) -> str | None:
+    """The Yes/No question a finished address_probe_safe run asked: the markers, or a range at or past entry
+    `heads` (nothing lit?). None when it didn't finish with an exact restore and that question, or is another range."""
+    result = record.get("result") or {}
+    obs = result.get("observations") or {}
+    if (record.get("params") or {}).get("pattern") == "markers":
+        question = Q_MARKERS
+    elif isinstance(obs.get("start"), int) and obs["start"] >= heads:
+        question = address_question("range", obs["start"], obs.get("count", 0), heads)
+    else:
+        return None
+    if result.get("verdict") != str(Verdict.NEEDS_EYES) or question not in (result.get("ask_human") or []):
+        return None  # the probe wasn't shown and restored exactly, or it asked another question
+    return question
+
+
 def _probe_kind(record: dict[str, Any], heads: int) -> tuple[str, str] | None:
     """("markers" | "dark", the question it asked) for a finished address_probe_safe run that can count towards a
     map: the markers pattern, or a range from entry `heads` to the frame's last entry; else None."""
-    result = record.get("result") or {}
-    obs = result.get("observations") or {}
-    params = record.get("params") or {}
-    if params.get("pattern") == "markers":
-        kind = "markers", Q_MARKERS
-    elif obs.get("start") == heads and obs.get("start", 0) + obs.get("count", 0) == obs.get("length"):
-        kind = "dark", address_question("range", heads, obs["count"], heads)
-    else:
+    question = _yes_no_question(record, heads)
+    if question is None:
         return None
-    if result.get("verdict") != str(Verdict.NEEDS_EYES) or kind[1] not in (result.get("ask_human") or []):
-        return None  # the probe wasn't shown and restored exactly, or it asked another question
-    return kind
+    if (record.get("params") or {}).get("pattern") == "markers":
+        return "markers", question
+    obs = record["result"]["observations"]
+    if obs["start"] == heads and obs["start"] + obs.get("count", 0) == obs.get("length"):
+        return "dark", question
+    return None  # a Yes/No probe of only part of the range past the heads
 
 
 def _jsonable(value: Any) -> Any:
