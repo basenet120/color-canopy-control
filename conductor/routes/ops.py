@@ -30,7 +30,9 @@ and a commissioning run that finished with problems answers `ok: false`. The suc
 the engine returned (the look, its tier, how many modules it went to, any held on a test page, an outage).
 
 "Reported" colours are the cloud's REST readback of each strand rendered per head (`render.head_colors`): they
-prove what Hubspace stores, not what the pucks show (07 §5). The payload says so, and says SIMULATED in sim.
+prove what Hubspace stores, not what the pucks show (07 §5). The payload says so, and says SIMULATED in sim. A kit
+with its own proven controller map (D54, `conductor.framemap.frame_indices`) is drawn through it: head i shows
+frame entry `indices[i]`.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from conductor.config import NOT_FOR_GIT, overlay_diff, overlay_text
 from conductor.drivers.base import StateRow
 from conductor.engine_api import PlanError
+from conductor.framemap import frame_indices, head_check, module_heads
 from conductor.gate import Purpose
 from conductor.geometry import build_layout, load_canopy_config
 from conductor.logring import installed as installed_logring
@@ -206,6 +209,14 @@ def _lock_owner(services: Any, entry: Any, address: str | None) -> str | None:
 
 def _caps(services: Any, device_id: str) -> Any:
     return ((services.extras.get("capabilities") or {}).get(device_id) or {}).get("caps")
+
+
+def _frame_indices(services: Any, entry: Any, address: str | None, n: int) -> list[int] | None:
+    """The kit's proven controller map (D54), when the cached capabilities were read from this same device."""
+    record = (services.extras.get("capabilities") or {}).get(entry.id) or {}
+    if record.get("caps") is None or record.get("address") != address:
+        return None
+    return frame_indices(entry, address, record["caps"], n)
 
 
 def _state_json(engine: Any) -> dict | None:
@@ -460,6 +471,7 @@ def canopy_heads(services: Any) -> dict:
             n = len(positions)
             address, address_error = _engine_address(services, entry.id)
             snap = services.tracker.snapshot(address) if address else None
+            indices = _frame_indices(services, entry, address, n)
             desired, desired_source = [None] * n, None
             target = plan.modules.get(entry.id) if plan is not None else None
             if target is not None and target.preview:
@@ -467,12 +479,12 @@ def canopy_heads(services: Any) -> dict:
                 desired += [None] * (n - len(desired))
                 desired_source = "plan"
             elif snap and snap["desired"] is not None:
-                desired = head_colors(_rows(snap["desired"]), n, _caps(services, entry.id))
+                desired = head_colors(_rows(snap["desired"]), n, _caps(services, entry.id), indices)
                 desired_source = "tracker"
             reported = [None] * n
             reported_at = None
             if snap and snap["reported"] is not None:
-                reported = head_colors(_rows(snap["reported"]), n, _caps(services, entry.id))
+                reported = head_colors(_rows(snap["reported"]), n, _caps(services, entry.id), indices)
                 reported_at = snap["reported_at"]
             engine_record = engine_modules.get(entry.id) or {}
             status = engine_record.get("status") or (snap or {}).get("status") or "unknown"
@@ -863,7 +875,8 @@ async def _check_heads(services: Any) -> dict:
 
     entries = services.registry.canopy_modules()
     records = await _capabilities(services, [e.id for e in entries], False)
-    problems, unread = [], []
+    heads = module_heads(services.config_dir)
+    problems, kinds, unread, mapped = [], set(), [], []
     for entry in entries:
         name = entry.label or entry.id
         record = records.get(entry.id) or {}
@@ -871,22 +884,34 @@ async def _check_heads(services: Any) -> dict:
         if caps is None:
             unread.append(f"{name} ({record.get('error') or 'not read'})")
             continue
-        if problem := caps.head_count_problem(entry.expected_heads):
-            problems.append(f"{name}: {problem}")
+        check = head_check(entry, record.get("address"), caps, heads)
+        if check.mapped:
+            mapped.append(caps.framebuffer_length)
+        elif check.problem:
+            problems.append(f"{name}: {check.problem}")
+            kinds.add(check.kind)
     visual = (
         "Whether a dark string changes what Hubspace reports is unverified, so also look up: all 270 heads "
         "should light."
     )
     if problems:
-        return _item(
-            "heads",
-            "Head counts",
-            "fail",
-            "; ".join(problems) + ".",
-            "Check that every string is plugged in, then power-cycle that controller (it counts pucks at power-up). "
-            "Never cut the strings.",
-            visual,
-        )
+        fixes = []
+        if "short" in kinds:
+            fixes.append(
+                "Check that every string is plugged in, then power-cycle that controller (it counts pucks at "
+                "power-up). Never cut the strings."
+            )
+        if kinds & {"no_map", "map_mismatch"}:
+            fixes.append(
+                "Commission that kit: gate_c_safe → address_probe_safe → record its framebuffer_mapping (runbook "
+                "bench-prototype-01 §5a)."
+            )
+        if "other" in kinds:
+            fixes.append(
+                "Press Refresh on the device list to read the profile again; if it stays, open that module's page "
+                "and read its slots."
+            )
+        return _item("heads", "Head counts", "fail", "; ".join(problems) + ".", " ".join(fixes), visual)
     if unread:
         return _item(
             "heads",
@@ -895,6 +920,18 @@ async def _check_heads(services: Any) -> dict:
             f"Couldn't read the profile of {'; '.join(unread)}.",
             "Press Refresh on the device list; if it stays, check the account on /ops/accounts.",
             visual,
+        )
+    if mapped:
+        who = "All" if len(mapped) == len(entries) else f"{len(mapped)} of"
+        rest = "" if len(mapped) == len(entries) else "; the rest report their expected heads"
+        lengths = "/".join(str(n) for n in sorted(set(mapped)))
+        return _item(
+            "heads",
+            "Head counts",
+            "pass",
+            f"{who} {len(entries)} modules reach their heads through their own proven controller map{rest}. "
+            f"The {lengths}-entry frame is the controller's capacity, not a count of lit heads.",
+            note="So the head check itself is visual: count the lit heads — all 270 should light.",
         )
     return _item(
         "heads",

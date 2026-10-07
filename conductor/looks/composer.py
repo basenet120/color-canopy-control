@@ -11,6 +11,10 @@ Rules implemented:
 - **Head-count guard (07 §6).** A frame is exactly the device's framebuffer length, which must equal the registry's
   `expected_heads` and the panel lattice (30). Anything else is refused with `PlanError` — per-head writes to a
   strand that lost pucks would paint the wrong heads.
+- **A kit's controller map (D54).** The real SQHDK03 reports 60 entries with 30 pucks attached. A placement with
+  `indices` (the kit's proven `framebuffer_mapping`, `conductor.framemap.frame_indices`) gets a full-length frame:
+  wire index i in entry `indices[i]`, every other entry OFF (all fields 0), so frames and slot hashes stay
+  deterministic. A longer frame without one is refused as controller capacity with no proven map, not lost pucks.
 - **Colours are recipes** (`config/recipes.yaml`, `rgb_only` or `blend`); between recipe colours every frame field
   is interpolated (a side with no white keeps the other side's Kelvin and only fades white brightness). A colour
   level (`colorBrightness` in modes.yaml) scales the recipe entry's colour *and* white brightness.
@@ -34,12 +38,14 @@ from typing import Any
 
 from conductor.config import RecipesFile
 from conductor.engine_api import PlanError
+from conductor.framemap import capacity_problem, unmapped_capacity
 from conductor.geometry import panel_lattice, panel_order
 from conductor.looks.schema import BandCanvas, ColorLevel, GradientCanvas, PathwayCanvas
 from conductor.rows import FrameEntry
 
 Point = tuple[float, float]
 PATH_SAMPLE_IN = 0.5  # the pathway's centre line is sampled every half inch for the distance to each head
+OFF = FrameEntry(0, 0, 0, 0, 0, 0)  # a controller entry no head is mapped to
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,7 @@ class Placement:
     order: tuple[Point, ...]  # A-frame panel position of wire index i
     frame_length: int | None  # the device's framebuffer length (None = the device reports none)
     expected_heads: int | None  # the registry's expected head count
+    indices: tuple[int, ...] | None = None  # the kit's proven controller map: wire index i → entry indices[i]
 
 
 @dataclass(frozen=True)
@@ -96,6 +103,7 @@ def placement_for(
     *,
     frame_length: int | None,
     module: str | None = None,
+    indices: Sequence[int] | None = None,
 ) -> Placement:
     """The placement of a registry entry (a `DeviceEntry`) at its canopy position — or at `module`, e.g. when the
     module page previews a position on the bench kit. Orientation: the entry's own (how that panel hangs), else the
@@ -117,6 +125,7 @@ def placement_for(
         order=tuple((float(x), float(y)) for x, y in order),
         frame_length=frame_length,
         expected_heads=entry.expected_heads,
+        indices=tuple(indices) if indices is not None else None,
     )
 
 
@@ -145,6 +154,10 @@ def head_count_problem(placement: Placement, lattice_size: int) -> str | None:
     n, expected = placement.frame_length, placement.expected_heads
     if n is None:
         return f"{placement.device_id} reports no frame length, so per-head frames are refused"
+    if placement.indices is not None:
+        return None  # a proven map (framemap.frame_indices checked its frame length and head count)
+    if unmapped_capacity(n, expected, lattice_size):
+        return f"{placement.device_id}: {capacity_problem(n, expected)}"
     if expected is not None and n != expected:
         return (
             f"{placement.device_id} reports {n} heads but this module should have {expected}; per-head frames "
@@ -280,7 +293,8 @@ def compose_canvas(
     recipes: RecipesFile,
     placements: Sequence[Placement],
 ) -> dict[str, list[FrameEntry]]:
-    """One frame per placed module (device id → entries in wire order, the device's frame length).
+    """One frame per placed module (device id → entries in wire order, the device's frame length; through a kit's
+    controller map, the heads at their mapped entries and OFF everywhere else).
 
     PlanError when a module fails the head-count guard or two placements share a canopy position."""
     lattice = len(panel_lattice(dict(canopy)))
@@ -292,4 +306,14 @@ def compose_canvas(
         if problem := head_count_problem(p, lattice):
             raise PlanError(problem)
     colour = _Evaluator(canvas, canopy, recipes)
-    return {p.device_id: [colour(x, y) for x, y in head_positions(canopy, p)] for p in placements}
+    frames = {}
+    for p in placements:
+        heads = [colour(x, y) for x, y in head_positions(canopy, p)]
+        if p.indices is not None:
+            assert p.frame_length is not None
+            frame = [OFF] * p.frame_length
+            for i, entry in zip(p.indices, heads, strict=True):
+                frame[i] = entry
+            heads = frame
+        frames[p.device_id] = heads
+    return frames

@@ -32,7 +32,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
-from conductor import render
+from conductor import framemap, render
 from conductor import rows as R
 from conductor.capabilities import Capabilities, detect
 from conductor.clock import Clock
@@ -225,17 +225,7 @@ class ModuleSession:
         return max(floor, float(requested or self.deps.settings.module_page.sweep_step_s))
 
     def frame_indices(self) -> list[int] | None:
-        mapping = self.entry.framebuffer_mapping
-        if mapping is None:
-            return None
-        if (
-            mapping.proven_on == self.address
-            and mapping.frame_length == self.caps.framebuffer_length
-            and len(mapping.indices) == self.n == (self.entry.expected_heads or self.n)
-            and len(set(self.caps.framebuffer_lengths.values())) == 1
-        ):
-            return list(mapping.indices)
-        return None
+        return framemap.frame_indices(self.entry, self.address, self.caps, self.n)
 
     def head_count(self) -> dict:
         expected = self.entry.expected_heads or self.n
