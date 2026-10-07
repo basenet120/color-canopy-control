@@ -104,10 +104,10 @@ def test_max_retries_is_forced_to_one_before_every_send(tmp_path):
         (FakeResponse(204, b""), Outcome.OK, 204),
         (FakeResponse(400, {"error": "bad"}), Outcome.CLIENT_ERROR, 400),
         (FakeResponse(401, {"error": "unauthorized"}), Outcome.AUTH_STALE, 401),  # refreshed, then retryable
-        (FakeResponse(403, {"error": "forbidden"}), Outcome.THROTTLED, 403),  # aioafero raises HTTPForbidden
+        (FakeResponse(403, {"error": "forbidden"}), Outcome.THROTTLED, 403),  # throttling
         (FakeResponse(404, {"error": "nope"}), Outcome.NOT_FOUND, 404),
         (FakeResponse(409, {"error": "conflict"}), Outcome.CLIENT_ERROR, 409),
-        (FakeResponse(429), Outcome.THROTTLED, 429),  # ExceededMaximumRetries; the transport saw the status
+        (FakeResponse(429), Outcome.THROTTLED, 429),  # one attempt, real status
         (FakeResponse(500, "oops"), Outcome.SERVER_ERROR, 500),
         (FakeResponse(502, "bad gateway"), Outcome.SERVER_ERROR, 502),
         (FakeResponse(503), Outcome.THROTTLED, 503),

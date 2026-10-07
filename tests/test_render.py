@@ -74,7 +74,8 @@ def test_individual_mode_respects_no_white_and_short_frames():
     assert no_white == [BLACK] * 30
     heads = head_colors(rows, 30)
     assert heads[19] != BLACK and heads[20:] == [BLACK] * 10  # heads past the frame stay dark
-    assert describe_look(rows, 30) == "slot custom-2 (20 painted heads of 30)"
+    # a frame length that differs from the module map is named as controller entries, not painted heads
+    assert describe_look(rows, 30) == "slot custom-2 (20 controller entries; 30 heads on the map)"
 
 
 def test_individual_mode_with_no_stored_pattern():
@@ -86,7 +87,7 @@ def test_individual_mode_with_no_stored_pattern():
 def test_programs_use_their_decoded_cct_and_level():
     rows = full_state_vector(Look("program", 100, program="dinner-party"))
     assert head_colors(rows, 4) == [scaled(kelvin_to_rgb(2800), 0.62)] * 4
-    assert describe_look(rows) == "program dinner-party: 2800 K at 62% (simulated approximation)"
+    assert describe_look(rows) == "program dinner-party: 2800 K at 62% (on-screen preview is approximate)"
     assert PROGRAMS["nightlight"] == (2700, 5) and PROGRAMS["moonlight"] == (5000, 10)
     assert set(PROGRAMS) == {
         "nightlight",
@@ -108,13 +109,13 @@ def test_presets_are_a_deterministic_three_colour_approximation():
     assert heads[:3] == [{"r": c[0], "g": c[1], "b": c[2]} for c in palette]
     assert heads[3:6] == heads[:3]  # the palette repeats along the strand
     assert head_colors(rows, 30) == heads  # no time, no randomness
-    assert describe_look(rows) == "preset snowfall (simulated approximation)"
-    hashed = preset_palette("effervescent")
-    assert hashed == preset_palette("effervescent") and hashed != preset_palette("prism")
-    assert len(set(hashed)) == 3
+    assert describe_look(rows) == "preset snowfall (on-screen preview is approximate)"
+    # a preset with no colour model is neutral grey, never colours invented from its name
+    unknown = preset_palette("effervescent")
+    assert unknown == preset_palette("prism") == ((96, 96, 96),) * 3
     dim = full_state_vector(Look("preset", 50, preset="effervescent"))
-    assert head_colors(dim, 1) == [scaled(hashed[0], 0.5)]
-    assert describe_look(dim) == "preset effervescent at 50% (simulated approximation)"
+    assert head_colors(dim, 1) == [scaled(unknown[0], 0.5)]
+    assert describe_look(dim) == "preset effervescent at 50% (on-screen preview is approximate)"
 
 
 def test_render_ignores_telemetry_rows_and_accepts_a_mapping():

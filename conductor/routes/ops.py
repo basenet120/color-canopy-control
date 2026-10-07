@@ -467,16 +467,12 @@ def canopy_heads(services: Any) -> dict:
                 desired += [None] * (n - len(desired))
                 desired_source = "plan"
             elif snap and snap["desired"] is not None:
-                desired = head_colors(
-                    _rows(snap["desired"]), n, _caps(services, entry.id), entry.frame_offset
-                )
+                desired = head_colors(_rows(snap["desired"]), n, _caps(services, entry.id))
                 desired_source = "tracker"
             reported = [None] * n
             reported_at = None
             if snap and snap["reported"] is not None:
-                reported = head_colors(
-                    _rows(snap["reported"]), n, _caps(services, entry.id), entry.frame_offset
-                )
+                reported = head_colors(_rows(snap["reported"]), n, _caps(services, entry.id))
                 reported_at = snap["reported_at"]
             engine_record = engine_modules.get(entry.id) or {}
             status = engine_record.get("status") or (snap or {}).get("status") or "unknown"
@@ -875,7 +871,7 @@ async def _check_heads(services: Any) -> dict:
         if caps is None:
             unread.append(f"{name} ({record.get('error') or 'not read'})")
             continue
-        if problem := caps.head_count_problem(entry.expected_heads, entry.frame_offset):
+        if problem := caps.head_count_problem(entry.expected_heads):
             problems.append(f"{name}: {problem}")
     visual = (
         "Whether a dark string changes what Hubspace reports is unverified, so also look up: all 270 heads "
@@ -899,28 +895,6 @@ async def _check_heads(services: Any) -> dict:
             f"Couldn't read the profile of {'; '.join(unread)}.",
             "Press Refresh on the device list; if it stays, check the account on /ops/accounts.",
             visual,
-        )
-    longer = sorted(
-        {
-            n
-            for e in entries
-            if (caps := (records.get(e.id) or {}).get("caps")) is not None
-            and (n := caps.framebuffer_length) is not None
-            and e.expected_heads is not None
-            and n > e.expected_heads
-        }
-    )
-    if longer:
-        # The controller reports its capacity (60), not the pucks it lit: the length can't show a lost puck (07 §6).
-        return _item(
-            "heads",
-            "Head counts",
-            "pass",
-            f"All {len(entries)} modules' saved patterns have room for their pucks "
-            f"({', '.join(map(str, longer))} entries each). That is the controller's capacity, not a count of lit "
-            "pucks, so a strand with dark pucks still reads the same here.",
-            note="So look up: all 270 heads should light. Whether Hubspace notices a dark string at all is "
-            "unverified (bench job: head count at boot).",
         )
     return _item(
         "heads",

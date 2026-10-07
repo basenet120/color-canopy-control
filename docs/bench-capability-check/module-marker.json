@@ -1,0 +1,722 @@
+{
+  "time": "2026-09-28T17:14:44.523177+00:00",
+  "pattern": "marker",
+  "simulated": false,
+  "result": {
+    "ok": true,
+    "status": "applied",
+    "http_status": 200,
+    "error": null,
+    "send_to_ack_ms": 209,
+    "ack_to_readback_ms": 1145
+  },
+  "t1": {
+    "allowed": true,
+    "reason": "Bench Gate C passed: frames written by the Conductor (T1) are proven on this device. 30 physical heads are mapped into its 60-entry buffer.",
+    "flag": true
+  },
+  "head_count": {
+    "expected": 30,
+    "reported": 60,
+    "map": 30,
+    "problem": null,
+    "mapped": true,
+    "controller_addresses": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+    ]
+  },
+  "reported_look": "slot custom-3 (60 controller entries; 30 heads on the map) at 40%",
+  "settings_mismatches": [],
+  "heads": [
+    {
+      "index": 0,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 1,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 2,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 3,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 4,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 5,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 6,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 7,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 8,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 9,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 10,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 11,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 12,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 13,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 14,
+      "desired": {
+        "r": 0,
+        "g": 102,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 102,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 255,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 100,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 15,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 16,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 17,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 18,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 19,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 20,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 21,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 22,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 23,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 24,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 25,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 26,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 27,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 28,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    },
+    {
+      "index": 29,
+      "desired": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "reported": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "paint": {
+        "r": 0,
+        "g": 0,
+        "b": 0,
+        "cct": 0,
+        "colorBrightness": 0,
+        "whiteBrightness": 0
+      },
+      "match": true
+    }
+  ],
+  "physical": "Yes — only head 15 is green"
+}

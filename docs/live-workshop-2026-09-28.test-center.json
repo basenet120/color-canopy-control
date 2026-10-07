@@ -1,0 +1,1235 @@
+{
+  "schema": 1,
+  "current": "live-workshop-2026-09-28-assisted-hardware-check",
+  "sessions": [
+    {
+      "id": "live-workshop-2026-09-28-assisted-hardware-check",
+      "meta": {
+        "name": "Live workshop — confirmed hardware observations",
+        "date": "2026-09-28",
+        "mode": "Real workshop",
+        "tester": "User observes the real bench kit; assistant operates the running app",
+        "browser": "Windows; account registration confirmed by user. Module commands sent through the app API.",
+        "target": "bench-kit",
+        "build": "color-canopy-workshop-kit-1eb8551 baseline + response-lifecycle connection repair",
+        "baseUrl": "http://localhost:8000",
+        "starting": "Real bench kit initially on, showing gradient-rainbow at reported 98%.",
+        "setup": "Actual copy: outputs/color-canopy-local-testing/color-canopy-workshop. Bench mode with real Hubspace driver; registered kit allowed and runtime restarted. Each write uses the app gate, device lease, executor and readback. Physical results are the user's observations. An API pass does not establish untested browser-button behaviour. Base checks requiring further steps remain Not run; completed portions are recorded as variants. End state: restore to white 2200 K at 50% applied with matching cloud readback. No additional physical observation was requested for this restoration; it is not recorded as a new physical pass. Preset follow-up: selected built-in motion, fade, jump and gradient presets are tested through the same gated API, with physical feedback recorded separately. Custom slot effect codes remain uncommissioned."
+      },
+      "results": {
+        "LOC-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "SET-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "SET-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "ACC-01": {
+          "status": "Pass",
+          "type": "",
+          "ui": "After the connection repair, discovery found two real devices and the user could select the intended kit.",
+          "physical": "N/A — discovery is read-only.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "UI-001 — fixed; live discovery retest passed.",
+          "notes": "Earlier Show devices failed with ClientConnectionError. The repaired response lifecycle passed 20 local regression/structure checks; the subsequent real discovery and registration succeeded.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "ACC-02": {
+          "status": "Pass",
+          "type": "",
+          "ui": "User confirmed “Registered as bench-kit”. The real device registration remained available after the allow-step restart.",
+          "physical": "N/A — registration alone sends no light command.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "The restarted app subsequently opened bench-kit using the real afero driver, confirming the saved registration was loaded.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "ACC-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "Runtime authorization passed: normal allow step and restart completed, then bench-kit opened with simulated:false, afero driver and no read error. Refreshed UI wording/badge was not independently confirmed.",
+          "physical": "Subsequent real power changes were physically confirmed.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "UI-002 — misleading generic Accounts guidance corrected in source; refreshed UI retest pending.",
+          "notes": "Partial: runtime eligibility is complete (see variant). This full case also requires the UI to stop presenting the kit as unallowed; retain Not run until that UI observation is recorded.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "ACC-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "ACC-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "ACC-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "MOD-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "MOD-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "MOD-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "MOD-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "MOD-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "App API returned applied / HTTP 200 for power off and power on, with matching readback.",
+          "physical": "User confirmed the light turned off and then turned back on.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Off/on control has a physical pass in the variants. The full Module-page on → off → on button sequence and displayed UI outcomes were not exercised through the browser; preserve that remaining UI coverage.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "MOD-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "Rainbow mode accepted 20% (first readback lagged; retry applied) and 100%. In white mode, the brightness-only 50% → 20% command applied.",
+          "physical": "Rainbow at 20% did not visibly dim on the confirmed retry; 100% became brighter. In white at 2200 K, reducing 50% to 20% visibly dimmed.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "Brightness behaviour differs by active mode; investigate rainbow result.",
+          "notes": "Partial: only two distinct values (20% and 100%) have been exercised by brightness-only commands. White at 50% was established by a full-look command, so it does not complete the three-value brightness-only requirement. Keep the confirmed variants and retain the rainbow failure rather than overwriting it with the white-mode pass.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "MOD-07": {
+          "status": "Not run",
+          "type": "",
+          "ui": "White 2200 K at 50% and 6500 K at 50% applied with matching readback.",
+          "physical": "User confirmed steady warm white at 2200 K and cool white at 6500 K.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Partial: supported low and high temperatures are physically confirmed in the variants. A supported middle temperature and the browser controls remain unverified, so the full low/middle/high base check remains Not run.",
+          "updated": "2026-09-28T15:46:12+00:00"
+        },
+        "MOD-08": {
+          "status": "Not run",
+          "type": "",
+          "ui": "RGB red, green and blue at 50% applied with matching readback.",
+          "physical": "User confirmed steady red, steady green and steady blue in sequence.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Partial: all three primary colours are physically confirmed through the app API. This full case also requires one show colour and UI agreement; those remain unverified, so the base case remains Not run.",
+          "updated": "2026-09-28T15:47:16+00:00"
+        },
+        "MOD-09": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "Selected presets are recorded as individual live variants. Not every listed preset, speed boundary or browser control has been tested.",
+          "updated": ""
+        },
+        "MOD-10": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-07": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-08": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-09": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-10": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-11": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-12": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-13": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-14": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-15": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "BEN-16": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-07": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "PNT-08": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-07": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TST-08": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "SLT-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "SLT-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "SLT-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "SLT-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "EFX-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "EFX-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "EFX-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "EFX-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "CAL-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "CAL-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "CAL-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "CAL-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "HLD-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "HLD-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "TEL-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "OPS-07": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "VIS-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "KSK-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "KSK-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "VIG-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "VIG-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "ROL-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "ROL-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "ROL-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-01": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-02": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-03": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-04": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-05": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-06": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "UX-07": {
+          "status": "Not run",
+          "type": "",
+          "ui": "",
+          "physical": "",
+          "evidence": "",
+          "issue": "",
+          "notes": "",
+          "updated": ""
+        },
+        "variant-acc03-runtime-allow": {
+          "status": "Pass",
+          "type": "",
+          "ui": "conductor.workshop allow --yes completed. After restart, bench-kit opened with simulated:false, driver afero and no read error.",
+          "physical": "Physical off/on actions later confirmed real-device control.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Scope is runtime eligibility, not the Accounts page badge or generic explanatory banner.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod05-power-off": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; HTTP 200; reported state off.",
+          "physical": "User: “Yes, the light turned off.”",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Sent one power:false command through the normal Module API and awaited physical feedback.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod05-power-on": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; HTTP 200; reported previous gradient-rainbow preset at 98%.",
+          "physical": "User: “Yes, it turned back on.”",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Sent one power:true command after the confirmed off result. Preserved the existing mode and brightness.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod06-rainbow-20": {
+          "status": "Fail",
+          "type": "Functional",
+          "ui": "First command was accepted but immediate readback mismatched; a later fresh read showed 20%. Retry returned applied and reported 20%.",
+          "physical": "No visible dimming was established; after retry, user said “No, it still looks the same.”",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "Physical brightness in rainbow preset did not follow the reported 20% value.",
+          "notes": "Distinguish delayed initial cloud readback from the separate physical observation. Matching readback on retry did not establish a hardware pass.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod06-rainbow-100": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; reported brightness 100%.",
+          "physical": "User: “Yes, it became brighter.”",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Scoped to this upward brightness change in the existing rainbow preset; does not resolve the downward-dimming failure.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod06-white-50-to-20": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Brightness-only reduction applied in white mode at 2200 K.",
+          "physical": "User confirmed the light dimmed.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "This confirms downward dimming in white mode. The starting 50% was set by the preceding full white-look command, not a separate brightness-only test.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod07-white-2200": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; matching readback at white 2200 K and 50%.",
+          "physical": "User confirmed steady warm white.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "This is the low-temperature observation only; middle and high require their own confirmed results.",
+          "updated": "2026-09-28T15:45:10+00:00"
+        },
+        "variant-mod07-white-6500": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; matching readback at white 6500 K and 50%.",
+          "physical": "User confirmed cool white.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "High-temperature physical observation. A middle temperature remains unverified.",
+          "updated": "2026-09-28T15:46:12+00:00"
+        },
+        "variant-mod08-red-50": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; reported RGB red at 50%.",
+          "physical": "User confirmed steady red.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "One colour only; does not complete the RGB plus show-colour case.",
+          "updated": "2026-09-28T15:46:12+00:00"
+        },
+        "variant-mod08-green-50": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Command applied; reported RGB green at 50%.",
+          "physical": "User confirmed steady green.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Green physically confirmed after the applied command. This does not complete the show-colour or browser-control requirements.",
+          "updated": "2026-09-28T15:47:16+00:00"
+        },
+        "variant-mod08-blue-50": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Applied; reported RGB blue at 50%.",
+          "physical": "User confirmed steady blue.",
+          "evidence": "Conversation observations; docs/current-live-test-session.md",
+          "issue": "",
+          "notes": "Blue physically confirmed. A show colour and browser-control observations remain unverified.",
+          "updated": "2026-09-28T15:47:16+00:00"
+        },
+        "variant-preset-rainbow-roll-low": {
+          "status": "Fail",
+          "type": "Functional",
+          "ui": "App API: rainbow-roll, brightness 40%, speed -8; HTTP 200, applied. Readback: preset rainbow-roll at 40% (on-screen preview is approximate).",
+          "physical": "User: colors flash but do not switch LED diodes.",
+          "evidence": "Live API command at 2026-09-28T15:52:16.607276+00:00; user's conversation response.",
+          "issue": "",
+          "notes": "Preset selection and readback matched; the requested movement between LEDs was not observed.",
+          "updated": "2026-09-28T15:54:13.111997+00:00"
+        },
+        "variant-preset-rainbow-road-mid": {
+          "status": "Pass",
+          "type": "",
+          "ui": "App API: rainbow-road, brightness 40%, speed 0; HTTP 200, applied. Readback: preset rainbow-road at 40% (on-screen preview is approximate).",
+          "physical": "User confirmed colors travel between LEDs.",
+          "evidence": "Live API command at 2026-09-28T15:54:16.439767+00:00; user's conversation response.",
+          "issue": "",
+          "notes": "",
+          "updated": "2026-09-28T15:55:47.532987+00:00"
+        },
+        "variant-preset-rainbow-road-low": {
+          "status": "Pass",
+          "type": "",
+          "ui": "App API: rainbow-road, brightness 40%, speed -8; HTTP 200, applied. Readback: preset rainbow-road at 40% (on-screen preview is approximate).",
+          "physical": "User confirmed it became very slow.",
+          "evidence": "Live API command at 2026-09-28T15:55:49.690780+00:00; user's conversation response.",
+          "issue": "",
+          "notes": "Visible speed reduction compared with speed 0; -8 is impractically slow for this test.",
+          "updated": "2026-09-28T15:57:00.705757+00:00"
+        },
+        "variant-preset-gradient-rainbow": {
+          "status": "Pass",
+          "type": "",
+          "ui": "App API: gradient-rainbow, brightness 40%, speed 0; HTTP 200, applied. Readback: preset gradient-rainbow at 40% (on-screen preview is approximate).",
+          "physical": "User confirmed static matching-color pairs progress through rainbow colors along the strand.",
+          "evidence": "Live API command at 2026-09-28T15:57:02.858535+00:00; user's conversation response.",
+          "issue": "",
+          "notes": "Native gradient uses matching adjacent pairs; it is not an individually unique color for every LED.",
+          "updated": "2026-09-28T15:59:08.691805+00:00"
+        },
+        "variant-preset-fade-3-mid": {
+          "status": "Pass",
+          "type": "",
+          "ui": "App API: fade-3, brightness 40%, speed 0; HTTP 200, applied. Readback: preset fade-3 at 40% (on-screen preview is approximate).",
+          "physical": "User observed very slow red-to-green-to-blue cycling, with darkness between transitions.",
+          "evidence": "Live API command at 2026-09-28T15:59:12.019616+00:00; user's conversation response.",
+          "issue": "",
+          "notes": "Observed behavior is fade-through-black. Seamless crossfading was not demonstrated; this records the actual native preset behavior.",
+          "updated": "2026-09-28T16:00:45.304264+00:00"
+        },
+        "variant-preset-jump-3-low": {
+          "status": "Fail",
+          "type": "Functional",
+          "ui": "App API: jump-3, brightness 20%, speed -3; HTTP 200, applied. Readback: preset jump-3 at 20% (on-screen preview is approximate).",
+          "physical": "User saw only red, then the automatic return to warm white.",
+          "evidence": "Live API command at 2026-09-28T16:00:49.798537+00:00; user's conversation response.",
+          "issue": "",
+          "notes": "No color jumps were observed within the 20-second window. The speed may be too slow for this window; a faster follow-up is needed. Warm white restoration was verified.",
+          "updated": "2026-09-28T16:01:58.957258+00:00"
+        },
+        "variant-preset-jump-3-fast": {
+          "status": "Pass",
+          "type": "",
+          "ui": "App API: jump-3, brightness 20%, speed 5; HTTP 200, mismatch. Readback: white 2200 K at 20%.",
+          "physical": "User confirmed sharp red/green/blue changes during the second test.",
+          "evidence": "Live API command at 2026-09-28T16:02:03.408160+00:00; user's conversation response.",
+          "issue": "The write was accepted but readback still differs after verification: color-mode.",
+          "notes": "Physical flashing/color-jump behavior passed. Immediate cloud verification reported a color-mode mismatch; this discrepancy is retained and no software verification pass is claimed. Automatic warm-white return applied successfully.",
+          "updated": "2026-09-28T16:03:25.280322+00:00"
+        },
+        "variant-custom-gate-c": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Custom 2 copied into Custom 3; HTTP 200 and matching frame hash. Physical answer recorded and device-bound T1 flag applied.",
+          "physical": "User: Yes — red, then solid green.",
+          "evidence": "docs/custom-pattern-session.md; saved anonymized bench runs",
+          "issue": "",
+          "notes": "The first red-copy trial was repeated at the user request. Browser controls themselves remain untested.",
+          "updated": "2026-09-28T20:00:43.745725+00:00"
+        },
+        "variant-custom-addresses": {
+          "status": "Pass",
+          "type": "",
+          "ui": "All four address-probe commands passed cloud verification with full 60-entry frames.",
+          "physical": "Address 0: first head red. Address 1: second head green. Address 29: last head blue. Addresses 30–59: all physical heads dark.",
+          "evidence": "docs/custom-pattern-session.md; saved anonymized bench runs",
+          "issue": "",
+          "notes": "First/second/last and unused upper half physically checked. Intermediate order is further checked by the custom gradient; individual sweep remains a separate test.",
+          "updated": "2026-09-28T20:00:43.745725+00:00"
+        },
+        "variant-custom-gradient": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Module Paint API: applied, HTTP 200; slot custom-3 (60 controller entries; 30 heads on the map) at 40%.",
+          "physical": "Yes — a steady red-to-purple-to-blue gradient",
+          "evidence": "docs/custom-pattern-session.md; saved anonymized bench runs",
+          "issue": "",
+          "notes": "API and physical check; browser button interaction remains separate.",
+          "updated": "2026-09-28T20:00:43.745725+00:00"
+        },
+        "variant-custom-marker": {
+          "status": "Pass",
+          "type": "",
+          "ui": "Module Paint API: applied, HTTP 200; slot custom-3 (60 controller entries; 30 heads on the map) at 40%.",
+          "physical": "Yes — only head 15 is green",
+          "evidence": "docs/custom-pattern-session.md; saved anonymized bench runs",
+          "issue": "",
+          "notes": "API and physical check; browser button interaction remains separate.",
+          "updated": "2026-09-28T20:00:43.745725+00:00"
+        }
+      },
+      "variants": [
+        {
+          "key": "variant-acc03-runtime-allow",
+          "caseId": "ACC-03",
+          "label": "Runtime allow step, restart and real-device lock"
+        },
+        {
+          "key": "variant-mod05-power-off",
+          "caseId": "MOD-05",
+          "label": "Power off through the running app"
+        },
+        {
+          "key": "variant-mod05-power-on",
+          "caseId": "MOD-05",
+          "label": "Power on through the running app"
+        },
+        {
+          "key": "variant-mod06-rainbow-20",
+          "caseId": "MOD-06",
+          "label": "Rainbow preset — brightness 20%, initial command and retry"
+        },
+        {
+          "key": "variant-mod06-rainbow-100",
+          "caseId": "MOD-06",
+          "label": "Rainbow preset — brightness 100%"
+        },
+        {
+          "key": "variant-mod06-white-50-to-20",
+          "caseId": "MOD-06",
+          "label": "White 2200 K — brightness-only 50% to 20%"
+        },
+        {
+          "key": "variant-mod07-white-2200",
+          "caseId": "MOD-07",
+          "label": "Supported low white — 2200 K at 50%"
+        },
+        {
+          "key": "variant-mod07-white-6500",
+          "caseId": "MOD-07",
+          "label": "Supported high white — 6500 K at 50%"
+        },
+        {
+          "key": "variant-mod08-red-50",
+          "caseId": "MOD-08",
+          "label": "RGB red at 50%"
+        },
+        {
+          "key": "variant-mod08-green-50",
+          "caseId": "MOD-08",
+          "label": "RGB green at 50%"
+        },
+        {
+          "key": "variant-mod08-blue-50",
+          "caseId": "MOD-08",
+          "label": "RGB blue at 50%"
+        },
+        {
+          "key": "variant-preset-rainbow-roll-low",
+          "caseId": "MOD-09",
+          "label": "Rainbow Roll, speed -8, 40%"
+        },
+        {
+          "key": "variant-preset-rainbow-road-mid",
+          "caseId": "MOD-09",
+          "label": "Rainbow Road, speed 0, 40%"
+        },
+        {
+          "key": "variant-preset-rainbow-road-low",
+          "caseId": "MOD-09",
+          "label": "Rainbow Road, speed -8, 40%"
+        },
+        {
+          "key": "variant-preset-gradient-rainbow",
+          "caseId": "MOD-09",
+          "label": "Gradient Rainbow, speed 0, 40%"
+        },
+        {
+          "key": "variant-preset-fade-3-mid",
+          "caseId": "MOD-09",
+          "label": "Fade 3, speed 0, 40%"
+        },
+        {
+          "key": "variant-preset-jump-3-low",
+          "caseId": "MOD-09",
+          "label": "Jump 3, speed -3, 20%, 20 seconds"
+        },
+        {
+          "key": "variant-preset-jump-3-fast",
+          "caseId": "MOD-09",
+          "label": "Jump 3, speed +5, 20%, 20 seconds"
+        },
+        {
+          "key": "variant-custom-gate-c",
+          "caseId": "BEN-05",
+          "label": "Real custom-slot copy: red to green"
+        },
+        {
+          "key": "variant-custom-addresses",
+          "caseId": "BEN-03",
+          "label": "30 physical heads in a 60-entry controller buffer"
+        },
+        {
+          "key": "variant-custom-gradient",
+          "caseId": "PNT-07",
+          "label": "Module Paint: gradient"
+        },
+        {
+          "key": "variant-custom-marker",
+          "caseId": "PNT-07",
+          "label": "Module Paint: marker"
+        }
+      ]
+    }
+  ]
+}

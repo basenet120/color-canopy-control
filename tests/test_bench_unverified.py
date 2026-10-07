@@ -230,10 +230,6 @@ def test_active_slot_rewrite_writes_only_the_showing_slot(tmp_path):
     assert R.slot_hash(after[(R.FRAME_CLASS, "custom-3")]) == obs["hash_written"]
     assert R.slot_hash(before[(R.FRAME_CLASS, "custom-3")]) == obs["hash_before"]
     assert after[("color-individual", "custom")] == "custom-3"
-    # the new pattern differs ON THE PUCKS (entries 0–29 of the 60-entry frame); the unused entries stay OFF
-    old = R.frame_entries(before[(R.FRAME_CLASS, "custom-3")])
-    new = R.frame_entries(after[(R.FRAME_CLASS, "custom-3")])
-    assert len(new) == 60 and new[:30] != old[:30] and new[30:] == [R.OFF_ENTRY] * 30
 
 
 def test_active_slot_rewrite_refuses_without_a_showing_slot_or_proven_frames(tmp_path, monkeypatch):
@@ -277,7 +273,6 @@ def test_rate_ramp_steps_down_to_one_write_a_second_and_reads_each_back(tmp_path
     # consecutive frames always differ, so a dropped write can't hide behind an identical earlier one
     hashes = [w["sent_hash"] for w in obs["writes"]]
     assert len(set(hashes)) == 9 and all(w["readback"] == "stored" for w in obs["writes"])
-    assert obs["length"] == 60
 
 
 def test_rate_ramp_counts_silent_drops(tmp_path):
@@ -356,15 +351,12 @@ def test_head_count_boot_needs_confirmation_and_never_writes(tmp_path):
     )
     obs = sim["result"]["observations"]
     assert sim["result"]["verdict"] == "needs_eyes" and sim["result"]["ask_human"] == [Q_HEAD_BOOT]
-    # the simulated kit reports the real kit's capacity (60 entries) for its 30 pucks: that is NOT a change — a
-    # controller that always reports 60 can't show missing pucks (only a count below the full kit's 30 would)
-    assert obs["segment_hint"] == 60 and obs["profile_reflects_detected_count"] is False
+    assert obs["segment_hint"] == 30 and obs["profile_reflects_detected_count"] is False
     assert (
-        obs["profile_framebuffer_lengths"] == {s: 60 for s in R.SLOTS} == obs["readback_framebuffer_lengths"]
+        obs["profile_framebuffer_lengths"] == {s: 30 for s in R.SLOTS} == obs["readback_framebuffer_lengths"]
     )
-    assert "60-segment" in obs["hints"]["custom-1"]
+    assert "30-segment" in obs["hints"]["custom-1"]
     assert "SIMULATED" in sim["result"]["summary"] and "visually" in sim["result"]["summary"]
-    assert "never fewer than the full kit" in sim["result"]["summary"]
     assert sim["artifacts"] == ["profile_boot_raw"]
     # a profile that does report fewer heads (the 20-segment string against a full kit of 30)
     short_obs = short["result"]["observations"]

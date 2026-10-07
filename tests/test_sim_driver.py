@@ -17,9 +17,7 @@ from conductor.gate import Purpose
 from conductor.render import head_colors, kelvin_to_rgb
 from conductor.rows import (
     FRAME_CLASS,
-    OFF_ENTRY,
     FrameEntry,
-    FrameLayout,
     Look,
     brightness,
     color_mode,
@@ -46,13 +44,11 @@ def make(settings=None, seed=0):
     return SimDriver(REG, clock=clock, settings=settings, seed=seed), clock
 
 
-def painted(n=30, slot="custom-2", length=60):
-    """A frame for the simulated kit: `n` pucks painted alternately, in a `length`-entry frame (the real SQHDK03's
-    60 entries by default), the other entries OFF."""
+def painted(n=30, slot="custom-2"):
     entries = [
         FrameEntry(255, 99, 2) if i % 2 == 0 else FrameEntry(0, 0, 255, 2700, 50, 40) for i in range(n)
     ]
-    value = frame_value(None, FrameLayout(length, n).place(entries), expected_length=length)
+    value = frame_value(None, entries, expected_length=None)
     return [slot_write(slot, value), *slot_select(slot), power(True)]
 
 
@@ -93,7 +89,7 @@ def test_discover_and_fetch_profile_reflect_current_cloud_state():
     assert all(i.simulated and i.account == "canopy" for i in canopy)
     assert info.device_id == KIT and info.raw["id"] == KIT and info.model.startswith("SQHDK03")
     caps = detect(info.functions, info.states)
-    assert caps.framebuffer_length == 60 and caps.individual  # the real kit's frame: 60 entries for 30 pucks
+    assert caps.framebuffer_length == 30 and caps.individual
     state = rows_by_key(info.states)
     assert state[("color-individual", "custom")] == "custom-2"
     raw_rows = {(s["functionClass"], s["functionInstance"]): s for s in info.raw["states"]}
@@ -111,14 +107,12 @@ def test_full_frame_select_mode_and_power_in_one_write_round_trips():
         w = await driver.write(KIT, rows, purpose=Purpose.BENCH)
         r = await driver.read_state(KIT)
         await clock.sleep(2.0)
-        return before, w, r, driver.device_view(KIT), driver.puck_colors(KIT), driver.device_debug(KIT)
+        return before, w, r, driver.device_view(KIT)
 
-    before, w, r, applied, pucks, debug = run_virtual(main)
+    before, w, r, applied = run_virtual(main)
     assert w.ok and w.http_status == 200 and w.simulated
     assert w.bytes_sent == payload_bytes(KIT, rows, round(w.sent_at * 1000))
-    assert (
-        4000 < w.bytes_sent < 6144
-    )  # ~5 KB compact for the real kit's 60 entries (04 measured ~3.4 KB for 30)
+    assert 2500 < w.bytes_sent < 4000  # ~3 KB compact for 30 entries (04)
     assert w.acked_at is not None and w.acked_at - w.sent_at == pytest.approx(w.elapsed_s)
     assert r.ok and r.simulated and r.available is True
     assert compare(rows, r.rows) == []
@@ -129,31 +123,6 @@ def test_full_frame_select_mode_and_power_in_one_write_round_trips():
     assert heads[0] == {"r": 255, "g": 99, "b": 2}
     ww = kelvin_to_rgb(2700)  # half blue + 40% warm white
     assert heads[1] == {"r": round(ww[0] * 0.4), "g": round(ww[1] * 0.4), "b": round(127.5 + ww[2] * 0.4)}
-    # the 30 simulated pucks show entries 0–29; entries 30–59 are stored (OFF here) but light nothing
-    assert pucks == heads and len(heads) == 30
-    stored = rows_by_key(applied)[(FRAME_CLASS, "custom-2")][FRAME_CLASS]["frameBuffer"]["framebuffer"]
-    assert len(stored) == 60 and [FrameEntry.from_json(e) for e in stored[30:]] == [OFF_ENTRY] * 30
-    assert (debug["frame_length"], debug["pucks"], debug["puck_offset"]) == (60, 30, 0)
-
-
-def test_simulated_pucks_are_driven_by_entries_0_to_29_only():
-    """Paint entries 30–59 only: the cloud stores them, the 30 simulated pucks stay dark."""
-    driver, clock = make()
-    lit = [FrameEntry(255, 255, 255)] * 30
-    rows = [slot_write("custom-1", frame_value(None, [OFF_ENTRY] * 30 + lit, expected_length=60))]
-    rows += [*slot_select("custom-1"), power(True)]
-
-    async def main():
-        w = await driver.write(KIT, rows, purpose=Purpose.BENCH)
-        await clock.sleep(2.0)
-        return w, driver.device_view(KIT), driver.puck_colors(KIT)
-
-    w, applied, pucks = run_virtual(main)
-    assert w.ok and rows_by_key(applied)[("color-mode", None)] == "individual"
-    assert pucks == [{"r": 0, "g": 0, "b": 0}] * 30
-    assert (
-        head_colors(applied, 30, None, 30) == [{"r": 255, "g": 255, "b": 255}] * 30
-    )  # what entries 30–59 hold
 
 
 def test_numbers_are_stored_as_ints_and_readback_is_a_copy():
@@ -206,7 +175,7 @@ def test_bad_rows_are_refused_with_400_and_nothing_is_stored(rows, reason):
 
 def test_malformed_frame_entries_are_refused():
     driver, clock = make()
-    good = frame_value(None, [FrameEntry()] * 60, expected_length=60)
+    good = frame_value(None, [FrameEntry()] * 30, expected_length=30)
     bad_colour = json.loads(json.dumps(good))
     bad_colour[FRAME_CLASS]["frameBuffer"]["framebuffer"][3]["r"] = 300
     missing_field = json.loads(json.dumps(good))
@@ -230,7 +199,7 @@ def test_wrong_frame_length_rejected_by_default_and_stored_under_accept_policy()
         return await strict.write(KIT, short, purpose=ENGINE), await lenient.write(KIT, short, purpose=ENGINE)
 
     refused, stored = run_virtual(main)
-    assert refused.http_status == 400 and "29 entries" in refused.error and "60" in refused.error
+    assert refused.http_status == 400 and "29 entries" in refused.error and "30" in refused.error
     assert stored.ok
     fb = rows_by_key(lenient.cloud_view(KIT))[(FRAME_CLASS, "custom-1")][FRAME_CLASS]["frameBuffer"]
     assert len(fb["framebuffer"]) == 29

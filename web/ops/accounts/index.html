@@ -68,8 +68,9 @@
     <h2 id="devices-h">Devices on <span id="devices-account"></span></h2>
     <p class="muted" id="devices-note"></p>
     <ul class="list" id="devices"></ul>
-    <p class="notice">After you register a device, add its id to <code>HUBSPACE_DEVICE_ALLOWLIST</code> on this
-      runtime and restart. Until then it stays read-only: nothing can write to it.</p>
+    <p class="notice">The badge beside each device shows its access. If a registered device is marked Read-only,
+      add its ID to <code>HUBSPACE_DEVICE_ALLOWLIST</code> on this runtime and restart.
+      Devices marked Writable are already enabled.</p>
     <p class="banner-ok" id="register-result" hidden></p>
     <p class="error" id="devices-error" hidden></p>
   </section>

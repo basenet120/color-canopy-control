@@ -244,11 +244,6 @@ def test_checklist_items_have_statuses_and_fixes(app_client):
     assert items["token"]["status"] == "pass" and "Simulator" in items["token"]["detail"]
     assert items["modules"]["status"] == "warn"  # nothing shown yet → no readback
     assert items["heads"]["status"] == "pass" and "look up" in items["heads"]["note"]
-    # the simulator's controllers report 60 entries for 30 pucks: the check says the length can't count dark pucks
-    assert (
-        "60 entries each" in items["heads"]["detail"]
-        and "not a count of lit pucks" in items["heads"]["detail"]
-    )
     assert items["slots"]["status"] == "warn" and "Commission slots" in items["slots"]["fix"]
     assert items["budget"]["status"] == "pass"
     assert items["test_mode_change"]["status"] == "warn"

@@ -92,9 +92,8 @@ def _all_correct(services, plan) -> bool:
 
 
 def _app_paint(services, device_id: str, slot: str, color: tuple[int, int, int], effects=None) -> str:
-    """Someone paints `slot` in the Hubspace app: the cloud stores a new pattern (a normal PUT from the app) — the
-    device's full 60-entry frame (what the app writes into the entries no puck uses is UNVERIFIED)."""
-    value = R.frame_value(None, [R.FrameEntry(*color, 0, 100, 0)] * 60, expected_length=60, effects=effects)
+    """Someone paints `slot` in the Hubspace app: the cloud stores a new pattern (a normal PUT from the app)."""
+    value = R.frame_value(None, [R.FrameEntry(*color, 0, 100, 0)] * 30, expected_length=30, effects=effects)
     stamp = int(services.clock.now() * 1000)
     row = R.slot_write(slot, value)
     response = services.sim.cloud.accept_wire(
@@ -433,7 +432,7 @@ def test_f6_motion_copy_only_once_the_device_holds_the_benched_code(tmp_path):
         # an app edit that only switches the animation off: the hash can't see it, the effect check does
         value = _device_slot(services, "canopy-r0c0", "custom-3")
         _app_paint_value = R.frame_value(
-            value, R.frame_entries(value), expected_length=60, effects={"motionEffect": 0}
+            value, R.frame_entries(value), expected_length=30, effects={"motionEffect": 0}
         )
         stamp = int(services.clock.now() * 1000)
         services.sim.cloud.accept_wire(

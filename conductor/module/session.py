@@ -10,10 +10,6 @@ Rules implemented (BUILD_PLAN P0b, 04, 07 §1/§5/§6, D8):
   `flags.t1_frames is True` (bench Gate C). On the simulator T1 is allowed (07 §6), and everything is labelled
   SIMULATED. Selecting a slot (T2) always works. A frame write copies the slot header and the framebuffer length
   from the device's own readback (`rows.frame_value`) and writes + selects it in ONE PUT.
-- **Frame length ≠ head count.** The page paints the module's physical heads (the map, `expected_heads`); the
-  device's frame can be longer (the real SQHDK03 reports 60 entries for 30 pucks). Every per-head write places the
-  heads at [frame_offset, frame_offset + heads) in a full-length frame and writes every other entry OFF; readback,
-  diffs, the map and the slot mini-maps show only the physical heads. `frame_offset` is set on the Calibrate tab.
 - **Desired vs reported per head**: desired = the last readback overlaid with every row this page sent; reported =
   the latest readback. Both are rendered with `render.head_colors`.
 - **Index sweep**: one frame write per step, never faster than the per-device rate budget (the step is at least
@@ -33,7 +29,7 @@ import logging
 import secrets
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from conductor import render
@@ -228,32 +224,43 @@ class ModuleSession:
         floor = max(1.0, float(self.target.executor.policy.min_write_interval_s))
         return max(floor, float(requested or self.deps.settings.module_page.sweep_step_s))
 
-    @property
-    def frame_offset(self) -> int:
-        return int(self.entry.frame_offset or 0)
+    def frame_indices(self) -> list[int] | None:
+        mapping = self.entry.framebuffer_mapping
+        if mapping is None:
+            return None
+        if (
+            mapping.proven_on == self.address
+            and mapping.frame_length == self.caps.framebuffer_length
+            and len(mapping.indices) == self.n == (self.entry.expected_heads or self.n)
+            and len(set(self.caps.framebuffer_lengths.values())) == 1
+        ):
+            return list(mapping.indices)
+        return None
 
     def head_count(self) -> dict:
-        """expected = the registry's pucks, reported = the device's frame length (entries), map = heads drawn."""
         expected = self.entry.expected_heads or self.n
         reported = self.caps.framebuffer_length
-        offset = self.frame_offset
-        problem = self.caps.head_count_problem(expected, offset)
-        if problem is None and expected != self.n:
-            problem = f"this module should have {expected} heads but its map has {self.n}"
-        layout = self.layout() if problem is None else None
-        return {
-            "expected": expected,
-            "reported": reported,
-            "map": self.n,
-            "offset": offset,
-            "problem": problem,
-            "note": self.caps.frame_note(expected, offset) if problem is None else None,
-            "pattern": layout.describe() if layout is not None and layout.padded else None,
-        }
-
-    def layout(self) -> R.FrameLayout | None:
-        """Where this module's heads sit in the device's frame (None when per-head frames can't reach them)."""
-        return self.caps.frame_layout(self.n, self.frame_offset)
+        indices = self.frame_indices()
+        if indices is not None:
+            return {
+                "expected": expected,
+                "reported": reported,
+                "map": self.n,
+                "problem": None,
+                "mapped": True,
+                "controller_addresses": indices,
+            }
+        if self.entry.framebuffer_mapping is not None:
+            return {
+                "expected": expected,
+                "reported": reported,
+                "map": self.n,
+                "problem": "the saved controller-address mapping does not match this kit, frame length or module map",
+            }
+        problem = self.caps.head_count_problem(expected)
+        if problem is None and reported != self.n:
+            problem = f"the device reports {reported} heads but this module's map has {self.n}"
+        return {"expected": expected, "reported": reported, "map": self.n, "problem": problem}
 
     def t1_status(self) -> tuple[bool, str]:
         """(allowed, plain-English reason) for per-head frames written by this page (T1)."""
@@ -267,7 +274,12 @@ class ModuleSession:
         if self.entry.flags_for(self.target.address).t1_frames is True:  # proven on THIS kit
             return (
                 True,
-                "Bench Gate C passed: frames written by the Conductor (T1) are proven on this device.",
+                "Bench Gate C passed: frames written by the Conductor (T1) are proven on this device."
+                + (
+                    f" {self.n} physical heads are mapped into its {self.caps.framebuffer_length}-entry buffer."
+                    if self.frame_indices() is not None
+                    else ""
+                ),
             )
         return False, (
             "Painting is off until bench Gate C proves that frames written by the Conductor show up on this "
@@ -341,21 +353,36 @@ class ModuleSession:
     def _slot_value(self, slot: str) -> Any:
         return self._reported_state().get((R.FRAME_CLASS, slot))
 
-    def _slot_frame(self, slot: str) -> list[R.FrameEntry]:
-        """Every entry of `slot` as read back (the device's full frame)."""
+    def _slot_entries(self, slot: str) -> list[R.FrameEntry]:
         entries = R.frame_entries(self._slot_value(slot))
         if entries is None:
             raise ModuleError(f"There's no readback of {slot} yet. Tap Read on the Slots tab first.")
+        indices = self.frame_indices()
+        if indices is not None:
+            if len(entries) != self.caps.framebuffer_length:
+                raise ModuleError(f"{slot} no longer matches the calibrated controller frame.")
+            return [entries[i] for i in indices]
+        if len(entries) != self.n:
+            raise ModuleError(f"{slot} holds {len(entries)} heads but this module has {self.n}.")
         return entries
 
-    def _slot_entries(self, slot: str) -> list[R.FrameEntry]:
-        """The entries of `slot` that drive this module's heads, head 0 first."""
-        entries = self._slot_frame(slot)
-        offset = self.frame_offset
-        if len(entries) < offset + self.n:
-            where = f" from entry {offset}" if offset else ""
-            raise ModuleError(f"{slot} holds {len(entries)} heads but this module has {self.n}{where}.")
-        return entries[offset : offset + self.n]
+    def _controller_frame(self, frame: Sequence[R.FrameEntry]) -> list[R.FrameEntry]:
+        if len(frame) != self.n:
+            raise R.PayloadError(f"paint has {len(frame)} heads but this module has {self.n}")
+        indices = self.frame_indices()
+        if indices is None:
+            return list(frame)
+        result = [C.OFF] * self.caps.framebuffer_length
+        for i, address in enumerate(indices):
+            result[address] = frame[i]
+        return result
+
+    def _head_colors(self, state: Mapping[Key, Any]) -> list[dict]:
+        indices = self.frame_indices()
+        if indices is not None and state.get(("color-mode", None)) == "individual":
+            full = render.head_colors(state, self.caps.framebuffer_length, self.caps)
+            return [full[i] for i in indices]
+        return render.head_colors(state, self.n, self.caps)
 
     # ---- sending -----------------------------------------------------------------------------------------------
     async def _send(self, rows: Sequence[StateRow], label: str) -> dict:
@@ -418,25 +445,18 @@ class ModuleSession:
         select: bool = True,
         effects: Mapping[str, int] | None = None,
         extra: Sequence[StateRow] = (),
-        whole_frame: bool = False,
     ) -> dict:
         """T1: one frame into `slot` (header + length from the device's readback), selected in the same PUT
-        (plus `extra` rows, e.g. a mode's brightness — still one PUT). `frame` is one entry per physical head,
-        placed at the module's frame offset with every other entry OFF — or, with `whole_frame`, every entry of the
-        device's frame as given (an effect restart rewrites a slot's content as read)."""
+        (plus `extra` rows, e.g. a mode's brightness — still one PUT)."""
         self._check_can_write()
         self._require_t1()
         header = self._slot_value(slot)
         if header is None:
             raise ModuleError(f"There's no readback of {slot} yet, so its header can't be copied. Tap Read.")
-        layout = self.layout()
-        if layout is None:  # _require_t1 refuses this first; kept so a frame is never built without a layout
-            raise ModuleError(f"Per-head painting is off: {self.head_count()['problem']}.")
         try:
-            entries = list(frame) if whole_frame else layout.place(list(frame))
             value = R.frame_value(
                 header,
-                entries,
+                self._controller_frame(frame),
                 expected_length=self.caps.framebuffer_length,
                 effects=effects,
                 cct_range=self.caps.cct_range,
@@ -446,7 +466,7 @@ class ModuleSession:
                 rows += [*R.slot_select(slot), R.power(True), *extra]
         except R.PayloadError as e:
             raise ModuleError(str(e), 400) from None
-        self.paint = layout.physical(entries)
+        self.paint = list(frame)
         self.paint_slot = slot
         self.written_slots.add(slot)  # this page's own pattern: never recordable as "painted in the app"
         return await self._send(rows, label)
@@ -514,7 +534,7 @@ class ModuleSession:
                 lk = C.look_from_json(look)
                 C.check_look(lk, self.caps)
                 rows = R.full_state_vector(lk, cct_range=self.caps.cct_range)
-                label = f"whole module: {render.describe_look(rows, self.n, self.caps, self.frame_offset)}"
+                label = f"whole module: {render.describe_look(rows, self.n, self.caps)}"
             elif power is not None:
                 rows, label = [R.power(bool(power))], f"power {'on' if power else 'off'}"
             elif brightness is not None:
@@ -581,9 +601,17 @@ class ModuleSession:
         mode = modes.modes[mode_id]
         # This device, as it hangs (its own orientation and calibration), placed at the chosen position.
         entry = self.entry.model_copy(update={"module": position, "orientation": self.cal.orientation})
+        # Compose in physical-head space; _write_frame expands into the controller buffer exactly once.
+        compose_caps = self.caps
+        if self.frame_indices() is not None:
+            compose_caps = replace(
+                self.caps,
+                segment_hint=self.n,
+                framebuffer_lengths={s: self.n for s in self.caps.framebuffer_lengths},
+            )
         ctx = CompileContext(
             registry=[entry],
-            capabilities={self.device_id: self.caps},
+            capabilities={self.device_id: compose_caps},
             slot_readback={self.device_id: {s: self._slot_value(s) for s in self.caps.slots}},
             effects_enabled=self.effects_enabled(),
             recorded_hashes={},
@@ -624,12 +652,7 @@ class ModuleSession:
                 k: int(inner[k]) for k in ("motionEffect", "motionSpeed", "brightnessEffect") if k in inner
             }
             level = [r for r in target.rows if r.key == ("brightness", None)]
-            layout = self.layout()
-            compiled = R.frame_entries(target.slot_value) or []
-            try:  # the compiled frame is already placed at this module's offset: take its heads back out
-                frame = layout.physical(compiled) if layout is not None else compiled
-            except R.PayloadError as e:
-                raise ModuleError(str(e), 400) from None
+            frame = R.frame_entries(target.slot_value) or []
             notes.append(
                 f"Written into {scratch} (this page's scratch slot), not the show slot {target.slot}."
             )
@@ -848,9 +871,7 @@ class ModuleSession:
                 )
                 out["notes"] = ["T1 isn't proven here, so only a re-select was sent (no header rewrite)."]
                 return out
-            return await self._write_frame(
-                slot, self._slot_frame(slot), f"restart effect in {slot}", whole_frame=True
-            )
+            return await self._write_frame(slot, self._slot_entries(slot), f"restart effect in {slot}")
         if action != "start":
             raise ModuleError("action must be start or restart", 400)
         enabled = self.effects_enabled()
@@ -874,7 +895,7 @@ class ModuleSession:
         self._stop_sweep_for("Stopped: you started an effect.")
         desc = ", ".join(f"{k}={v}" for k, v in chosen.items()) or "header unchanged"
         return await self._write_frame(
-            slot, self._slot_frame(slot), f"start effect in {slot} ({desc})", effects=chosen, whole_frame=True
+            slot, self._slot_entries(slot), f"start effect in {slot} ({desc})", effects=chosen
         )
 
     def calibrate(
@@ -921,29 +942,6 @@ class ModuleSession:
         self.publish("calibration")
         return self.map
 
-    def set_frame_offset(self, offset: Any) -> dict:
-        """Save which framebuffer entry drives puck 0 (registry `frame_offset`) to the ops overlay. Nothing is sent
-        to the lights. Refused when the pucks wouldn't fit the device's frame from that entry."""
-        self._validate_lease()
-        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
-            raise ModuleError("The frame offset must be a whole number, 0 or more.", 400)
-        length = self.caps.framebuffer_length
-        if length is not None and offset + self.n > length:
-            raise ModuleError(
-                f"This device's frame holds {length} entries, so {self.n} pucks can start at entry "
-                f"{max(0, length - self.n)} at the most.",
-                400,
-            )
-        if self.deps.save_calibration is None:
-            raise ModuleError("The frame offset can't be saved here (no registry overlay).", 500)
-        try:
-            self.deps.save_calibration(self.device_id, {"frame_offset": offset})
-        except ConfigError as e:
-            raise ModuleError(str(e), 400) from None
-        self._stop_sweep_for("Stopped: the frame offset changed.")
-        self.publish("calibration")
-        return self.head_count()
-
     def set_hold(self, on: bool, name: str | None = None) -> dict:
         self._validate_lease()
         if on:
@@ -968,7 +966,7 @@ class ModuleSession:
     def look_name(self) -> str:
         if self.last_label:
             return self.last_label.removeprefix("card: ")
-        return render.describe_look(self.desired_state, self.n, self.caps, self.frame_offset)
+        return render.describe_look(self.desired_state, self.n, self.caps)
 
     def lock_json(self) -> dict:
         holder = self.deps.locks.holder(self.address)
@@ -1008,7 +1006,7 @@ class ModuleSession:
                     if recorded.get(slot)
                     else None,
                     "length": len(entries) if entries is not None else None,
-                    "heads": render.head_colors(state, self.n, self.caps, self.frame_offset),
+                    "heads": self._head_colors(state),
                     "active": mode == "individual" and selected == slot,
                     "effects": {k: inner.get(k) for k in R.EFFECT_FIELDS}
                     if isinstance(inner, Mapping)
@@ -1029,9 +1027,11 @@ class ModuleSession:
     def snapshot(self) -> dict:
         n = self.n
         reported = self._reported_state()
-        offset = self.frame_offset
-        desired_colors = render.head_colors(self.desired_state, n, self.caps, offset)
-        reported_colors = render.head_colors(reported, n, self.caps, offset)
+        desired_colors = self._head_colors(self.desired_state)
+        reported_colors = self._head_colors(reported)
+        mismatches = R.compare(
+            [StateRow(k[0], k[1], v) for k, v in self.desired_state.items()], self.reported_rows
+        )
         heads = [
             {
                 "index": i,
@@ -1065,7 +1065,6 @@ class ModuleSession:
                 "programs": caps.programs,
                 "slots": caps.slots,
                 "framebuffer_length": caps.framebuffer_length,
-                "frame_offset": offset,
                 "no_white_hint": caps.no_white_hint,
                 "individual": caps.individual,
             },
@@ -1078,11 +1077,27 @@ class ModuleSession:
             "flags": entry.flags_for(self.target.address).model_dump(),
             "heads": heads,
             "diff": [h["index"] for h in heads if not h["match"]],
-            "desired_look": render.describe_look(self.desired_state, n, caps, offset),
-            "reported_look": render.describe_look(reported, n, caps, offset)
-            if reported
-            else "no readback yet",
+            "desired_look": render.describe_look(self.desired_state, n, caps),
+            "reported_look": render.describe_look(reported, n, caps) if reported else "no readback yet",
             "reported_at": self.reported_at,
+            "reported_controls": {
+                "power": reported.get(("power", None)),
+                "brightness": reported.get(("brightness", None)),
+                "color_mode": reported.get(("color-mode", None)),
+                "preset": reported.get(("color-sequence", "preset")),
+                "speed": reported.get(("speed", "color-sequence")),
+                "slot": reported.get(("color-individual", "custom")),
+                "cct": reported.get(("color-temperature", None)),
+                "rgb": reported.get(("color-rgb", None)),
+            },
+            "preview": {
+                "desired": render.sequence_preview(self.desired_state),
+                "reported": render.sequence_preview(reported),
+            },
+            "settings_mismatches": [
+                f"{m.function_class}/{m.function_instance}" if m.function_instance else m.function_class
+                for m in mismatches
+            ],
             "read_error": self.last_read_error,
             "busy": self.in_flight > 0,
             "paint_slot": self.paint_slot,

@@ -8,11 +8,6 @@ steps 3–9. Rules every job follows:
   the per-device budget apart (`ctx.budget_s`; whole-strand looks ≥ 2 s apart). The executor enforces the budget
   too — the sleeps here keep the looks visible long enough to judge.
 - Frame writes copy the header and the frame length from the device's **own readback** of that slot.
-- **Frame length ≠ head count.** The real SQHDK03 reports a 60-entry framebuffer with 30 pucks attached (VWBD
-  workshop, Sep 27 2026). Synthetic frames (hue ramp, contrast patterns, rate ramp) are built for the module's
-  physical heads (registry `expected_heads`) and placed at its `frame_offset` in a full-length frame, every other
-  entry OFF; `hue_ramp` with `whole_frame` spreads the ramp over every entry instead, to show which entries the
-  pucks use. Gate C replays a slot as read, untouched.
 - Rows the device doesn't declare are never sent (the device's function list is the truth, 06 #1).
 - A job proposes DeviceFlags only for what it measured; each flag is applied later, and only after the person at
   the bench answers its confirming question "yes" (FLAG_QUESTIONS), and never for a simulated run.
@@ -40,7 +35,7 @@ LOOK_SPACING_S = 2.0  # whole-strand looks: long enough to see each one
 UNPLUGGED_SETTLE_S = 3.0  # wait before the GET in the unplugged test
 CALM_CCT = 2700
 CALM_BRIGHTNESS = 50
-DEFAULT_HEADS = 30  # a canopy module's pucks when the registry doesn't say
+PER_HEAD_LENGTHS = (30, 60)  # Gate A: a 30-entry (or fixed 60-entry) frame keeps the per-head path alive
 BEFORE_HOLD_S = 4.0  # Gate C: how long the BEFORE look holds before the replay, so it can be seen and filmed
 MAX_TRIALS = 100
 MAX_SPACING_S = 30.0  # latency trials: well inside the lock's 10-min idle timeout, and a run stays short
@@ -59,10 +54,6 @@ Q_UNPLUGGED = "Was the kit switched off at the wall (lights dark) the whole time
 Q_HUE_RAMP = (
     "Did every puck show a different colour, running through the rainbow along the strand? Take a photo."
 )
-Q_HUE_RAMP_WHOLE = (
-    "Take a photo. Which part of the rainbow do the pucks show? Red → yellow → green means they use the first "
-    "entries of the pattern; cyan → blue → magenta means the later ones."
-)
 Q_INDEX = "Is puck 1 (the red one you painted first) the puck nearest the controller?"
 Q_LATENCY = "Did you film every trial with the clock page next to the kit?"
 Q_STALE_STORED = "Did the strand switch to {slot} after the stale-stamped write?"
@@ -74,11 +65,21 @@ Q_HEAD_BOOT = "With strings 2 and 3 unplugged, did only string 1's pucks light w
 FLAG_QUESTIONS: dict[str, dict[str, str]] = {
     "gate_b": {"t2_select": Q_GATE_B},
     "gate_c": {"t1_frames": Q_GATE_C},
+    "gate_c_safe": {"t1_frames": Q_GATE_C},
     "gate_b_unplugged": {"readback_device_level": Q_UNPLUGGED},
 }
 
 # Bounds for numeric job options (inclusive), checked by coerce_params before a run starts.
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
+    "gate_c_safe": {"brightness": (1, 100), "duration_s": (4.0, 120.0), "before_duration_s": (4.0, 60.0)},
+    "effect_probe": {"code": (1, 255), "speed": (0, 100), "duration_s": (2.0, 20.0)},
+    "address_probe": {"start": (0, 255), "count": (1, 256), "brightness": (1, 100)},
+    "address_probe_safe": {
+        "start": (0, 255),
+        "count": (1, 256),
+        "brightness": (1, 100),
+        "duration_s": (4.0, 120.0),
+    },
     "latency_trials": {"n": (1, MAX_TRIALS), "spacing_s": (0.0, MAX_SPACING_S)},
     "rate_ramp": {"writes_per_step": (1, MAX_RAMP_WRITES_PER_STEP)},
     "head_count_boot": {"full_heads": (1, 90)},
@@ -121,7 +122,6 @@ class JobContext(BenchContext, Protocol):
     budget_s: float  # the per-device write budget (executor min_write_interval_s)
     t1_allowed: bool  # per-head frames may be written (simulator, or Gate C proven on this kit)
     expected_heads: int | None  # the registry's head count for this device (None = not set)
-    frame_offset: int  # the registry's frame_offset: the framebuffer entry that drives puck 0
     artifacts: dict[str, Any]  # big outputs saved with the result (Gate A's scrubbed profile)
 
     async def write(
@@ -276,10 +276,8 @@ def colour_name(e: R.FrameEntry) -> str:
     return "other"
 
 
-def hue_ramp_entries(length: int, step_deg: float | None = None) -> list[R.FrameEntry]:
-    """Hue = step·i at full saturation and brightness, one entry per head. The default step spreads the ramp once
-    round the colour wheel over `length` (12° for 30 heads)."""
-    step_deg = 360.0 / max(length, 1) if step_deg is None else step_deg
+def hue_ramp_entries(length: int, step_deg: float = 12.0) -> list[R.FrameEntry]:
+    """Hue = step·i at full saturation and brightness, one entry per head."""
     out = []
     for i in range(length):
         r, g, b = colorsys.hsv_to_rgb(((step_deg * i) % 360) / 360.0, 1.0, 1.0)
@@ -303,34 +301,14 @@ def slot_header(value: Any) -> dict[str, Any] | None:
     return out
 
 
-def contrast_entries(avoid: list[R.FrameEntry], layout: R.FrameLayout | None = None) -> list[R.FrameEntry]:
-    """A frame of the same length that visibly differs from `avoid` ON THE PUCKS: the hue ramp over the physical
-    heads (placed at the layout's offset, OFF elsewhere), reversed if that's what the pucks show now."""
-    layout = layout or R.FrameLayout(len(avoid), len(avoid))
-    shown = layout.physical(avoid)
-    ramp = hue_ramp_entries(layout.heads)
-    for candidate in (ramp, ramp[::-1], [R.OFF_ENTRY] * layout.heads):
-        if candidate != shown:
-            return layout.place(candidate)
-    return layout.place(ramp)
-
-
-def frame_layout(ctx: JobContext, length: int) -> R.FrameLayout:
-    """Where this module's pucks sit in a `length`-entry frame (registry expected_heads + frame_offset).
-
-    When the registry sets no head count, every entry is a head. When the frame is too short for the pucks (a
-    strand that lost pucks, or a wrong offset), the frame is used as-is from entry 0 and a step says so — these
-    are bench diagnostics, and the full frame is then the most useful thing to see."""
-    heads = ctx.expected_heads or length
-    offset = int(getattr(ctx, "frame_offset", 0) or 0)
-    try:
-        return R.FrameLayout(length, heads, offset)
-    except R.PayloadError:
-        ctx.step(
-            f"The frame holds {length} entries, too few for this module's {heads} pucks from entry {offset}: "
-            "using every entry as a head."
-        )
-        return R.FrameLayout(length, length, 0)
+def contrast_entries(avoid: list[R.FrameEntry]) -> list[R.FrameEntry]:
+    """A frame of the same length that visibly differs from `avoid`: the hue ramp, reversed if that's `avoid`."""
+    n = len(avoid)
+    ramp = hue_ramp_entries(n)
+    for candidate in (ramp, ramp[::-1], [R.FrameEntry(0, 0, 0, 0, 0, 0)] * n):
+        if candidate != avoid:
+            return candidate
+    return ramp
 
 
 def contrast_look(caps: Capabilities) -> tuple[str, R.Look] | None:
@@ -411,28 +389,15 @@ async def gate_a(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             obs,
         )
     n = caps.framebuffer_length
-    # The frame length is the controller's framebuffer, which may be longer than the strand (the real SQHDK03
-    # reports 60 entries with 30 pucks): it must only be long enough for this module's pucks from its offset.
-    expected = ctx.expected_heads or DEFAULT_HEADS
-    offset = int(getattr(ctx, "frame_offset", 0) or 0)
-    problem = caps.head_count_problem(expected, offset)
-    note = caps.frame_note(expected, offset)
-    obs.update({"expected_heads": expected, "frame_offset": offset, "head_count_problem": problem})
-    if note:
-        obs["frame_note"] = note
-        obs["pucks_use_entries"] = [offset, offset + expected - 1]
-    if len(caps.slots) == 3 and problem is None and len(set(lengths.values())) == 1:
-        extra = f" {note}" if note else ""
+    if len(caps.slots) == 3 and n in PER_HEAD_LENGTHS and len(set(lengths.values())) == 1:
         return JobResult(
             Verdict.PASS,
-            f"Per-head path is alive: 3 slots with a {n}-entry frame for this module's {expected} pucks.{extra} "
-            "Download the profile for the simulator.",
+            f"Per-head path is alive: 3 slots with a {n}-entry frame. Download the profile for the simulator.",
             obs,
         )
-    why = f"; {problem}" if problem else ""
     return JobResult(
         Verdict.NEEDS_EYES,
-        f"Per-head mode exists, but the shape is unexpected ({len(caps.slots)} slots, frame length {n}{why}). "
+        f"Per-head mode exists, but the shape is unexpected ({len(caps.slots)} slots, frame length {n}). "
         "Send the anonymized JSON and the profile to the build session.",
         obs,
     )
@@ -449,12 +414,8 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     ctx.step(f"Reading {slot}. Nothing is written.")
     rr = await _read_ok(ctx, f"for {slot}")
     value, entries = _slot_entries(rr, slot)
-    # The pucks' entries only: on a 60-entry frame with 30 pucks, entries 30–59 drive nothing, so "the last puck"
-    # is entry offset + 29, not entry 59.
-    layout = frame_layout(ctx, len(entries))
-    pucks = layout.physical(entries)
-    first = pucks[:4]
-    last = pucks[-4:]
+    first = entries[:4]
+    last = entries[-4:]
     first_names = [colour_name(e) for e in first]
     last_names = [colour_name(e) for e in last]
     header = slot_header(value)
@@ -468,7 +429,6 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         "header": header,
         "slot_headers": headers,
         "length": len(entries),
-        "pucks_use_entries": [layout.offset, layout.end - 1],
         "first_4": [_entry_json(e) for e in first],
         "last_4": [_entry_json(e) for e in last],
         "first_4_colours": first_names,
@@ -491,17 +451,6 @@ async def index_order(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             [Q_INDEX],
         )
     obs["order"] = "not found"
-    names = [colour_name(e) for e in entries]
-    found = next((k for k in range(len(names) - 3) if names[k : k + 4] == PATTERN), None)
-    if found is not None:
-        obs["pattern_at_entry"] = found
-        return JobResult(
-            Verdict.NEEDS_EYES,
-            f"The red/green/blue/white pattern starts at frame entry {found}, but this module's pucks are set to "
-            f"use entries {layout.offset}–{layout.end - 1}. If puck 1 is the red one, set the frame offset to "
-            f"{found} on the module page (Calibrate tab) and run this again.",
-            obs,
-        )
     return JobResult(
         Verdict.NEEDS_EYES,
         "The red/green/blue/white pattern isn't at either end of the frame. In the Hubspace app, paint puck 1 "
@@ -636,6 +585,7 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     - the human is asked whether the lights changed from the BEFORE look to exactly the source's pattern.
     """
     source, target = str(params["source"]), str(params["target"])
+    before_hold = float(params.get("before_duration_s", BEFORE_HOLD_S))
     if source == target:
         return JobResult(Verdict.ERROR, "Pick two different slots: the source is copied INTO the target.")
     info = await ctx.profile()
@@ -691,14 +641,14 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     obs["before_look"] = before_name
     ctx.step(
         f"BEFORE: switching the lights to {before_name} (not {source}'s pattern). Watch the strand: it holds "
-        f"for about {BEFORE_HOLD_S:g} s, then {target} is rewritten with {source}'s pattern and selected."
+        f"for about {before_hold:g} s, then {target} is rewritten with {source}'s pattern and selected."
     )
     res = await ctx.write(_only_declared(ctx, info, before_rows), label=f"gate_c: BEFORE look {before_name}")
     obs["before_write"] = write_facts(res)
     if problem := _write_problem(res, f"The BEFORE look ({before_name})"):
         problem.observations.update(obs)
         return problem
-    await ctx.sleep(max(BEFORE_HOLD_S, ctx.budget_s))
+    await ctx.sleep(max(before_hold, ctx.budget_s))
     rows = _only_declared(
         ctx, info, [R.slot_write(target, copy.deepcopy(value)), *R.slot_select(target), R.power(True)]
     )
@@ -729,65 +679,413 @@ async def gate_c(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     )
 
 
+async def _restore_touched(ctx, original, touched, label):
+    # A frame write can reselect individual mode. Restore storage, then its
+    # selector, then the original active look in separate verified commands.
+    frames = [StateRow(*k, copy.deepcopy(original[k])) for k in touched if k[0] == R.FRAME_CLASS]
+    if frames:
+        await ctx.write(frames, label=label + ": restore fresh original slot")
+        await ctx.sleep(ctx.budget_s)
+    if ("color-individual", "custom") in touched:
+        await ctx.write(
+            R.slot_select(original[("color-individual", "custom")]), label=label + ": restore slot selection"
+        )
+        await ctx.sleep(ctx.budget_s)
+    controls = [
+        StateRow(*k, copy.deepcopy(original[k]))
+        for k in sorted(touched, key=lambda k: (k[0] == "color-mode", k[0]))
+        if k[0] not in (R.FRAME_CLASS, "color-individual")
+    ]
+    return await ctx.write(controls, label=label + ": restore previous active look")
+
+
+async def gate_c_safe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Bounded Gate C with an exact, freshly captured target-slot restoration.
+
+    Custom 3 may be the read-only source, but is never the write target. The
+    ordinary Gate C proof and human confirmation still apply independently.
+    """
+    source, target = str(params["source"]), str(params["target"])
+    if target not in ("custom-1", "custom-2") or source == target:
+        return JobResult(Verdict.ERROR, "Use distinct slots; the temporary target must be Custom 1 or 2.")
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, source, target)
+    before = await _read_ok(ctx, "before the bounded replay")
+    original = {r.key: copy.deepcopy(r.value) for r in before.rows}
+    source_value, _ = _slot_entries(before, source)
+    target_value, _ = _slot_entries(before, target)
+    if R.slot_hash(source_value) == R.slot_hash(target_value):
+        return JobResult(Verdict.ERROR, "Source and target already match; a replay would prove nothing.")
+    if ("brightness", None) not in original or ("brightness", None) not in _declared(info):
+        return JobResult(Verdict.ERROR, "A current brightness readback is required. Nothing was sent.")
+    ctx.artifacts["gate_c_safe_before"] = {
+        "slot": target,
+        "value": copy.deepcopy(target_value),
+        "controls": [r.to_json() for r in before.rows if r.function_class != R.FRAME_CLASS],
+    }
+    touched = set()
+
+    class TrackedContext:
+        def __getattr__(self, name):
+            return getattr(ctx, name)
+
+        async def write(self, rows, **kw):
+            if any(r.key not in original for r in rows):
+                raise JobError("A setting has no original readback to restore.")
+            touched.update(r.key for r in rows)
+            return await ctx.write(rows, **kw)
+
+    tracked = TrackedContext()
+    result = None
+    restored = None
+    try:
+        level = await tracked.write(
+            [R.brightness(int(params["brightness"]))], label="gate_c_safe: observation brightness"
+        )
+        result = _write_problem(level, "Setting the observation brightness")
+        if result is None:
+            await ctx.sleep(ctx.budget_s)
+            result = await gate_c(tracked, params)
+            if result.verdict is Verdict.NEEDS_EYES:
+                ctx.step(
+                    f"Observe the replay for {float(params['duration_s']):g} seconds; then the original pattern returns."
+                )
+                await ctx.sleep(float(params["duration_s"]))
+    finally:
+        if touched:
+            restored = await _restore_touched(ctx, original, touched, "gate_c_safe")
+    if restored is not None:
+        if problem := _write_problem(restored, "Restoring the original slot and controls"):
+            return problem
+        after = await _read_ok(ctx, "after restoring the bounded replay")
+        exact = all(after.get(*k) == original[k] for k in touched)
+        untouched_slots = all(after.get(R.FRAME_CLASS, s) == before.get(R.FRAME_CLASS, s) for s in caps.slots)
+        if not exact or not untouched_slots:
+            return JobResult(
+                Verdict.FAIL,
+                "The bounded replay ended, but exact restoration was not confirmed.",
+                {"restored": exact, "all_slots_unchanged": untouched_slots},
+            )
+        result.observations.update(
+            {
+                "restore": write_facts(restored),
+                "all_slots_unchanged": True,
+                "custom_3_written": False,
+                "duration_s": float(params["duration_s"]),
+            }
+        )
+        result.summary += " The temporary target and previous controls have been restored exactly."
+    return result
+
+
 # ---- hue ramp ----------------------------------------------------------------------------------------------------
 async def hue_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
-    """The rainbow for the index map. Default: hue = 360°/heads · i over the module's physical heads (12° · i for
-    30), placed at its frame offset with every other entry OFF. `whole_frame`: hue = 360°/n · i over all n entries
-    of the device's frame, so a photo shows which part of the frame the pucks actually use."""
     slot = str(params["slot"])
-    whole = bool(params.get("whole_frame"))
     info = await ctx.profile()
     caps = _caps(info)
     _check_slot(caps, slot)
     rr = await _read_ok(ctx, f"for {slot}")
     header, current = _slot_entries(rr, slot)
     length = len(current)
-    layout = frame_layout(ctx, length)
-    if whole:
-        step = 360.0 / length
-        entries = hue_ramp_entries(length)
-        ctx.step(f"Built a hue ramp over all {length} entries of the frame (hue = {step:g}° × entry)")
-    else:
-        step = 360.0 / layout.heads
-        entries = layout.place(hue_ramp_entries(layout.heads))
-        where = (
-            f" in entries {layout.offset}–{layout.end - 1}, the other entries off" if layout.padded else ""
-        )
-        ctx.step(f"Built a hue ramp over the {layout.heads} pucks (hue = {step:g}° × puck){where}")
+    entries = hue_ramp_entries(length)
     value = R.frame_value(header, entries, expected_length=length, cct_range=caps.cct_range)
+    ctx.step(f"Built a {length}-entry hue ramp (hue = 12° × index)")
     rows = _only_declared(ctx, info, [R.slot_write(slot, value), *R.slot_select(slot), R.power(True)])
-    res = await ctx.write(rows, label=f"hue_ramp: {slot}" + (" (whole frame)" if whole else ""))
+    res = await ctx.write(rows, label=f"hue_ramp: {slot}")
     obs: dict[str, Any] = {
         "slot": slot,
         "length": length,
-        "heads": layout.heads,
-        "frame_offset": layout.offset,
-        "whole_frame": whole,
-        "hue_step_deg": round(step, 3),
-        "pucks_use_entries": [layout.offset, layout.end - 1],
         "hash": R.slot_hash(value),
-        "first_4": [_entry_json(e) for e in entries[layout.offset : layout.offset + 4]],
+        "first_4": [_entry_json(e) for e in entries[:4]],
         "write": write_facts(res),
     }
     if problem := _write_problem(res, "The hue ramp"):
         problem.observations.update(obs)
         return problem
-    if whole:
-        half = length // 2
-        return JobResult(
-            Verdict.NEEDS_EYES,
-            f"A {length}-entry hue ramp is in {slot} and selected (entry i at {step:g}° × i). Photograph the "
-            f"strand: pucks running red → yellow → green use entries 0–{half - 1}; cyan → blue → magenta, "
-            f"entries {half}–{length - 1}. Then set the frame offset on the module page if it isn't "
-            f"{layout.offset}.",
-            obs,
-            [Q_HUE_RAMP_WHOLE],
-        )
     return JobResult(
         Verdict.NEEDS_EYES,
         f"The hue ramp is in {slot} and selected. Photograph the whole strand for the index map.",
         obs,
         [Q_HUE_RAMP],
+    )
+
+
+# ---- address probe ----------------------------------------------------------------------------------------------
+async def address_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Identify framebuffer addresses without assuming one entry equals one physical head.
+
+    This diagnostic retains the controller's full frame length. It does not change the module map or
+    promote a mapping flag; the observer must identify which physical heads respond.
+    """
+    if not ctx.t1_allowed:
+        return JobResult(
+            Verdict.ERROR, "Run and physically confirm Gate C on this kit before probing addresses."
+        )
+    slot = str(params["slot"])
+    start, count, brightness = (int(params[k]) for k in ("start", "count", "brightness"))
+    color = str(params["color"]).lower()
+    pattern = str(params.get("pattern", "range"))
+    colors = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255)}
+    if color not in colors or not 1 <= brightness <= 100 or pattern not in ("range", "markers"):
+        return JobResult(Verdict.ERROR, "Use red, green or blue and brightness 1–100. Nothing was sent.")
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, slot)
+    rr = await _read_ok(ctx, "before the address probe")
+    header, current = _slot_entries(rr, slot)
+    length = len(current)
+    if start < 0 or count < 1 or start + count > length:
+        return JobResult(Verdict.ERROR, f"Select addresses within 0–{length - 1}. Nothing was sent.")
+    if caps.framebuffer_length != length or len(set(caps.framebuffer_lengths.values())) > 1:
+        return JobResult(Verdict.ERROR, "The slot lengths disagree. Nothing was sent.")
+    effects = R.slot_effects(header) or {}
+    if any(effects.get(k) != 0 for k in ("motionEffect", "brightnessEffect")):
+        return JobResult(
+            Verdict.ERROR, "Choose a static slot with both effect codes zero before probing addresses."
+        )
+    before = contrast_look(caps)
+    if before is None:
+        return JobResult(
+            Verdict.ERROR, "No declared whole-strand look is available for a clean slot reselect."
+        )
+    entries = [R.FrameEntry(0, 0, 0, 0, 0, 0)] * length
+    entries[start : start + count] = [R.FrameEntry(*colors[color], 0, 100, 0)] * count
+    if pattern == "markers":
+        if length != 60 or ctx.expected_heads != 30:
+            return JobResult(
+                Verdict.ERROR,
+                "The three-marker test requires a 60-entry controller and the declared 30-head bench strand.",
+            )
+        entries = [R.FrameEntry(0, 0, 0, 0, 0, 0)] * length
+        for i, rgb in [(0, colors["red"]), (1, colors["green"]), (29, colors["blue"])]:
+            entries[i] = R.FrameEntry(*rgb, 0, 100, 0)
+    value = R.frame_value(header, entries, expected_length=length, cct_range=caps.cct_range)
+    requested = [R.slot_write(slot, value), *R.slot_select(slot), R.power(True), R.brightness(brightness)]
+    if not {row.key for row in requested}.issubset(_declared(info)):
+        return JobResult(
+            Verdict.ERROR, "The device does not declare every required probe control. Nothing was sent."
+        )
+    # Saved with the run so the previous slot can be recovered after calibration.
+    ctx.artifacts["address_probe_before"] = {"slot": slot, "value": copy.deepcopy(header)}
+    obs = {
+        "slot": slot,
+        "length": length,
+        "start": start,
+        "count": count,
+        "color": color,
+        "brightness": brightness,
+        "previous_hash": R.slot_hash(header),
+        "hash": R.slot_hash(value),
+        "pattern": pattern,
+    }
+    if pattern == "markers":
+        obs["markers"] = {0: "red", 1: "green", 29: "blue"}
+    ctx.step("Saved the slot; changing to a whole-strand look before reselecting the probe", **obs)
+    res = await ctx.write(
+        _only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range)),
+        label="address_probe: before look",
+    )
+    if problem := _write_problem(res, "The before look"):
+        return problem
+    await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+    probe_label = (
+        "0 red, 1 green, 29 blue" if pattern == "markers" else f"{start}–{start + count - 1} {color}"
+    )
+    res = await ctx.write(requested, label=f"address_probe: {probe_label}")
+    obs["write"] = write_facts(res)
+    if problem := _write_problem(res, "The address probe"):
+        problem.observations.update(obs)
+        return problem
+    return JobResult(
+        Verdict.NEEDS_EYES,
+        f"Controller addresses lit: {probe_label}; all other entries are off. "
+        "The original slot is saved with this run. No physical mapping has been assumed.",
+        obs,
+        ["How many physical heads lit, and where are they when counted from the controller?"],
+    )
+
+
+async def address_probe_safe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """A held address probe with exact restoration; it never certifies a map."""
+    if str(params["slot"]) not in ("custom-1", "custom-2"):
+        return JobResult(
+            Verdict.ERROR, "Use Custom 1 or 2 for temporary address tests; Custom 3 is protected."
+        )
+    before = await _read_ok(ctx, "before the bounded address probe")
+    original = {r.key: copy.deepcopy(r.value) for r in before.rows}
+    touched = set()
+
+    class TrackedContext:
+        def __getattr__(self, name):
+            return getattr(ctx, name)
+
+        async def write(self, rows, **kw):
+            if any(r.key not in original for r in rows):
+                raise JobError("A setting has no original readback to restore.")
+            touched.update(r.key for r in rows)
+            return await ctx.write(rows, **kw)
+
+    result = None
+    restored = None
+    try:
+        result = await address_probe(TrackedContext(), params)
+        if result.verdict is Verdict.NEEDS_EYES:
+            detail = (
+                "markers 0 red, 1 green, 29 blue"
+                if params.get("pattern") == "markers"
+                else f"addresses {params['start']} through {params['start'] + params['count'] - 1}"
+            )
+            ctx.step(f"Observe {detail} for {params['duration_s']:g} seconds.")
+            await ctx.sleep(float(params["duration_s"]))
+    finally:
+        if touched:
+            restored = await _restore_touched(ctx, original, touched, "address_probe_safe")
+    if restored is not None:
+        if problem := _write_problem(restored, "Restoring the address probe"):
+            return problem
+        after = await _read_ok(ctx, "after restoring the address probe")
+        exact = all(after.get(*k) == v for k, v in original.items() if k in touched or k[0] == R.FRAME_CLASS)
+        if not exact:
+            return JobResult(
+                Verdict.FAIL, "The address probe ended, but exact restoration was not confirmed."
+            )
+        result.observations.update(
+            {"restore": write_facts(restored), "all_slots_unchanged": True, "custom_3_written": False}
+        )
+        result.summary += " Original slot and controls restored exactly. No map was saved."
+    return result
+
+
+# ---- timed custom-effect commissioning -------------------------------------------------------------------------
+async def effect_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Explore one explicitly selected code, without enabling it for ordinary controls.
+
+    The candidate's meaning is unknown until observed. A static rainbow first proves the frame; only one
+    effect field is then changed. The original slot header and entries are restored after the bounded test.
+    """
+    if not ctx.t1_allowed:
+        return JobResult(Verdict.ERROR, "Physically confirm Gate C before testing custom effects.")
+    slot, field = str(params["slot"]), str(params["field"])
+    pattern = str(params.get("pattern", "rainbow"))
+    code, speed, duration = int(params["code"]), int(params["speed"]), float(params["duration_s"])
+    if (
+        pattern not in ("rainbow", "blocks")
+        or field not in ("motionEffect", "brightnessEffect")
+        or not 1 <= code <= 255
+        or not 0 <= speed <= 100
+        or not math.isfinite(duration)
+        or not 2 <= duration <= 20
+    ):
+        return JobResult(
+            Verdict.ERROR, "Choose one effect field, code 1–255, speed 0–100 and duration 2–20 s."
+        )
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, slot)
+    rr = await _read_ok(ctx, "before the effect test")
+    original, entries = _slot_entries(rr, slot)
+    if len(entries) != caps.framebuffer_length or len(set(caps.framebuffer_lengths.values())) > 1:
+        return JobResult(Verdict.ERROR, "Slot lengths disagree; no effect test was sent.")
+    before = contrast_look(caps)
+    if before is None:
+        return JobResult(Verdict.ERROR, "No whole-strand look is available for a clean slot reselect.")
+    test_entries = hue_ramp_entries(len(entries))
+    if pattern == "blocks":
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+        test_entries = [
+            R.FrameEntry(*colors[(i // 10) % 3]) if i % 10 < 3 else R.FrameEntry(0, 0, 0, 0, 0, 0)
+            for i in range(len(entries))
+        ]
+    static = R.frame_value(
+        original,
+        test_entries,
+        expected_length=len(entries),
+        effects={"motionEffect": 0, "brightnessEffect": 0},
+        cct_range=caps.cct_range,
+    )
+    candidate = R.frame_value(
+        static,
+        R.frame_entries(static),
+        expected_length=len(entries),
+        effects={field: code, "motionSpeed" if field == "motionEffect" else "brightnessSpeed": speed},
+        cct_range=caps.cct_range,
+    )
+
+    def slot_rows(value):
+        return [R.slot_write(slot, value), *R.slot_select(slot), R.power(True), R.brightness(30)]
+
+    if not {r.key for r in slot_rows(candidate)}.issubset(_declared(info)):
+        return JobResult(Verdict.ERROR, "The device does not declare all required effect controls.")
+    ctx.artifacts["effect_probe_before"] = {"slot": slot, "value": copy.deepcopy(original)}
+    obs = {
+        "slot": slot,
+        "field": field,
+        "code": code,
+        "speed": speed,
+        "duration_s": duration,
+        "length": len(entries),
+        "pattern": pattern,
+        "original_hash": R.slot_hash(original),
+        "automatically_enabled": False,
+        "expected_effects": R.slot_effects(candidate),
+        "reselected_from_whole_strand": True,
+    }
+    result = None
+    try:
+        res = await ctx.write(
+            _only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range)),
+            label="effect_probe: before look",
+        )
+        result = _write_problem(res, "The before look")
+        if result is None:
+            await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+            res = await ctx.write(slot_rows(static), label=f"effect_probe: static {pattern}")
+            result = _write_problem(res, "The static pattern")
+        if result is None:
+            await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+            # Some controllers may reload effect headers only when entering individual mode.
+            # Keep that behavior separate from whether rewriting an already active slot works.
+            res = await ctx.write(
+                _only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range)),
+                label="effect_probe: leave slot before candidate",
+            )
+            result = _write_problem(res, "Leaving the static slot")
+        if result is None:
+            await ctx.sleep(max(LOOK_SPACING_S, ctx.budget_s))
+            res = await ctx.write(slot_rows(candidate), label=f"effect_probe: candidate {field} {code}")
+            obs["write"] = write_facts(res)
+            obs["reported_effects"] = (
+                R.slot_effects(res.readback.get(R.FRAME_CLASS, slot)) if res.readback else None
+            )
+            result = _write_problem(res, "The candidate effect")
+            ctx.step(f"Observe candidate {field} {code} for {duration:g} seconds; behavior is unverified.")
+            # A cloud mismatch can still physically animate, so restoration happens regardless.
+            await ctx.sleep(duration)
+    finally:
+        restore_rows = [R.slot_write(slot, copy.deepcopy(original)), *R.slot_select(slot), R.power(True)]
+        if caps.brightness_range:
+            level = rr.get("brightness")
+            if isinstance(level, int) and 1 <= level <= 100:
+                restore_rows.append(R.brightness(level))
+        restored = await ctx.write(restore_rows, label="effect_probe: restore original slot and header")
+        obs["restore"] = write_facts(restored)
+        obs["restore_effects"] = (
+            R.slot_effects(restored.readback.get(R.FRAME_CLASS, slot)) if restored.readback else None
+        )
+    if problem := _write_problem(restored, "Restoring the original pattern"):
+        problem.observations.update(obs)
+        return problem
+    if result is not None:
+        result.observations.update(obs)
+        result.ask_human = ["What changed during the timed effect test, if anything?"]
+        return result
+    return JobResult(
+        Verdict.NEEDS_EYES,
+        f"Tested candidate {field} {code} at speed {speed}; original slot restored. "
+        "This code is not automatically enabled or assigned a behavior name.",
+        obs,
+        ["What did the colors do during the timed test: travel, pulse, flash, or stay still?"],
     )
 
 
@@ -836,10 +1134,9 @@ async def latency_trials(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     elif ctx.t1_allowed:
         into = b if showing != b else a
         other = a if into == b else b
-        avoid = entries_a if other == a else entries_b
         frame = R.frame_value(
             rr.get(R.FRAME_CLASS, into),
-            contrast_entries(avoid, frame_layout(ctx, len(avoid))),
+            contrast_entries(entries_a if other == a else entries_b),
             expected_length=len(entries_a),
             cct_range=caps.cct_range,
         )
@@ -1163,10 +1460,7 @@ async def active_slot_rewrite(ctx: JobContext, params: dict[str, Any]) -> JobRes
     _check_slot(caps, slot)
     value, entries = _slot_entries(rr, slot)
     frame = R.frame_value(
-        value,
-        contrast_entries(entries, frame_layout(ctx, len(entries))),
-        expected_length=len(entries),
-        cct_range=caps.cct_range,
+        value, contrast_entries(entries), expected_length=len(entries), cct_range=caps.cct_range
     )
     obs: dict[str, Any] = {
         "slot": slot,
@@ -1204,13 +1498,11 @@ async def active_slot_rewrite(ctx: JobContext, params: dict[str, Any]) -> JobRes
     )
 
 
-def _ramp_entries(layout: R.FrameLayout, i: int) -> list[R.FrameEntry]:
-    """Write i's frame: the hue ramp over the pucks rotated by i heads (placed at the layout's offset, OFF
-    elsewhere), so consecutive writes always differ on the pucks."""
-    heads = layout.heads
-    ramp = hue_ramp_entries(heads)
-    k = (i + 1) % max(heads, 1) or 1
-    return layout.place(ramp[k:] + ramp[:k])
+def _ramp_entries(length: int, i: int) -> list[R.FrameEntry]:
+    """Write i's frame: the hue ramp rotated by i heads, so consecutive writes always differ."""
+    ramp = hue_ramp_entries(length)
+    k = (i + 1) % max(length, 1) or 1
+    return ramp[k:] + ramp[:k]
 
 
 async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
@@ -1234,7 +1526,6 @@ async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     rr = await _read_ok(ctx, f"for {slot}")
     header, current = _slot_entries(rr, slot)
     length = len(current)
-    layout = frame_layout(ctx, length)
     spacings = [max(s, ctx.budget_s, RAMP_MIN_SPACING_S) for s in RAMP_SPACINGS_S]
     ctx.step(
         f"{per_step} frame writes into {slot} at each spacing ({', '.join(f'{s:g} s' for s in spacings)}), each "
@@ -1252,7 +1543,7 @@ async def rate_ramp(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         for _ in range(per_step):
             await _space(ctx, last_sent, spacing)
             value = R.frame_value(
-                header, _ramp_entries(layout, n), expected_length=length, cct_range=caps.cct_range
+                header, _ramp_entries(length, n), expected_length=length, cct_range=caps.cct_range
             )
             sent_hash = R.slot_hash(value)
             res = await ctx.write(
@@ -1376,9 +1667,7 @@ async def head_count_boot(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     if info.raw is not None:
         ctx.artifacts["profile_boot_raw"] = copy.deepcopy(info.raw)
     counts = [caps.segment_hint, *profile_lengths.values(), *readback_lengths.values()]
-    # A controller that reports its capacity (the real SQHDK03: 60 entries for a 30-puck kit) still reports it with
-    # strings unplugged; only a count BELOW the full kit's pucks shows the cloud noticed the missing pucks.
-    reflects = any(c is not None and c < full for c in counts)
+    reflects = any(c is not None and c != full for c in counts)
     obs["profile_reflects_detected_count"] = reflects
     ctx.step(
         "Profile read",
@@ -1399,11 +1688,9 @@ async def head_count_boot(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             "count from the API."
         )
     else:
-        seen = sorted({c for c in counts if c is not None})
         summary = (
-            f"The cloud profile did NOT change: segment hint {caps.segment_hint} and frame lengths "
-            f"{', '.join(map(str, seen)) or 'none'} with strings 2–3 unplugged (full kit = {full} pucks), never "
-            "fewer than the full kit. The 12-puck fault can only be caught visually (07 §6)."
+            f"The cloud profile did NOT change: segment hint {caps.segment_hint} and every frame length is still "
+            f"{full} with strings 2–3 unplugged. The 12-puck fault can only be caught visually (07 §6)."
         )
     return JobResult(Verdict.NEEDS_EYES, summary + sim, obs, [Q_HEAD_BOOT])
 
@@ -1418,8 +1705,7 @@ JOBS: dict[str, Job] = {
                 "Gate A — read-only profile dump",
                 "Reads what the kit says it can do: slots, frame length, colour modes, white range, presets.",
                 writes=False,
-                look_for="Nothing changes on the lights. Pass = 3 slots whose saved patterns have room for the "
-                "module's 30 pucks (30 entries, or 60 on the real kit — the controller reports its capacity).",
+                look_for="Nothing changes on the lights. Pass = 3 slots with a 30-entry frame.",
             ),
             gate_a,
         ),
@@ -1472,18 +1758,81 @@ JOBS: dict[str, Job] = {
         ),
         Job(
             JobSpec(
+                "gate_c_safe",
+                "Gate C — bounded replay with exact restoration",
+                "Replays a source into Custom 1 or 2, holds briefly for observation, then restores its fresh original value and previous controls.",
+                writes=True,
+                look_for="Observe the BEFORE look and replay. Original patterns return automatically; Custom 3 is never written.",
+                params={
+                    "source": "custom-3",
+                    "target": "custom-1",
+                    "brightness": 30,
+                    "duration_s": 8.0,
+                    "before_duration_s": 4.0,
+                },
+            ),
+            gate_c_safe,
+        ),
+        Job(
+            JobSpec(
                 "hue_ramp",
                 "Hue ramp — rainbow for the index map",
-                "Writes a rainbow (each puck a different hue, 12° apart on 30 pucks) into slot 3 and selects it. "
-                "Tick whole_frame to spread it over every entry of the saved pattern instead (60 on the real kit), "
-                "to see which entries the pucks use.",
+                "Writes a rainbow (each puck a different hue) into slot 3 and selects it.",
                 writes=True,
-                look_for="Every puck a different colour, red at one end through the rainbow. Photograph it. With "
-                "whole_frame the pucks show only part of the rainbow: red to green = the first half of the "
-                "pattern, cyan to magenta = the second half.",
-                params={"slot": "custom-3", "whole_frame": False},
+                look_for="Every puck a different colour, red at one end through the rainbow. Photograph it.",
+                params={"slot": "custom-3"},
             ),
             hue_ramp,
+        ),
+        Job(
+            JobSpec(
+                "address_probe",
+                "Address probe — locate individual lights",
+                "After Gate C, lights one address or a consecutive range in a saved slot; all other entries are off.",
+                writes=True,
+                look_for="After a brief whole-strand look, count which physical heads light from the controller end. "
+                "Addresses start at 0. The prior slot pattern is saved with the run; the probe stays visible.",
+                params={"slot": "custom-3", "start": 0, "count": 1, "color": "red", "brightness": 40},
+            ),
+            address_probe,
+        ),
+        Job(
+            JobSpec(
+                "address_probe_safe",
+                "Address probe — bounded with exact restoration",
+                "Holds one controller address or a range, then restores the original slot and look. Requires its own Gate C proof.",
+                writes=True,
+                look_for="Count responding physical heads from the controller. No address map is inferred or saved.",
+                params={
+                    "slot": "custom-2",
+                    "start": 0,
+                    "count": 1,
+                    "color": "red",
+                    "brightness": 30,
+                    "duration_s": 60.0,
+                    "pattern": "range",
+                },
+            ),
+            address_probe_safe,
+        ),
+        Job(
+            JobSpec(
+                "effect_probe",
+                "Custom effect test — timed candidate",
+                "Tests one unverified effect code on a rainbow or separated color blocks at 30%, then restores the original slot.",
+                writes=True,
+                look_for="Watch the static rainbow first, then the candidate effect. Report actual behavior; "
+                "this does not enable or name the code. The original slot is restored within 20 seconds plus network time.",
+                params={
+                    "slot": "custom-3",
+                    "field": "motionEffect",
+                    "code": 1,
+                    "speed": 30,
+                    "duration_s": 15.0,
+                    "pattern": "rainbow",
+                },
+            ),
+            effect_probe,
         ),
         Job(
             JobSpec(

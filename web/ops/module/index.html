@@ -17,6 +17,7 @@
     <div class="device-line"><span id="device-name">Connecting…</span> <span id="status-pill" class="pill" hidden></span></div>
   </div>
   <div class="topbar-actions">
+    <a href="/ops/showcase/" class="secondary">Presentation view</a>
     <button type="button" id="hold-btn" class="secondary" disabled>Hold</button>
     <button type="button" id="switch-btn" class="secondary" hidden>Done</button>
   </div>
@@ -44,15 +45,22 @@
       </div>
     </div>
     <div class="map-wrap"><svg id="map" role="img" aria-label="The module's heads"></svg></div>
+    <div class="preview-status"><p id="preview-note">Preview from reported settings.</p><button type="button" class="chip" id="preview-toggle" hidden>Pause preview</button></div>
+    <div id="preview-rate-controls" class="preview-rate-controls" hidden>
+      <label for="preview-rate">Preview timing <output id="preview-rate-out">1.00×</output></label>
+      <input id="preview-rate" type="range" min="0.25" max="4" step="0.05" value="1" aria-label="Preview timing multiplier">
+      <button type="button" class="chip" id="preview-rate-reset">Reset</button>
+      <p class="muted small">Adjust to match what you see. This changes only the viewport and is saved for this preset and speed.</p>
+    </div>
+    <p id="readback-note" class="muted small">Settings refreshed every 5 seconds while this page is visible.</p>
     <p class="legend">
-      <span><span class="key key-reported"></span>centre: what Hubspace reports</span>
+      <span><span class="key key-reported"></span>centre: preview of reported settings</span>
       <span><span class="key key-desired"></span>ring: what we sent</span>
       <span><span class="key key-draft"></span>dashed: not applied yet</span>
     </p>
     <div class="look-line">
-      <div><strong>Lights show:</strong> <span id="reported-look">–</span></div>
+      <div><strong>Reported setting:</strong> <span id="reported-look">–</span></div>
       <div id="diff-line" class="muted"></div>
-      <div id="frame-note" class="muted small" hidden></div>
     </div>
 
     <div class="telemetry" id="telemetry" aria-live="polite">
@@ -237,17 +245,6 @@
         <button type="button" id="cal-flip" class="big secondary">Flip wire order</button>
       </div>
       <p class="muted small">Flip puts head 0 at the other end of the cable. Saved for this module only.</p>
-
-      <div class="field" id="offset-field">
-        <span class="field-label">Pattern entry that drives head 0</span>
-        <p class="muted small" id="offset-explain"></p>
-        <div class="offset-row">
-          <input type="number" id="cal-offset" min="0" step="1" inputmode="numeric" aria-label="Frame offset">
-          <button type="button" id="cal-offset-save" class="secondary">Save offset</button>
-        </div>
-        <p class="muted small">Only change this if the index sweep lights nothing, or lights the wrong half. The
-          usual value is 0. Nothing is sent to the lights when you save it.</p>
-      </div>
     </div>
   </section>
 </main>
@@ -274,6 +271,6 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<script type="module" src="/ops/module/module.js"></script>
+<script type="module" src="/ops/module/module.js?v=preview-timing-3"></script>
 </body>
 </html>

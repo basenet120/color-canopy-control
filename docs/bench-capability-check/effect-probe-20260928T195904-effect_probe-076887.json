@@ -1,0 +1,264 @@
+{
+  "note": "Anonymized bench result from the Color Canopy Conductor: ids, MACs, SSIDs, emails, names and locations are replaced with placeholders.",
+  "run_id": "20260928T195904-effect_probe-076887",
+  "job": "effect_probe",
+  "title": "Custom effect test — timed candidate",
+  "device_id": "bench-kit",
+  "address": "device-2",
+  "simulated": false,
+  "driver": "afero",
+  "status": "finished",
+  "started": 1790625544.3100204,
+  "finished": 1790625584.9454064,
+  "params": {
+    "slot": "custom-3",
+    "field": "motionEffect",
+    "code": 1,
+    "speed": 30,
+    "duration_s": 20.0,
+    "pattern": "blocks"
+  },
+  "steps": [
+    {
+      "n": 1,
+      "t": 1790625544.321,
+      "elapsed_s": 0.016,
+      "message": "Started Custom effect test — timed candidate on bench-kit",
+      "detail": {}
+    },
+    {
+      "n": 2,
+      "t": 1790625545.404,
+      "elapsed_s": 1.094,
+      "message": "Read the device's state",
+      "detail": {
+        "kind": "read",
+        "outcome": "ok",
+        "http_status": 200,
+        "elapsed_ms": 328
+      }
+    },
+    {
+      "n": 3,
+      "t": 1790625545.408,
+      "elapsed_s": 1.094,
+      "message": "Sending: effect_probe: before look",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: before look",
+        "t": 1790625545.4080675,
+        "rows": 6
+      }
+    },
+    {
+      "n": 4,
+      "t": 1790625548.448,
+      "elapsed_s": 4.141,
+      "message": "effect_probe: before look: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: before look",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625545.410965,
+        "acked_at": 1790625545.886308,
+        "verified_at": 1790625548.4468648
+      }
+    },
+    {
+      "n": 5,
+      "t": 1790625550.465,
+      "elapsed_s": 6.157,
+      "message": "Sending: effect_probe: static blocks",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: static blocks",
+        "t": 1790625550.4647522,
+        "rows": 5
+      }
+    },
+    {
+      "n": 6,
+      "t": 1790625554.055,
+      "elapsed_s": 9.75,
+      "message": "effect_probe: static blocks: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: static blocks",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625550.4791343,
+        "acked_at": 1790625551.6820142,
+        "verified_at": 1790625554.0535557
+      }
+    },
+    {
+      "n": 7,
+      "t": 1790625556.057,
+      "elapsed_s": 11.75,
+      "message": "Sending: effect_probe: leave slot before candidate",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: leave slot before candidate",
+        "t": 1790625556.057413,
+        "rows": 6
+      }
+    },
+    {
+      "n": 8,
+      "t": 1790625558.809,
+      "elapsed_s": 14.5,
+      "message": "effect_probe: leave slot before candidate: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: leave slot before candidate",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625556.07309,
+        "acked_at": 1790625556.4030733,
+        "verified_at": 1790625558.8061304
+      }
+    },
+    {
+      "n": 9,
+      "t": 1790625560.846,
+      "elapsed_s": 16.532,
+      "message": "Sending: effect_probe: candidate motionEffect 1",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: candidate motionEffect 1",
+        "t": 1790625560.8455772,
+        "rows": 5
+      }
+    },
+    {
+      "n": 10,
+      "t": 1790625563.495,
+      "elapsed_s": 19.188,
+      "message": "effect_probe: candidate motionEffect 1: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: candidate motionEffect 1",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625560.8532662,
+        "acked_at": 1790625561.0843394,
+        "verified_at": 1790625563.4940636
+      }
+    },
+    {
+      "n": 11,
+      "t": 1790625563.509,
+      "elapsed_s": 19.204,
+      "message": "Observe candidate motionEffect 1 for 20 seconds; behavior is unverified.",
+      "detail": {}
+    },
+    {
+      "n": 12,
+      "t": 1790625583.528,
+      "elapsed_s": 39.219,
+      "message": "Sending: effect_probe: restore original slot and header",
+      "detail": {
+        "kind": "write_start",
+        "label": "effect_probe: restore original slot and header",
+        "t": 1790625583.527654,
+        "rows": 5
+      }
+    },
+    {
+      "n": 13,
+      "t": 1790625584.931,
+      "elapsed_s": 40.625,
+      "message": "effect_probe: restore original slot and header: applied",
+      "detail": {
+        "kind": "write",
+        "label": "effect_probe: restore original slot and header",
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625583.5425172,
+        "acked_at": 1790625583.7433994,
+        "verified_at": 1790625584.9291666
+      }
+    }
+  ],
+  "result": {
+    "verdict": "needs_eyes",
+    "summary": "Tested candidate motionEffect 1 at speed 30; original slot restored. This code is not automatically enabled or assigned a behavior name.",
+    "observations": {
+      "slot": "custom-3",
+      "field": "motionEffect",
+      "code": 1,
+      "speed": 30,
+      "duration_s": 20.0,
+      "length": 60,
+      "pattern": "blocks",
+      "original_hash": "34668817133b8700",
+      "automatically_enabled": false,
+      "expected_effects": {
+        "brightnessDepth": 100,
+        "brightnessEffect": 0,
+        "brightnessSpeed": 50,
+        "motionEffect": 1,
+        "motionSpeed": 30
+      },
+      "reselected_from_whole_strand": true,
+      "write": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625560.8532662,
+        "ack_ms": 231,
+        "verified_ms": 2641,
+        "mismatches": [],
+        "error": null
+      },
+      "reported_effects": {
+        "brightnessDepth": 100,
+        "brightnessEffect": 0,
+        "brightnessSpeed": 50,
+        "motionEffect": 1,
+        "motionSpeed": 30
+      },
+      "restore": {
+        "status": "applied",
+        "http_status": 200,
+        "attempts": 1,
+        "sent_at": 1790625583.5425172,
+        "ack_ms": 201,
+        "verified_ms": 1387,
+        "mismatches": [],
+        "error": null
+      },
+      "restore_effects": {
+        "brightnessDepth": 100,
+        "brightnessEffect": 0,
+        "brightnessSpeed": 50,
+        "motionEffect": 0,
+        "motionSpeed": 50
+      }
+    },
+    "ask_human": [
+      "What did the colors do during the timed test: travel, pulse, flash, or stay still?"
+    ],
+    "flags": {}
+  },
+  "answers": {},
+  "flag_questions": {},
+  "flags_applied": null,
+  "flags_revoked": null,
+  "writes_sent": 5,
+  "confirmed_verdict": null,
+  "environment": {
+    "mode": "bench",
+    "version": "0.1.0",
+    "bench_live": true
+  },
+  "artifacts": [
+    "effect_probe_before"
+  ]
+}

@@ -59,24 +59,22 @@ phone is from the server. Every time a job sends a write the screen flashes oran
 
 ## 5. The jobs, in order
 
-On `/ops/bench`: pick **bench-kit**, then tap **Run** on each card, top to bottom. Each card says what to look for.
+On `/ops/bench`: pick **bench-kit**, then tap **Run** on each card below, in this order (the commissioning cards VWBD
+added are in 5a — they're for commissioning a kit, not this list). Each card says what to look for.
 Steps appear live under the job. When it finishes you get a verdict and, for most jobs, questions with big
 **Yes / No** buttons — answer them from what you saw. After each job, tap **Copy anonymized JSON** and paste it
 into the build session (see section 7).
 
 1. **Gate A — read-only profile dump.** Nothing changes on the lights.
-   Pass = 3 slots whose saved patterns have room for the module's 30 pucks. The real kit reports **60 entries**
-   per saved pattern with 30 pucks attached (VWBD's workshop, Sep 27) — the most pucks one controller can take,
-   not the pucks it has — and that is a pass: the result adds "this module's 30 pucks use entries 0–29 (confirm
-   once with the index sweep or the hue ramp)". Needs eyes = fewer entries than pucks, or slots that disagree.
-   Fail = "T3 only" (no per-puck path).
+   Pass = 3 slots with a 30- or 60-entry frame. Fail = "T3 only" (no per-puck path). The real kit reports
+   **60** entries with 30 pucks attached — the controller's frame, not its pucks (CLOUD, Kingston, Sep 28 and Oct 2:
+   `docs/bench-capability-check/gate-a-result.json`, `docs/vwbd-commissioning-transfer-2026-10-02.json`; see 5a).
    Tap **Download profile (sqhdk03.json)** as well and send that file to the build session — it becomes the
    simulator's model of the real kit.
 2. **Index order.** First, in the Hubspace app, paint slot 1: puck 1 red, 2 green, 3 blue, 4 white (the rest
    anything dim), and save. Then Run. It reads slot 1 (nothing written) and says whether the red puck is
-   the first or the last of the pucks' entries (0 or 29 on the real kit — entries 30–59 drive nothing). If the
-   pattern turns up somewhere else in the 60 entries (say at entry 30), it says so and names the frame offset to
-   set on the module page. Answer whether the red puck is the one nearest the controller.
+   index 0 or the last entry (on a 60-entry kit that's entry 59, which drives nothing on Kingston — see 5a). Answer
+   whether the red puck is the one nearest the controller.
    While you're in the app: switch slot 1 through each effect and a few speeds, run Index order after each, and
    copy the JSON each time — that builds the effect-code table. Each result carries the slot's `header`
    (`motionEffect`, `motionSpeed`, `brightnessEffect`, `brightnessSpeed`, `brightnessDepth`, `id`, `version`,
@@ -98,13 +96,9 @@ into the build session (see section 7).
    Pass = HTTP 200, slot 2 reads back identical to slot 1, and you saw the lights **change** from the BEFORE
    look to exactly slot 1's pattern. Answer "Did the lights change from the BEFORE look to exactly slot 1's
    pattern?". Yes proves T1 (frames by API). If the lights never left the BEFORE look, answer No.
-6. **Hue ramp.** Every puck a different colour, running once through the rainbow (12° apart on 30 pucks); on the
-   real kit's 60-entry pattern the rainbow goes into the pucks' entries (0–29) and the rest are written off.
-   **Take a clear photo of the whole strand** (it becomes the index map) and answer the question.
-   If the strand stays dark or looks wrong, run it again with **whole_frame** ticked (Options): the rainbow is
-   then spread over all 60 entries (6° apart), so the pucks show only part of it — red → yellow → green means
-   they use entries 0–29, cyan → blue → magenta means 30–59. Photograph that too; if it's the second half, set
-   the frame offset to 30 on the module page (Calibrate).
+6. **Hue ramp.** Every puck a different colour, running through the rainbow. **Take a clear photo of the whole
+   strand** (it becomes the index map) and answer the question. On a 60-entry kit the same rainbow repeats in entries
+   30–59, so the photo can't tell which half drives the pucks: map that kit with the address probes (5a).
 7. **Latency trials.** 20 changes, one every 3 s, between slot 2 and slot 3 (after Gate C and the hue ramp they
    hold slot 1's pattern and the rainbow, so every trial is a visible change). It starts with whichever of the
    two isn't showing. If the two slots hold the same pattern, it first writes a rainbow into one of them (only
@@ -138,11 +132,12 @@ into the build session (see section 7).
     kit off at the wall, **unplug strings 2 and 3** (only string 1 stays on the controller), switch it back on and
     wait about 30 s for it to reconnect. Count the lit pucks. Tick **I've booted the kit with strings 2 and 3
     unplugged** (terminal: `--param confirmed=1`) and Run. It dumps the segment hints and all three slots' frame
-    lengths (from the profile and from readback) and says whether the cloud noticed the missing pucks — only a
-    number **below** the full kit's 30 counts (a controller that always says 60 can't show missing pucks). If it
-    didn't notice, the 12-puck fault can only be caught by eye at the 7 am check. Answer whether only string 1 lit.
-    Then switch the kit off, plug strings 2 and 3 back in, switch it on and run **Gate A** — it must say the same
-    as before (60 entries on the real kit). `full_heads` (Options) is the pucks on the full kit: leave it at 30.
+    lengths (from the profile and from readback) and says whether the cloud noticed the missing pucks (it doesn't read `connected-light-count`; check that in the dump
+    too). If it
+    didn't, the 12-puck fault can only be caught by eye at the 7 am check. Answer whether only string 1 lit.
+    Then switch the kit off, plug strings 2 and 3 back in, switch it on and run **Gate A** — it must report the same
+    frame length as before (60 on Kingston).
+    If Gate A reported 60-entry frames, set `full_heads` to 60 under Options.
 13. **Restore.** Puts the kit back to calm warm white 2700 K at 50%. Run it at the end of every session.
 
 A job that says **ERROR** stopped without a verdict: the device was busy, not connected or not allowed, a
@@ -152,18 +147,90 @@ the kit may have changed (for example Gate C may already have rewritten slot 2) 
 run it again. Only one job runs on a device at a time; `/ops/module` and a bench job can't hold the kit at the
 same moment.
 
+## 5a. What VWBD found on the real kit (Sep 28 – Oct 7, 2026)
+
+Paris ran these at VWBD from a local workshop server, not staging. Everything here is about **Kingston test**, the
+kit registered as **bench-kit**, unless it says otherwise. The Sep 28 runs were made from another computer and matched
+to the same controller on Oct 2 by an id digest (`docs/bench-commissioning-proof.json`,
+`docs/vwbd-commissioning-transfer-2026-10-02.json`). PHYSICAL = seen on the lights by the person at VWBD; CLOUD =
+Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or screen evidence never counts as physical.
+
+**What the kit does**
+- **60 entries, 30 pucks.** Every slot holds 60 entries (CLOUD, Gate A, Sep 28 and Oct 2:
+  `docs/bench-capability-check/gate-a-result.json`, `docs/vwbd-commissioning-transfer-2026-10-02.json`); the kit
+  has 30 pucks (confirmed by the person at VWBD, `docs/vwbd-commissioning-transfer-2026-10-02.json`).
+- **The map.** Entries 0–29 drive pucks 1–30 counting from the controller end; entries 30–59 drive nothing
+  (PHYSICAL, Sep 28): entry 0 lit only puck 1, entry 1 only puck 2, entry 29 only puck 30, and 30–59 left all 30
+  dark (`docs/bench-capability-check/address-probe-*.json`); a `/ops/module` puck-15 marker and a 30-puck
+  red → purple → blue gradient looked right (`docs/custom-pattern-session.md`). Not proven: every middle puck one
+  by one, or the panel's 8/7/8/7 routing.
+- **T1.** Gate C passed on Sep 28 (PHYSICAL: red → green when Custom 2 was copied into Custom 3;
+  `docs/bench-capability-check/gate-c-result.json`, `docs/custom-pattern-session.md`).
+- **Motion code 1** (`motionEffect` 1, speed 30, separated red/green/blue blocks, 20 s at 30%, Oct 2): "Blocks
+  moved to different heads" (PHYSICAL); header and restore matched (CLOUD) (`docs/vwbd-effect-probe-2026-10-02.json`).
+  A bounded pass only: vendor name, direction, period and phase are unknown, earlier rainbow tries looked still or
+  flashed slightly (`docs/custom-pattern-session.md`), and `effects.enabled` stays empty.
+- **No Gate B (T2) or unplugged-readback proof** exists for either shop module (`docs/bench-commissioning-proof.json`;
+  for String light 1, Paris's package, `CONFIGURATION-NOTES.txt`).
+
+**Where the map lives** (decision D54)
+- Per kit, as `framebuffer_mapping` {`frame_length`, `indices`, `proven_on`} in the ops overlay — never in git. It
+  only applies to the kit whose Hubspace id is `proven_on`, and only while the frame length and the 30-puck module
+  map still match (`conductor/config.py`, `conductor/module/session.py`).
+- A 60-entry kit without its own map gets no per-puck painting; `/ops/module` says why.
+- No probe ever saves a map, and there's no button for it. Today it's an offline edit: stop the server, write that
+  kit's `framebuffer_mapping` (with `proven_on` = its own id) through `conductor.config.save_overlay_patch`, start
+  it again (`VWBD-HANDOFF.md`).
+
+**The commissioning jobs VWBD added** (cards on `/ops/bench`; `conductor/bench/jobs.py`; decision D55)
+- **Gate C — bounded replay** (`gate_c_safe`). Replays a source slot (default Custom 3, only read) into Custom 1 or
+  2 (default 1), never Custom 3, at a set brightness (default 30%). Holds the BEFORE look 4–60 s (default 4) and the
+  replay 4–120 s (default 8), then restores the frame, the slot selection and the active look as separate commands
+  and reads them back — anything not exactly as before is a FAIL. Same question as Gate C; a Yes enables Apply
+  flags for `t1_frames` (section 6).
+- **Address probe — bounded** (`address_probe_safe`). Custom 2 by default; refuses Custom 3. Lights `markers`
+  (entry 0 red, 1 green, 29 blue — a 60-entry kit with 30 pucks only) or a range (`start`, `count`, one colour),
+  everything else off, for 4–120 s (default 60) at 30% by default, then restores exactly. Needs that kit's own T1
+  (Gate C applied), and the slot's pattern must have no effect running. It never saves a map.
+- **Address probe — original** (`address_probe`). A range of addresses only (no markers), 40 % by default, no timed hold, and the same T1 rule, but it **defaults to Custom 3
+  and leaves its pattern in the slot** (the old one is only saved with the run). Don't run it on a slot holding a
+  saved pattern you care about; use the bounded one.
+- **Custom effect test** (`effect_probe`). One code (`motionEffect` or `brightnessEffect`, 1–255, speed 0–100) on
+  a rainbow or separated blocks, 2–20 s at 30%; needs T1; Custom 3 by default. Afterwards it writes the slot's
+  original pattern and header back, but the lights end on **that slot** at the previous brightness, not on the look
+  that was showing before. It never enables or names a code.
+
+**Commissioning another kit** (order from Paris's Oct 7 package, `INTEGRATE.txt` §8 and `CHANGELOG.txt`)
+1. Fresh full backups of all three slots, and an observer at the lights who is ready before anything is sent.
+2. That kit's own `gate_c_safe`, answered Yes from the lights (PHYSICAL), then Apply flags.
+3. Its own bounded address probes (`address_probe_safe`: markers, then 30–59 as a range).
+4. Record its own map (above).
+5. Only then any paired or gradient test.
+
+Never copy Kingston's flags or map to another controller. A whole-strand colour response or a 30-puck count is not
+a map. (The one exception is the same physical controller registered again: compare the SHA-256 digest of its id
+(UTF-8, whitespace stripped, no newline) with `device_id_sha256` in `docs/bench-commissioning-proof.json`, never
+printing the id, and take a fresh Gate A first — `VWBD-HANDOFF.md`.)
+
+Where the second shop module stands: **String light 1** (only in VWBD's private overlay, as `shop-string-1`) has no
+physical Gate C pass and no map. Its latest `gate_c_safe` (Oct 6 evening, run `20261007T010607-gate_c_safe-30ed44`)
+matched in the cloud and restored exactly, with no physical answer yet; an earlier one got "No—it did something
+else… whitish pinkish" (Paris's package, `VALIDATION-STATUS.json`). The Studio's paired per-head gradient refuses
+until each kit has its own T1 proof and its own recorded map (`conductor/module/scene_gradient.py`; decision D56),
+so it has never been sent to real lights — only the on-screen preview has shown it (SCREEN).
+
 ## 6. Apply flags (after Gates B and C)
 
-When Gate B or C passes and you've answered its question **Yes**, the result card enables **Apply flags**
-(`t2_select`, `t1_frames`, `readback_device_level`). Tapping it records what the kit proved in the ops overlay,
-together with **which kit** proved it (its Hubspace id, `flags_proven_on`). It stays disabled — with the reason
-shown — for simulated runs and until the matching answer is Yes.
+When Gate B, Gate C or `gate_c_safe` passes and you've answered its question **Yes**, the result card enables
+**Apply flags** (`t2_select`, `t1_frames`, `readback_device_level`). Tapping it records what the kit proved in the
+ops overlay, together with **which kit** proved it (its Hubspace id, `flags_proven_on`). It stays disabled — with
+the reason shown — for simulated runs and until the matching answer is Yes.
 
 - **Changed your mind?** Tapping **No** on that question after applying puts the flags back to what they were
   before (the card says "Undone…"), so `/ops/module` locks per-puck painting again. Tap Yes and Apply to redo it.
 - **Swapped kits?** Flags only count for the kit that proved them. If a different kit is registered as
-  `bench-kit`, its old flags don't carry over, and Apply flags on a run from the old kit is refused — run the
-  gates again on the new kit.
+  `bench-kit`, its old flags don't carry over (nor does its map: `framebuffer_mapping.proven_on`), and Apply flags
+  on a run from the old kit is refused — run the gates again on the new kit, in the order in 5a.
 
 ## 7. Getting results back to the build session
 
@@ -196,19 +263,16 @@ For you, or VWBD's crew on Prototype 01, once `/ops/module` exists.
 
 - **Target a device.** Open `/ops/module`, pick the device. Opening it takes the device's lock (the show engine
   and bench jobs leave it alone); it's released when you leave or after 10 minutes idle.
-- **Module map.** The 30 pucks drawn where they sit on the panel, in wire order, with what each is showing. On the
-  real kit the saved patterns hold 60 entries; the page paints the 30 pucks into entries 0–29, writes the rest off,
-  and says so in a small line under the map ("60-entry pattern; pucks use 0–29").
+- **Module map.** The 30 pucks drawn where they sit on the panel, in wire order, with what each is showing.
 - **Paint + Apply.** Tap pucks to colour them, then Apply writes the frame into a slot and selects it. Per-puck
-  writes (T1) are only offered once Gate C has passed on that kit.
+  writes (T1: paint, index sweep, single head) are only offered once Gate C has passed on that kit and, on a 60-entry
+  kit, once its own map is recorded (5a) — so map a new 60-entry kit with the bench address probes, not the sweep.
 - **Whole-module controls.** Power, white temperature, brightness, RGB, presets and speed for the whole strand.
 - **Prototype 01 test cards** (one tap each): white 2700 / 3000 / 4000 K; HD orange, amber, peach and warm
   ivory; recipe compare (RGB-only vs RGB + warm white, side by side); thirds split for the Mylar zones; hue ramp;
   index sweep (one puck at a time, for mapping); single head.
 - **Slots and effects.** Select, read or rewrite slots 1–3; start benched effect codes only.
-- **Calibration.** Cable path, start corner and orientation; saved to the overlay. Also **Pattern entry that drives
-  head 0** (the frame offset, normally 0): only change it if the index sweep lights nothing, or lights the wrong
-  half — e.g. 30 if the pucks turn out to use entries 30–59. Saving it sends nothing to the lights.
+- **Calibration.** Cable path, start corner and orientation; saved to the overlay.
 - **Hold / photo mode.** Freezes the current look so nothing changes while you photograph.
 - **Telemetry strip.** Every write with its time, HTTP result and whether readback matched.
 

@@ -1,0 +1,65 @@
+{
+  "original_archive": "color-canopy-workshop-kit-1eb8551.zip",
+  "original_archive_sha256": "c89d01ab8a57b1e58e61a343bb2460ec63628ff607bb4cefad32c4d7b0f44e95",
+  "original_file_count": 119,
+  "changed": [
+    {
+      "path": "README.md",
+      "original_sha256": "6350fc87f1b1fe9d5ba2b0a7e3a41b2878c513b751555e3a7f94e250e8465129",
+      "release_sha256": "504ca8376198fb5ad7b43225de6642bca002058b30934fe95a99036f9b5c2d09"
+    },
+    {
+      "path": "conductor/bench/jobs.py",
+      "original_sha256": "3887521d07d804b39a769fd2988ac30989649ccb619b7818248b41d0310a1f9c",
+      "release_sha256": "ec8317d6e91cdaae6387b3cd9cc97f47014b1fdf5a34669a1def8abed64ca9d5"
+    },
+    {
+      "path": "conductor/config.py",
+      "original_sha256": "edbcea4c55fb3e229eae14bbfef92b4667ccbc49dcd9610ba02f9b06dd65a9c7",
+      "release_sha256": "e0f72b4c98a03669781a2decb3a98f2cc5481da7c1193e1e3985e00aa8080084"
+    },
+    {
+      "path": "conductor/drivers/afero.py",
+      "original_sha256": "2032a825dc13ff809203b0cc182104345363c548be268696d3f8b9fd6a01854d",
+      "release_sha256": "d168b4241d443b879f4d7425e5655e15f050ea87f716f5018f8490628b5cd083"
+    },
+    {
+      "path": "conductor/module/session.py",
+      "original_sha256": "5edda0a3b6f63ac849420377a80fff673d824452856d49c4c9bf6ab59ff071c4",
+      "release_sha256": "be86398314267c9c5c74d443c0d9bc8ba1ca61d90e26064c515e54e5f205bd26"
+    },
+    {
+      "path": "conductor/render.py",
+      "original_sha256": "a84183410c33cf4d4173eecbf5dc64f73c7689530934d0eacc88b2ad013cb3b0",
+      "release_sha256": "66c930a675765507bd69509e7a88629516439e424a00fa1ebd3e56d9b5f0d12c"
+    },
+    {
+      "path": "conductor/rows.py",
+      "original_sha256": "4fc2e0160469fc3a1c111c2e88a545e9614dc22f98550f0856b3ff7f11f489b4",
+      "release_sha256": "3fdc26bb86da6ac6b056042ac479864ea390495c73fa7d2b90d8cfba7b8b796f"
+    },
+    {
+      "path": "web/ops/accounts/index.html",
+      "original_sha256": "b543eea5f72b7c6a581a62fceac807cb5d0cbe3cc1801007a93626079676672c",
+      "release_sha256": "8e7744003dbd79d15a8f4357b05c7905c2071a42e6f2108a11e9fb5fd38da7ba"
+    },
+    {
+      "path": "web/ops/module/index.html",
+      "original_sha256": "fa5b7c4bacd29d046fe23586e2394594f5471a4332c1eb07c70f3b259185cd64",
+      "release_sha256": "31640c3536267815e6b7b23039b48f72943e8ad6b6ecd1c16e363221f8581a54"
+    },
+    {
+      "path": "web/ops/module/module.css",
+      "original_sha256": "b71d964b071fa45598e691ae4008132b044bac16f09641ae8653576e67457d61",
+      "release_sha256": "bbce9097a4d4f4d20063a4362dec36245d2c7cb09ada3001a075c65eb6188565"
+    },
+    {
+      "path": "web/ops/module/module.js",
+      "original_sha256": "0c0f924f6511d8dac6b818d847d983a9ecc638040d03f20032a7c1931b3f49cb",
+      "release_sha256": "0557099eca0699f0d73912f408f77e177cc0daa88a0df03ab34bbdff00c0363e"
+    }
+  ],
+  "unchanged_count": 108,
+  "missing": [],
+  "note": "New release files are listed by MANIFEST.sha256. Original-file changes are intentional repairs and documentation updates."
+}

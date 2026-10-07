@@ -93,15 +93,11 @@ class BuiltinCompiler:
     description = "built-in soak compiler (strand + module-level + one-colour-per-module canvas frames)"
     CCT_FLOOR = 2700  # the simulator profile's range is 2700–6500 K
 
-    def __init__(
-        self, registry: Registry, config_dir: Path = CONFIG_DIR, frame_length: int = 60, heads: int = 30
-    ) -> None:
+    def __init__(self, registry: Registry, config_dir: Path = CONFIG_DIR, frame_length: int = 30) -> None:
         with open(config_dir / "modes.yaml", encoding="utf-8") as f:
             self._modes: dict[str, dict] = (yaml.safe_load(f) or {})["modes"]
         self._modules = registry.canopy_modules()
-        # The simulator's kit: a 60-entry frame driving 30 pucks from entry 0; the other entries are written off.
         self._frame_length = frame_length
-        self._layout = R.FrameLayout(frame_length, min(heads, frame_length), 0)
 
     def modes(self) -> list[str]:
         return list(self._modes)
@@ -169,15 +165,14 @@ class BuiltinCompiler:
 
     def _frame(self, look: R.Look, module_index: int) -> list[R.FrameEntry]:
         out = []
-        heads = self._layout.heads
-        for i in range(heads):
-            level = 60 + (40 * i) // max(1, heads - 1)
+        for i in range(self._frame_length):
+            level = 60 + (40 * i) // max(1, self._frame_length - 1)
             if look.kind == "rgb" and look.rgb:
                 r, g, b = look.rgb
                 out.append(R.FrameEntry(r, g, b, 0, level, 0))
             else:
                 out.append(R.FrameEntry(0, 0, 0, look.cct or 2700, 0, level))
-        return self._layout.place(out)
+        return out
 
 
 def default_compiler(registry: Registry) -> tuple[Any, str]:

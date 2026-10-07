@@ -12,9 +12,6 @@ Rules implemented:
 - **Frames copy the device's header** (`rows.frame_value`): header and `frameBuffer.flags` come from the slot's
   readback (the default header when none was read yet — with a note), the frame length is the device's, and the
   only effect codes written are bench-enabled ones (`settings.effects.enabled`); everything else is 0 = static.
-- **Frame length ≠ head count.** A controller frame can be longer than the module (60 entries for 30 pucks on the
-  real SQHDK03): the composer puts the pucks at [frame_offset, frame_offset + heads) and OFF everywhere else, and
-  previews show only the physical heads.
 - **Honest copy.** `ModePlan.feature` is the sentence of the technique actually compiled. A canvas look is
   `motion=True` with `motion_feature` only when its `motionEffect` code is bench-enabled; otherwise it is static,
   says so in a note, and uses the static `feature` (the schema refuses movement words there).
@@ -31,7 +28,7 @@ Rules implemented:
   (`SAFE_MODES`) never waits: it assumes `SAFE_DEFAULT_CAPS` for an unread module.
 - **Kelvin in the copy.** A strand look whose copy names its Kelvin value uses the configured fallback look when a
   module's range would clamp that value (Lowcountry Calm never says "2700 K" at 3000 K).
-- `ModuleTarget.preview` is `render.head_colors` of the intended result, per physical head in wire order.
+- `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order.
 """
 
 from __future__ import annotations
@@ -315,8 +312,7 @@ def _count_words(n: int) -> str:
 
 
 def _heads(entry: DeviceEntry, caps: Capabilities) -> int:
-    """The module's physical heads (the registry's count; the frame may be longer)."""
-    return entry.expected_heads or caps.framebuffer_length or 30
+    return caps.framebuffer_length or entry.expected_heads or 30
 
 
 class _Notes:
@@ -434,7 +430,7 @@ def _target(
 ) -> ModuleTarget:
     rows = R.dedupe(rows)
     preview = render.head_colors(
-        preview_rows if preview_rows is not None else rows, _heads(entry, caps), caps, entry.frame_offset
+        preview_rows if preview_rows is not None else rows, _heads(entry, caps), caps
     )
     return ModuleTarget(
         device_id=entry.id,
@@ -567,12 +563,6 @@ def _canvas(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
             notes.add(f"No readback of {slot} yet: the default slot header is used", d.id)
         if c.no_white_hint:
             notes.add("This device doesn't drive per-puck white (no-white hint): blends show RGB only", d.id)
-        if (fl := c.framebuffer_length) is not None and fl != _heads(d, c):
-            end = d.frame_offset + _heads(d, c) - 1
-            notes.add(
-                f"{fl}-entry saved pattern: the pucks use entries {d.frame_offset}–{end}, the rest are written off",
-                d.id,
-            )
         try:
             value = R.frame_value(
                 header, entries, expected_length=c.framebuffer_length, effects=effects, cct_range=c.cct_range

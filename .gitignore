@@ -3,6 +3,9 @@
 # Client decks, the private text-message screenshot, and exported briefs stay local;
 # docs/context/ summarizes everything the build needs
 Ref Docs/
+# VWBD hand-off drops (zips, a Windows .venv, and a private runtime with the secret key and an encrypted token);
+# the reviewed source is merged into the repo, the drop folder never is
+NEW STUFF FROM PARIS/
 *.pdf
 *.docx
 
