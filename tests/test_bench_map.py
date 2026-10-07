@@ -591,8 +591,10 @@ def test_the_shows_head_check_flips_from_no_map_to_mapped_after_apply(tmp_path):
 
 
 # ---- the routes and the CLI ----------------------------------------------------------------------------------------
-def run_over_http(client, params: dict) -> str:
-    r = client.post("/api/bench/run", json={"job": "address_probe_safe", "device_id": KIT, "params": params})
+def run_over_http(client, params: dict, device_id: str = KIT) -> str:
+    r = client.post(
+        "/api/bench/run", json={"job": "address_probe_safe", "device_id": device_id, "params": params}
+    )
     assert r.status_code == 202, r.text
     return wait_for(client, r.json()["run_id"])["run_id"]
 
@@ -630,6 +632,27 @@ def test_the_map_routes_preview_refuse_and_apply(app_client):
     assert ADDRESS not in export.text
     assert app_client.get("/api/bench/runs/not-a-run/map").status_code == 404
     assert app_client.post("/api/bench/runs/not-a-run/map").status_code == 404
+
+
+def test_taking_back_a_yes_after_a_controller_swap_takes_the_map_back_where_the_kit_is_now(app_client):
+    services = app_client.app.state.services
+    sixty(services, "spare-1")
+    spare_map = {**IDENTITY, "proven_on": "sim-spare-1"}
+    markers = run_over_http(app_client, MARKERS, "spare-1")
+    dark = run_over_http(app_client, DARK, "spare-1")
+    answer_yes_as_real(app_client, (markers, dark))
+    assert app_client.post(f"/api/bench/runs/{dark}/map", json={}).status_code == 200
+    swap = {"metadevice_id": "sim-spare-1", "device_id": "canopy-r1c1"}  # the spare replaces module r1c1
+    r = app_client.post("/api/accounts/canopy/register", json=swap)
+    assert r.status_code == 200 and r.json()["map_carried"] is True
+    assert services.registry.get("canopy-r1c1").framebuffer_mapping.model_dump() == spare_map
+    question = app_client.get(f"/api/bench/runs/{dark}").json()["result"]["ask_human"][0]
+    r = app_client.post(f"/api/bench/runs/{dark}/answers", json={"answers": {question: "no"}})
+    assert r.status_code == 200 and r.json()["map_revoked"]["undone"] is True
+    # the controller's map is gone wherever it is registered now, not only from the spare it was proven on
+    assert services.registry.get("canopy-r1c1").framebuffer_mapping is None
+    assert services.registry.get("spare-1").framebuffer_mapping is None
+    assert sorted(r.json()["map_revoked"]["devices"]) == ["canopy-r1c1", "spare-1"]
 
 
 def test_the_map_routes_are_ops_only(app_client_auth):

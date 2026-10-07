@@ -778,18 +778,26 @@ class BenchRunner:
         return detect(info.functions, info.states)
 
     def _revoke_map(self, record: dict[str, Any]) -> None:
-        """Put back the map this run's yes recorded: only if the registry still holds exactly that map (proven on
-        this kit, nothing changed since). Both runs that justified it record what was undone."""
+        """Put back the map this run's yes recorded, wherever the registry still holds exactly that map (proven on
+        this kit, nothing changed since): on the run's device, and on any entry a controller swap carried it to.
+        Both runs that justified it record what was undone."""
         applied = record["map_applied"]
         device_id = record["device_id"]
-        try:
-            current = self.services.registry.get(device_id).framebuffer_mapping
-        except KeyError:
-            current = None
-        undone = current is not None and current.model_dump() == applied["mapping"]
-        if undone:
-            self.services.update_registry(device_id, {"framebuffer_mapping": applied["previous"]})
-        revoked = {"mapping": applied["mapping"], "undone": undone, "at": self.services.clock.now()}
+        holders = [
+            entry.id
+            for entry in self.services.registry.file.devices
+            if entry.framebuffer_mapping is not None
+            and entry.framebuffer_mapping.model_dump() == applied["mapping"]
+        ]
+        for holder in holders:
+            self.services.update_registry(holder, {"framebuffer_mapping": applied["previous"]})
+        undone = bool(holders)
+        revoked = {
+            "mapping": applied["mapping"],
+            "undone": undone,
+            "devices": holders,
+            "at": self.services.clock.now(),
+        }
         for run_id in applied["runs"]:
             run = record if run_id == record["run_id"] else self.results.load(run_id)
             if run is None:
@@ -800,10 +808,14 @@ class BenchRunner:
                 self.results.save(run)
                 self._publish_record(run, "map")
         self.services.telemetry.record(
-            "bench", device_id=device_id, job=MAP_JOB, step="map revoked", detail={"undone": undone}
+            "bench",
+            device_id=device_id,
+            job=MAP_JOB,
+            step="map revoked",
+            detail={"undone": undone, "devices": holders},
         )
-        if undone:
-            self._reread_show(device_id)
+        for holder in holders:
+            self._reread_show(holder)
 
     def _reread_show(self, device_id: str) -> None:
         """The show caches each module's profile and judges its map from it: drop the cache and read it again now,
