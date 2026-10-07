@@ -1,4 +1,5 @@
-"""Bench routes (ops only): run Gates A–C and friends, read results, answer questions, apply flags (bench_api.py).
+"""Bench routes (ops only): run Gates A–C and friends, read results, answer questions, apply flags and maps
+(bench_api.py).
 
 - `GET  /api/bench/jobs` — job specs, plus per device: simulated?, driver, who holds its lock.
 - `POST /api/bench/run` `{job, device_id, params}` → `{run_id}`; progress on WebSocket topic "bench".
@@ -8,9 +9,13 @@
 - `GET  /api/bench/runs/{id}/profile.json` — Gate A's scrubbed profile (candidate simulator fixture).
 - `POST /api/bench/runs/{id}/stop` — stop a run that is going (verdict ERROR, lock released). 409 if it isn't.
 - `POST /api/bench/runs/{id}/answers` `{answers: {question: "yes"|"no"|note}}`. Taking back a "yes" after its flags
-  were applied puts those flags back to what they were (the response's `flags_revoked` says what changed).
+  (or a map) were applied puts them back to what they were (the response's `flags_revoked` / `map_revoked` says what
+  changed).
 - `POST /api/bench/runs/{id}/flags` — apply the proposed DeviceFlags to the ops overlay. Refused (409) for simulated
   runs and until the matching question is answered "yes".
+- `GET  /api/bench/runs/{id}/map` — what Apply map would record from this address probe and why, or why not
+  (`{ready, reason, mapping, runs}`). `POST` records it: the kit's identity controller map, in the ops overlay, from
+  its own two answered probes (D58). Refused (409) unless the proof rule holds; it sends nothing to the lights.
 - `GET  /api/bench/time` — the server's clock in epoch ms (the clock page estimates its offset from it).
 """
 
@@ -142,6 +147,24 @@ async def run_flags(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
     _get(request, run_id)
     try:
         record = _runner(request).apply_flags(run_id)
+    except BenchRefused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    except ConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return _json(record)
+
+
+@router.get("/runs/{run_id}/map")
+async def run_map_proposal(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
+    _get(request, run_id)
+    return _json(_runner(request).map_proposal(run_id))
+
+
+@router.post("/runs/{run_id}/map")
+async def run_map(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
+    _get(request, run_id)
+    try:
+        record = await _runner(request).apply_map(run_id)
     except BenchRefused as e:
         raise HTTPException(status_code=409, detail=str(e)) from None
     except ConfigError as e:

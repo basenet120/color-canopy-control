@@ -60,6 +60,12 @@ Q_STALE_STORED = "Did the strand switch to {slot} after the stale-stamped write?
 Q_STALE_DROPPED = "Did the lights stay as they were after the first (stale) write, and switch to {slot} only after the second?"
 Q_ACTIVE_REWRITE = "Did the lights change to the new pattern while {slot} stayed selected (no reselect)?"
 Q_HEAD_BOOT = "With strings 2 and 3 unplugged, did only string 1's pucks light when the kit booted?"
+# address_probe_safe: yes/no for the two probes a kit's map is recorded from (D58), else where heads lit.
+Q_ADDRESS = "How many physical heads lit, and where are they when counted from the controller?"
+Q_MARKERS = (
+    "Counting from the controller, was head 1 red, head 2 green and head 30 blue, with every other head dark?"
+)
+Q_DARK = "Once the before look ended, did every head stay dark (nothing lit) while entries {first}–{last} were held?"
 
 # Which answer must be "yes" before a proposed flag may be applied.
 FLAG_QUESTIONS: dict[str, dict[str, str]] = {
@@ -113,6 +119,16 @@ def flag_questions(job: str, params: Mapping[str, Any]) -> dict[str, str]:
 def question(job: str, params: Mapping[str, Any]) -> str:
     """The confirming question a flag-proposing job asks for these params."""
     return next(iter(flag_questions(job, params).values()))
+
+
+def address_question(pattern: str, start: int, count: int, expected_heads: int | None) -> str:
+    """The question an address probe asks: the markers, and a range wholly past the module's heads, get a yes/no
+    question (those two runs are what Apply map reads, D58); any other range asks where the lit heads are."""
+    if pattern == "markers":
+        return Q_MARKERS
+    if expected_heads is not None and start >= expected_heads:
+        return Q_DARK.format(first=start, last=start + count - 1)
+    return Q_ADDRESS
 
 
 class JobContext(BenchContext, Protocol):
@@ -904,7 +920,7 @@ async def address_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         f"Controller addresses lit: {probe_label}; all other entries are off. "
         "The original slot is saved with this run. No physical mapping has been assumed.",
         obs,
-        ["How many physical heads lit, and where are they when counted from the controller?"],
+        [address_question(pattern, start, count, ctx.expected_heads)],
     )
 
 

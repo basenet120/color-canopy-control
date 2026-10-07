@@ -5,7 +5,7 @@
 import { api, connectLive, simBadge, copyJSON } from "/static/app.js";
 
 const $ = (id) => document.getElementById(id);
-const state = { jobs: [], devices: [], runId: null, record: null, pollTimer: null, liveOpen: false };
+const state = { jobs: [], devices: [], runId: null, record: null, pollTimer: null, liveOpen: false, mapAsk: 0 };
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -271,6 +271,7 @@ function renderResult(record) {
   if (hasProfile) profile.href = `/api/bench/runs/${encodeURIComponent(record.run_id)}/profile.json`;
 
   renderFlags(record);
+  renderMap(record);
 }
 
 function renderFlags(record) {
@@ -297,6 +298,43 @@ function renderFlags(record) {
       : "";
   why.textContent =
     (reason || "Saves these flags to the device's registry overlay, for this kit only.") + undone;
+}
+
+// Apply map (D58): a finished address probe can record its kit's map. The server says what it would record from
+// this run and the kit's other probe, or why not; the button shows only when the proof holds.
+async function renderMap(record) {
+  const button = $("map");
+  const why = $("map-why");
+  const ask = ++state.mapAsk;
+  const probe = record.job === "address_probe_safe" && record.status === "finished";
+  button.hidden = true;
+  why.hidden = !probe;
+  if (!probe) return;
+  const revoked = record.map_revoked;
+  const undone = !revoked
+    ? ""
+    : revoked.undone
+      ? " Taken back after an answer changed: the kit's previous map is back."
+      : " An answer changed, but the kit's map had changed since, so it was left as it is.";
+  const applied = record.map_applied;
+  if (applied) {
+    const heads = applied.mapping.indices.length;
+    const length = applied.mapping.frame_length;
+    why.textContent =
+      `Map recorded: entries 0–${heads - 1} drive heads 1–${heads} of this kit's ${length}-entry controller ` +
+      `(runs ${applied.runs.join(" and ")}). Changing your answer to No takes it back.`;
+    return;
+  }
+  why.textContent = "Checking whether this probe can record the kit's map…";
+  let proposal;
+  try {
+    proposal = await api(`/api/bench/runs/${encodeURIComponent(record.run_id)}/map`);
+  } catch (err) {
+    proposal = { ready: false, reason: err.message };
+  }
+  if (ask !== state.mapAsk) return; // a newer render (another answer, another run) owns the card now
+  button.hidden = !proposal.ready;
+  why.textContent = proposal.reason + undone;
 }
 
 async function answer(question, value) {
@@ -412,6 +450,18 @@ $("flags").addEventListener("click", async () => {
     renderRun(await api(`/api/bench/runs/${encodeURIComponent(state.runId)}/flags`, { method: "POST", body: {} }));
   } catch (err) {
     showError(err.message);
+  }
+});
+$("map").addEventListener("click", async () => {
+  showError("");
+  const button = $("map");
+  button.disabled = true;
+  try {
+    renderRun(await api(`/api/bench/runs/${encodeURIComponent(state.runId)}/map`, { method: "POST", body: {} }));
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    button.disabled = false;
   }
 });
 
