@@ -128,6 +128,121 @@ async def _bench_runner_stale_clock(env: Env, address: str) -> str:
     return str(record["result"]["observations"].get("write", {}).get("status", record["result"]["verdict"]))
 
 
+class _T1Proven:
+    """The registry as the bench runner sees it, with Gate C (T1) recorded on each kit: only the gate and the lock
+    can stop the jobs that need T1."""
+
+    def __init__(self, registry):
+        self.registry = registry
+
+    def __getattr__(self, name: str):
+        return getattr(self.registry, name)
+
+    def get(self, device_id: str):
+        from conductor.config import DeviceFlags
+
+        entry = self.registry.get(device_id)
+        return entry.model_copy(
+            update={"flags": DeviceFlags(t1_frames=True), "flags_proven_on": entry.metadevice_id}
+        )
+
+
+async def _bench_runner_job(env: Env, address: str, job: str, params: dict, *, t1: bool = False) -> str:
+    """A VWBD commissioning job through the runner: refused at the lock for a non-allowlisted device. On the bench
+    kit, the status of its last write — the restore its `finally` sends through the same runner context."""
+    device_id = env.world.registry.logical_for(address).id
+    with tempfile.TemporaryDirectory() as data:
+        services = _BenchServices(env, Path(data))
+        if t1:
+            services.registry = _T1Proven(services.registry)  # type: ignore[assignment]
+        try:
+            record = await BenchRunner(services).run(job, device_id, params)  # type: ignore[arg-type]
+        except BenchBusy:
+            return "lock_refused"
+    writes = [s["detail"]["status"] for s in record["steps"] if s["detail"].get("kind") == "write"]
+    return writes[-1] if writes else str(record["result"]["verdict"])
+
+
+async def _bench_runner_gate_c_safe(env: Env, address: str) -> str:
+    return await _bench_runner_job(env, address, "gate_c_safe", {"source": "custom-2", "target": "custom-1"})
+
+
+async def _bench_runner_address_probe_safe(env: Env, address: str) -> str:
+    return await _bench_runner_job(env, address, "address_probe_safe", {"duration_s": 4.0}, t1=True)
+
+
+async def _bench_runner_effect_probe(env: Env, address: str) -> str:
+    return await _bench_runner_job(env, address, "effect_probe", {"duration_s": 2.0}, t1=True)
+
+
+async def _studio_pair(env: Env, address: str, action) -> str:
+    """/ops/showcase's paired routes (conductor/module/pair.py, scene_gradient.py) with `address` as String light 1.
+    Kingston, its partner, is an allowlisted kit in a separate fake cloud, so only the device under test is counted.
+    Each session is opened as the module page opens it (taking the lock), with Gate C and the kit's own map
+    recorded: only the gate and the lock can stop the pair."""
+    from fake_afero import raw_device_from_dump
+
+    from conductor.config import ConductorSettings, DeviceFlags, FramebufferMapping, load_recipes
+    from conductor.geometry import load_canopy_config
+    from conductor.module import ModuleSession, SessionDeps
+    from conductor.sim.profiles import load_profile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        partner = await make_world(Path(tmp) / "partner")
+        sessions = []
+        try:
+            for device_id, world, kit_env, md in (
+                ("bench-kit", partner, Env(partner), BENCH_MD),
+                ("shop-string-1", env.world, env, address),
+            ):
+                world.fake.devices[md] = raw_device_from_dump(md, load_profile("sqhdk03-sim"))  # 30 heads
+                entry = world.registry.logical_for(md).model_copy(
+                    update={
+                        "id": device_id,
+                        "flags": DeviceFlags(t1_frames=True),
+                        "flags_proven_on": md,
+                        "framebuffer_mapping": FramebufferMapping(
+                            frame_length=30, indices=list(range(30)), proven_on=md
+                        ),
+                    }
+                )
+                deps = SessionDeps(
+                    clock=world.clock,
+                    locks=kit_env.locks,
+                    telemetry=Telemetry(None, world.clock),
+                    settings=ConductorSettings(),
+                    recipes=load_recipes(),
+                    canopy=load_canopy_config(),
+                    entry=lambda _id, entry=entry: entry,
+                )
+                try:
+                    target = Target(device_id, md, world.driver, kit_env.executor)
+                    sessions.append(await ModuleSession.open(deps, target, owner="studio · test"))
+                except LockError:
+                    return "lock_refused"
+            result = await action(sessions, Path(tmp))
+            return str(result["modules"]["shop-string-1"]["result"]["status"])
+        finally:
+            for session in sessions:
+                await session.close()
+            await partner.driver.close()
+
+
+async def _studio_pair_whole(env: Env, address: str) -> str:
+    from conductor.module.pair import apply_pair
+
+    return await _studio_pair(env, address, lambda sessions, _data: apply_pair(sessions, {"power": True}))
+
+
+async def _studio_pair_gradient(env: Env, address: str) -> str:
+    from conductor.module import scene_gradient
+
+    colors = [[255 - 8 * i, 0, 8 * i] for i in range(30)]
+    return await _studio_pair(
+        env, address, lambda sessions, data: scene_gradient.apply(sessions, colors, 30, "writer path", data)
+    )
+
+
 async def _module_page_paint(env: Env, address: str) -> str:
     """/ops/module: open the device (takes its lock) → paint three heads (a T1 frame write + select, one PUT)."""
     import json
@@ -328,6 +443,11 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "driver.write (anything bypassing the executor)": _driver_direct,
     "bench runner (gate_c)": _bench_runner_gate_c,
     "bench runner (stale_clock_put, shifted stamp)": _bench_runner_stale_clock,
+    "bench runner (gate_c_safe, with restore)": _bench_runner_gate_c_safe,
+    "bench runner (address_probe_safe, with restore)": _bench_runner_address_probe_safe,
+    "bench runner (effect_probe, with restore)": _bench_runner_effect_probe,
+    "studio pair (whole module)": _studio_pair_whole,
+    "studio pair (scene gradient)": _studio_pair_gradient,
     "module page (paint)": _module_page_paint,
     "module page (lowcountry preview)": _module_page_lowcountry_preview,
     "canopy engine (mode change)": _canopy_mode_change,
