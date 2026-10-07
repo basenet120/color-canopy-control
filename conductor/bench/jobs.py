@@ -1707,7 +1707,7 @@ JOBS: dict[str, Job] = {
                 "Gate A — read-only profile dump",
                 "Reads what the kit says it can do: slots, frame length, colour modes, white range, presets.",
                 writes=False,
-                look_for="Nothing changes on the lights. Pass = 3 slots with a 30-entry frame.",
+                look_for="Nothing changes on the lights. Pass = 3 slots with a 30- or 60-entry frame.",
             ),
             gate_a,
         ),

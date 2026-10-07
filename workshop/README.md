@@ -1,6 +1,6 @@
-# Current distribution — October 2, 2026
+# Distribution of October 2, 2026
 
-Start with [VWBD-HANDOFF.md](VWBD-HANDOFF.md) for the current setup, completed physical tests, repairs and next test. This is the updated user-supplied ZIP baseline, not the initial untested kit. The Windows browser workflow is supported; a phone app is not required for these continuing tests.
+[VWBD-HANDOFF.md](VWBD-HANDOFF.md) is the October 2 record of the setup, completed physical tests, repairs and next test — read it as of that date. What VWBD found through October 7, and the order for commissioning another kit, is in `docs/bench-prototype-01.md` §5a (in the repository: `docs/runbooks/bench-prototype-01.md`). This is the updated user-supplied ZIP baseline, not the initial untested kit. The Windows browser workflow is supported; a phone app is not required for these continuing tests.
 
 The original workshop guide follows for background. Its simulator-first tutorial is optional.
 
@@ -83,6 +83,11 @@ module. Open **http://localhost:8000/ops/bench/** and, with the module in view:
 4. Optional: open **http://localhost:8000/ops/bench/clock/** on a second screen next to the module and film both —
    the video tells us how fast the lights respond.
 
+**A 60-entry kit also needs its own map.** If Gate A reports 60 entries per slot for 30 pucks (like Kingston), Gate C
+alone doesn't switch painting on: commission that kit with **Gate C — bounded replay** (`gate_c_safe`) → **Address
+probe — bounded** (`address_probe_safe`) → record that kit's own map, as in `docs/bench-prototype-01.md` §5a. Never
+copy another kit's flags or map.
+
 If Gate C fails, tell Alon — you can still test whole-module colours and saved patterns painted in the Hubspace app.
 
 ## 4 · Testing Prototype 01 — the module page
@@ -123,7 +128,7 @@ press **Done**, close it, or leave it for 10 minutes. At the top it says who is 
 | The browser asks for a password | User **workshop**, password in `workshop.env` (open it with a text editor). |
 | The phone can't open the page | Same Wi-Fi as the laptop? Use the address the program printed; allow the firewall prompt. |
 | "isn't in the allowlist" / "can't be locked" | Do step 2.4–2.6 (Use as Bench kit → allow → restart). |
-| Painting is greyed out | Gate C hasn't passed on this module yet (step 3). |
+| Painting is greyed out | Gate C hasn't passed on this module yet, or (60-entry kit) its own map isn't recorded yet (step 3). |
 | "In use by …" | Someone else has the module page open. Wait, or press take over. |
 | "Re-sign-in required" | Sign in again on /ops/accounts (step 2.3). |
 | Lights don't change but the page says done | Check the module has power and Wi-Fi (the Hubspace app shows it online), then reload the page. |

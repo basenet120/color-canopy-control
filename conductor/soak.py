@@ -31,8 +31,8 @@ on the virtual clock with a temporary `CONDUCTOR_DATA_DIR` and `conductor.show.S
 lifespan builds it: capabilities read from each module's (simulated) profile in the background, the looks compiler,
 the commissioning gate on T1, slot records (hash, origin, effect fields) in the registry overlay, the same ladder and
 tier rules. Only the simulator's conditions (pinned) and one soak-only setting differ: `config/sim/soak.yaml` enables a
-SIMULATED on-device motion code for Golden Hour, so the all-or-none motion re-trigger (07 §6) is measured too. Nothing
-real has been benched; the report says so.
+SIMULATED on-device motion code for Golden Hour, so the all-or-none motion re-trigger (07 §6) is measured too. On real
+hardware code 1 has only one bounded bench run (Kingston) and `effects.enabled` stays empty; the report says so.
 
 `run_soak(compiler=...)` still takes any object with `compile(mode_id, tier)`, `ladder(mode_id)` and `modes()` and
 then runs the bare engine on it (the older world: every tier allowed, no overlay); `BuiltinCompiler` below is kept for
@@ -941,7 +941,8 @@ def _motion_line(results: dict) -> str:
         return f"- Motion: no motion code enabled; accepted changes by tier: {tiers}."
     return (
         f"- Motion: **SIMULATED** — `config/sim/soak.yaml` enables motionEffect {motion['motionEffect']} for "
-        f"{motion['mode']} (soak only; nothing has been benched and the simulator doesn't animate). "
+        f"{motion['mode']} (soak only; on real hardware code 1 has one bounded bench run on Kingston and "
+        "`effects.enabled` stays empty; the simulator doesn't animate). "
         f"{wiring.get('motion_plans', 0)} accepted changes installed a motion plan (all-or-none re-trigger). "
         f"Accepted changes by tier: {tiers}."
     )
