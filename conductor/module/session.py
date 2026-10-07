@@ -356,13 +356,19 @@ class ModuleSession:
             raise ModuleError(f"{slot} holds {len(entries)} heads but this module has {self.n}.")
         return entries
 
-    def _controller_frame(self, frame: Sequence[R.FrameEntry]) -> list[R.FrameEntry]:
+    def _controller_frame(
+        self, frame: Sequence[R.FrameEntry], base: Sequence[R.FrameEntry] | None = None
+    ) -> list[R.FrameEntry]:
+        """The wire frame: the heads at their mapped entries, every other entry OFF — or, with `base` (the slot
+        as read), every other entry exactly as read, so rewriting a slot's header doesn't change its pattern."""
         if len(frame) != self.n:
             raise R.PayloadError(f"paint has {len(frame)} heads but this module has {self.n}")
         indices = self.frame_indices()
         if indices is None:
             return list(frame)
-        result = [C.OFF] * self.caps.framebuffer_length
+        if base is not None and len(base) != self.caps.framebuffer_length:
+            raise R.PayloadError("the slot no longer matches the calibrated controller frame")
+        result = list(base) if base is not None else [C.OFF] * self.caps.framebuffer_length
         for i, address in enumerate(indices):
             result[address] = frame[i]
         return result
@@ -435,9 +441,11 @@ class ModuleSession:
         select: bool = True,
         effects: Mapping[str, int] | None = None,
         extra: Sequence[StateRow] = (),
+        as_read: bool = False,
     ) -> dict:
         """T1: one frame into `slot` (header + length from the device's readback), selected in the same PUT
-        (plus `extra` rows, e.g. a mode's brightness — still one PUT)."""
+        (plus `extra` rows, e.g. a mode's brightness — still one PUT). `as_read` keeps the controller entries no
+        head is mapped to as they were read (effect start/restart), instead of writing them OFF."""
         self._check_can_write()
         self._require_t1()
         header = self._slot_value(slot)
@@ -446,7 +454,7 @@ class ModuleSession:
         try:
             value = R.frame_value(
                 header,
-                self._controller_frame(frame),
+                self._controller_frame(frame, R.frame_entries(header) if as_read else None),
                 expected_length=self.caps.framebuffer_length,
                 effects=effects,
                 cct_range=self.caps.cct_range,
@@ -861,7 +869,9 @@ class ModuleSession:
                 )
                 out["notes"] = ["T1 isn't proven here, so only a re-select was sent (no header rewrite)."]
                 return out
-            return await self._write_frame(slot, self._slot_entries(slot), f"restart effect in {slot}")
+            return await self._write_frame(
+                slot, self._slot_entries(slot), f"restart effect in {slot}", as_read=True
+            )
         if action != "start":
             raise ModuleError("action must be start or restart", 400)
         enabled = self.effects_enabled()
@@ -885,7 +895,11 @@ class ModuleSession:
         self._stop_sweep_for("Stopped: you started an effect.")
         desc = ", ".join(f"{k}={v}" for k, v in chosen.items()) or "header unchanged"
         return await self._write_frame(
-            slot, self._slot_entries(slot), f"start effect in {slot} ({desc})", effects=chosen
+            slot,
+            self._slot_entries(slot),
+            f"start effect in {slot} ({desc})",
+            effects=chosen,
+            as_read=True,
         )
 
     def calibrate(
