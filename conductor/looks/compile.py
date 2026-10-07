@@ -28,7 +28,13 @@ Rules implemented:
   (`SAFE_MODES`) never waits: it assumes `SAFE_DEFAULT_CAPS` for an unread module.
 - **Kelvin in the copy.** A strand look whose copy names its Kelvin value uses the configured fallback look when a
   module's range would clamp that value (Lowcountry Calm never says "2700 K" at 3000 K).
-- `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order.
+- **A kit's controller map (D54).** With `addresses` (the show), a module whose `framebuffer_mapping` was proven on
+  the device at its address (`conductor.framemap.frame_indices`) takes T1 frames of its full controller length: its
+  heads at their mapped entries, every other entry OFF. A saved map that doesn't match the kit, or a longer frame with
+  no map, refuses T1 with `conductor.framemap.head_check`'s reason (whole-strand tiers and app-painted T2 slots still
+  compile). Without `addresses` no map is consulted.
+- `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
+  kit's map when it has one).
 """
 
 from __future__ import annotations
@@ -40,13 +46,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from conductor import render
+from conductor import framemap, render
 from conductor import rows as R
 from conductor.capabilities import Capabilities
 from conductor.config import CONFIG_DIR, DeviceEntry, DeviceFlags, RecipesFile, load_recipes
 from conductor.drivers.base import StateRow
 from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Tier
-from conductor.geometry import load_canopy_config
+from conductor.geometry import load_canopy_config, panel_lattice
 from conductor.looks.composer import compose_canvas, parse_position, placement_for
 from conductor.looks.schema import LookSpec, Mode, ModesFile, load_modes
 
@@ -105,6 +111,8 @@ class CompileContext:
       profile hasn't been read. Every other mode leaves such a module out of the plan (`ModePlan.skipped`).
     - `flags`: device id → bench `DeviceFlags` (already resolved for the kit at that address). None = simulator:
       every tier allowed.
+    - `addresses`: device id → the driver address its capabilities were read from (the Afero metadevice id live, the
+      sim address in sim). A kit's `framebuffer_mapping` applies only through this (D54, D25). None = no map is used.
     - `modes`, `recipes`, `canopy`: loaded from `config_dir` when not given.
     """
 
@@ -121,6 +129,7 @@ class CompileContext:
     recipes: RecipesFile | None = None
     canopy: dict | None = None
     config_dir: Path = CONFIG_DIR
+    addresses: Mapping[str, str | None] | None = None
 
     def __post_init__(self) -> None:
         key = str(self.config_dir)
@@ -189,6 +198,13 @@ class CompileContext:
 
     def readback(self, device_id: str, slot: str) -> Any:
         return (self.slot_readback.get(device_id) or {}).get(slot)
+
+    def frame_indices(self, entry: DeviceEntry, caps: Capabilities) -> list[int] | None:
+        """The module's proven controller map (D54) for the device at its address, or None (see `addresses`)."""
+        if self.addresses is None or self.canopy is None:
+            return None
+        heads = len(panel_lattice(self.canopy))
+        return framemap.frame_indices(entry, self.addresses.get(entry.id), caps, heads)
 
 
 # ---- public API --------------------------------------------------------------------------------------------------
@@ -427,10 +443,14 @@ def _target(
     slot_value: dict | None = None,
     slot_hash: str | None = None,
     preview_rows: list[StateRow] | None = None,
+    indices: list[int] | None = None,
 ) -> ModuleTarget:
     rows = R.dedupe(rows)
     preview = render.head_colors(
-        preview_rows if preview_rows is not None else rows, _heads(entry, caps), caps
+        preview_rows if preview_rows is not None else rows,
+        len(indices) if indices is not None else _heads(entry, caps),
+        caps,
+        indices,
     )
     return ModuleTarget(
         device_id=entry.id,
@@ -494,7 +514,9 @@ def _strand(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
     modules = {}
     for d in devices:
         look = _to_look(spec, caps[d.id], notes, d.id, preset)
-        modules[d.id] = _target(d, caps[d.id], _vector(look, caps[d.id]))
+        modules[d.id] = _target(
+            d, caps[d.id], _vector(look, caps[d.id]), indices=ctx.frame_indices(d, caps[d.id])
+        )
     return ModePlan(mode_id, mode.label, Tier.STRAND, feature, False, modules, notes.lines(len(devices)))
 
 
@@ -515,7 +537,17 @@ def _canvas(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
             raise PlanError(
                 f"frames written by the Conductor (T1) aren't proven on {d.id} yet (bench Gate C)"
             )
-    placements = [placement_for(ctx.canopy, d, frame_length=caps[d.id].framebuffer_length) for d in devices]
+    indices = {d.id: ctx.frame_indices(d, caps[d.id]) for d in devices}
+    for d in devices:
+        if ctx.addresses is not None and d.framebuffer_mapping is not None and indices[d.id] is None:
+            check = framemap.head_check(
+                d, ctx.addresses.get(d.id), caps[d.id], len(panel_lattice(ctx.canopy))
+            )
+            raise PlanError(f"{d.id}: {check.problem}")  # a saved map that isn't valid always has a problem
+    placements = [
+        placement_for(ctx.canopy, d, frame_length=caps[d.id].framebuffer_length, indices=indices[d.id])
+        for d in devices
+    ]
     frames = compose_canvas(tech.canvas, canopy=ctx.canopy, recipes=ctx.recipes, placements=placements)
 
     # Motion only when the configured code is one the bench has enabled; otherwise static, and the copy says so.
@@ -581,6 +613,7 @@ def _canvas(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceE
             slot_value=value,
             slot_hash=R.slot_hash(value),
             preview_rows=[*rows, slot_row],
+            indices=indices[d.id],
         )
     return ModePlan(mode_id, mode.label, Tier.T1, feature, motion, modules, notes.lines(len(devices)))
 
@@ -655,7 +688,10 @@ def _slot(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEnt
             )
             value = {R.FRAME_CLASS: {"frameBuffer": {"framebuffer": [e.to_json() for e in design[d.id]]}}}
             preview_rows = [*rows, R.slot_write(slot, value)]
-        modules[d.id] = _target(d, c, rows, slot=slot, slot_hash=recorded, preview_rows=preview_rows)
+        indices = ctx.frame_indices(d, c)
+        modules[d.id] = _target(
+            d, c, rows, slot=slot, slot_hash=recorded, preview_rows=preview_rows, indices=indices
+        )
         if preview_rows is None:
             modules[d.id].preview = []
     return ModePlan(mode_id, mode.label, Tier.T2, tech.feature, motion, modules, notes.lines(len(devices)))
@@ -670,7 +706,13 @@ def _design_frames(
         return {}
     try:
         placements = [
-            placement_for(ctx.canopy, d, frame_length=caps[d.id].framebuffer_length) for d in devices
+            placement_for(
+                ctx.canopy,
+                d,
+                frame_length=caps[d.id].framebuffer_length,
+                indices=ctx.frame_indices(d, caps[d.id]),
+            )
+            for d in devices
         ]
         return compose_canvas(tech.canvas, canopy=ctx.canopy, recipes=ctx.recipes, placements=placements)
     except PlanError:
@@ -703,7 +745,7 @@ def _modules(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
         if problem := _look_problem(spec, c):
             raise PlanError(f"{mode.label} (module level) can't run on {d.id}: {problem}")
         look = _to_look(spec, c, notes, d.id)
-        modules[d.id] = _target(d, c, _vector(look, c))
+        modules[d.id] = _target(d, c, _vector(look, c), indices=ctx.frame_indices(d, c))
     return ModePlan(mode_id, mode.label, Tier.T3, tech.feature, False, modules, notes.lines(len(devices)))
 
 

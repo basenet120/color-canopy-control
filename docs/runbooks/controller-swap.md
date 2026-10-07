@@ -22,13 +22,16 @@ and ideally passed Gates B and C then. If a spare wasn't onboarded, step 3 cover
    (*Registered as spare-K*, or *Not registered*) → **Swap in as** / **Register as** → `Module N (canopy-rXcY) —
    replaces its current kit` → confirm.
    - The message says *Moved from spare-K to canopy-rXcY* and whether **its bench flags came with it** (they do if
-     that kit passed Gates B and C). The old kit's id is replaced in the ops overlay; with
+     that kit passed Gates B and C) and whether **its controller map came with it** (it does if that kit was mapped,
+     D57). The old kit's id is replaced in the ops overlay; with
      `HUBSPACE_DEVICE_ALLOWLIST=registry` the new kit is writable at once, the old one no longer is.
 5. **Gates, only if the flags didn't come along** (5 min): `/ops/bench/` → Module N → Gate B → Apply flags; Gate C
    → Apply flags (`install-day-commissioning.md` step 5). Without them this module shows painted modes at module
-   level only.
+   level only. **If the map didn't come along** on a 60-entry kit, map it per `bench-prototype-01.md` §5a
+   (`gate_c_safe` → `address_probe_safe` → record the map). Until then its painted looks are whole-strand only.
 6. **Recalibrate** (5 min): `/ops/calibrate/` → Module N → hue ramp → photo → check or flip the wire order → Save →
-   close the page. A new controller may number the pucks from the other end.
+   close the page. A new controller may number the pucks from the other end. If a map came with the controller onto
+   this module's strings, check the markers against it before trusting it.
 7. **Recommission its slots** (2 min): `/ops` → **Commission slots…** → Commission. The new kit's slots are empty,
    so the old hashes no longer match; this writes and records them.
 8. **Verify** (5 min):
