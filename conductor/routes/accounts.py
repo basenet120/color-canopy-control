@@ -447,6 +447,10 @@ async def api_register(request: Request, account: str, _ops: Ops) -> JSONRespons
     services.extras.get("capabilities", {}).pop(entry.id, None)
     if spare is not None:
         services.extras.get("capabilities", {}).pop(spare.id, None)
+    if (wiring := services.extras.get("show")) is not None:
+        # the show's cached profile is the old controller's: drop it so the carried map is never judged against it
+        wiring.caps.pop(entry.id, None)
+        wiring.request_refresh([entry.id])
     allowlisted = metadevice_id in services.gate.effective_allowlist()
     if simulated:
         message = (

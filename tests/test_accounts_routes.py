@@ -268,6 +268,22 @@ def test_a_swapped_in_spare_brings_the_controller_map_proven_on_it(app_client, t
     assert services.registry.get("canopy-r0c0").framebuffer_mapping.proven_on == "md-dead-0006"
 
 
+def test_a_swap_drops_the_shows_cached_profile_of_the_old_controller(app_client_show):
+    """After a swap the show must not judge the carried map against the dead controller's cached profile: it drops
+    that module's capabilities and reads the new kit's at once."""
+    services = app_client_show.app.state.services
+    wiring = services.extras["show"]
+    refreshed: list[list[str] | None] = []
+    wiring.request_refresh = lambda ids=None: refreshed.append(ids)
+    sentinel = object()
+    wiring.caps["canopy-r1c1"] = sentinel
+    r = app_client_show.post(
+        "/api/accounts/canopy/register", json={"metadevice_id": "md-new-0001", "device_id": "canopy-r1c1"}
+    )
+    assert r.status_code == 200
+    assert wiring.caps.get("canopy-r1c1") is not sentinel and refreshed == [["canopy-r1c1"]]
+
+
 # ---- the /ops/accounts form --------------------------------------------------------------------------------------
 def test_form_is_off_without_the_flag(app_client):
     r = _form(app_client, {"account": "bench", "email": EMAIL, "password": PASSWORD})

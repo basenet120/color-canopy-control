@@ -285,6 +285,13 @@ def test_the_one_rule_needs_every_slot_to_report_one_length():
     )
     unmapped = entry.model_copy(update={"framebuffer_mapping": None})
     assert framemap.head_check(unmapped, ADDRESS, mixed, 30).kind == "other"
+    # a segment hint but no slot readback: the length is only the hint, so the cause is the readback (Refresh), not
+    # a map that fails on its own terms
+    hint_only = Capabilities(segment_hint=60)
+    assert hint_only.framebuffer_length == 60 and not hint_only.framebuffer_lengths
+    assert framemap.head_check(entry, ADDRESS, hint_only, 30) == framemap.HeadCheck(
+        framemap.NO_SLOT_LENGTHS, "other"
+    )
 
 
 def test_the_7am_check_passes_a_mapped_kit_and_says_the_head_check_is_visual(app_client):

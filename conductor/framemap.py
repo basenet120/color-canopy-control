@@ -22,6 +22,7 @@ _STILL_WORKS = (
     "still work"
 )
 MAP_MISMATCH = f"the saved controller map doesn't match this kit (D54): {_STILL_WORKS}"
+NO_SLOT_LENGTHS = "the device's slots report no frame length — per-head writes refused"
 
 
 def capacity_problem(frame_length: int, heads: int) -> str:
@@ -82,6 +83,9 @@ def head_check(entry: Any, address: str | None, caps: Any, heads: int) -> HeadCh
     if problem is not None and (mixed or n is None or short):
         return HeadCheck(problem, "short" if short else "other")
     if entry.framebuffer_mapping is not None:
+        if not caps.framebuffer_lengths:
+            # the length above is only the segment hint: no slot readback to judge the map by (Refresh, not re-map)
+            return HeadCheck(NO_SLOT_LENGTHS, "other")
         return HeadCheck(MAP_MISMATCH, "map_mismatch")
     if not mixed and unmapped_capacity(n, expected, heads):
         return HeadCheck(capacity_problem(n, expected), "no_map")
