@@ -58,7 +58,8 @@ class Context:
 
 
 def params(**values):
-    return coerce_params(JOBS["address_probe"].spec, values)
+    # address_probe is no longer a job of its own; address_probe_safe coerces its params and calls it.
+    return coerce_params(JOBS["address_probe_safe"].spec, {"slot": "custom-3", "brightness": 40, **values})
 
 
 class AddressProbeTests(unittest.IsolatedAsyncioTestCase):
