@@ -9,6 +9,7 @@ Control software for the Home Depot × Hearst "Whole Home" activation at 284 Mee
 make setup   # uv sync (Python 3.12)
 make test    # pytest
 make run     # http://localhost:8000 → canopy visualizer (the Studio, /ops/showcase/, is home only in the VWBD workshop, D56)
+make guest-dev  # the guest panel on the simulator, both shop modules mapped: http://127.0.0.1:8100/kiosk/?debug=1
 ```
 
 ## Where things are

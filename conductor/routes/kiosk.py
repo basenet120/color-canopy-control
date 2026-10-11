@@ -295,9 +295,18 @@ def _refuse(status: int, message: str, **extra: Any) -> JSONResponse:
     return JSONResponse({"detail": message, **extra}, status_code=status, headers=headers)
 
 
+Refusal = tuple[
+    int, str, dict[str, float]
+]  # (HTTP status, guest-safe sentence, extra JSON such as retry_after_s)
+
+
+def cooldown_refusal(retry_after_s: float | None) -> Refusal:
+    return 429, COOLDOWN, {"retry_after_s": round(min(MAX_RETRY_AFTER_S, max(0.0, retry_after_s or 0.0)), 3)}
+
+
 def _cooldown(retry_after_s: float | None) -> JSONResponse:
-    wait = round(min(MAX_RETRY_AFTER_S, max(0.0, retry_after_s or 0.0)), 3)
-    return _refuse(429, COOLDOWN, retry_after_s=wait)
+    status, message, extra = cooldown_refusal(retry_after_s)
+    return _refuse(status, message, **extra)
 
 
 def _retry(seconds: float | None) -> dict[str, float]:
@@ -306,35 +315,46 @@ def _retry(seconds: float | None) -> dict[str, float]:
     return {"retry_after_s": round(min(MAX_RETRY_AFTER_S, seconds), 3)}
 
 
-def _refused_state(engine: Any, st: CanopyState, now: float) -> JSONResponse:
+def refusal_for_state(engine: Any, st: CanopyState, now: float) -> Refusal:
     """The plain refusal for a `CanopyState` the engine returned with `refused=True` (conductor/canopy.py never
     raises). The engine's own sentence is for ops (it may name tiers and reasons), so it goes to the log; the guest
-    gets the kiosk's calm copy."""
+    gets the kiosk's calm copy. (Shared with the guest panel, conductor/guest_panel.py.)"""
     log.info("The canopy engine declined a kiosk choice: %s", st.message)
     if _flag(engine, "stopped") is True:
-        return _refuse(503, RESTING)
+        return 503, RESTING, {}
     if _flag(engine, "commissioning") is True:
-        return _refuse(503, BEING_SET_UP, **_retry(st.retry_after_s or 30.0))
+        return 503, BEING_SET_UP, _retry(st.retry_after_s or 30.0)
     if _flag(engine, "outage") is not None:
-        return _refuse(503, RESTING, **_retry(st.retry_after_s))
+        return 503, RESTING, _retry(st.retry_after_s)
     if _flag(engine, "paused") is True or not st.guest_input:
-        return _refuse(423, PAUSED)
+        return 423, PAUSED, {}
     wait = _remaining(st.cooldown_until, now)
     if wait > 0:
-        return _cooldown(wait)
+        return cooldown_refusal(wait)
     if st.phase == CanopyPhase.RESTING:
-        return _refuse(503, RESTING, **_retry(st.retry_after_s))
-    return _refuse(409, UNAVAILABLE)
+        return 503, RESTING, _retry(st.retry_after_s)
+    return 409, UNAVAILABLE, {}
+
+
+def refusal_for(exc: ModeRefused) -> Refusal:
+    """The plain refusal for a `ModeRefused` raised by the engine (older engines and the fakes)."""
+    if exc.reason is RefusalReason.COOLDOWN:
+        return cooldown_refusal(exc.retry_after_s)
+    if exc.reason is RefusalReason.PAUSED:
+        return 423, PAUSED, {}
+    if exc.reason is RefusalReason.UNKNOWN_MODE:
+        return 404, UNKNOWN, {}
+    return 503, RESTING, {}
+
+
+def _refused_state(engine: Any, st: CanopyState, now: float) -> JSONResponse:
+    status, message, extra = refusal_for_state(engine, st, now)
+    return _refuse(status, message, **extra)
 
 
 def _refusal(exc: ModeRefused) -> JSONResponse:
-    if exc.reason is RefusalReason.COOLDOWN:
-        return _cooldown(exc.retry_after_s)
-    if exc.reason is RefusalReason.PAUSED:
-        return _refuse(423, PAUSED)
-    if exc.reason is RefusalReason.UNKNOWN_MODE:
-        return _refuse(404, UNKNOWN)
-    return _refuse(503, RESTING)
+    status, message, extra = refusal_for(exc)
+    return _refuse(status, message, **extra)
 
 
 def _modes_or_503() -> list[dict[str, Any]]:

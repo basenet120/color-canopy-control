@@ -243,6 +243,100 @@ async def _studio_pair_gradient(env: Env, address: str) -> str:
     )
 
 
+class _TwoWorldLocks:
+    """`locks.holder` over the two fake clouds' lock managers (the guest panel asks who holds each module)."""
+
+    def __init__(self, by_address: dict):
+        self.by_address = by_address
+
+    def holder(self, address: str):
+        return self.by_address[address].holder(address)
+
+
+async def _guest_panel_workshop(env: Env, address: str, act, shown: str | None = None) -> str:
+    """The guest panel's workshop target (conductor/guest_panel.py) with `address` as String light 1. The target opens
+    both sessions itself, as "guest panel" and never stealing, then runs one guest action through its lane. As in
+    `_studio_pair`, Kingston is an allowlisted kit in a separate fake cloud, and Gate C and each kit's own map are
+    recorded: only the gate and the lock can stop it."""
+    from fake_afero import raw_device_from_dump
+
+    from conductor.config import ConductorSettings, DeviceFlags, FramebufferMapping, load_recipes
+    from conductor.geometry import load_canopy_config
+    from conductor.guest_panel import GuestRefused, WorkshopDeps, WorkshopTarget
+    from conductor.module import ModuleSession, SessionDeps
+    from conductor.sim.profiles import load_profile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        partner = await make_world(Path(tmp) / "partner")
+        kits = {}
+        for device_id, world, kit_env, md in (
+            ("bench-kit", partner, Env(partner), BENCH_MD),
+            ("shop-string-1", env.world, env, address),
+        ):
+            world.fake.devices[md] = raw_device_from_dump(md, load_profile("sqhdk03-sim"))  # 30 heads
+            entry = world.registry.logical_for(md).model_copy(
+                update={
+                    "id": device_id,
+                    "flags": DeviceFlags(t1_frames=True),
+                    "flags_proven_on": md,
+                    "framebuffer_mapping": FramebufferMapping(
+                        frame_length=30, indices=list(range(30)), proven_on=md
+                    ),
+                }
+            )
+            kits[device_id] = (world, kit_env, md, entry)
+
+        async def open_session(device_id: str) -> ModuleSession:
+            world, kit_env, md, entry = kits[device_id]
+            deps = SessionDeps(
+                clock=world.clock,
+                locks=kit_env.locks,
+                telemetry=Telemetry(None, world.clock),
+                settings=ConductorSettings(),
+                recipes=load_recipes(),
+                canopy=load_canopy_config(),
+                entry=lambda _id, entry=entry: entry,
+            )
+            return await ModuleSession.open(
+                deps, Target(device_id, md, world.driver, kit_env.executor), owner="guest panel"
+            )
+
+        target = WorkshopTarget(
+            WorkshopDeps(
+                clock=env.world.clock,
+                settings=ConductorSettings(),
+                data=Path(tmp),
+                locks=_TwoWorldLocks({k[2]: k[1].locks for k in kits.values()}),  # type: ignore[arg-type]
+                open_session=open_session,
+                address_of=lambda device_id: kits[device_id][2],
+            )
+        )
+        try:
+            try:
+                await act(target)
+            except GuestRefused:
+                return "lock_refused"
+            await target.wait_idle()
+            assert shown is None or target.shown == shown, (
+                target.last_job
+            )  # the gradient path, not the fallback
+            return str(target.sessions["shop-string-1"].results[0]["status"])
+        finally:
+            await target.close()
+            await partner.driver.close()
+
+
+async def _guest_panel_scene(env: Env, address: str) -> str:
+    from conductor.scenes import load_scenes
+
+    scene = load_scenes().get("coastal-tides")
+    return await _guest_panel_workshop(env, address, lambda t: t.scene(scene), shown="gradient")
+
+
+async def _guest_panel_power(env: Env, address: str) -> str:
+    return await _guest_panel_workshop(env, address, lambda t: t.power(True))
+
+
 async def _module_page_paint(env: Env, address: str) -> str:
     """/ops/module: open the device (takes its lock) → paint three heads (a T1 frame write + select, one PUT)."""
     import json
@@ -448,6 +542,8 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "bench runner (effect_probe, with restore)": _bench_runner_effect_probe,
     "studio pair (whole module)": _studio_pair_whole,
     "studio pair (scene gradient)": _studio_pair_gradient,
+    "guest panel (workshop scene gradient)": _guest_panel_scene,
+    "guest panel (workshop power)": _guest_panel_power,
     "module page (paint)": _module_page_paint,
     "module page (lowcountry preview)": _module_page_lowcountry_preview,
     "canopy engine (mode change)": _canopy_mode_change,

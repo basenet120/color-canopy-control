@@ -24,6 +24,18 @@ only so far)._
    map from its own two answered `address_probe_safe` runs (D58, closes gap 9). It follows the agreed proof rule and
    only ever records the identity map. Also: taking back a Yes revokes it, the show re-reads that module at once,
    a CLI `map` command, and yes/no questions for the two map probes.
+5. **`claude/guest-panel` (based on `d897843`, the six-scene catalog) → after the scene catalog**: the guest panel's
+   backend (part 1 of 2; the iPad UI follows on top). `conductor/guest_panel.py` + `conductor/routes/guest.py`:
+   `GET /api/kiosk/panel`, `POST /api/kiosk/scene|brightness|power`, ops-only `GET /api/kiosk/debug`. Workshop target
+   (CONDUCTOR_ENV=workshop* and both shop modules registered) drives the two shop strands only through ModuleSession /
+   `apply_pair` / `scene_gradient` as "guest panel" (never steals a lock; gradient when both kits have their own map,
+   else the scene's solid colour; Custom 1 only, the original Custom 1 backup kept); engine target everywhere else
+   (`request_mode(scene_id)`; brightness/power only if the engine has `set_guest_*`). "Guest panel" buttons on /ops
+   and the Studio header; `make guest-dev` runs it on the simulator (port 8100, 60-entry controllers, mapped).
+   **Verified (sim):** `tests/test_guest_panel.py` (30) + two new writer paths; full suite, lint, node tests; the
+   launcher exercised by curl (gradient applied, brightness coalesced, leases "guest panel").
+   **Needs real hardware:** a guest scene on Kingston + String light 1 (String light 1 needs its own Gate C and map
+   first, or the panel shows solid colours — by design).
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
