@@ -24,6 +24,11 @@ only so far)._
    map from its own two answered `address_probe_safe` runs (D58, closes gap 9). It follows the agreed proof rule and
    only ever records the identity map. Also: taking back a Yes revokes it, the show re-reads that module at once,
    a CLI `map` command, and yes/no questions for the two map probes.
+5. **`claude/scene-modes` → after the scene catalog commit (`d897843`, `config/scenes.yaml`)**: the show's six modes
+   become the six approved scenes (D59). Coastal Tides replaces Holiday at Home, every tier renders the scene's
+   palette, and nothing moves. Three scenes are painted (one per slot); the other three start at module level.
+   Verified in sim only: the full pytest suite, the node tests, `make lint`, and an 8-hour soak with every target
+   PASS (24 SIMULATED motion plans; canvas 71 and module level 96 accepted changes). No light was touched.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -214,10 +219,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - Formal Gate B (slot select). No recorded run shows a slot select on the lights (the Sep 27 Slots-tab report has no
   run record); Gate C's BEFORE select was confirmed by readback only (CLOUD). Also readback semantics with the kit unplugged.
 - **Effect codes:** only code 1 has been tried, bounded. Vendor name, direction, period and phase restart are
-  unknown, and `effects.enabled` stays empty, so Golden Hour remains a static glow and says so. Two-controller phase
-  alignment is unmeasured.
-- Per-puck white and colour recipes through Mylar (Prototype 01); per-entry CCT/white fields; the hue ramp; 1–10 %
-  dimming smoothness.
+  unknown, and `effects.enabled` stays empty. Since D59 no show scene moves, Golden Hour included. Two-controller
+  phase alignment is unmeasured.
+- Per-puck white and colour recipes through Mylar (Prototype 01), including the six scene palettes at their draft
+  brightness (D59: they are RGB-only until then); per-entry CCT/white fields; the hue ramp; 1–10 % dimming smoothness.
 - Real latency, throttling (writes and the 1.8 GET/s true-up reads), token rotation, 401/403 semantics.
 - Stale-clock writes, rewriting the showing slot, the 12-puck fault. Whether that fault shows in the cloud (frame
   length, `connected-light-count`) is unbenched (gate 10); until then the check is visual.
@@ -226,8 +231,11 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - iOS Safari: enrollment cookies, beacon on page close, Guided Access.
 
 ## Decisions Alon owes
-- **Golden Hour technique and kiosk look** (06 #12–13, was due Oct 5). The new input is the bounded code-1 movement on
-  Kingston; there is no direction or multi-controller phase data yet.
+- **Which three scenes get the painted slots** (D59). Today Rainbow Row Sunset, Garden Gathering and Golden Hour keep
+  custom-1..3, and Lowcountry Calm (the idle look), Coastal Tides and The Goodnight Glow run at module level. Swapping
+  is a config change. Also the scenes' brightness drafts, at the physical mood approval. (Golden Hour's technique,
+  06 #12, is settled by D59: static.)
+- **Kiosk look** (06 #13, was due Oct 5): client copy and brand sign-off.
 - **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback
   criteria are in D26.
 - **Authorization letter** from Home Depot before any show-account writes (06 #20).

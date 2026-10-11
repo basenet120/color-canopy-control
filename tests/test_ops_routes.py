@@ -152,7 +152,10 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     _wait_ready(app_client, "golden-hour")
     body = app_client.get("/api/canopy/heads").json()
     assert body["engine"] is True and body["mode"] == "golden-hour" and body["tier"] == "modules"
-    assert body["feature"] == "Each Hubspace strand set to its own shade of amber."
+    assert body["feature"] == (
+        "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy "
+        "column by column."
+    )
     assert len(body["heads"]) == 270 and body["counts"]["match"] == 270
     plan = engine.current_plan()
     by_module = {m["id"]: m for m in body["modules"]}
@@ -164,10 +167,10 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     for m in body["modules"]:
         assert m["status"] == "ready" and m["desired_source"] == "plan" and m["reported_at"]
         assert m["counts"] == {"match": 30, "mismatch": 0, "unknown": 0}
-    # left column deeper amber than the right (the modes.yaml columns), so colours really come per module
+    # left column soft gold, right rose-lavender (the modes.yaml columns), so colours really come per module
     left = next(h for h in body["heads"] if h["module"] == "r0c0")["reported"]
     right = next(h for h in body["heads"] if h["module"] == "r0c2")["reported"]
-    assert left["g"] < right["g"]
+    assert left["g"] > right["g"] and left["b"] < right["b"]
 
 
 def test_heads_flag_a_module_whose_readback_differs(app_client):

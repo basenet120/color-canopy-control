@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test fixture
 
 from conductor import rows as R
 from conductor.capabilities import detect
@@ -52,7 +53,7 @@ def _painted(hashes: dict | None = None) -> dict:
 
 
 def _golden_with_code(code: int):
-    modes = MODES.model_copy(deep=True)
+    modes = TM.model_copy(deep=True)
     modes.modes["golden-hour"].techniques.canvas.motion_effect.motionEffect = code
     return modes
 
@@ -104,29 +105,31 @@ def test_every_mode_compiles_at_every_tier_of_its_ladder(mode_id, tier):
 
 
 def test_ladder_is_read_from_the_modes_file():
-    assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.T3]
-    assert ladder("lowcountry-calm") == [Tier.STRAND]
+    assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.T3, Tier.STRAND]
+    assert ladder("lowcountry-calm") == [Tier.T3, Tier.STRAND]
+    assert ladder("lowcountry-calm", TM) == [Tier.STRAND]
     with pytest.raises(PlanError, match="no mode 'disco'"):
         ladder("disco")
     with pytest.raises(PlanError, match="has no canvas technique"):
         compile_mode("lowcountry-calm", Tier.T1, _ctx())
 
 
+# ---- techniques no show mode uses since D59, on the pre-D59 recipes (tests/fixtures_modes_techniques.yaml) ----------
 def test_goodnight_clamps_2200_k_to_the_device_floor_with_a_note():
-    plan = compile_mode("goodnight-glow", Tier.STRAND, _ctx())
+    plan = compile_mode("goodnight-glow", Tier.STRAND, _ctx(modes=TM))
     rows = plan.modules["canopy-r1c1"].rows
     assert R.StateRow("color-temperature", None, "2700") in rows and R.brightness(10) in rows
     assert any("2200 K clamped to the device floor 2700 K" in n and "all 9 modules" in n for n in plan.notes)
     assert plan.feature.startswith("Dimming and the warmest white")
     # a device that goes down to 2200 K gets 2200 K and no note
-    wide = compile_mode("goodnight-glow", Tier.STRAND, _ctx(_caps(cct_range=(2200, 6500))))
+    wide = compile_mode("goodnight-glow", Tier.STRAND, _ctx(_caps(cct_range=(2200, 6500)), modes=TM))
     assert (
         R.StateRow("color-temperature", None, "2200") in wide.modules["canopy-r0c0"].rows and not wide.notes
     )
 
 
 def test_calm_falls_back_to_rgb_ivory_with_true_copy_when_white_is_unsupported():
-    plan = compile_mode("lowcountry-calm", Tier.STRAND, _ctx(_caps(cct_range=None)))
+    plan = compile_mode("lowcountry-calm", Tier.STRAND, _ctx(_caps(cct_range=None), modes=TM))
     rows = plan.modules["canopy-r0c0"].rows
     assert R.color_mode("color") in rows and R.color_rgb(255, 190, 120) in rows
     assert "2700" not in plan.feature and "nine" in plan.feature and "one colour" in plan.feature
@@ -134,36 +137,36 @@ def test_calm_falls_back_to_rgb_ivory_with_true_copy_when_white_is_unsupported()
 
 
 def test_holiday_picks_the_first_preset_every_module_lists():
-    plan = compile_mode("holiday-at-home", Tier.STRAND, _ctx())
+    plan = compile_mode("holiday-at-home", Tier.STRAND, _ctx(modes=TM))
     rows = plan.modules["canopy-r2c2"].rows
     assert R.preset("snowfall") in rows and R.speed(-8) in rows and R.brightness(70) in rows
     assert R.color_mode("sequence") in rows
-    assert plan.feature == MODES.mode("holiday-at-home").techniques.strand.feature
+    assert plan.feature == TM.mode("holiday-at-home").techniques.strand.feature
     fewer = _caps(presets=["mistletoe", "christmas", "rainbow"])
     assert (
         R.preset("mistletoe")
-        in compile_mode("holiday-at-home", Tier.STRAND, _ctx(fewer)).modules["canopy-r0c0"].rows
+        in compile_mode("holiday-at-home", Tier.STRAND, _ctx(fewer, modes=TM)).modules["canopy-r0c0"].rows
     )
     # one module lacking mistletoe: the canopy stays uniform on the next preset all nine list
     mixed = {m.id: fewer for m in MODULES}
     mixed["canopy-r1c1"] = _caps(presets=["christmas"])
     uniform = compile_mode(
-        "holiday-at-home", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities=mixed)
+        "holiday-at-home", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities=mixed, modes=TM)
     )
     assert {t.rows[2] for t in uniform.modules.values()} == {R.preset("christmas")}
 
 
 def test_holiday_without_any_listed_preset_uses_its_fallback_look_and_copy():
-    plan = compile_mode("holiday-at-home", Tier.STRAND, _ctx(_caps(presets=["rainbow"])))
-    strand = MODES.mode("holiday-at-home").techniques.strand
+    plan = compile_mode("holiday-at-home", Tier.STRAND, _ctx(_caps(presets=["rainbow"]), modes=TM))
+    strand = TM.mode("holiday-at-home").techniques.strand
     assert plan.feature == strand.fallback_feature
     assert R.StateRow("color-temperature", None, "2700") in plan.modules["canopy-r0c0"].rows
     assert any("none of the presets" in n for n in plan.notes)
 
 
 def test_golden_hour_is_a_static_glow_until_a_motion_code_is_bench_enabled():
-    canvas = MODES.mode("golden-hour").techniques.canvas
-    static = compile_mode("golden-hour", Tier.T1, _ctx())
+    canvas = TM.mode("golden-hour").techniques.canvas
+    static = compile_mode("golden-hour", Tier.T1, _ctx(modes=TM))
     assert static.motion is False and static.feature == canvas.feature
     assert not MOTION_WORDS.search(static.feature)
     header = static.modules["canopy-r0c0"].slot_value[R.FRAME_CLASS]
@@ -201,7 +204,7 @@ def test_golden_hour_is_a_static_glow_until_a_motion_code_is_bench_enabled():
         inner = target.slot_value[R.FRAME_CLASS]
         assert inner["motionEffect"] == 4 and inner["motionSpeed"] == canvas.motion_effect.motionSpeed
     # T2 and T3 never claim motion
-    assert compile_mode("golden-hour", Tier.T3, _ctx()).motion is False
+    assert compile_mode("golden-hour", Tier.T3, _ctx(modes=TM)).motion is False
 
 
 def test_static_canvas_resets_effects_copied_from_the_readback_header():
@@ -228,7 +231,7 @@ def test_t2_refuses_until_the_hand_painted_slot_is_recorded():
     plan = compile_mode("garden-gathering", Tier.T2, _ctx(**_painted()))
     target = plan.modules["canopy-r0c0"]
     assert target.slot == "custom-2" and target.slot_hash == "b2" * 8 and target.slot_value is None
-    assert R.slot_select("custom-2")[0] in target.rows and R.brightness(85) in target.rows
+    assert R.slot_select("custom-2")[0] in target.rows and R.brightness(75) in target.rows
     # the registry's own recorded hashes are used when the context doesn't pass any
     entries = [
         m.model_copy(update={"slot_hashes": {"custom-2": "d4" * 8}, "slot_origin": {"custom-2": "app"}})
@@ -243,7 +246,7 @@ def test_t2_preview_shows_the_readback_only_when_it_matches_the_recorded_hash():
     real = R.slot_hash(readback["custom-2"])
     recorded = {m.id: {"custom-2": real} for m in MODULES}
     plan = compile_mode("garden-gathering", Tier.T2, _ctx(**_painted(recorded)))
-    assert plan.modules["canopy-r0c0"].preview[0] == {"r": 0, "g": 217, "b": 0}  # green profile slot × 85 %
+    assert plan.modules["canopy-r0c0"].preview[0] == {"r": 0, "g": 191, "b": 0}  # green profile slot × 75 %
     # a stale readback isn't shown as if it were the painted look: the preview falls back to the canvas design
     stale = compile_mode("garden-gathering", Tier.T2, _ctx(**_painted()))
     design = compile_mode("garden-gathering", Tier.T1, _ctx())
@@ -261,18 +264,40 @@ def test_features_differ_per_tier_and_only_motion_copy_mentions_movement():
             features.append(plan.feature)
         assert len(set(features)) == len(features), mode_id
     moving = compile_mode("golden-hour", Tier.T1, _ctx(modes=_golden_with_code(4), effects_enabled=enabled))
-    assert moving.feature not in features
+    assert not MOTION_WORDS.search(moving.feature)  # the code isn't saved in the slots yet: static copy
 
 
 def test_module_level_looks_follow_canopy_position():
+    # each module = the scene's gradient at its column centre (config/modes.yaml), at the scene's brightness
     sunset = compile_mode("rainbow-row-sunset", Tier.T3, _ctx())
+    for row in range(3):
+        assert R.color_rgb(255, 175, 175) in sunset.modules[f"canopy-r{row}c0"].rows
+        assert R.color_rgb(255, 210, 224) in sunset.modules[f"canopy-r{row}c1"].rows
+        assert R.color_rgb(216, 189, 232) in sunset.modules[f"canopy-r{row}c2"].rows
+    assert all(R.brightness(85) in t.rows for t in sunset.modules.values())
+    calm = compile_mode("lowcountry-calm", Tier.T3, _ctx())  # mirrored: the side columns match
+    assert R.color_rgb(209, 234, 227) in calm.modules["canopy-r1c1"].rows
+    assert R.color_rgb(234, 239, 230) in calm.modules["canopy-r0c0"].rows
+    assert R.color_rgb(234, 239, 230) in calm.modules["canopy-r2c2"].rows
+
+
+def test_module_level_rows_and_middle_row_layouts_follow_canopy_position():
+    sunset = compile_mode("rainbow-row-sunset", Tier.T3, _ctx(modes=TM))
     assert R.color_rgb(249, 99, 2) in sunset.modules["canopy-r0c2"].rows
     assert R.StateRow("color-temperature", None, "2700") in sunset.modules["canopy-r2c0"].rows
-    garden = compile_mode("garden-gathering", Tier.T3, _ctx())
+    garden = compile_mode("garden-gathering", Tier.T3, _ctx(modes=TM))
     assert R.brightness(100) in garden.modules["canopy-r1c0"].rows  # the centre row is the path
     assert R.color_rgb(255, 90, 0) in garden.modules["canopy-r0c1"].rows
-    golden = compile_mode("golden-hour", Tier.T3, _ctx())
+    golden = compile_mode("golden-hour", Tier.T3, _ctx(modes=TM))
     assert R.color_rgb(255, 170, 60) in golden.modules["canopy-r1c2"].rows
+
+
+def test_the_strand_fallback_is_the_scenes_solid_colour_on_every_module():
+    plan = compile_mode("coastal-tides", Tier.STRAND, _ctx())
+    for target in plan.modules.values():  # aqua, as RGB, at the scene's brightness
+        assert R.color_rgb(121, 206, 212) in target.rows
+        assert R.color_mode("color") in target.rows and R.brightness(85) in target.rows
+    assert plan.feature == "Colour and dimming: all nine Hubspace strands set to aqua."
 
 
 def test_bench_flags_gate_t1_and_t2_on_live_hardware():
@@ -286,7 +311,7 @@ def test_bench_flags_gate_t1_and_t2_on_live_hardware():
     # live before the bench: the ladder lands on T3 and says why
     plan = compile_first("rainbow-row-sunset", _ctx(flags=unproven))
     assert plan.tier is Tier.T3 and any("Gate C" in n for n in plan.notes)
-    assert available_tiers("rainbow-row-sunset", _ctx(flags=unproven)) == [Tier.T3]
+    assert available_tiers("rainbow-row-sunset", _ctx(flags=unproven)) == [Tier.T3, Tier.STRAND]
     assert compile_first("golden-hour", _ctx(), skip=[Tier.T1]).tier is Tier.T3
 
 
@@ -299,7 +324,7 @@ def test_a_wrong_head_count_refuses_t1_but_t3_still_compiles():
 
 def test_a_device_without_capabilities_or_individual_mode_is_refused_plainly():
     with pytest.raises(PlanError, match="hasn't been read yet"):
-        compile_mode("holiday-at-home", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities={}))
+        compile_mode("goodnight-glow", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities={}))
     # the safe look never waits for a profile (F2): conservative capabilities, and the plan says so
     safe = compile_mode("lowcountry-calm", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities={}))
     assert len(safe.modules) == 9 and not safe.skipped and any("assumes" in n for n in safe.notes)

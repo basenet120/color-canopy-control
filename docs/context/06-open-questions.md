@@ -35,9 +35,11 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 11. **Vignette control surface — by Oct 1.** Custom `/vignette/<id>` pages vs. the stock Hubspace app on each vignette iPad (Guided Access, one account per room — honest by construction, no build).
     *Default:* build thin custom pages in P4; if they aren't solid by Oct 12, ship the stock app on the vignette iPads.
 12. **Golden Hour technique — by Oct 5**, from bench footage: on-device motion burst vs. stepped sweep. *Default:* build one technique (on-device motion) first; the other is a seam.
+    *Answered by the approved scenes (D59, Oct 11):* Golden Hour is a static five-colour gradient; no show mode uses motion. Motion stays a seam.
     *New input (as of Oct 7):* only code 1's bounded block movement on Kingston (#4); no direction, period, run-to-run consistency or multi-controller phase data (#5). The Studio's Golden Hour per-head gradient (D56) is SCREEN only, 30 static colours, and has never been sent to hardware (preflight blocks it; package `evidence/scene-gradient-browser-2026-10-06.json`, `evidence/scene-gradient-api-2026-10-06.json`). Only whole-strand single palette colours have reached real lights (package `CHANGELOG.txt`).
 13. **Kiosk look — to the client by Oct 5** for copy and brand sign-off. *Default:* House Beautiful × Home Depot styling, words-only "Hubspace".
     *Note (Oct 6):* Paris's Studio (`/ops/showcase/`, D56) shows six scene palettes chosen in his session as the primary interface; its list has Coastal Tides where `02` and `config/modes.yaml` have Holiday at Home (`web/ops/showcase/demo-model.mjs`). It's an ops page, not the guest kiosk; no client sign-off recorded.
+    *Resolved (D59, Oct 11):* the owner approved those six scenes; `config/modes.yaml` now has Coastal Tides in place of Holiday at Home and every mode uses its scene's palette.
 
 ## VWBD (fabrication)
 14. **Cable routing**: can every module be routed so the index rises with canvas X (B modules included), strings uncut, slack looped above the panel? Heads 20″ apart (same x in this lattice) can't be neighbours on the wire (the puck spacing is 19.7″).

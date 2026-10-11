@@ -155,7 +155,7 @@ def test_an_unmapped_60_entry_module_refuses_t1_with_the_d54_text_and_takes_whol
     assert (
         canvas_tier is not Tier.T1 and canvas_ok
     )  # the mode fell to a whole-strand tier, shown on the module
-    assert calm_tier is Tier.STRAND and calm_ok
+    assert calm_tier is Tier.T3 and calm_ok  # a module-level look (one colour per strand) needs no map
     assert snapshot["problems"] == [NO_MAP] and snapshot["status"] == "needs_attention"
     skipped = {s["mode"]: s["reason"] for s in commission["skipped"]}
     assert skipped[CANVAS_MODE] == f"{MODULE}: {NO_MAP}"

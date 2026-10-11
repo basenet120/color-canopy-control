@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from technique_modes import PATH as TECHNIQUES
 
 from conductor.engine_api import (
     CanopyEngineAPI,
@@ -24,7 +25,7 @@ from conductor.engine_api import (
     PlanError,
     RefusalReason,
 )
-from conductor.routes.kiosk import RESTING, load_kiosk_modes
+from conductor.routes.kiosk import RESTING, _pattern, load_kiosk_modes
 
 ROOT = Path(__file__).resolve().parent.parent
 MODES_YAML = yaml.safe_load((ROOT / "config" / "modes.yaml").read_text())
@@ -140,6 +141,18 @@ def test_modes_list_matches_modes_yaml(app_client, engine):
 def test_modes_patterns_follow_each_modes_technique():
     patterns = {m["id"]: m["pattern"] for m in load_kiosk_modes()}
     assert patterns == {
+        "lowcountry-calm": "modules",
+        "rainbow-row-sunset": "gradient-x",
+        "garden-gathering": "gradient-x",
+        "coastal-tides": "modules",
+        "golden-hour": "gradient-x",
+        "goodnight-glow": "modules",
+    }
+
+
+def test_each_tier_draws_what_the_ceiling_shows():
+    specs = yaml.safe_load(TECHNIQUES.read_text())["modes"]  # the pre-D59 recipes: every technique kind
+    assert {m: _pattern(spec) for m, spec in specs.items()} == {
         "lowcountry-calm": "wash",
         "rainbow-row-sunset": "gradient",
         "garden-gathering": "pathway",
@@ -147,6 +160,11 @@ def test_modes_patterns_follow_each_modes_technique():
         "golden-hour": "bands",
         "goodnight-glow": "wash",
     }
+    sunset = specs["rainbow-row-sunset"]
+    assert _pattern(sunset, "slot") == "gradient"  # a hand-painted slot draws like the canvas
+    assert _pattern(sunset, "modules") == "modules"
+    assert _pattern(specs["lowcountry-calm"], "strand") == "modules"  # one colour per module
+    assert _pattern(specs["holiday-at-home"], "strand") == "scatter"  # a preset's heads differ
 
 
 def test_modes_serve_without_an_engine(app_client):

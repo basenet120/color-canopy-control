@@ -48,11 +48,17 @@ def test_verdicts_fail_when_a_target_is_missed():
     assert not any(verdicts.values()), verdicts
 
 
-def test_builtin_compiler_covers_every_mode_on_its_ladder():
+def test_builtin_compiler_covers_every_mode_on_its_ladder(tmp_path):
+    import shutil
+
+    from technique_modes import PATH as TECHNIQUES
+
+    from conductor import rows as R
     from conductor.config import CONFIG_DIR, load_registry
     from conductor.engine_api import Tier
 
-    compiler = soak.BuiltinCompiler(load_registry(CONFIG_DIR, None))
+    registry = load_registry(CONFIG_DIR, None)
+    compiler = soak.BuiltinCompiler(registry)
     for mode_id in compiler.modes():
         for tier in compiler.ladder(mode_id):
             plan = compiler.compile(mode_id, tier)
@@ -60,4 +66,8 @@ def test_builtin_compiler_covers_every_mode_on_its_ladder():
             if tier is Tier.T1:
                 assert all(mt.slot and mt.slot_value and mt.slot_hash for mt in plan.modules.values())
     goodnight = compiler.compile("goodnight-glow", Tier.STRAND)
-    assert "2200 K clamped to the device floor 2700 K" in goodnight.notes
+    assert R.color_rgb(139, 139, 209) in goodnight.modules["canopy-r0c0"].rows  # periwinkle
+    # the white CCT clamp, on the pre-D59 recipes (a test fixture)
+    shutil.copy(TECHNIQUES, tmp_path / "modes.yaml")
+    legacy = soak.BuiltinCompiler(registry, config_dir=tmp_path)
+    assert "2200 K clamped to the device floor 2700 K" in legacy.compile("goodnight-glow", Tier.STRAND).notes

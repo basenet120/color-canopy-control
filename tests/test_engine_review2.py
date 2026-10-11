@@ -12,6 +12,7 @@ import dataclasses
 import time
 
 from fake_compiler import FakeCompiler, make_world, settings_with
+from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test fixture
 
 from conductor import rows as R
 from conductor.capabilities import detect
@@ -22,6 +23,7 @@ from conductor.drivers.base import Outcome
 from conductor.engine_api import CanopyPhase, PlanError, Tier
 from conductor.gate import Purpose
 from conductor.looks import CompileContext, compile_mode, load_modes
+from conductor.looks.schema import MotionEffect
 from conductor.services import build_services
 from conductor.show import ShowWiring
 from conductor.sim.profiles import profile_parts
@@ -257,11 +259,11 @@ def test_f2_partial_plans_count_only_the_modules_they_drive():
     calm = compile_mode("lowcountry-calm", Tier.STRAND, ctx)
     assert len(calm.modules) == 9 and not calm.skipped
     try:
-        compile_mode("holiday-at-home", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities={}))
+        compile_mode("goodnight-glow", Tier.STRAND, CompileContext(registry=REGISTRY, capabilities={}))
     except PlanError as e:
         assert "hasn't been read yet" in str(e)
     else:  # pragma: no cover
-        raise AssertionError("a preset look can't be planned without any profile")
+        raise AssertionError("a look other than the safe one can't be planned without any profile")
 
 
 # ---- F3 ------------------------------------------------------------------------------------------------------------
@@ -410,13 +412,19 @@ def test_f5_a_recalibrated_module_stays_t1_and_its_stale_slots_are_rewritten_onc
 
 
 # ---- F6 ------------------------------------------------------------------------------------------------------------
+MOTION_COPY = "A saved Hubspace custom pattern with an animated effect (test only)."
+
+
 def test_f6_motion_copy_only_once_the_device_holds_the_benched_code(tmp_path):
     async def main():
         services, wiring, engine = await _boot(tmp_path)
         await _settled(services, wiring, engine)
-        # later, the bench enables a motion code (config) and the Conductor picks it up
+        # later, the bench enables a motion code (config) and the Conductor picks it up. Every show scene is static
+        # (D59), so the motion technique is added here, as the soak adds it.
         modes = wiring.modes_file.model_copy(deep=True)
-        modes.modes["golden-hour"].techniques.canvas.motion_effect.motionEffect = 1
+        canvas = modes.modes["golden-hour"].techniques.canvas
+        canvas.motion_effect = MotionEffect(motionEffect=1, motionSpeed=10)
+        canvas.motion_feature = MOTION_COPY
         wiring.modes_file = modes
         services.settings.effects.enabled["motionEffect"][1] = "SIMULATED scroll"
         engine.invalidate_t1_plans()
@@ -457,7 +465,7 @@ def test_f6_motion_copy_only_once_the_device_holds_the_benched_code(tmp_path):
     assert early.feature == golden.feature, "claimed motion while the device's slot holds motionEffect 0"
     assert early_motion is True  # re-triggered as one burst anyway
     assert late_effect == 1 and recorded and recorded["motionEffect"] == 1
-    assert late.feature == golden.motion_feature and late.tier == "canvas"
+    assert late.feature == MOTION_COPY and late.tier == "canvas"
     assert any("effect fields of custom-3 changed" in a for a in alerts), alerts
 
 
@@ -543,7 +551,7 @@ def test_f8_upgrade_back_skips_rungs_that_cant_compile():
 
 
 # ---- F9 ------------------------------------------------------------------------------------------------------------
-def _painted_ctx(header: dict | None, *, effects=None) -> CompileContext:
+def _painted_ctx(header: dict | None, *, effects=None, modes=TM) -> CompileContext:
     readback = {r.function_instance: r.value for r in STATES if r.function_class == R.FRAME_CLASS}
     if header is not None:
         readback["custom-3"] = {R.FRAME_CLASS: {**readback["custom-3"][R.FRAME_CLASS], **header}}
@@ -556,6 +564,7 @@ def _painted_ctx(header: dict | None, *, effects=None) -> CompileContext:
         recorded_hashes={m.id: {"custom-3": "c3" * 8} for m in CANOPY},
         recorded_origins={m.id: {"custom-3": "app"} for m in CANOPY},
         recorded_effects=effects,
+        modes=modes,
     )
 
 
@@ -575,12 +584,17 @@ def test_f9_a_hand_painted_golden_hour_that_may_animate_is_a_motion_plan():
     sunset_ctx.recorded_hashes = {m.id: {"custom-1": "a1" * 8} for m in CANOPY}
     sunset_ctx.recorded_origins = {m.id: {"custom-1": "app"} for m in CANOPY}
     assert compile_mode("rainbow-row-sunset", Tier.T2, sunset_ctx).motion is False
+    # every show scene is static (D59): the show's Golden Hour has no `motion: true` either
+    assert (
+        compile_mode("golden-hour", Tier.T2, _painted_ctx({"motionEffect": 3}, modes=MODES)).motion is False
+    )
 
 
 # ---- F10 -----------------------------------------------------------------------------------------------------------
 def test_f10_calm_never_claims_2700_k_when_the_device_floor_is_higher():
+    # on the pre-D59 recipes (TM): the show's Calm is an RGB look since D59, but white copy that names Kelvin stays
     warm_floor = CompileContext(
-        registry=REGISTRY, capabilities={m.id: _caps(cct_range=(3000, 6500)) for m in CANOPY}
+        registry=REGISTRY, capabilities={m.id: _caps(cct_range=(3000, 6500)) for m in CANOPY}, modes=TM
     )
     calm = compile_mode("lowcountry-calm", Tier.STRAND, warm_floor)
     assert "2700" not in calm.feature
@@ -590,9 +604,9 @@ def test_f10_calm_never_claims_2700_k_when_the_device_floor_is_higher():
     goodnight = compile_mode(
         "goodnight-glow",
         Tier.STRAND,
-        CompileContext(registry=REGISTRY, capabilities={m.id: _caps() for m in CANOPY}),
+        CompileContext(registry=REGISTRY, capabilities={m.id: _caps() for m in CANOPY}, modes=TM),
     )
-    assert goodnight.feature == MODES.mode("goodnight-glow").techniques.strand.feature
+    assert goodnight.feature == TM.mode("goodnight-glow").techniques.strand.feature
     assert R.StateRow("color-temperature", None, "2700") in goodnight.modules["canopy-r0c0"].rows
 
 

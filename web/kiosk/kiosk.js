@@ -4,8 +4,8 @@
 //   - "Changing the light…" only while the server says the canopy phase is `updating`; "Ready" only when it says
 //     `ready`. The Hubspace feature sentence is always `state.feature` from the server — never written here.
 //   - The illustrated canopy is a preview drawn from the mode's own preview colours (config/modes.yaml), laid out
-//     for the tier actually in use: at module level (T3) it is one flat colour per module, from the plan the server
-//     reports (`module_colours`), because that is all the ceiling shows.
+//     for the tier actually in use: at module level (T3), and for a one-colour whole-strand look, it is one flat
+//     colour per module, from the plan the server reports (`module_colours`), because that is all the ceiling shows.
 //   - A refused choice (any non-2xx) never shows "Changing the light…": the tile falls back to the mode now
 //     showing and a gentle hint explains. Live events only trigger a re-read of /api/kiosk/state, so the page always
 //     shows the kiosk's view of the engine (e.g. slot commissioning reads as "resting", not "changing").
@@ -119,6 +119,8 @@ export function headColours(mode, heads) {
       }
       case "gradient":
         return ramp(palette, v + 0.03 * Math.sin(u * 9));
+      case "gradient-x": // the scenes' canvas: the palette's stops evenly spaced across the canopy (x / 225)
+        return ramp(palette, u);
       case "pathway": {
         const centre = H / 2 + 30 * Math.sin(2 * Math.PI * 1.5 * u);
         const d = Math.abs(h.y - centre);
@@ -211,11 +213,13 @@ function buildCanopy() {
 }
 
 /** The picture for `mode`: its listing (the tier the engine would use), or — when it is the mode now showing — the
- * tier the server says is in use, with the plan's own module colours at module level. */
+ * tier the server says is in use, with the plan's own module colours when it shows one flat colour per module (module
+ * level, or a one-colour whole-strand look). */
 function pictureOf(mode, s) {
   if (!mode) return null;
   if (!s || s.mode !== mode.id || typeof s.tier !== "string") return mode;
-  if (s.tier === "modules" && Array.isArray(s.module_colours)) {
+  const flat = s.tier === "modules" || s.tier === "strand";
+  if (flat && Array.isArray(s.module_colours)) {
     return { ...mode, pattern: "modules", module_colours: s.module_colours };
   }
   if (s.tier !== "modules" && mode.pattern === "modules") {

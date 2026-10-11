@@ -1,9 +1,11 @@
 # Soak-only settings — SIMULATED, never used by the running Conductor (07 §6: sim-only motion semantics live here).
 # The soak (`make soak`) runs the show's own wiring with this on-device motion code enabled for one mode, so the
 # all-or-none motion re-trigger is measured. No motion code has been benched: the number is arbitrary, the simulator
-# doesn't animate anything, and the report labels it SIMULATED. The pinned acceptance conditions are in
-# acceptance.yaml.
+# doesn't animate anything, and the report labels it SIMULATED. Every show scene is static (D59), so the mode named
+# here must have a canvas (a painted slot) and the soak adds `feature` as its motion copy. The pinned acceptance
+# conditions are in acceptance.yaml.
 motion:
   mode: golden-hour
   motionEffect: 1
   note: "SIMULATED scroll (soak only; nothing benched)"
+  feature: "SIMULATED on-device motion in a saved Hubspace custom pattern (soak only; never shown to guests)."
