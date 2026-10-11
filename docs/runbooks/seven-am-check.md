@@ -31,8 +31,11 @@ Work top to bottom: a failure near the top often explains the ones below it.
     wait 10 minutes: it lets go by itself).
   - *WARN "No confirmed readback yet":* press **Re-assert all** (or run the test mode change below).
 
-- [ ] **Head counts** — each module reports its 30 heads. Hubspace may not report a dark string at all
-      (unverified), so **also look up: all 270 heads lit.**
+- [ ] **Head counts** — each module reports its 30 heads, or a 60-entry frame read through its own controller map
+      (that 60 is the controller's capacity, D57). Hubspace may not report a dark string at all (unverified), so
+      **also look up: all 270 heads lit.**
+  - *FAIL "no proven map yet":* that kit was never mapped. Commission it (`bench-prototype-01.md` §5a) before
+    painted looks can use it. Whole-strand looks still work.
   - *FAIL:* check that module's three strings are plugged in, power-cycle its controller (it counts pucks when it
     powers up). Never cut a string.
 

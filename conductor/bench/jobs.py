@@ -60,6 +60,12 @@ Q_STALE_STORED = "Did the strand switch to {slot} after the stale-stamped write?
 Q_STALE_DROPPED = "Did the lights stay as they were after the first (stale) write, and switch to {slot} only after the second?"
 Q_ACTIVE_REWRITE = "Did the lights change to the new pattern while {slot} stayed selected (no reselect)?"
 Q_HEAD_BOOT = "With strings 2 and 3 unplugged, did only string 1's pucks light when the kit booted?"
+# address_probe_safe: yes/no for the two probes a kit's map is recorded from (D58), else where heads lit.
+Q_ADDRESS = "How many physical heads lit, and where are they when counted from the controller?"
+Q_MARKERS = (
+    "Counting from the controller, was head 1 red, head 2 green and head 30 blue, with every other head dark?"
+)
+Q_DARK = "Once the before look ended, did every head stay dark (nothing lit) while entries {first}–{last} were held?"
 
 # Which answer must be "yes" before a proposed flag may be applied.
 FLAG_QUESTIONS: dict[str, dict[str, str]] = {
@@ -73,7 +79,6 @@ FLAG_QUESTIONS: dict[str, dict[str, str]] = {
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "gate_c_safe": {"brightness": (1, 100), "duration_s": (4.0, 120.0), "before_duration_s": (4.0, 60.0)},
     "effect_probe": {"code": (1, 255), "speed": (0, 100), "duration_s": (2.0, 20.0)},
-    "address_probe": {"start": (0, 255), "count": (1, 256), "brightness": (1, 100)},
     "address_probe_safe": {
         "start": (0, 255),
         "count": (1, 256),
@@ -114,6 +119,16 @@ def flag_questions(job: str, params: Mapping[str, Any]) -> dict[str, str]:
 def question(job: str, params: Mapping[str, Any]) -> str:
     """The confirming question a flag-proposing job asks for these params."""
     return next(iter(flag_questions(job, params).values()))
+
+
+def address_question(pattern: str, start: int, count: int, expected_heads: int | None) -> str:
+    """The question an address probe asks: the markers, and a range wholly past the module's heads, get a yes/no
+    question (those two runs are what Apply map reads, D58); any other range asks where the lit heads are."""
+    if pattern == "markers":
+        return Q_MARKERS
+    if expected_heads is not None and start >= expected_heads:
+        return Q_DARK.format(first=start, last=start + count - 1)
+    return Q_ADDRESS
 
 
 class JobContext(BenchContext, Protocol):
@@ -817,6 +832,9 @@ async def address_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
 
     This diagnostic retains the controller's full frame length. It does not change the module map or
     promote a mapping flag; the observer must identify which physical heads respond.
+
+    Not a runnable job: it leaves its pattern in the slot, so only `address_probe_safe` calls it, inside a
+    context that tracks what it writes and restores it.
     """
     if not ctx.t1_allowed:
         return JobResult(
@@ -902,7 +920,7 @@ async def address_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         f"Controller addresses lit: {probe_label}; all other entries are off. "
         "The original slot is saved with this run. No physical mapping has been assumed.",
         obs,
-        ["How many physical heads lit, and where are they when counted from the controller?"],
+        [address_question(pattern, start, count, ctx.expected_heads)],
     )
 
 
@@ -1705,7 +1723,7 @@ JOBS: dict[str, Job] = {
                 "Gate A — read-only profile dump",
                 "Reads what the kit says it can do: slots, frame length, colour modes, white range, presets.",
                 writes=False,
-                look_for="Nothing changes on the lights. Pass = 3 slots with a 30-entry frame.",
+                look_for="Nothing changes on the lights. Pass = 3 slots with a 30- or 60-entry frame.",
             ),
             gate_a,
         ),
@@ -1783,18 +1801,6 @@ JOBS: dict[str, Job] = {
                 params={"slot": "custom-3"},
             ),
             hue_ramp,
-        ),
-        Job(
-            JobSpec(
-                "address_probe",
-                "Address probe — locate individual lights",
-                "After Gate C, lights one address or a consecutive range in a saved slot; all other entries are off.",
-                writes=True,
-                look_for="After a brief whole-strand look, count which physical heads light from the controller end. "
-                "Addresses start at 0. The prior slot pattern is saved with the run; the probe stays visible.",
-                params={"slot": "custom-3", "start": 0, "count": 1, "color": "red", "brightness": 40},
-            ),
-            address_probe,
         ),
         Job(
             JobSpec(

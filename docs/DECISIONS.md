@@ -129,7 +129,7 @@ a directional motionEffect code is bench-enabled.
 in `/etc/canopy/box.env`. The data volume is external so no compose command can delete it. Break-glass means stopping
 the Conductor (`canopy-stop`, held through reboots until `canopy-start`), because merely pausing guest input lets the
 reconciler undo app edits. Three spare kits are registry entries on the canopy account; registering a spare's device
-as a module moves it off the spare and carries only bench flags that same kit proved. The cold spare restores
+as a module moves it off the spare and carries only bench flags and the controller map (D57) that same kit proved. The cold spare restores
 `/data` with `--skip-tokens` and signs in fresh (07 §3: never copy tokens between runtimes). The venue env example sets
 `HUBSPACE_LIVE_UNTIL=2026-11-02` (end of Home Depot's authorization window, pending the letter).
 
@@ -294,7 +294,7 @@ a visual check. The simulator's default kit now has 60-entry frames driving 30 p
 _Mechanism superseded by D54 (2026-10-07): no `frame_offset`, no frame-offset field on the Calibrate tab, and the
 default simulator kit is back to 30 entries. Still true: Kingston reports 60 entries with 30 pucks, and frames shorter
 than the pucks are refused. Unused entries are written OFF only through a kit's mapping. The 7 am check, composer and
-compiler are back to frame = heads until the port in STATUS gap 1. Whether the 12-puck fault shows in the cloud is
+compiler read each kit's map since D57. Whether the 12-puck fault shows in the cloud is
 unbenched (gate 10)._
 
 **D53 — A client that disconnects mid-request on the accounts routes is a quiet no-op** (499, one INFO line), not a
@@ -311,19 +311,17 @@ lives in the ops overlay (NOT_FOR_GIT) and never transfers between kits (D25). I
 device's id and the frame length, head count and slot lengths agree. Unmapped entries are written OFF, and readback is
 mapped back through the same indices. Without a mapping the frame must equal the heads. Kingston's map was watched on
 the lights on Sep 28: entries 0–29 drive pucks 1–30 from the controller end, and 30–59 drive nothing. Slot writes now
-check every requested effect field as well as the colour hash; hash-only checks stay colour-only. **Known gap:** only
-the module page and the Studio read the mapping. Bench jobs address raw controller entries (they need only that kit's
-T1 flag) and never read or save a map. The show engine's T1 compile and composer, `/api/devices`,
-the attention list and the 7 am head-count check do not. A real 60-entry module is flagged there, and T1 canvas looks
-can't use it, until the mapping is ported into those paths.
+check every requested effect field as well as the colour hash; hash-only checks stay colour-only. Bench jobs address raw controller entries (they need
+only that kit's T1 flag) and never read or save a map. The show path read no map at first; D57 closed that gap.
 
 **D55 — Bounded commissioning jobs restore what they touch and promote nothing.** `gate_c_safe` copies a slot into
 Custom 1 or 2 (never Custom 3), holds it for a bounded time, then restores the frame, the slot selection and the active
 look as three separate commands. A single combined restore left String light 1 in Custom mode (run f613f6, CLOUD readback).
 `address_probe_safe` defaults to Custom 2, refuses Custom 3 and restores exactly. `effect_probe` tests one effect code
 for 2–20 s and restores the slot, but not the previous look. No job enables or names an effect code or saves a map;
-`effects.enabled` stays empty. The original `address_probe` still defaults to Custom 3 and leaves its pattern there, so
-use the safe job on any slot that holds a pattern someone saved.
+`effects.enabled` stays empty. The original `address_probe` defaulted to Custom 3 and left its pattern there, so it is **no longer a runnable job**
+(decided 2026-10-07). The bench page, CLI and runner refuse it; the function survives only inside `address_probe_safe`,
+which tracks and restores what it touched.
 
 **D56 — The Studio (`/ops/showcase/`) is Paris's six-scene home, and `/` redirects to it.** Six scene palettes
 (Lowcountry Calm … The Goodnight Glow) are drawn on the saved 270-head canopy. They live in
@@ -339,5 +337,66 @@ use the safe job on any slot that holds a pattern someone saved.
 The gradient has never been sent to real hardware, because preflight blocks the uncommissioned String light 1. The
 Studio is wired to VWBD's two kits: `bench-kit` (label "Kingston test…") and `shop-string-1` (label "String light 1…"),
 the second only in VWBD's private overlay. Anywhere else the live Studio refuses to connect and only `?preview=1`
-works. **Open (Alon):** today `/` redirects to the Studio in every mode, including the venue box and staging, where
-it can't connect.
+works. So `/` redirects to the Studio only when the runtime environment (`CONDUCTOR_ENV`, else Railway's
+environment name) starts with `workshop`: Paris's laptop, live or practice. Everywhere else (venue box, staging,
+local) it goes to `/visualizer/` as before (decided 2026-10-07).
+
+**D57 — The show path reads each kit's own map (closes D54's gap).** One rule, `conductor/framemap.py`
+`frame_indices`, decides whether a saved `framebuffer_mapping` applies: `proven_on` is that device's own address, its
+`frame_length` is the one length every slot reports, and it maps exactly the module's heads. `ModuleSession` uses the
+same rule; on 200,000 random inputs it matched Paris's original. Every consumer uses it:
+- **The show engine:** the T1 composer and compiler write head *i* to entry `indices[i]` and every other entry OFF, so
+  the full-frame slot hash stays deterministic.
+- **The checks:** `/api/devices`, the attention list and the 7 am check. A mapped kit passes, and its 60-entry frame
+  is noted as controller capacity, with the head check visual. A longer frame with no map says the kit has no proven
+  map yet and points to runbook §5a. A short frame keeps the plug-in / power-cycle fix. Mixed slot lengths or slots
+  with no readback get Refresh.
+- **Previews:** `/ops` and the plan previews read heads through the map.
+
+Without a valid map, the Conductor's T1 frames are refused for that kit, but whole-strand looks and app-painted T2
+slots still work. A controller swap carries a spare's map only when the map was proven on that same kit. The swap
+also drops the show's cached profile of the old controller, so the carried map is never judged against it.
+
+Effect start/restart on the module page keeps the unmapped entries as read. Paint, cards, sweep and preview still
+write them OFF. An opt-in `sqhdk03-sim-60` profile models the real kit; the default simulator stays at 30 entries.
+Recording a map was still an offline overlay edit (STATUS gap 9) until D58.
+
+**D58 — A kit's map is recorded in the app from its own two answered address probes, and only as the identity
+(closes STATUS gap 9).** **Apply map** on an `address_probe_safe` result card on `/ops/bench` (also
+`POST /api/bench/runs/{id}/map` and `python -m conductor.bench map <run_id>`) records `framebuffer_mapping` for
+device D at controller address A only when all of these hold (the proof rule, accepted by Alon on 2026-10-07):
+- (a) Gate C is proven on A: `flags_for(A).t1_frames` is true;
+- (b) D's newest markers probe at A (entry 0 red, 1 green, 29 blue) is a real run that finished with an exact restore
+  and is answered **Yes** to "Counting from the controller, was head 1 red, head 2 green and head 30 blue, with every
+  other head dark?";
+- (c) D's newest real probe at A of every entry from the module's head count to the last (30–59) is answered **Yes**
+  to "… did every head stay dark (nothing lit) while entries 30–59 were held?", and so is every Yes/No probe at A of
+  only part of that range (e.g. 45–59) run after it;
+- (d) both runs saw the same frame length L (each run checked that every slot agreed), the kit still reports L when the
+  map is applied (one profile read, a GET), and the module map's head count (30) equals the registry's
+  `expected_heads`.
+
+The map is then exactly the identity, `{frame_length: L, indices: [0 … heads − 1], proven_on: A}`. Anything else is
+refused with a plain reason, and no permutation is ever inferred. That covers a No (markers seen elsewhere, reversed
+order, a lit head past the heads), a missing or unanswered probe, a simulated run, a run from a kit that was
+re-registered since, and a changed frame length; the reason ends in "tell Alon" where the kit itself looks wrong.
+The newest probe of each kind is the one that counts, so a probe of part of 30–59 run before the justifying 30–59
+run is superseded by it. Other details:
+- the map goes into the ops overlay only (NOT_FOR_GIT), and only on that explicit action, never automatically. The
+  POST is refused (403/415) unless it is JSON from this site, like the module and ops writes;
+- both runs record what they justified, when, and the map it replaced. Taking back a Yes on either run puts that
+  previous map back on every registry entry that still holds exactly what was applied: the run's device, and a
+  module a controller swap carried it to;
+- applying or revoking drops the show's cached profile of that module and reads it again, as a controller swap does,
+  so `/ops`, the attention list, the 7 am check and T1 pick it up at once;
+- Apply map itself sends nothing to the lights. But on a canopy module the show counts its re-read as new
+  capabilities, so a running show then sends its current look to the canopy again (its own writes, through its
+  executor and the live gate), now through the map. A revoke does the same.
+
+So that (b) and (c) can be answered Yes or No, `address_probe_safe` now asks those two questions for a markers run
+and for a range wholly past the module's heads. Every other range keeps Paris's free-text question, and the job's
+writes and restore are unchanged. Probes saved before this change asked the free-text question, so they don't count.
+A newer markers or 30–59 probe, or a later Yes/No probe of part of 30–59, that isn't answered Yes blocks a new
+Apply map. None of them removes a map already recorded; taking back the Yes on a run that recorded it does. Lower
+ranges keep the free-text question, so Apply map doesn't read them. Simulator only so far: the flow has never run
+against a real kit.

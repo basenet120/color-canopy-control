@@ -10,6 +10,10 @@ the model name. A profile that doesn't have exactly those six hints is refused r
 Profiles:
 - `sqhdk03-sim`  — the sibling string at 30 heads (the canopy default, `DEFAULT_PROFILE`).
 - `string-20seg` — the fixture as-is (the Glow Garden string).
+- `sqhdk03-sim-60` — the sibling string at 60 entries: the frame length the real SQHDK03 reports with 30
+  pucks attached (VWBD bench). Opt-in (a registry entry's `profile:`); the default stays `sqhdk03-sim`. A module
+  on it paints per head only through its own device-bound `framebuffer_mapping` (D25, D54); without one, per-head
+  frames are refused.
 
 Vignette profiles (P4), **synthesized from aioafero 9.3.0 controller source — UNVERIFIED until a real dump**. No
 public dump exists for these exact models, so each is built in code from what aioafero's controllers read and write
@@ -48,6 +52,7 @@ PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 SIBLING_FILE = "hampton-bay-string-20seg.json"
 DEFAULT_PROFILE = "sqhdk03-sim"
 SQHDK03_SIM_HEADS = 30
+SQHDK03_REAL_ENTRIES = 60  # framebuffer entries the real kit reports (VWBD bench, 30 pucks attached)
 SQHDK03_SIM_MODEL = "SQHDK03 (simulated from sibling string)"
 HINTS_PER_PROFILE = 6  # 3 capabilities categoryValues + 3 function values
 
@@ -336,6 +341,8 @@ def _build(name: str) -> dict:
         return copy.deepcopy(_read(SIBLING_FILE))
     if name == "sqhdk03-sim":
         return resize_profile(_read(SIBLING_FILE), SQHDK03_SIM_HEADS, model=SQHDK03_SIM_MODEL)
+    if name == "sqhdk03-sim-60":
+        return resize_profile(_read(SIBLING_FILE), SQHDK03_REAL_ENTRIES, model=SQHDK03_SIM_MODEL)
     if name in SYNTHESIZED:
         return SYNTHESIZED[name]()
     raise ProfileError(f"no simulator profile called {name!r}; use one of {', '.join(profile_names())}")
@@ -347,7 +354,7 @@ def _built(name: str) -> dict:
 
 
 def profile_names() -> list[str]:
-    return ["sqhdk03-sim", "string-20seg", *SYNTHESIZED]
+    return ["sqhdk03-sim", "string-20seg", "sqhdk03-sim-60", *SYNTHESIZED]
 
 
 def is_synthesized(name: str) -> bool:

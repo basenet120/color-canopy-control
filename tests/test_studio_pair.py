@@ -12,6 +12,7 @@ class Session:
         self.device_id = key
         self.log = log
         self.status = status
+        self.error = None
         self.in_flight = 0
         self.held = False
         self.caps = Capabilities(
@@ -34,6 +35,8 @@ class Session:
     async def whole(self, **action):
         self.log.append((self.device_id, action))
         await asyncio.sleep(0)
+        if self.error is not None:
+            raise self.error
         return {
             "status": self.status,
             "timings": {"sent_at": 100 if self.device_id == PAIR_IDS[0] else 100.005},
@@ -81,6 +84,23 @@ class PairTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["phase"], "reset")
         self.assertEqual(len(self.log), 2)
+
+    async def test_restart_without_a_brightness_resets_at_the_level_the_preset_will_use(self):
+        look = {"look": {"kind": "preset", "preset": "rainbow-road"}}
+        out = await apply_pair(self.sessions, look, restart=True)
+        self.assertTrue(out["ok"])
+        self.assertEqual([a["look"].get("brightness") for _, a in self.log], [100, 100, None, None])
+
+    async def test_a_failed_module_command_is_logged_with_its_device_and_phase(self):
+        self.sessions[1].error = RuntimeError("boom")
+        with self.assertLogs("conductor.module.pair", "ERROR") as logs:
+            out = await apply_pair(self.sessions, {"power": True})
+        self.assertFalse(out["ok"])
+        self.assertEqual(
+            out["modules"][PAIR_IDS[1]]["result"]["error"], "Module command failed; inspect its readback."
+        )
+        self.assertIn(f"whole-module action failed on {PAIR_IDS[1]}", logs.output[0])
+        self.assertIn("RuntimeError: boom", logs.output[0])
 
     async def test_saved_slots_and_ambiguous_actions_are_refused(self):
         for action in [{"look": {"kind": "slot", "slot": "custom-3"}}, {"brightness": 30, "power": True}]:

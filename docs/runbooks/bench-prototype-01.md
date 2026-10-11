@@ -178,9 +178,9 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
   only applies to the kit whose Hubspace id is `proven_on`, and only while the frame length and the 30-puck module
   map still match (`conductor/config.py`, `conductor/module/session.py`).
 - A 60-entry kit without its own map gets no per-puck painting; `/ops/module` says why.
-- No probe ever saves a map, and there's no button for it. Today it's an offline edit: stop the server, write that
-  kit's `framebuffer_mapping` (with `proven_on` = its own id) through `conductor.config.save_overlay_patch`, start
-  it again (`VWBD-HANDOFF.md`).
+- No probe saves a map by itself. **Apply map** on an address probe's result card records it, from that kit's own
+  two answered probes (decision D58; step 4 below). It replaces the offline `save_overlay_patch` edit with the server
+  stopped (`VWBD-HANDOFF.md`).
 
 **The commissioning jobs VWBD added** (cards on `/ops/bench`; `conductor/bench/jobs.py`; decision D55)
 - **Gate C — bounded replay** (`gate_c_safe`). Replays a source slot (default Custom 3, only read) into Custom 1 or
@@ -191,10 +191,12 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
 - **Address probe — bounded** (`address_probe_safe`). Custom 2 by default; refuses Custom 3. Lights `markers`
   (entry 0 red, 1 green, 29 blue — a 60-entry kit with 30 pucks only) or a range (`start`, `count`, one colour),
   everything else off, for 4–120 s (default 60) at 30% by default, then restores exactly. Needs that kit's own T1
-  (Gate C applied), and the slot's pattern must have no effect running. It never saves a map.
-- **Address probe — original** (`address_probe`). A range of addresses only (no markers), 40 % by default, no timed hold, and the same T1 rule, but it **defaults to Custom 3
-  and leaves its pattern in the slot** (the old one is only saved with the run). Don't run it on a slot holding a
-  saved pattern you care about; use the bounded one.
+  (Gate C applied), and the slot's pattern must have no effect running. It never saves a map itself. A markers run
+  asks "Counting from the controller, was head 1 red, head 2 green and head 30 blue, with every other head dark?" A
+  range wholly past the 30 heads (e.g. `start=30 count=30`) asks whether every head stayed dark (nothing lit). Both
+  are Yes/No, and those two answers are what Apply map reads. Any other range asks how many heads lit and where.
+- **Address probe — original** (`address_probe`): **retired** (D55). It defaulted to Custom 3 and left its pattern
+  in the slot, so the bench no longer offers it. Use the bounded probe above.
 - **Custom effect test** (`effect_probe`). One code (`motionEffect` or `brightnessEffect`, 1–255, speed 0–100) on
   a rainbow or separated blocks, 2–20 s at 30%; needs T1; Custom 3 by default. Afterwards it writes the slot's
   original pattern and header back, but the lights end on **that slot** at the previous brightness, not on the look
@@ -203,8 +205,23 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
 **Commissioning another kit** (order from Paris's Oct 7 package, `INTEGRATE.txt` §8 and `CHANGELOG.txt`)
 1. Fresh full backups of all three slots, and an observer at the lights who is ready before anything is sent.
 2. That kit's own `gate_c_safe`, answered Yes from the lights (PHYSICAL), then Apply flags.
-3. Its own bounded address probes (`address_probe_safe`: markers, then 30–59 as a range).
-4. Record its own map (above).
+3. Its own bounded address probes, each answered from the lights: `address_probe_safe` with `pattern=markers`,
+   then with `start=30 count=30` (pattern `range`). Count heads from the controller end.
+4. **Apply map** on either result card. The card says what it will record, or why not. It shows only when all of
+   these hold (D58):
+   - Gate C is applied on this very kit;
+   - this kit's registry entry expects 30 heads (`expected_heads`), the module's head count;
+   - this kit's newest markers run is answered **Yes**;
+   - its newest 30–59 run is answered **Yes**, and so is every Yes/No probe of part of 30–59 run after it;
+   - both runs saw the same frame length.
+
+   When you tap it, it reads the kit's frame length once more. If the kit now reports a different length, the tap is
+   refused and nothing is saved: run both probes again. It records exactly the plain map (entries 0–29 → heads 1–30,
+   30–59 unused), for this kit only, in the ops overlay (never git). Apply map itself sends nothing to the lights,
+   but if this kit is a canopy module and the show is running, the show then re-reads it and sends its current look
+   to the canopy again, now through the map. Any No, or markers anywhere else, means no map: tell Alon, and don't
+   edit one in by hand. Changed your mind? Answering No on either run takes the map back, also from a module a
+   controller swap carried it to.
 5. Only then any paired or gradient test.
 
 Never copy Kingston's flags or map to another controller. A whole-strand colour response or a 30-puck count is not

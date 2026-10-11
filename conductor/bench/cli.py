@@ -5,6 +5,7 @@
     python -m conductor.bench --server URL runs          recent results
     python -m conductor.bench --server URL export <run_id>   the anonymized JSON to paste into a build session
     python -m conductor.bench --server URL stop <run_id> stop a run that is going (the lock is released)
+    python -m conductor.bench --server URL map <run_id>  record a kit's map from its answered address probes (D58)
     python -m conductor.bench run gate_c --local         try a job in-process on the simulator (no server)
 
 It talks to the running Conductor (`--server`, default $CONDUCTOR_URL or http://localhost:8000) with the ops
@@ -108,6 +109,12 @@ class BenchClient:
     def stop(self, run_id: str) -> dict:
         return self.call("POST", f"/api/bench/runs/{run_id}/stop", {})
 
+    def map_proposal(self, run_id: str) -> dict:
+        return self.call("GET", f"/api/bench/runs/{run_id}/map")
+
+    def apply_map(self, run_id: str) -> dict:
+        return self.call("POST", f"/api/bench/runs/{run_id}/map", {})
+
 
 def _describe(status: int, body: Any) -> str:
     detail = body.get("detail") if isinstance(body, dict) else None
@@ -142,6 +149,8 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("run_id")
     stop = sub.add_parser("stop", help="stop a run that is going")
     stop.add_argument("run_id")
+    record_map = sub.add_parser("map", help="record a kit's map from its answered address probes")
+    record_map.add_argument("run_id")
     return parser
 
 
@@ -275,9 +284,24 @@ def cmd_run(
                 p.line("Flags applied.")
             except CliError as e:
                 p.line(f"Flags not applied: {e}")
+        if record.get("job") == "address_probe_safe" and not record.get("simulated"):
+            offer_map(client, p, run_id, ask)
     if p.as_json:
         p.data(record)
     return record
+
+
+def offer_map(client: BenchClient, p: Printer, run_id: str, ask: Callable[[str], str]) -> None:
+    """After an address probe: say what Apply map would record from it (or why not), and record it if asked."""
+    proposal = client.map_proposal(run_id)
+    p.line(proposal.get("reason", ""))
+    reply = ask("Record this map in the device's registry entry? [y/N] ") if proposal.get("ready") else ""
+    if reply.strip().lower() in ("y", "yes"):
+        try:
+            client.apply_map(run_id)
+            p.line("Map recorded.")
+        except CliError as e:
+            p.line(f"Map not recorded: {e}")
 
 
 def cmd_runs(client: BenchClient, p: Printer) -> None:
@@ -374,6 +398,15 @@ def main(
             cmd_runs(client, p)
         elif args.command == "export":
             p.data(client.anonymized(args.run_id))
+        elif args.command == "map":
+            record = client.apply_map(args.run_id)  # refused (exit 1, with the reason) unless the proof holds
+            mapping = (record.get("map_applied") or {}).get("mapping") or {}
+            p.line(
+                f"Map recorded for {record.get('device_id')}: {len(mapping.get('indices') or [])} heads in a "
+                f"{mapping.get('frame_length')}-entry frame."
+            )
+            if p.as_json:
+                p.data(record)
         elif args.command == "stop":
             record = client.stop(args.run_id)
             p.line(f"Stopped. {(record.get('result') or {}).get('summary', '')}")

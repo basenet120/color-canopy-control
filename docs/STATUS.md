@@ -1,8 +1,9 @@
 # Status
 
 _Last updated: 2026-10-07. Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into `main` as
-canon (D54). One kit, Kingston, is commissioned for per-head frames. The show engine is not yet mapping-aware (gap
-1 below)._
+canon (D54). One kit, Kingston, is commissioned for per-head frames. The follow-ups make the show engine read each
+kit's own map (D57) and let `/ops/bench` record a kit's map from its own bench evidence (D58, **Apply map**; simulator
+only so far)._
 
 ## PR stack (merge order — merge commits, not squash)
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
@@ -13,6 +14,16 @@ canon (D54). One kit, Kingston, is commissioned for per-head frames. The show en
    It also carries PR #10's STATUS commit, so **#10 is superseded**. PRs #1–#9 were already merged on Sep 27, and their
    remote branches are fully merged and can be deleted. **Merging this redeploys Railway staging.** Check the pre-deploy
    item under Next step first.
+2. **`claude/review-fixes` → after #11**: fixes for the bugs the merge review found in Paris's Studio and bench code,
+   the two decisions (home redirect, retiring the original `address_probe`), route-level Studio tests, writer-path
+   coverage for the new jobs and Studio paths, and true copy (see Known gaps 2–4 and 7).
+3. **`claude/show-path-mapping` → after `claude/review-fixes`**: the show path reads each kit's own controller map
+   (D57, closes gap 1). Also: the controller swap carries the map, module-page effect start/restart keeps unmapped
+   entries as read, an opt-in 60-entry simulator profile, and the 07 §6 mapping rule (flagged for Alon's wording).
+4. **`claude/record-map` → after `claude/show-path-mapping`**: **Apply map** on `/ops/bench` records a kit's controller
+   map from its own two answered `address_probe_safe` runs (D58, closes gap 9). It follows the agreed proof rule and
+   only ever records the identity map. Also: taking back a Yes revokes it, the show re-reads that module at once,
+   a CLI `map` command, and yes/no questions for the two map probes.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -107,36 +118,59 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - **Not run:** `make e2e`. The pinned Playwright needs `chromium_headless_shell-1194`, which isn't installed on this
   Mac. The screenshots are the pre-VWBD set; regenerate them when e2e runs.
 
+- **Follow-up branches** (same Mac, each from a clean worktree):
+  - `claude/review-fixes`: 970 passed.
+  - `claude/show-path-mapping`: **984 passed**, with `test_deploy.py` excluded.
+  - Both: lint clean, JS 19/19, tracker check OK, soak 9/9 PASS.
+  - One-off soaks with all nine modules on the 60-entry profile: 9/9 mapped and 9/9 unmapped.
+  - Every new regression test was checked to fail on the old code.
+  - `framemap.frame_indices` matched Paris's original rule on 200,000 random inputs.
+  - `claude/record-map`: **1028 passed** with `test_deploy.py` excluded (984 + 44 in `tests/test_bench_map.py`).
+    Lint clean, JS 19/19, tracker check OK; the soak wasn't rerun (nothing in the show path changed). After the
+    review fixes, each of 33 guards was removed in turn, and a named test failed each time. They cover the proof
+    rule's refusals (including a later Yes/No probe of part of 30–59), the per-kit filter on the partner run, the
+    re-check after the profile read, the bench-target match, the revoke and every entry it reaches, the show re-read
+    after apply and after a revoke, the yes/no question, and the same-site/JSON guard. Before the review fixes, by
+    hand on a local simulator server with two probes marked real by the test seam: the `/ops/bench` card gave the
+    reason, showed **Apply map** after the Yes, recorded the map (`/api/devices` then said mapped), and a No took it
+    back. That check wasn't repeated after the fixes.
+
 ## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
-1. **The show path ignores the framebuffer mapping (high, before install).** The T1 compiler and composer,
-   `/api/devices`, the attention list and the 7 am head-count check still assume frame length = heads. On real 60-entry
-   modules they flag every module, and T1 canvas looks can't use them. Fix: port Paris's `framebuffer_mapping` into
-   those paths. Main's removed 929c0d2 shows the shape, including the "the length is capacity, check the heads by eye"
-   wording.
-2. **`/` redirects to the Studio in every mode**, including the venue box and staging, where it can't connect (D56).
-   Decide whether to keep it there or redirect only in the VWBD workshop.
-3. **Bugs in Paris's code** (fixes drafted in review, not applied):
-   - the scene-gradient restore loses preset speed and party-mode yet reports `ok`;
+1. ~~The show path ignores the framebuffer mapping~~ **Done in `claude/show-path-mapping` (D57)**, in the simulator
+   only. These now read each kit's own map under one rule: the T1 compiler and composer, previews, `/api/devices`, the
+   attention list and the 7 am check. A mapped 60-entry module takes T1 canvas looks. An unmapped one is refused for
+   T1 with a true D54 message and still takes whole-strand looks. Show-engine T1 through a map has never reached a
+   real kit.
+2. ~~`/` redirects to the Studio in every mode~~ **Decided and done (`claude/review-fixes`, D56):** the Studio is home
+   only when `CONDUCTOR_ENV` starts with `workshop`; elsewhere `/` goes to `/visualizer/`.
+3. **Bugs in Paris's code.**
+   Fixed in `claude/review-fixes`, each with a regression test that fails on the old code:
+   - the gradient restore now keeps preset speed and party-mode;
+   - a paired restart with no brightness uses the preset's level instead of returning HTTP 500;
+   - pair and gradient errors are logged (device and phase, never credentials);
+   - slot cards show the mapped head count;
+   - the Presentation link is hidden from testers;
+   - the original `address_probe` is retired (D55).
+
+   Still open:
    - Start/Restart effect on a mapped kit rewrites entries 30–59 to OFF. That shifts the slot hash of an app-recorded
      T2 slot if the app fills those entries, which is unknown because no hand-painted app pattern has been dumped
      yet;
-   - `effect_probe` ends on the probed slot instead of the previous look;
-   - the original `address_probe` defaults to Custom 3 and never restores it;
-   - a paired restart with a preset that has no brightness → HTTP 500;
+   - `effect_probe` ends on the probed slot instead of the previous look. It needs a bench check of whether
+     re-entering individual mode reloads the header;
    - a pending gradient record can block the feature (manual recovery: inspect
      `<CONDUCTOR_DATA_DIR>/studio-gradients/active.json`; the `backup-*.json` files keep the originals);
-   - pair and gradient errors aren't logged;
-   - module-page slot cards say "60 heads" on a 30-head mapped kit;
-   - the "Presentation view" link shows for tester-role users.
-4. **Test gaps:**
-   - no route-level tests for `/api/studio/pair/*`;
-   - the writer-path allowlist test doesn't list the new jobs;
-   - Paris's JS tests and the tracker check aren't in `make test` or CI.
+   - whether real Afero readbacks include speed and party-mode, which the gradient fix backs up only when present, is
+     unverified on hardware.
+4. **Test gaps.** `claude/review-fixes` adds route-level Studio tests (14) and writer-path coverage for `gate_c_safe`,
+   `address_probe_safe`, `effect_probe` and both Studio write paths: a non-allowlisted device gets zero requests.
+   Still open: Paris's JS tests and the tracker check aren't in `make test` or CI.
 5. **The kit builder** (`scripts/make_workshop_kit.py`) would not ship `TEST-CENTER.html`, `tests/`, `tools/` or
    Paris's docs. Until it does, VWBD keeps working from Paris's own folder rather than a freshly built kit.
 6. **The simulator still models the 30-entry sibling string.** The real Gate A dump now exists
    (`docs/bench-capability-check/gate-a-result.json`) but isn't the SQHDK03 fixture yet.
-7. **Stale text in Paris's own files** (left as canon; fix with the next change to each):
+7. **Stale text in Paris's own files.** All four items below are fixed in `claude/review-fixes`. Still stale:
+   `config/sim/soak.yaml`'s header comment says no motion code has been benched.
    - `workshop/README.md` points to the Oct 2 handoff and says painting unlocks after the original Gate C. On a
      60-entry kit painting also needs the kit's own map: commission per runbook §5a (`gate_c_safe` → `address_probe_safe`
      → record the map).
@@ -147,6 +181,14 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    `test_deploy.py` watchdog tests. Their stub `systemctl` reported a start 1 µs after boot, so a runner booted
    < 120 s earlier put the watchdog inside its start-up grace and it exited silently. The stub now reports no
    timestamp. `tests_e2e` wasn't run for this merge (see Verified).
+9. ~~No in-app way to record a kit's map~~ **Done in `claude/record-map` (D58)**, in the simulator only. **Apply map**
+   on an address probe's result card records the identity map, only when all of these hold: Gate C on that very kit,
+   and its newest markers run and newest 30–59 run both answered Yes (and any later Yes/No probe of part of 30–59
+   too). Anything else is refused with the reason. It writes the ops overlay only (NOT_FOR_GIT) and sends nothing to
+   the lights itself; on a canopy module a running show then re-reads it and sends its current look again, through
+   the map. Those two `address_probe_safe` runs now ask yes/no questions (Paris's job: its writes and restore are
+   unchanged), so probes saved before this branch don't count. It has never run against a real kit. The runbooks
+   (§5a, install day, controller swap) use the button.
 
 ## Next step
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
@@ -154,18 +196,21 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    registry after the redeploy.
 2. Alon merges this PR. Then `git pull` in the main checkout (it was 84 commits behind) and delete the merged
    `claude/*` remote branches.
-3. Decide gap 2 (home redirect) and the `address_probe` default slot. Then make one small fix-up PR for gaps 3–4.
-4. **Port the mapping into the show path (gap 1).** This is required before the canopy's T1 looks can run on real kits
-   at install (Oct 20–23); feature freeze target Oct 12. 07 §6 (binding) still says only "frame length = the device's
-   framebuffer length". Alon words the mapping rule into it as part of the port.
+3. Merge `claude/review-fixes` after #11 (gaps 2–4 and 7), then `claude/show-path-mapping` (gap 1, D57), then
+   `claude/record-map` (gap 9, D58). Check show-path-mapping's 07 §6 sentence (the binding contract's wording is
+   yours) and D58's proof rule as written.
+4. **Use Apply map on a real kit once before install** (Oct 20–23; feature freeze target Oct 12): so far it has run
+   only on the simulator. String light 1 (step 5) is the natural first use. A kit whose probes show anything but the
+   plain order gets no map, and that needs a decision before install.
 5. At VWBD, with an observer and fresh full-slot backups, for String light 1: its own `gate_c_safe` physical answer →
-   its own bounded `address_probe_safe` runs → record its own map → only then a live paired gradient. Don't clear the
-   preflight to make a demo work.
+   its own bounded `address_probe_safe` runs (markers, then `start=30 count=30`) → **Apply map** → only then a live
+   paired gradient. Don't clear the preflight to make a demo work.
 6. Turn the Gate A dump into the simulator's SQHDK03 fixture (gap 6).
 
 ## Needs real hardware (UNVERIFIED)
 - **The other kits.** Kingston is the only kit with a T1 flag and a map. Every canopy module needs its own Gate C and
-  address map at install (~5 min each; D25, D54).
+  address map at install (~5 min each; D25, D54, D57). The show engine has never sent a mapped T1 frame to real
+  hardware, and Apply map (D58) has never recorded a map from real runs.
 - Formal Gate B (slot select). No recorded run shows a slot select on the lights (the Sep 27 Slots-tab report has no
   run record); Gate C's BEFORE select was confirmed by readback only (CLOUD). Also readback semantics with the kit unplugged.
 - **Effect codes:** only code 1 has been tried, bounded. Vendor name, direction, period and phase restart are
@@ -181,18 +226,18 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - iOS Safari: enrollment cookies, beacon on page close, Guided Access.
 
 ## Decisions Alon owes
-- **Home redirect** (gap 2, D56) and the **`address_probe` default slot** (D55).
 - **Golden Hour technique and kiosk look** (06 #12–13, was due Oct 5). The new input is the bounded code-1 movement on
   Kingston; there is no direction or multi-controller phase data yet.
 - **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback
   criteria are in D26.
 - **Authorization letter** from Home Depot before any show-account writes (06 #20).
 - **A second named person** with the show-account password and inbox (`docs/runbooks/outages.md`).
-- Skim D51–D56 in `docs/DECISIONS.md`.
+- Skim D51–D58 in `docs/DECISIONS.md` (D58 is the map proof rule as built).
 
 ## Top risks
-1. **The show path isn't mapping-aware** (gap 1). Without the port, T1 canvas modes on real 60-entry kits are refused,
-   and the 7 am check fails every module.
+1. **Every canopy kit needs its own Gate C and map** before painted looks can use per-head frames (D57). Recording a map
+   is now an Apply map tap on `/ops/bench` (D58), but that has never been used on a real kit. Show-engine T1 through a
+   map is proven in the simulator only.
 2. **Gate C per kit:** proven on Kingston only, and String light 1's custom-frame tests are a NO followed by an
    unanswered run. Any canopy kit that fails Gate C falls back to T2 (hand-paint in the app, ~15–20 min per module,
    then "record it" on `/ops/module`) or T3.

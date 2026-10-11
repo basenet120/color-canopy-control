@@ -1,4 +1,5 @@
-"""Bench routes (ops only): run Gates A–C and friends, read results, answer questions, apply flags (bench_api.py).
+"""Bench routes (ops only): run Gates A–C and friends, read results, answer questions, apply flags and maps
+(bench_api.py).
 
 - `GET  /api/bench/jobs` — job specs, plus per device: simulated?, driver, who holds its lock.
 - `POST /api/bench/run` `{job, device_id, params}` → `{run_id}`; progress on WebSocket topic "bench".
@@ -8,9 +9,14 @@
 - `GET  /api/bench/runs/{id}/profile.json` — Gate A's scrubbed profile (candidate simulator fixture).
 - `POST /api/bench/runs/{id}/stop` — stop a run that is going (verdict ERROR, lock released). 409 if it isn't.
 - `POST /api/bench/runs/{id}/answers` `{answers: {question: "yes"|"no"|note}}`. Taking back a "yes" after its flags
-  were applied puts those flags back to what they were (the response's `flags_revoked` says what changed).
+  (or a map) were applied puts them back to what they were (the response's `flags_revoked` / `map_revoked` says what
+  changed).
 - `POST /api/bench/runs/{id}/flags` — apply the proposed DeviceFlags to the ops overlay. Refused (409) for simulated
   runs and until the matching question is answered "yes".
+- `GET  /api/bench/runs/{id}/map` — what Apply map would record from this address probe and why, or why not
+  (`{ready, reason, mapping, runs}`). `POST` records it: the kit's identity controller map, in the ops overlay, from
+  its own two answered probes (D58). Refused (409) unless the proof rule holds, and (403/415) unless it is JSON from
+  this site. It sends nothing to the lights itself; a running show then re-reads the module (and re-sends its look).
 - `GET  /api/bench/time` — the server's clock in epoch ms (the clock page estimates its offset from it).
 """
 
@@ -25,6 +31,7 @@ from pydantic import BaseModel, Field
 from conductor.bench.runner import BenchBusy, BenchError, BenchRefused, runner_of
 from conductor.config import ConfigError
 from conductor.roles_api import Principal
+from conductor.routes.accounts import same_origin
 from conductor.routes.deps import require_ops, services_of
 
 router = APIRouter(prefix="/api/bench")
@@ -49,6 +56,16 @@ def _runner(request: Request):
 
 def _json(data: Any, status_code: int = 200) -> JSONResponse:
     return JSONResponse(data, status_code=status_code, headers=NO_STORE)
+
+
+def _same_site_json(request: Request) -> None:
+    """Refuse a cross-site or non-JSON write (403/415), as the module, ops and vignette routes do."""
+    headers = request.headers
+    if ("origin" in headers or "referer" in headers) and not same_origin(headers):
+        raise HTTPException(status_code=403, detail="Refused: this request came from another site.")
+    media_type = (headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(status_code=415, detail="Send JSON (Content-Type: application/json).")
 
 
 def _get(request: Request, run_id: str) -> dict:
@@ -142,6 +159,25 @@ async def run_flags(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
     _get(request, run_id)
     try:
         record = _runner(request).apply_flags(run_id)
+    except BenchRefused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    except ConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return _json(record)
+
+
+@router.get("/runs/{run_id}/map")
+async def run_map_proposal(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
+    _get(request, run_id)
+    return _json(_runner(request).map_proposal(run_id))
+
+
+@router.post("/runs/{run_id}/map")
+async def run_map(request: Request, run_id: str, _ops: Ops) -> JSONResponse:
+    _same_site_json(request)
+    _get(request, run_id)
+    try:
+        record = await _runner(request).apply_map(run_id)
     except BenchRefused as e:
         raise HTTPException(status_code=409, detail=str(e)) from None
     except ConfigError as e:

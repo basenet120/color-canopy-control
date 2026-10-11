@@ -64,11 +64,17 @@ passed carries its flags into a swap). A kit that hasn't passed shows the painte
 Pause guest input if anyone is near the kiosk.
 
 On `/ops/bench/` → pick **Module N**, film the module with the clock page if Alon wants footage:
-- [ ] **Gate A** (read-only): 3 slots with a 30-entry frame. Copy the anonymized JSON for the build session.
+- [ ] **Gate A** (read-only): 3 slots with a 30- or 60-entry frame (the real kit reports 60). Copy the anonymized
+      JSON for the build session.
 - [ ] **Gate B** → answer the question → **Apply flags** (`t2_select`).
 - [ ] **Hue ramp** into `custom-2` (only if Gate C says slot 2 already matches slot 1), then **Gate C** → answer →
       **Apply flags** (`t1_frames`).
 - [ ] If Gate C fails on the platform (not just one kit), painted modes can't use frames: see the note at the end.
+- [ ] **Map a 60-entry kit** (D57, D58): after its own Gate C, run **Address probe — bounded** with
+      `pattern=markers` (answer: head 1 red, head 2 green, head 30 blue, nothing else?), then with `start=30 count=30`
+      (answer: everything stayed dark?), then tap **Apply map** on either result card (`bench-prototype-01.md` §5a,
+      step 4). The card says what it records, or why not. A No anywhere means no map: tell Alon. Without a map, that
+      module's painted looks are whole-strand only.
 
 ## 6. Calibrate each module's wire order (about 5 min each)
 

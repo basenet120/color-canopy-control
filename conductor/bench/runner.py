@@ -17,6 +17,11 @@
 - Flags (DeviceFlags) are applied only from a real run whose kit is still the one registered under that id, and
   are saved with `flags_proven_on` = that kit's address. Changing a confirming answer away from "yes" afterwards
   puts the flags this run applied back to what they were before (if nothing else changed them since).
+- A kit's controller map (`framebuffer_mapping`, D54) is recorded only by `apply_map`, from that kit's own two
+  answered `address_probe_safe` runs (the proof rule, D58), and only ever as the identity map. It writes the ops
+  overlay and reads the kit's profile once; it sends nothing to the lights itself, but a running show then re-reads
+  that module and, if it is a canopy module, sends its current look again through the map. Taking back a "yes" on
+  either run puts the previous map back (if nothing else changed it since).
 """
 
 from __future__ import annotations
@@ -35,15 +40,19 @@ from conductor.bench.jobs import (
     CONFIRM_LABELS,
     JOBS,
     PARAM_BOUNDS,
+    Q_MARKERS,
     Job,
     JobError,
+    address_question,
     coerce_params,
     flag_questions,
 )
 from conductor.bench.results import BenchResults, fixture_shape, is_run_id
 from conductor.bench_api import JobResult, Verdict
+from conductor.capabilities import Capabilities, detect
 from conductor.drivers.base import DeviceInfo, Outcome, ReadResult, StateRow
 from conductor.executor_api import Command, CommandResult
+from conductor.framemap import module_heads
 from conductor.gate import GateDenied, Purpose
 from conductor.locks import Lease, LockError
 from conductor.services import Services, Target
@@ -53,6 +62,9 @@ log = logging.getLogger(__name__)
 SAFE_ERRORS = (JobError, LookupError, GateDenied, LockError, ValueError)
 MAX_ANSWER_CHARS = 2000
 LEASE_TOUCH_S = 60.0  # a sleep inside a run touches the lease at least this often (idle timeout is 10 min)
+MAP_JOB = "address_probe_safe"  # the only job whose runs can record a kit's map (D58)
+MAP_SEARCH_RUNS = 1000  # saved runs searched, newest first, for a kit's latest two map probes
+PROFILE_TIMEOUT_S = 15.0
 
 
 class BenchError(ValueError):
@@ -323,6 +335,8 @@ class BenchRunner:
             "flag_questions": flag_questions(job_name, coerced),
             "flags_applied": None,
             "flags_revoked": None,
+            "map_applied": None,
+            "map_revoked": None,
             "writes_sent": 0,
             "confirmed_verdict": None,
             "environment": {
@@ -457,6 +471,9 @@ class BenchRunner:
         }
         if revoke:
             self._revoke_flags(record, revoke)
+        # So is a map this run's yes recorded (address_probe_safe asks one question).
+        if record.get("map_applied") and any(a != "yes" for a in given.values()):
+            self._revoke_map(record)
         record["answers"].update(given)
         record["confirmed_verdict"] = self._confirmed(record)
         self.results.save(record)
@@ -534,6 +551,283 @@ class BenchRunner:
             "bench", device_id=device_id, job=record["job"], step="flags revoked", detail=undone
         )
         self._publish_record(record, "flags")
+
+    # ---- the controller map (D58) ----------------------------------------------------------------------------
+    def map_proposal(self, run_id: str) -> dict[str, Any]:
+        """What Apply map would record from this run and why, or why not (`ready`). Reads saved runs and the
+        registry only; the kit's frame length is read when the map is applied."""
+        record = self.get(run_id)
+        try:
+            mapping, runs = self._map_proof(record)
+            self._not_recorded_yet(record["device_id"], mapping)
+        except BenchRefused as e:
+            return {"ready": False, "reason": str(e), "mapping": None, "runs": None}
+        heads, length = len(mapping["indices"]), mapping["frame_length"]
+        return {
+            "ready": True,
+            "reason": (
+                f"Apply map records this kit's map: entries 0–{heads - 1} drive heads 1–{heads} in order and "
+                f"entries {heads}–{length - 1} drive nothing ({length}-entry controller), for this kit only. "
+                f"Proof: Gate C on this kit, and its markers probe ({runs['markers']}) and its "
+                f"{_probe_name('dark', heads)} ({runs['dark']}), both answered Yes. It reads the kit's frame length "
+                "once more first and sends nothing to the lights itself. If this kit is a canopy module in a running "
+                "show, the show then re-reads it and sends its current look to the canopy again, through this map."
+            ),
+            "mapping": mapping,
+            "runs": runs,
+        }
+
+    async def apply_map(self, run_id: str) -> dict[str, Any]:
+        """Record the kit's identity map from its two answered probes (D58) in the ops overlay. One profile read
+        checks the kit still reports the probes' frame length; this sends nothing to the lights (the show's re-read
+        afterwards may: `_reread_show`)."""
+        record = self.get(run_id)
+        self._map_proof(record)  # refused before the kit is read
+        caps = await self._current_caps(record["device_id"], record["address"], record.get("driver") or "")
+        record = self.get(run_id)  # from here on nothing awaits, so the proof below is the one saved
+        mapping, runs = self._map_proof(record)
+        device_id, length = record["device_id"], mapping["frame_length"]
+        if len(set(caps.framebuffer_lengths.values())) != 1 or caps.framebuffer_length != length:
+            raise BenchRefused(
+                f"The kit now reports {caps.framebuffer_length or 'no'} entries (slots: "
+                f"{sorted(set(caps.framebuffer_lengths.values())) or 'none'}), not the {length} its probes saw. "
+                "Nothing was saved: run both probes again."
+            )
+        previous = self._not_recorded_yet(device_id, mapping)
+        self.services.update_registry(device_id, {"framebuffer_mapping": mapping})
+        applied = {
+            "mapping": mapping,
+            "previous": previous,
+            "runs": [runs["markers"], runs["dark"]],
+            "at": self.services.clock.now(),
+        }
+        for other in [record] + [self.get(r) for r in applied["runs"] if r != record["run_id"]]:
+            other["map_applied"] = applied
+            other["map_revoked"] = None
+            self.results.save(other)
+            self._publish_record(other, "map")
+        self.services.telemetry.record(
+            "bench",
+            device_id=device_id,
+            job=MAP_JOB,
+            step="map applied",
+            detail={"frame_length": length, "heads": len(mapping["indices"]), "runs": applied["runs"]},
+        )
+        self._reread_show(device_id)
+        return record
+
+    def _not_recorded_yet(self, device_id: str, mapping: dict[str, Any]) -> dict[str, Any] | None:
+        """The device's current map (to restore on a revoke); refused when it already is exactly `mapping`."""
+        current = self.services.registry.get(device_id).framebuffer_mapping
+        previous = current.model_dump() if current is not None else None
+        if previous == mapping:
+            raise BenchRefused(
+                "This kit's map is already recorded exactly as these probes show. Nothing to change."
+            )
+        return previous
+
+    def _map_proof(self, record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+        """The identity map this run and the kit's other probe prove, or BenchRefused saying why not (D58).
+
+        All on the kit at this run's address: Gate C (T1) applied there; its latest markers probe answered Yes
+        (head 1 red, head 2 green, head 30 blue, nothing else); its latest probe of entries heads…L−1 answered Yes
+        (nothing lit), and so is every Yes/No probe of part of that range run after it; both saw the same frame length
+        L (the job checked every slot agreed); and the module's head count = the registry's `expected_heads`.
+        Anything else is refused: no permutation is ever inferred."""
+        if record.get("job") != MAP_JOB:
+            raise BenchRefused("Only the bounded address probe (address_probe_safe) can record a map.")
+        if record.get("simulated"):
+            raise BenchRefused(
+                "This run was on the simulator, so it proves nothing about the real kit. A map is never recorded "
+                "from a simulated run."
+            )
+        if record.get("status") != "finished" or not record.get("result"):
+            raise BenchRefused("The run hasn't finished yet.")
+        device_id, address, driver = record["device_id"], record.get("address"), record.get("driver") or ""
+        try:
+            entry = self.services.registry.get(device_id)
+        except KeyError:
+            raise BenchRefused(f"{device_id} isn't in the registry any more.") from None
+        if not address or self.services.registry.address(device_id, driver) != address:
+            raise BenchRefused(
+                f"This run was on a different kit from the one registered as {device_id} now (it was re-registered "
+                "since). A map belongs to the kit that proved it: probe this kit again."
+            )
+        if entry.flags_for(address).t1_frames is not True:
+            raise BenchRefused(
+                "Gate C isn't proven on this kit: run gate_c_safe, answer Yes and Apply flags before recording a map."
+            )
+        heads = module_heads(self.services.config_dir)
+        if entry.expected_heads != heads:
+            raise BenchRefused(
+                f"{device_id} is set to {entry.expected_heads or 'no'} expected heads but a module has {heads}, so "
+                "these probes can't be read as its map. Tell Alon."
+            )
+        kind = _probe_kind(record, heads)
+        params = record.get("params") or {}
+        if (
+            kind is None
+            and _yes_no_question(record, heads) is None
+            and (params.get("pattern") == "markers" or int(params.get("start", 0)) >= heads)
+        ):
+            raise BenchRefused(
+                "This probe didn't finish with an exact restore and a Yes/No question, so it can't count towards a "
+                f"map. Run the markers probe or the {_probe_name('dark', heads)} again."
+            )
+        if kind is None:
+            raise BenchRefused(
+                f"A map is recorded from two probes: the markers pattern, and a range from entry {heads} to the "
+                "controller's last entry. This run is neither."
+            )
+        latest, later = self._latest_probes(device_id, address, driver, heads)
+        newest = latest[kind[0]]
+        if newest is not None and newest["run_id"] != record["run_id"]:
+            raise BenchRefused(
+                f"A newer {_probe_name(kind[0], heads)} ran on this kit ({newest['run_id']}), and the newest one is "
+                "the one that counts. Open it under Recent runs."
+            )
+        for name, run in latest.items():
+            probe = _probe_name(name, heads)
+            if run is None:
+                raise BenchRefused(
+                    f"Run the {probe} on this kit too, and answer it. Only a run that finished with an exact restore "
+                    "and asked Yes or No counts."
+                )
+            if run.get("simulated"):
+                raise BenchRefused(f"The {probe} ({run['run_id']}) was simulated, so it proves nothing.")
+            question = _probe_kind(run, heads)[1]
+            answer = run["answers"].get(question)
+            if answer is None:
+                raise BenchRefused(f"Answer “{question}” on the {probe} ({run['run_id']}) first.")
+            if answer != "yes":
+                raise BenchRefused(
+                    f"The {probe} ({run['run_id']}) was answered “{answer}”, so this kit doesn't show entries "
+                    f"0–{heads - 1} on heads 1–{heads} in order with the rest dark. No map can be recorded from "
+                    "here: tell Alon."
+                )
+        for run in later:  # a newer look at part of entries heads…L−1 must say nothing lit there either
+            question = _yes_no_question(run, heads)
+            obs = run["result"]["observations"]
+            entries = f"entries {obs['start']}–{obs['start'] + obs.get('count', 0) - 1}"
+            answer = run["answers"].get(question)
+            if answer is None:
+                raise BenchRefused(
+                    f"Answer “{question}” on the later probe of {entries} ({run['run_id']}) first."
+                )
+            if answer != "yes":
+                raise BenchRefused(
+                    f"A later probe of {entries} ({run['run_id']}) was answered “{answer}”, so a head lit past head "
+                    f"{heads}. No map can be recorded from here: tell Alon."
+                )
+        markers, dark = latest["markers"], latest["dark"]
+        length = markers["result"]["observations"].get("length")
+        if dark["result"]["observations"].get("length") != length:
+            raise BenchRefused(
+                f"The two probes saw different frame lengths ({length} and "
+                f"{dark['result']['observations'].get('length')}): run both again."
+            )
+        lit = {int(k) for k in markers["result"]["observations"].get("markers") or {}}
+        if lit != {0, 1, heads - 1}:
+            raise BenchRefused(
+                f"The markers probe lit entries {sorted(lit)}, not 0, 1 and {heads - 1}. Tell Alon."
+            )
+        # The dark probe covers entries heads…length−1 (its kind), so length > heads.
+        mapping = {"frame_length": length, "indices": list(range(heads)), "proven_on": address}
+        return mapping, {"markers": markers["run_id"], "dark": dark["run_id"]}
+
+    def _latest_probes(
+        self, device_id: str, address: str, driver: str, heads: int
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The newest finished markers probe and dark-range probe on the kit at `address` (None if there is none),
+        and the Yes/No probes of only part of the range past the heads that ran after that dark-range probe."""
+        latest: dict[str, Any] = {"markers": None, "dark": None}
+        later: list[dict[str, Any]] = []
+        for summary in self.results.list(MAP_SEARCH_RUNS):
+            if summary.get("job") != MAP_JOB or summary.get("device_id") != device_id:
+                continue
+            run = self.results.load(summary["run_id"])
+            if run is None or (run.get("address"), run.get("driver")) != (address, driver):
+                continue
+            kind = _probe_kind(run, heads)
+            if kind is not None and latest[kind[0]] is None:
+                latest[kind[0]] = run
+            elif kind is None and latest["dark"] is None and _yes_no_question(run, heads) is not None:
+                later.append(run)
+        return latest, later
+
+    async def _current_caps(self, device_id: str, address: str, driver: str) -> Capabilities:
+        """The kit's capabilities now, from one profile read through the bench driver (a GET, never a write)."""
+        try:
+            target = self.services.target(device_id, Purpose.BENCH)
+        except LookupError as e:
+            raise BenchRefused(str(e)) from None
+        if (target.driver.name, target.address) != (driver, address):
+            raise BenchRefused(
+                "Bench jobs here don't reach the kit these probes ran on, so its frame length can't be checked. "
+                "Apply the map on the Conductor that ran the probes."
+            )
+        try:
+            info = await asyncio.wait_for(
+                target.driver.fetch_profile(address, purpose=Purpose.BENCH), PROFILE_TIMEOUT_S
+            )
+        except GateDenied as e:
+            raise BenchRefused(e.reason) from None
+        except TimeoutError:
+            raise BenchRefused(
+                "Reading the kit's profile took too long. Nothing was saved; try again."
+            ) from None
+        except Exception as e:  # noqa: BLE001 - AferoRequestFailed and friends carry operator-safe messages
+            raise BenchRefused(f"Couldn't read the kit's profile, so nothing was saved: {e}") from None
+        return detect(info.functions, info.states)
+
+    def _revoke_map(self, record: dict[str, Any]) -> None:
+        """Put back the map this run's yes recorded, wherever the registry still holds exactly that map (proven on
+        this kit, nothing changed since): on the run's device, and on any entry a controller swap carried it to.
+        Both runs that justified it record what was undone."""
+        applied = record["map_applied"]
+        device_id = record["device_id"]
+        holders = [
+            entry.id
+            for entry in self.services.registry.file.devices
+            if entry.framebuffer_mapping is not None
+            and entry.framebuffer_mapping.model_dump() == applied["mapping"]
+        ]
+        for holder in holders:
+            self.services.update_registry(holder, {"framebuffer_mapping": applied["previous"]})
+        undone = bool(holders)
+        revoked = {
+            "mapping": applied["mapping"],
+            "undone": undone,
+            "devices": holders,
+            "at": self.services.clock.now(),
+        }
+        for run_id in applied["runs"]:
+            run = record if run_id == record["run_id"] else self.results.load(run_id)
+            if run is None:
+                continue
+            run["map_applied"] = None
+            run["map_revoked"] = revoked
+            if run is not record:  # answer() saves and publishes this run
+                self.results.save(run)
+                self._publish_record(run, "map")
+        self.services.telemetry.record(
+            "bench",
+            device_id=device_id,
+            job=MAP_JOB,
+            step="map revoked",
+            detail={"undone": undone, "devices": holders},
+        )
+        for holder in holders:
+            self._reread_show(holder)
+
+    def _reread_show(self, device_id: str) -> None:
+        """The show caches each module's profile and judges its map from it: drop the cache and read it again now,
+        as a controller swap does, so /ops, the 7 am check and T1 pick the change up at once. For a canopy module
+        the re-read counts as new capabilities, so the running show sends its current look again (its own writes,
+        through its executor and the live gate)."""
+        if (wiring := self.services.extras.get("show")) is not None:
+            wiring.caps.pop(device_id, None)
+            wiring.request_refresh([device_id])
 
     def anonymized(self, run_id: str) -> dict[str, Any]:
         record = self.get(run_id)
@@ -648,8 +942,44 @@ class BenchRunner:
                 "confirmed_verdict": record["confirmed_verdict"],
                 "flags_applied": record["flags_applied"],
                 "flags_revoked": record.get("flags_revoked"),
+                "map_applied": record.get("map_applied"),
+                "map_revoked": record.get("map_revoked"),
             },
         )
+
+
+def _probe_name(kind: str, heads: int) -> str:
+    return "markers probe" if kind == "markers" else f"probe of entries {heads} onwards"
+
+
+def _yes_no_question(record: dict[str, Any], heads: int) -> str | None:
+    """The Yes/No question a finished address_probe_safe run asked: the markers, or a range at or past entry
+    `heads` (nothing lit?). None when it didn't finish with an exact restore and that question, or is another range."""
+    result = record.get("result") or {}
+    obs = result.get("observations") or {}
+    if (record.get("params") or {}).get("pattern") == "markers":
+        question = Q_MARKERS
+    elif isinstance(obs.get("start"), int) and obs["start"] >= heads:
+        question = address_question("range", obs["start"], obs.get("count", 0), heads)
+    else:
+        return None
+    if result.get("verdict") != str(Verdict.NEEDS_EYES) or question not in (result.get("ask_human") or []):
+        return None  # the probe wasn't shown and restored exactly, or it asked another question
+    return question
+
+
+def _probe_kind(record: dict[str, Any], heads: int) -> tuple[str, str] | None:
+    """("markers" | "dark", the question it asked) for a finished address_probe_safe run that can count towards a
+    map: the markers pattern, or a range from entry `heads` to the frame's last entry; else None."""
+    question = _yes_no_question(record, heads)
+    if question is None:
+        return None
+    if (record.get("params") or {}).get("pattern") == "markers":
+        return "markers", question
+    obs = record["result"]["observations"]
+    if obs["start"] == heads and obs["start"] + obs.get("count", 0) == obs.get("length"):
+        return "dark", question
+    return None  # a Yes/No probe of only part of the range past the heads
 
 
 def _jsonable(value: Any) -> Any:
