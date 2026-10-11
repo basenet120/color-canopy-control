@@ -547,7 +547,7 @@ def test_engine_scene_asks_the_engine_and_reports_its_feature(app_client):
     assert engine.calls == [("rainbow-row-sunset", "kiosk")]
     state = r.json()["state"]
     assert state["scene"] == "rainbow-row-sunset" and state["phase"] == "changing"
-    assert state["feature"] == "Feature sentence for rainbow-row-sunset."
+    assert state["feature"] is None  # not until the new scene is showing
     r = app_client.post("/api/kiosk/scene", json={"scene": GOLDEN.id})  # the engine's 8 s cooldown
     assert r.status_code == 429 and 7 < r.json()["retry_after_s"] <= 8
     assert engine.calls == [("rainbow-row-sunset", "kiosk")]
@@ -585,7 +585,9 @@ def test_engine_with_guest_brightness_and_power(app_client):
     brightness = [c for c in engine.guest_calls if c[0] == "brightness"]
     assert brightness[-1] == ("brightness", 10, "kiosk") and len(brightness) < 8  # coalesced
     assert app_client.post("/api/kiosk/power", json={"on": False}).status_code == 200
-    assert _settle(app_client)["state"]["power"] is False
+    state = _settle(app_client)["state"]
+    assert state["power"] is False
+    assert state["feature"] is None  # no technique sentence for lights that are off
     assert engine.guest_calls[-1] == ("power", False, "kiosk")
 
 

@@ -844,7 +844,8 @@ class EngineTarget:
             "look": None,  # the engine's techniques aren't a 30-light frame; the panel previews the scene itself
             "phase": phase,
             "message": message,
-            "feature": st.feature,
+            # never a technique sentence for lights that are off or still changing scene (kiosk copy must be true)
+            "feature": None if power is False or st.phase == CanopyPhase.UPDATING else st.feature,
             "cooldown_remaining_s": cooldown,
         }
 
