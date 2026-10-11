@@ -49,9 +49,9 @@ only so far)._
    calm copy only. `?debug=1` (ops only) adds the debug drawer and the iPad-frame preview. The state now carries
    `look` ("gradient" | "solid") and each scene its `solid` colour, so the preview draws what is actually lit.
    Quicksand (OFL) is vendored as one variable file renamed "Canopy Rounded" (OFL Reserved Font Name) under
-   `web/static/fonts/canopy-rounded/`, so weights 500/600 really render — **needs Alon's OK** (convention is system
-   fonts; removing the `@font-face` rule falls back to SF Pro Rounded). Hubspace logos in `web/kiosk/brand/` — **logo use needs
-   Home Depot / Hearst brand confirmation**.
+   `web/static/fonts/canopy-rounded/`, so weights 500/600 really render. **Approved by Alon (2026-10-11)** as an
+   exception to the system-font convention for the guest panel. The Hubspace logos in `web/kiosk/brand/` were
+   **approved by Alon** too.
    **Verified (sim):** node + Python suites; driven with Playwright on `make guest-dev` at 1180×820, 1024×768 and
    820×1180 with touch emulation (scene, cooldown toast, slider drag pacing, power, debug, attract, frame preview; no
    page errors, no overflow). `tests_e2e/test_kiosk.py` rewritten for the panel but **not run** (the pinned
