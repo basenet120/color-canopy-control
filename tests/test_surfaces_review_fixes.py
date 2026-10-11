@@ -410,11 +410,13 @@ def test_f8_t3_state_and_modes_carry_one_colour_per_module(t3_show):
     assert len(set(colours)) > 1, "Sunset's rows differ at module level"
 
 
-def test_f8_kiosk_js_draws_flat_modules_from_the_state():
+def test_f8_guest_panel_previews_what_is_lit_from_the_state():
+    """The guest panel replaced the mode kiosk; its preview follows state.look (one colour when the strands took the
+    solid fallback). Behaviour: tests/guest-panel.test.mjs ("now showing draws the one colour…")."""
     from pathlib import Path
 
-    js = (Path(__file__).resolve().parent.parent / "web" / "kiosk" / "kiosk.js").read_text()
-    assert 'case "modules"' in js and "module_colours" in js
+    js = (Path(__file__).resolve().parent.parent / "web" / "kiosk" / "panel-model.mjs").read_text()
+    assert 'state.look === "solid"' in js and "scene.solid" in js
 
 
 # ---- (a) the /ops device list is grouped by role / room ------------------------------------------------------

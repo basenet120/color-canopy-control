@@ -2,58 +2,130 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <meta name="format-detection" content="telephone=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Color Canopy">
+  <meta name="theme-color" content="#323232">
   <title>The Color Canopy</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/kiosk/brand/favicon-32.png">
+  <link rel="apple-touch-icon" href="/kiosk/brand/apple-touch-icon.png">
   <!--
-    The guest canopy touchscreen (P3 /kiosk). A single page that never navigates away: every fetch and socket
-    failure is caught and becomes the calm "canopy is resting" screen. Copy anchors come from the signage plan
-    (config/modes.yaml `kiosk:`); the Hubspace feature sentence is always the server's (state.feature), never ours.
+    The guest panel on the iPad stand (docs/design/guest-panel.md): a Hubspace-style device sheet driven by
+    /api/kiosk/panel and POST /api/kiosk/scene|brightness|power. A single page that never navigates away and never
+    shows a raw error. The Hubspace feature sentence is always the server's (state.feature), never ours.
   -->
-  <link rel="stylesheet" href="/static/base.css">
+  <link rel="preload" href="/static/fonts/quicksand/Quicksand-Regular.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/quicksand/Quicksand-Bold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/kiosk/kiosk.css">
   <script type="module" src="/kiosk/kiosk.js"></script>
 </head>
 <body class="kiosk" data-view="loading">
-  <main class="stage" id="stage">
-    <section class="hero" aria-labelledby="title">
-      <header class="masthead">
-        <p class="eyebrow">Six Lowcountry Modes</p>
-        <h1 id="title" class="title">The Color Canopy</h1>
-        <p class="prompt">Choose a mood. Watch the light change.</p>
-      </header>
-
-      <figure class="canopy" id="canopy">
-        <div class="canopy-art">
-          <svg id="canopy-svg" viewBox="-5 -5 235 130" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+  <div class="app" id="app" data-phase="ready">
+    <header class="hdr" id="hdr">
+      <div class="hdr-tint" id="tint-a" aria-hidden="true"></div>
+      <div class="hdr-tint" id="tint-b" aria-hidden="true"></div>
+      <div class="hdr-row">
+        <div class="hdr-text">
+          <h1 class="hdr-title">The Color Canopy</h1>
+          <p class="hdr-sub" id="hdr-sub" aria-live="polite"><span class="spinner" id="hdr-spinner" aria-hidden="true" hidden></span><span id="hdr-sub-text">&nbsp;</span></p>
         </div>
-        <figcaption class="now">
-          <span class="status-line" id="status-line" data-state="idle" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="status-text">&nbsp;</span></span>
-          <span class="now-label" id="now-label">&nbsp;</span>
-        </figcaption>
-      </figure>
+        <button class="power" id="power" type="button" role="switch" aria-checked="false" aria-label="Canopy lights" data-unknown="true">
+          <span class="power-label" id="power-label" aria-hidden="true">—</span>
+          <span class="power-track" aria-hidden="true"><span class="power-knob"></span></span>
+        </button>
+      </div>
+    </header>
 
-      <p class="feature" id="feature" hidden><span class="feature-kicker">Hubspace feature</span><span class="feature-text" id="feature-text"></span></p>
-    </section>
+    <main class="sheet" id="sheet">
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="sheet-body" id="sheet-body">
+        <section class="scenes" aria-labelledby="scenes-title">
+          <div class="sec-head">
+            <h2 class="sec-title" id="scenes-title">Choose a Scene</h2>
+            <span class="sec-rule" aria-hidden="true"></span>
+            <span class="chip" id="chip" hidden></span>
+          </div>
+          <div class="grid" id="grid"></div>
+        </section>
 
-    <section class="choices" aria-label="Choose a mood">
-      <header class="choices-head">
-        <p class="tagline">Make it your mood.</p>
-      </header>
-      <div class="tiles" id="tiles"></div>
-      <p class="hint" id="hint" aria-live="polite">&nbsp;</p>
-    </section>
-  </main>
+        <div class="side">
+          <section class="card now" aria-labelledby="now-title">
+            <div class="sec-head">
+              <svg class="icon icon-list" viewBox="0 0 24 24" aria-hidden="true"><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/><path d="M9 6h12M9 12h12M9 18h12"/></svg>
+              <h2 class="sec-title" id="now-title">Now Showing</h2>
+              <span class="sec-rule" aria-hidden="true"></span>
+            </div>
+            <div class="now-body">
+              <div class="now-copy">
+                <p class="now-name" id="now-name">&nbsp;</p>
+                <p class="now-desc" id="now-desc">&nbsp;</p>
+              </div>
+              <svg class="snake" id="snake" aria-hidden="true"></svg>
+            </div>
+          </section>
 
-  <section class="resting" id="resting" aria-live="polite" hidden>
-    <div class="resting-glow" aria-hidden="true"></div>
+          <section class="bright" aria-labelledby="bright-label">
+            <div class="bright-row">
+              <svg class="icon icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>
+              <span class="bright-label" id="bright-label">Brightness:</span>
+              <span class="bright-value"><span id="bright-value">—</span><span class="bright-unit" id="bright-unit">%</span></span>
+            </div>
+            <p class="help">The brightness selected will apply to all the lights.</p>
+            <div class="slider" id="slider" role="slider" tabindex="0" aria-labelledby="bright-label" aria-valuemin="10" aria-valuemax="100" aria-valuenow="10" aria-valuetext="10 percent">
+              <div class="slider-track"><div class="slider-fill" id="slider-fill"></div></div>
+              <div class="slider-knob" id="slider-knob"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <footer class="bar" id="bar">
+        <div class="feature">
+          <img class="badge" src="/kiosk/brand/hub-glyph.svg" alt="" width="32" height="32" draggable="false">
+          <div class="feature-copy">
+            <p class="feature-kicker" id="feature-kicker" data-on="Hubspace Feature" data-off="Hubspace">Hubspace</p>
+            <p class="feature-text" id="feature-text" aria-live="polite" data-fallback="Choose a scene to see the Hubspace feature at work.">Choose a scene to see the Hubspace feature at work.</p>
+          </div>
+        </div>
+        <img class="lockup" src="/kiosk/brand/hubspace-logo.svg" alt="Powered by Hubspace" height="40" draggable="false">
+      </footer>
+
+      <div class="paused" id="paused" hidden>
+        <div class="paused-card">
+          <img class="badge badge-48" src="/kiosk/brand/hub-glyph.svg" alt="" width="48" height="48" draggable="false">
+          <p class="paused-title">Paused for a moment</p>
+          <p class="paused-body" id="paused-body">Our team is adjusting the canopy. It will be back shortly.</p>
+        </div>
+      </div>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="spinner toast-spinner" id="toast-spinner" aria-hidden="true" hidden></span><span id="toast-text"></span></div>
+  </div>
+
+  <section class="resting" id="resting" hidden>
+    <div class="glow" id="resting-glow" aria-hidden="true"></div>
     <div class="resting-copy">
-      <p class="eyebrow">Six Lowcountry Modes</p>
-      <h2 class="title">The Color Canopy</h2>
-      <p class="resting-text" id="resting-text">The canopy is resting. It will be back shortly.</p>
-      <p class="tagline">Make it your mood.</p>
+      <img class="lockup-white" src="/kiosk/brand/hubspace-logo-white.png" alt="Hubspace" height="36" draggable="false">
+      <p class="resting-title">The Color Canopy is resting.</p>
+      <p class="resting-text" id="resting-text">Come back soon.</p>
     </div>
+  </section>
+
+  <section class="attract" id="attract" hidden>
+    <div class="hdr-tint attract-tint" id="attract-a" aria-hidden="true"></div>
+    <div class="hdr-tint attract-tint" id="attract-b" aria-hidden="true"></div>
+    <div class="attract-copy">
+      <img class="badge badge-72" src="/kiosk/brand/hub-glyph.svg" alt="" width="72" height="72" draggable="false">
+      <p class="attract-title">The Color Canopy</p>
+      <p class="attract-mood" id="attract-mood">&nbsp;</p>
+      <div class="attract-strips" id="attract-strips" aria-hidden="true"></div>
+      <p class="attract-prompt">Tap anywhere to light the canopy</p>
+    </div>
+    <img class="lockup-white attract-lockup" src="/kiosk/brand/hubspace-logo-white.png" alt="" height="36" draggable="false">
   </section>
 </body>
 </html>

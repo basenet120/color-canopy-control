@@ -1,4 +1,4 @@
-"""The shared static web assets: vendored (no CDN, no web fonts) and app.js behaves (07 §2, §10)."""
+"""The shared static web assets: vendored (no CDN; the only web font is vendored with its licence) and app.js behaves (07 §2, §10)."""
 
 import re
 import shutil
@@ -12,12 +12,16 @@ STATIC = ROOT / "web" / "static"
 
 
 def test_static_assets_are_vendored():
-    files = sorted(STATIC.iterdir())
+    files = sorted(f for f in STATIC.iterdir() if f.is_file())
     assert {f.name for f in files} >= {"base.css", "app.js"}
     for f in files:
         text = f.read_text()
         assert not re.search(r"https?://", text), f"{f.name} references an external URL"
         assert "@import" not in text and "@font-face" not in text
+    # the one vendored web font (the guest panel's Quicksand) ships with its licence; nothing else lives in fonts/
+    for family in (STATIC / "fonts").iterdir():
+        assert (family / "OFL.txt").is_file(), family.name
+        assert {f.suffix for f in family.iterdir()} <= {".woff2", ".txt"}, family.name
 
 
 def test_base_css_has_the_shared_pieces():

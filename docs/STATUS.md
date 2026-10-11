@@ -36,6 +36,21 @@ only so far)._
    launcher exercised by curl (gradient applied, brightness coalesced, leases "guest panel").
    **Needs real hardware:** a guest scene on Kingston + String light 1 (String light 1 needs its own Gate C and map
    first, or the panel shows solid colours — by design).
+   **Part 2, the iPad UI (same branch):** `/kiosk/` is now the Hubspace-style guest panel (spec + as-built notes:
+   `docs/design/guest-panel.md`): dark device header with the master switch, light sheet with six scene cards, a
+   Now-showing serpentine of the 30 lights, the Hubspace brightness slider and the server's feature line. Pure logic
+   in `web/kiosk/panel-model.mjs` (`tests/guest-panel.test.mjs`). Touch: ≥ 64 pt targets, pressed states, the slider
+   sends ≤ 1/s while dragging plus the final value, no zoom / callout / overscroll, safe areas, attract after 2 min,
+   calm copy only. `?debug=1` (ops only) adds the debug drawer and the iPad-frame preview. The state now carries
+   `look` ("gradient" | "solid") and each scene its `solid` colour, so the preview draws what is actually lit.
+   Quicksand (OFL) is vendored under `web/static/fonts/` — **needs Alon's OK** (convention is system fonts; removing
+   the two `@font-face` rules falls back to SF Pro Rounded). Hubspace logos in `web/kiosk/brand/` — **logo use needs
+   Home Depot / Hearst brand confirmation**.
+   **Verified (sim):** node + Python suites; driven with Playwright on `make guest-dev` at 1180×820, 1024×768 and
+   820×1180 with touch emulation (scene, cooldown toast, slider drag pacing, power, debug, attract, frame preview; no
+   page errors, no overflow). `tests_e2e/test_kiosk.py` rewritten for the panel but **not run** (the pinned
+   Playwright browser isn't installed here). **Needs a real iPad:** Safari touch feel, Guided Access, home-screen
+   web-app mode.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
