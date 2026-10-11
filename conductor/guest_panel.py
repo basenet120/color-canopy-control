@@ -830,7 +830,9 @@ class EngineTarget:
             phase, message = "cooldown", self.message
         else:
             phase, message = "ready", self.message
-        power = getattr(st, "power", None)
+        # the engine's own truth (D60): `guest_power` is False only while a guest has the canopy off, and the idle
+        # reset turns it back on — never the panel's last request
+        power = getattr(st, "guest_power", getattr(st, "power", None))
         brightness = getattr(st, "brightness", None)
         if power is None:
             power = self.requested.get("power", self.accepted.get("power"))

@@ -58,6 +58,13 @@ only so far)._
    Playwright browser isn't installed here). **Needs a real iPad:** Safari touch feel, Guided Access, home-screen
    web-app mode.
 
+5. **`claude/guest-engine-controls` → after the scenes catalog (`d897843`)**: guest brightness and on/off in the
+   show engine for the iPad guest panel (D60). It adds `set_guest_brightness`, `set_guest_power` and
+   `clear_guest_overrides`, and the guest fields in `CanopyState`. The overrides are desired state, so the
+   reconciler keeps them. Choosing a mood, the safe look and an idle reset (`kiosk.idle_reset_s`, 300 s) clear them.
+   It also adds `POST /api/canopy/guest-reset` and a "Clear guest brightness / off" button on `/ops`. No kiosk routes:
+   the guest panel branch calls the engine methods.
+
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
   folder; manifest verified, 234 files). The baseline kit inside it is byte-identical to `1eb8551`, so this was a true
@@ -168,6 +175,22 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
     reason, showed **Apply map** after the Yes, recorded the map (`/api/devices` then said mapped), and a No took it
     back. That check wasn't repeated after the fixes.
 
+- **`claude/guest-engine-controls` (D60), 2026-10-11, simulator only:** lint clean; **1061 passed** with `test_deploy.py` excluded; JS 19/19 and the tracker check pass. `tests/test_guest_controls.py`
+  has 21 engine tests on the virtual clock, plus a guest-reset route test. They cover one write per module at every
+  tier (motion plans as one burst) and drift re-asserted to the guest's level, including drift onto the designed
+  value; two mutations of the reconciler fail that test. Also covered: power off/on, mood choice vs re-pick, the idle
+  reset and the idle scene, the shared cooldown, pause/outage/commissioning refusals, safe look and ops clear, lock
+  release, and the rate budget under rapid ops changes. Soak 9/9 PASS (report in the session scratchpad;
+  `docs/reports/sim-acceptance.md` not regenerated). The `/ops` chip and button were checked in a browser on a local
+  simulator server, with the state response faked to show a guest override.
+  **Review fixes (same day):** the idle reset now acts only while a guest setting is in force. Before, with
+  `idle_scene` set to something other than the idle hold's mood, the two alternated every few minutes, and the reset
+  could undo a mood ops chose later. `idle_scene` must name a mode, or startup refuses. Guest levels are clamped to
+  each device's brightness range. A brightness that isn't a whole number is refused. A reset that fell due during an
+  outage goes out with the recovery burst, and on resume the idle hold goes before the reset, so each is one burst.
+  Re-verified: lint clean; **1089 passed** (`test_deploy.py` excluded); soak 9/9 PASS (scratchpad report). There are
+  16 new tests, and each was mutation-checked: all 13 code mutations fail at least one test.
+
 ## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
 1. ~~The show path ignores the framebuffer mapping~~ **Done in `claude/show-path-mapping` (D57)**, in the simulator
    only. These now read each kit's own map under one rule: the T1 compiler and composer, previews, `/api/devices`, the
@@ -251,6 +274,14 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
   phase alignment is unmeasured.
 - Per-puck white and colour recipes through Mylar (Prototype 01), including the six scene palettes at their draft
   brightness (D59: they are RGB-only until then); per-entry CCT/white fields; the hue ramp; 1–10 % dimming smoothness.
+
+  unknown, and `effects.enabled` stays empty, so Golden Hour remains a static glow and says so. Two-controller phase
+  alignment is unmeasured.
+- **Guest brightness on painted looks (D60):** whether `brightness` dims a strand that shows a custom slot. A
+  rainbow-mode dim read back without being seen on Sep 28. Also unbenched: turning back on, which is one PUT that
+  starts from power-off.
+- Per-puck white and colour recipes through Mylar (Prototype 01); per-entry CCT/white fields; the hue ramp; 1–10 %
+  dimming smoothness.
 - Real latency, throttling (writes and the 1.8 GET/s true-up reads), token rotation, 401/403 semantics.
 - Stale-clock writes, rewriting the showing slot, the 12-puck fault. Whether that fault shows in the cloud (frame
   length, `connected-light-count`) is unbenched (gate 10); until then the check is visual.

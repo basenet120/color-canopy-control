@@ -516,18 +516,27 @@ def _guest_engine_class():
     from test_kiosk_routes import FakeEngine
 
     class GuestEngine(FakeEngine):
-        """With the other branch's set_guest_* methods: one async, one plain (the panel takes either)."""
+        """With the engine's set_guest_* methods (D60): one async, one plain (the panel takes either). Like the
+        real engine, its state reports what it was set to (`brightness`, `guest_power`)."""
 
         def __init__(self, clock, **kw):
             super().__init__(clock, **kw)
             self.guest_calls: list[tuple] = []
+            self.guest = {"guest_power": True, "brightness": None}
+
+        def state(self):
+            import dataclasses
+
+            return dataclasses.replace(super().state(), **self.guest)
 
         async def set_guest_brightness(self, level, *, source):
             self.guest_calls.append(("brightness", level, source))
+            self.guest["brightness"] = level
             return self.state()
 
         def set_guest_power(self, on, *, source):
             self.guest_calls.append(("power", on, source))
+            self.guest["guest_power"] = on
             return self.state()
 
     return GuestEngine
@@ -590,6 +599,21 @@ def test_engine_with_guest_brightness_and_power(app_client):
     assert state["power"] is False
     assert state["feature"] is None  # no technique sentence for lights that are off
     assert engine.guest_calls[-1] == ("power", False, "kiosk")
+
+
+def test_the_panel_shows_the_engines_own_power_and_brightness_not_its_last_request(app_client):
+    """At the venue the engine's idle reset turns the canopy back on and restores the designed brightness (D60):
+    the iPad must show that, not the off / dim it last asked for."""
+    _services(app_client).settings.executor.min_write_interval_s = 0.1
+    base = _guest_engine_class()
+
+    engine = _engine(app_client, base)
+    assert app_client.post("/api/kiosk/power", json={"on": False}).status_code == 200
+    assert app_client.post("/api/kiosk/brightness", json={"level": 20}).status_code == 200
+    assert _settle(app_client)["state"]["power"] is False
+    engine.guest = {"guest_power": True, "brightness": 70}  # the engine's idle reset ran
+    state = _panel(app_client)["state"]
+    assert state["power"] is True and state["brightness"] == 70
 
 
 def test_engine_paused_resting_and_missing(app_client):

@@ -92,6 +92,12 @@ class KioskSettings(_Strict):
     cooldown_s: float = 8
     idle_return_s: float = 180
     idle_mode: str = "lowcountry-calm"
+    # Guest brightness / power (D60): the lowest brightness a guest can set, and how long after the last guest input
+    # the guest's brightness and power settings are cleared (power on, the look's designed brightness), optionally
+    # also returning to `idle_scene` (None = stay on the current look).
+    guest_brightness_min: int = Field(10, ge=1, le=100)
+    idle_reset_s: float = Field(300, gt=0)
+    idle_scene: str | None = None
 
 
 class ModulePageSettings(_Strict):

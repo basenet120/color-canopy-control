@@ -28,6 +28,14 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).
 - **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused), request
   `kiosk.idle_mode` with source "idle".
+- **Guest settings (D60).** "Differs" means readback differs from `engine.desired_rows` — the look with the guest's
+  brightness / power applied — so a re-assert restores the guest's choice and never undoes it. **Idle reset:** while
+  a guest setting is in force, after `kiosk.idle_reset_s` with no guest input (and guest input not paused, no outage,
+  not commissioning), clear the guest's brightness and power (on, designed brightness) and, when `kiosk.idle_scene`
+  is set, show that mood (source "idle"), so the canopy is never left dark or dim. Without a guest setting in force
+  it does nothing, so it never undoes a later mood choice and never alternates with the idle hold. The idle hold goes
+  first in a tick; a reset that fell due during an outage goes out with the recovery burst. One attempt per idle
+  period.
 - **Slots.** During a true-up each module's slot objects are hashed (canonical projection of the readback, 07 §6)
   and compared with the recorded hash; the effect fields that make a pattern animate (motionEffect, brightnessEffect
   — outside the hash) are compared with those recorded, separately. A drifted T1 slot (commissioned, origin "api") is
@@ -207,7 +215,9 @@ class Reconciler:
             await self.true_up()
         else:
             self._rolling_reads(now)
+        # The idle hold first: its mood clears the guest settings, so the reset then has nothing left to do.
         await self._idle_hold(now)
+        await self._idle_reset(now)
 
     # ---- re-assert --------------------------------------------------------------------------------------------
     async def reassert(self, *, source: str = "reconciler") -> list[str]:
@@ -241,16 +251,15 @@ class Reconciler:
             return False
         snap = engine.tracker.snapshot(target.address)
         reported = [StateRow.from_wire(r) for r in snap["reported"] or []]
-        return _rows_differ(list(engine.current_plan().modules[device_id].rows), reported)
+        return _rows_differ(engine.desired_rows(device_id), reported)
 
     def _differs(self, device_id: str, target: Any) -> bool:
         engine = self.engine
-        plan = engine.current_plan()
         address = target.address
         if engine.tracker.mismatched([address]):
             snap = engine.tracker.snapshot(address)
             reported = [StateRow.from_wire(r) for r in snap["reported"] or []]
-            return _rows_differ(list(plan.modules[device_id].rows), reported)
+            return _rows_differ(engine.desired_rows(device_id), reported)
         return engine.last_status.get(address) in (CommandStatus.FAILED, CommandStatus.MISMATCH)
 
     # ---- true-up ----------------------------------------------------------------------------------------------
@@ -377,6 +386,8 @@ class Reconciler:
         rr = await target.driver.read_state(target.address, purpose=Purpose.ENGINE)
         engine.tracker.note_readback(target.address, rr)
         if rr.ok:
+            # An idle reset that fell due during the outage goes out with the recovery burst, not right after it.
+            await self._idle_reset(self.clock.monotonic(), recovering=True)
             engine.exit_outage(f"{device_id} answered a readback")
             return True
         return False
@@ -493,6 +504,33 @@ class Reconciler:
         state = await engine.request_mode(kiosk.idle_mode, source="idle")
         if state.refused:
             engine.telemetry.record("alert", level="warn", message=f"Idle return refused: {state.message}")
+
+    async def _idle_reset(self, now: float, *, recovering: bool = False) -> None:
+        """No guest input for `kiosk.idle_reset_s` while a guest setting is in force: clear the guest's
+        brightness/power (and show `idle_scene`). Nothing else — a mood chosen since (by ops or anyone) already
+        cleared them, so it is never undone. `recovering`: called just before an outage ends, so the change goes
+        out with the recovery burst instead of a second burst right after it."""
+        engine = self.engine
+        kiosk = engine.deps.settings.kiosk
+        if engine.paused or engine.commissioning or engine.stopped:
+            return
+        if engine.outage is not None and not recovering:
+            return
+        if not engine.guest_overrides_active or now - engine.last_guest_input_mono < kiosk.idle_reset_s:
+            return
+        engine.last_guest_input_mono = now  # one attempt per idle period, even if it's refused
+        scene = kiosk.idle_scene
+        plan = engine.current_plan()
+        if scene is not None and (plan is None or plan.mode_id != scene):  # choosing a mood clears them too
+            state = await engine.request_mode(scene, source="idle")
+            if not state.refused:
+                return
+            engine.telemetry.record(
+                "alert", level="warn", message=f"Idle reset to {scene} refused: {state.message}"
+            )
+        state = await engine.clear_guest_overrides(source="idle")
+        if state.refused:
+            engine.telemetry.record("alert", level="warn", message=f"Idle reset refused: {state.message}")
 
     # ---- slots ------------------------------------------------------------------------------------------------
     def check_slots(self, device_id: str, target: Any, rows: list[StateRow]) -> None:

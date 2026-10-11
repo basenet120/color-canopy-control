@@ -7,6 +7,7 @@ heads and the test mode change see real (simulated) readback.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 
@@ -23,6 +24,7 @@ CONTROL_CALLS = [
     ("/api/canopy/pause", {"paused": True}, "pause_guest_input", {"paused": True, "source": "ops"}),
     ("/api/canopy/pause", {"paused": False}, "pause_guest_input", {"paused": False, "source": "ops"}),
     ("/api/canopy/safe-look", {}, "safe_look", {"source": "ops"}),
+    ("/api/canopy/guest-reset", {}, "clear_guest_overrides", {"source": "ops"}),
     ("/api/canopy/commission", {}, "commission", {"source": "ops"}),
     (
         "/api/canopy/mode",
@@ -107,6 +109,25 @@ def test_unknown_mode_and_engine_refusals_are_plain(app_client):
     response = app_client.post("/api/canopy/reassert", json={})
     assert response.status_code == 500
     assert "unexpected error" in response.json()["detail"] and "boom" not in response.json()["detail"]
+
+
+def test_guest_reset_says_what_it_cleared_and_refuses_an_engine_without_guest_settings(app_client):
+    engine = _install(app_client, RecordingEngine)
+    nothing = app_client.post("/api/canopy/guest-reset", json={})
+    assert nothing.status_code == 200 and nothing.json()["message"].startswith("Nothing to clear")
+    off = dataclasses.replace(engine.state(), guest_power=False, guest_brightness=20)
+    engine.state = lambda: off  # a guest turned it off; the recording engine "clears" nothing itself
+    cleared = app_client.post("/api/canopy/guest-reset", json={})
+    assert cleared.status_code == 200
+    assert cleared.json()["message"].startswith("Guest settings cleared, back on at the designed brightness")
+
+    class Older:  # an engine from before D60
+        def state(self):
+            return off
+
+    _services(app_client).extras["canopy"] = Older()
+    refused = app_client.post("/api/canopy/guest-reset", json={})
+    assert refused.status_code == 409 and "no guest brightness" in refused.json()["detail"]
 
 
 def test_posts_must_be_same_site_json(app_client):

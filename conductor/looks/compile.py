@@ -459,6 +459,7 @@ def _target(
         slot=slot,
         slot_value=slot_value,
         slot_hash=slot_hash,
+        brightness_range=caps.brightness_range,
         preview=preview,
     )
 

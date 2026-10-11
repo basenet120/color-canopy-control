@@ -438,3 +438,67 @@ and preview are now the scene's id, name, mood and palette (in order), and every
   other techniques (white CCT and its clamps, presets, pathway and band canvases, row and middle-row layouts, motion
   copy). They are tested on the pre-D59 modes, kept as a fixture (`tests/fixtures_modes_techniques.yaml`).
   `tests/test_modes_match_scenes.py` pins `modes.yaml` to `scenes.yaml`.
+
+## 2026-10-11 — the iPad guest panel
+
+**D60 — Guest brightness and on/off are part of the engine's desired state.** The guest panel lets guests dim the
+canopy and turn it off and on, as well as choose a mood. `CanopyEngine` gains `set_guest_brightness(level, *, source)`,
+`set_guest_power(on, *, source)` and `clear_guest_overrides(*, source)`. `CanopyState` JSON gains four fields:
+- `guest_brightness`: the guest's level, or null for the look's designed brightness;
+- `guest_power`: false while a guest has the canopy off;
+- `brightness`: the level the canopy is set to now. That is the guest's level, else the designed one (the brightest
+  module's when modules differ);
+- `guest_brightness_min`: the lowest level a guest may set.
+
+The rules:
+- **Desired state, not a side write.** Every show command sends the plan's full state vector with the guest settings
+  applied: the brightness row replaced in place, or `power off` alone. The tracker expects exactly that, and the
+  reconciler judges readback against it (`CanopyEngine.desired_rows`). So a re-assert restores the guest's choice and
+  never undoes it, even when the drift lands exactly on the designed value. Tier changes, new capabilities, recovery,
+  lock releases and early re-sends all carry the guest settings.
+- **One write per module.** A change is one burst: one command per module, all at once (a motion plan's modules
+  included). Brightness is a control row: no slot object is sent and no frame is rewritten. The executor's
+  ≤ 1 write/s per device and its coalescing are unchanged, and a test fires rapid ops changes to prove it.
+- **Absolute, for every module.** A guest level replaces each module's designed brightness, clamped to
+  [`kiosk.guest_brightness_min` (10), 100], as a Hubspace app group's brightness does, and then to each device's own
+  brightness range, as the compiler clamps a designed level. A level that isn't a whole number (true, 30.0, NaN,
+  "30") is refused, not coerced. A T3 look whose modules differ (Garden Gathering's bright centre row) flattens to
+  one level. Moving the brightness also turns the canopy on (a judgment call: a guest dragging the slider expects
+  light).
+- **Choosing a mood** clears the brightness and turns the canopy on, as choosing a scene in the Hubspace app does.
+  That covers the kiosk, ops, the idle hold and the idle scene. Choosing the mood already showing counts as choosing
+  it. Re-picking the look now showing keeps both settings: a tier change, new capabilities, recovery and the
+  simulator's start-up commissioning (sources `reconciler`, `recovery`, `startup`).
+- **Refusals.** A kiosk change is refused as a kiosk mood choice is: during the cooldown, while guest input is
+  paused, and while the canopy rests (outage). The cooldown is shared: after a mood choice a brightness change waits
+  the same 8 s, and the other way round. Every source is refused while the engine is stopped, while it commissions,
+  and before the first look. Ops bypass the cooldown and the pause. An ops change made during an outage is kept and
+  goes out with the look on recovery. A request that changes nothing sends nothing and starts no cooldown.
+- **Idle.** A guest brightness or on/off change counts as activity for the idle hold. After `idle_return_s` (180 s)
+  the hold returns to `idle_mode`, and that clears the settings. A new **idle reset** acts `kiosk.idle_reset_s`
+  (300 s) after the last guest input: if a guest setting is in force, the canopy goes back on at its designed
+  brightness, so it is never left dark or dim. With `kiosk.idle_scene` set (default null), the reset also shows that
+  mood. With no guest setting in force the reset does nothing, so it never undoes a mood chosen after the last guest
+  input (ops' included: choosing a mood clears the settings) and never alternates with the idle hold. `idle_scene`
+  must name a mode in `config/modes.yaml`, or the Conductor refuses to start. Like the idle hold, the reset waits
+  while guest input is paused (staff own the canopy then), during an outage and during commissioning. It acts on the
+  first reconciler tick after a pause or commissioning ends; when the idle hold is due in that tick too, the hold goes
+  first and its mood does the clearing, so it is one change. A reset that fell due during an outage goes out with the
+  recovery burst, not as a second burst after it.
+- **Staff.** The safe look clears both settings: it is always on, at its designed brightness. `POST
+  /api/canopy/guest-reset` and the `/ops` button "Clear guest brightness / off" also clear them. The button shows
+  only while a guest setting is in force, beside a chip that names the setting. Re-assert keeps the guest settings,
+  because it re-sends the desired state.
+- **Commissioning** writes slot objects only. Guest settings already in force stay in force through it, and the look
+  re-picked afterwards carries them.
+- **Not saved.** The settings live in memory only, so a restart comes back on at the designed brightness. The
+  guest-input pause is different: it must survive a restart.
+- **No kiosk routes here.** The guest panel branch calls these engine methods when they exist. `/api/kiosk/state`
+  already carries the new fields.
+
+Unverified on hardware:
+- Whether `brightness` dims a strand that is showing a custom slot (individual mode). VWBD saw 50→20 % in steady
+  white, but a dim to 20 % in rainbow mode read back without being seen (Sep 28; 04, bench item 7). Until that is
+  benched, guest copy shouldn't promise that painted moods dim.
+- Turning the canopy back on sends power, the selector and the brightness in one PUT that starts from power-off.
+  That case is unbenched (04, bench item 6).
