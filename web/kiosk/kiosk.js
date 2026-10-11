@@ -115,7 +115,7 @@ export function headColours(mode, heads) {
     switch (mode.pattern) {
       case "modules": {
         const c = flat[h.module];
-        return typeof c === "string" && HEX.test(c) ? rgbOf(c) : ramp(palette, h.module / 8);
+        return typeof c === "string" && HEX.test(c) ? rgbOf(c) : ramp(palette, ((h.module % 3) + 0.5) / 3); // by column, like T3
       }
       case "gradient":
         return ramp(palette, v + 0.03 * Math.sin(u * 9));

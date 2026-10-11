@@ -7,7 +7,8 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
                             `preview` is the mode's colour swatch (config/modes.yaml); `pattern` says how the kiosk's
                             illustrated canopy spreads those colours *at the tier the engine would use now* ("modules"
                             at T3, and for a one-colour whole-strand look: one flat colour per module, from
-                            `module_colours`); `feature` is the "Hubspace feature" sentence for the tier actually in
+                            `module_colours`; a modules-first mode lists its static column colours until a plan says
+                            otherwise); `feature` is the "Hubspace feature" sentence for the tier actually in
                             use — known only for the mode now showing (from the engine), else null.
 - `GET  /api/kiosk/state`   the engine's CanopyState JSON, plus `server_now` and `cooldown_remaining_s` so the page
                             counts the cooldown down in server-relative time (the kiosk's own clock may be off), and
@@ -142,6 +143,21 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     return "wash"
 
 
+def _column_colours(spec: Mapping[str, Any]) -> list[str] | None:
+    """Nine "#RRGGBB" (r0c0…r2c2) from a modules-first mode's static `techniques.modules.columns`, so its picture
+    steps column by column like the ceiling even before the engine can compile a plan for it; else None."""
+    if (spec.get("ladder") or ["strand"])[0] != "modules":
+        return None
+    columns = ((spec.get("techniques") or {}).get("modules") or {}).get("columns") or []
+    if len(columns) != 3 or any((c or {}).get("kind") != "rgb" for c in columns):
+        return None
+    try:
+        hexes = ["#" + "".join(f"{int(v):02X}" for v in c["rgb"]) for c in columns]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return [hexes[i % 3] for i in range(9)]
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     with path.open() as fh:
         raw = yaml.safe_load(fh) or {}
@@ -202,7 +218,7 @@ def load_kiosk_modes(path: Path = MODES_FILE) -> list[dict[str, Any]]:
                 "pattern_primary": _pattern(spec),  # the picture above T3 (the kiosk falls back to it)
                 "feature": None,
                 "tier": None,
-                "module_colours": None,
+                "module_colours": _column_colours(spec),
             }
         )
     return modes
@@ -407,7 +423,8 @@ def modes(request: Request) -> JSONResponse:
             mode["pattern"] = (
                 _pattern(specs.get(mode["id"]) or {}, mode["tier"]) if specs else mode["pattern"]
             )
-            mode["module_colours"] = module_colours(services, plan)
+            static = mode["module_colours"] if mode["tier"] == str(Tier.T3) else None
+            mode["module_colours"] = module_colours(services, plan) or static
     return JSONResponse(listing, headers=NO_STORE)
 
 

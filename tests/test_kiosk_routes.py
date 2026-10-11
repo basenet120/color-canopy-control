@@ -150,6 +150,20 @@ def test_modes_patterns_follow_each_modes_technique():
     }
 
 
+def test_module_level_modes_picture_their_columns_without_a_plan(app_client, engine):
+    """No compiled plan (FakeEngine has no compile_best): a modules-first mode still lists its static column colours
+    in r0c0…r2c2 order, so the tile steps left to right like the ceiling (Calm mirrored), not row by row."""
+    by_id = {m["id"]: m for m in app_client.get("/api/kiosk/modes").json()}
+    for mode_id in ("lowcountry-calm", "coastal-tides", "goodnight-glow"):
+        columns = MODES_YAML["modes"][mode_id]["techniques"]["modules"]["columns"]
+        hexes = ["#" + "".join(f"{v:02X}" for v in c["rgb"]) for c in columns]
+        assert by_id[mode_id]["pattern"] == "modules"
+        assert by_id[mode_id]["module_colours"] == hexes * 3
+    calm = by_id["lowcountry-calm"]["module_colours"]
+    assert calm[0] == calm[2] != calm[1]  # ivory at both ends, sea glass in the middle
+    assert all(by_id[m]["module_colours"] is None for m in (SUNSET, "garden-gathering", "golden-hour"))
+
+
 def test_each_tier_draws_what_the_ceiling_shows():
     specs = yaml.safe_load(TECHNIQUES.read_text())["modes"]  # the pre-D59 recipes: every technique kind
     assert {m: _pattern(spec) for m, spec in specs.items()} == {
