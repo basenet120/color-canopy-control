@@ -119,6 +119,10 @@ class RecordingEngine:
         self._call("commission", source=source)
         return {"written": [], "message": "nothing to commission (recording engine)"}
 
+    async def clear_guest_overrides(self, *, source: str) -> CanopyState:
+        self._call("clear_guest_overrides", source=source)
+        return self.state()
+
 
 class FakeEngine:
     """A minimal working engine over the real services (see the module docstring)."""

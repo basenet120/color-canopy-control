@@ -27,7 +27,8 @@
         <div class="now" id="canopy-now">
           <div class="now-mode" id="canopy-mode">—</div>
           <div class="now-meta"><span class="chip" id="canopy-tier" hidden></span>
-            <span class="chip" id="canopy-guest" hidden></span></div>
+            <span class="chip" id="canopy-guest" hidden></span>
+            <span class="chip warn" id="canopy-guest-look" hidden></span></div>
           <p class="feature" id="canopy-feature" hidden></p>
           <p class="notice" id="canopy-message" hidden></p>
         </div>
@@ -43,6 +44,7 @@
           <button type="button" class="big" id="pause-btn">Pause guest input</button>
           <button type="button" class="big secondary" id="reassert-btn">Re-assert all</button>
           <button type="button" class="big secondary" id="safe-btn">Safe look</button>
+          <button type="button" class="big secondary" id="guest-reset-btn" hidden>Clear guest brightness / off</button>
           <button type="button" class="big secondary" id="commission-btn">Commission slots…</button>
         </div>
         <div class="mode-picker">
@@ -54,7 +56,8 @@
         </div>
         <p class="notice" id="control-result" role="status" hidden></p>
         <p class="muted small">Safe look = Lowcountry Calm (warm white) on all nine modules, now. Re-assert resends
-          the look only to modules whose readback differs.</p>
+          the look only to modules whose readback differs. Clear guest brightness / off puts the canopy back on, at
+          the look's designed brightness (it also happens on its own after a few idle minutes).</p>
       </section>
 
       <!-- 7 am checklist (07 §10) -->

@@ -24,6 +24,12 @@ only so far)._
    map from its own two answered `address_probe_safe` runs (D58, closes gap 9). It follows the agreed proof rule and
    only ever records the identity map. Also: taking back a Yes revokes it, the show re-reads that module at once,
    a CLI `map` command, and yes/no questions for the two map probes.
+5. **`claude/guest-engine-controls` → after the scenes catalog (`d897843`)**: guest brightness and on/off in the
+   show engine for the iPad guest panel (D60). It adds `set_guest_brightness`, `set_guest_power` and
+   `clear_guest_overrides`, and the guest fields in `CanopyState`. The overrides are desired state, so the
+   reconciler keeps them. Choosing a mood, the safe look and an idle reset (`kiosk.idle_reset_s`, 300 s) clear them.
+   It also adds `POST /api/canopy/guest-reset` and a "Clear guest brightness / off" button on `/ops`. No kiosk routes:
+   the guest panel branch calls the engine methods.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -135,6 +141,15 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
     reason, showed **Apply map** after the Yes, recorded the map (`/api/devices` then said mapped), and a No took it
     back. That check wasn't repeated after the fixes.
 
+- **`claude/guest-engine-controls` (D60), 2026-10-11, simulator only:** lint clean; **1061 passed** with `test_deploy.py` excluded; JS 19/19 and the tracker check pass. `tests/test_guest_controls.py`
+  has 21 engine tests on the virtual clock, plus a guest-reset route test. They cover one write per module at every
+  tier (motion plans as one burst) and drift re-asserted to the guest's level, including drift onto the designed
+  value; two mutations of the reconciler fail that test. Also covered: power off/on, mood choice vs re-pick, the idle
+  reset and the idle scene, the shared cooldown, pause/outage/commissioning refusals, safe look and ops clear, lock
+  release, and the rate budget under rapid ops changes. Soak 9/9 PASS (report in the session scratchpad;
+  `docs/reports/sim-acceptance.md` not regenerated). The `/ops` chip and button were checked in a browser on a local
+  simulator server, with the state response faked to show a guest override.
+
 ## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
 1. ~~The show path ignores the framebuffer mapping~~ **Done in `claude/show-path-mapping` (D57)**, in the simulator
    only. These now read each kit's own map under one rule: the T1 compiler and composer, previews, `/api/devices`, the
@@ -216,6 +231,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - **Effect codes:** only code 1 has been tried, bounded. Vendor name, direction, period and phase restart are
   unknown, and `effects.enabled` stays empty, so Golden Hour remains a static glow and says so. Two-controller phase
   alignment is unmeasured.
+- **Guest brightness on painted looks (D60):** whether `brightness` dims a strand that shows a custom slot. A
+  rainbow-mode dim read back without being seen on Sep 28. Also unbenched: turning back on, which is one PUT that
+  starts from power-off.
 - Per-puck white and colour recipes through Mylar (Prototype 01); per-entry CCT/white fields; the hue ramp; 1–10 %
   dimming smoothness.
 - Real latency, throttling (writes and the 1.8 GET/s true-up reads), token rotation, 401/403 semantics.

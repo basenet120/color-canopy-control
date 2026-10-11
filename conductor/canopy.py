@@ -54,6 +54,16 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   on /ops. A file that can't be read counts as paused (staff resume it on /ops), never as resumed.
 - **Modules left out.** A module the plan skipped (`ModePlan.skipped`, e.g. its profile hasn't been read) is shown as
   needing attention; the others are driven.
+- **Guest brightness and power (D60).** `set_guest_brightness` / `set_guest_power` are part of the DESIRED state:
+  every show command sends the current plan's full state vector with them applied (`desired_rows`: the brightness
+  row set to the guest's level, or just `power off`), the tracker expects that, and the reconciler compares readback
+  against it — so it re-asserts the guest's choice after drift and never fights it. A change is one burst, one write
+  per module; frames are never touched. Kiosk changes are refused like a mode (cooldown — shared with mood choices —
+  pause, resting); nothing changes while stopped, commissioning or before the first look. Choosing a mood (kiosk,
+  ops, idle) clears the brightness and turns the canopy on; re-picking the look now showing (`RECOMPILE_SOURCES`: a
+  tier change, new capabilities, recovery) keeps both. The safe look clears both. The reconciler's idle reset clears
+  them `kiosk.idle_reset_s` after the last guest input (and optionally shows `kiosk.idle_scene`). Kept in memory
+  only: a restart comes back on, at the designed brightness.
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -111,6 +121,11 @@ EARLY_REASSERT_LIMIT = 3  # per module per change
 HEADER_READ_ATTEMPTS = 3  # the readback a slot write copies its header from
 # The guest-input pause, kept across restarts, under EngineDeps.state_dir (<data>/state).
 GUEST_INPUT_FILE = "guest_input.json"
+# Sources that re-pick the look now showing (a tier change, new capabilities, recovery, the simulator's start-up
+# commissioning) rather than choose one: they keep the guest's brightness and power. Any other source choosing a mode
+# (kiosk, ops, idle) clears them, like choosing a scene in the Hubspace app (D60).
+RECOMPILE_SOURCES = frozenset({"reconciler", "recovery", "startup"})
+BRIGHTNESS_KEY = ("brightness", None)
 
 Compiler = Callable[[str, Tier], ModePlan]
 Ladder = Callable[[str], list[Tier]]
@@ -192,6 +207,10 @@ class CanopyEngine:
         self._started = False
         self._last_kiosk_mono: float | None = None
         self.last_change_mono: float = self.clock.monotonic()  # any accepted change (idle hold)
+        # Guest overrides (D60): a brightness for every module (None = designed) and on/off. Desired state, not saved.
+        self._guest_brightness: int | None = None
+        self._guest_power = True
+        self.last_guest_input_mono: float = self.clock.monotonic()  # the idle reset counts from it
         self.floors: dict[str, int] = {}  # mode id → ladder index floor set by a hysteresis downgrade
         self._sent: dict[int, _Sent] = {}  # id(command) → record, until its result arrives
         self._latest: dict[str, Command] = {}  # address → the newest show command the engine sent
@@ -354,6 +373,25 @@ class CanopyEngine:
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
         """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state."""
         now = self.clock.monotonic()
+        refused = self._refusal(source, now)
+        if refused is not None:
+            return refused
+        plan, why = self.compile_best(mode_id)
+        if plan is None:
+            return self._refused(why, None)
+        if source == "kiosk":
+            self._last_kiosk_mono = now
+            self.last_guest_input_mono = now
+        if source not in ("reconciler", "recovery"):
+            self.last_change_mono = now
+        if source not in RECOMPILE_SOURCES:  # a mood was chosen: its designed brightness, and on (D60)
+            self._guest_brightness, self._guest_power = None, True
+        self._show(plan, source)
+        return self.state()
+
+    def _refusal(self, source: str, now: float) -> CanopyState | None:
+        """A refused state when a request from `source` can't be taken now, else None. Nothing goes through while
+        stopped or commissioning; ops, idle and reconciler requests bypass the cooldown, the pause and resting."""
         if self._stopped:
             return self._refused(STOPPED_MESSAGE, None)
         if self._commissioning:
@@ -369,15 +407,119 @@ class CanopyEngine:
                     f"One moment: the canopy is still changing. Try again in {math.ceil(remaining)} s.",
                     round(remaining, 2),
                 )
-        plan, why = self.compile_best(mode_id)
-        if plan is None:
-            return self._refused(why, None)
-        if source == "kiosk":
-            self._last_kiosk_mono = now
-        if source not in ("reconciler", "recovery"):
-            self.last_change_mono = now
-        self._show(plan, source)
+        return None
+
+    # ---- guest brightness and power (D60) ---------------------------------------------------------------------
+    async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
+        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100]. Turns
+        the canopy on. One write per module (the full state vector with this brightness row; never a frame)."""
+        refused = self._guest_refusal(source)
+        if refused is not None:
+            return refused
+        level = max(self.deps.settings.kiosk.guest_brightness_min, min(100, int(level)))
+        if self._guest_power and level == self._guest_brightness:
+            return self.state()  # already so: nothing is sent and no cooldown starts
+        self._guest_brightness, self._guest_power = level, True
+        self._guest_input(source, "brightness")
         return self.state()
+
+    async def set_guest_power(self, on: bool, *, source: str) -> CanopyState:
+        """Off: one `power off` write per module. On: the current look's full state vector (with any guest
+        brightness), one write per module."""
+        refused = self._guest_refusal(source)
+        if refused is not None:
+            return refused
+        if bool(on) == self._guest_power:
+            return self.state()
+        self._guest_power = bool(on)
+        self._guest_input(source, "on" if on else "off")
+        return self.state()
+
+    async def clear_guest_overrides(self, *, source: str) -> CanopyState:
+        """Ops and the idle reset: back on, at the look's designed brightness (bypasses the cooldown and the pause).
+        During an outage the change is kept and goes to every module with the look on recovery."""
+        if self._stopped:
+            return self._refused(STOPPED_MESSAGE, None)
+        if self._commissioning:
+            return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        if self.guest_overrides_active:
+            self._guest_brightness, self._guest_power = None, True
+            self._apply_guest(source, "clear")
+        return self.state()
+
+    @property
+    def guest_overrides_active(self) -> bool:
+        return self._guest_brightness is not None or not self._guest_power
+
+    def _guest_refusal(self, source: str) -> CanopyState | None:
+        refused = self._refusal(source, self.clock.monotonic())
+        if refused is None and self._plan is None:
+            return self._refused(STARTING_MESSAGE, 5.0)  # no look yet: nothing to dim or switch
+        return refused
+
+    def _guest_input(self, source: str, action: str) -> None:
+        now = self.clock.monotonic()
+        if source == "kiosk":
+            self._last_kiosk_mono = now  # one cooldown for every guest input, moods included
+        self.last_guest_input_mono = now
+        self.last_change_mono = now  # the idle hold waits for guest activity too
+        self._apply_guest(source, action)
+
+    def _apply_guest(self, source: str, action: str) -> None:
+        """Send the current look with the guest's settings to every module: one burst, one write per module. While
+        resting, nothing is sent; recovery re-applies the look (with these settings) to every module."""
+        plan = self._plan
+        self.telemetry.record(
+            "guest",
+            action=action,
+            brightness=self._guest_brightness,
+            power=self._guest_power,
+            mode=plan.mode_id if plan else None,
+            source=source,
+        )
+        if plan is not None and self._outage is None:
+            self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
+            self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")
+        self._publish_soon()
+
+    def desired_rows(self, device_id: str) -> list[StateRow]:
+        """The rows a show command sends `device_id` now: the current plan's full state vector with the guest's
+        settings applied. The reconciler judges readback against these, so it keeps the guest's choice."""
+        plan = self._plan
+        return self._guest_rows(list(plan.modules[device_id].rows)) if plan is not None else []
+
+    def _guest_rows(self, rows: list[StateRow]) -> list[StateRow]:
+        if not self._guest_power:
+            return [R.power(False)]
+        if self._guest_brightness is None:
+            return rows
+        # The brightness row is replaced in place, so the row order inside the PUT is kept.
+        level = R.brightness(self._guest_brightness)
+        return [level if r.key == BRIGHTNESS_KEY else r for r in rows]
+
+    def _desired_expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
+        return self._guest_rows(self._expect(device_id, mt, plan))
+
+    def _desired_label(self, plan: ModePlan) -> str:
+        label = f"{plan.label} ({plan.tier})"
+        if not self._guest_power:
+            return f"{label}, turned off from the guest panel"
+        if self._guest_brightness is not None:
+            return f"{label} at {self._guest_brightness}% from the guest panel"
+        return label
+
+    def _brightness_now(self, plan: ModePlan | None) -> int | None:
+        if plan is None:
+            return None
+        if self._guest_brightness is not None:
+            return self._guest_brightness
+        levels = [
+            r.value
+            for mt in plan.modules.values()
+            for r in mt.rows
+            if r.key == BRIGHTNESS_KEY and isinstance(r.value, int)
+        ]
+        return max(levels) if levels else None
 
     async def reassert_all(self, *, source: str) -> CanopyState:
         """Send the full state vector to every non-locked module, now (one burst). During an outage, probe instead:
@@ -404,7 +546,8 @@ class CanopyEngine:
         return self.state()
 
     async def safe_look(self, *, source: str) -> CanopyState:
-        """Lowcountry Calm at its strand technique, every module, now (bypasses cooldown, pause and floors)."""
+        """Lowcountry Calm at its strand technique, every module, now (bypasses cooldown, pause and floors). Always
+        on, at its designed brightness: it clears the guest's settings (D60)."""
         try:
             plan = self.deps.compile(SAFE_MODE, Tier.STRAND)
         except (PlanError, KeyError, LookupError) as e:
@@ -412,6 +555,7 @@ class CanopyEngine:
             if plan is None:
                 return self._refused(f"The safe look can't be compiled: {e}; {why}", None)
         self.last_change_mono = self.clock.monotonic()
+        self._guest_brightness, self._guest_power = None, True
         self._show(plan, source)
         return self.state()
 
@@ -547,6 +691,10 @@ class CanopyEngine:
             modules=modules,
             simulated=simulated,
             message=message,
+            guest_brightness=self._guest_brightness,
+            guest_power=self._guest_power,
+            brightness=self._brightness_now(plan),
+            guest_brightness_min=self.deps.settings.kiosk.guest_brightness_min,
         )
 
     def _phase(
@@ -662,17 +810,17 @@ class CanopyEngine:
                 self._locked.add(target.address)
                 continue
             mt = plan.modules[device_id]
-            expect = self._expect(device_id, mt, plan)
+            expect = self._desired_expect(device_id, mt, plan)
             self.tracker.set_desired(
                 target.address,
                 expect,
-                label=f"{plan.label} ({plan.tier})",
+                label=self._desired_label(plan),
                 source=source,
                 meta={"mode": plan.mode_id, "tier": str(plan.tier), "device_id": device_id},
             )
             cmd = Command(
                 target.address,
-                list(mt.rows),
+                self.desired_rows(device_id),
                 Purpose.ENGINE,
                 label=label,
                 verify=True,
@@ -1161,12 +1309,12 @@ class CanopyEngine:
             return
         target = self._targets.get(device_id)
         if previous is None or previous["hash"] != record["hash"]:
-            expect = self._expect(device_id, mt, plan)
+            expect = self._desired_expect(device_id, mt, plan)
             if target is not None and self.locks.holder(target.address) is None:
                 self.tracker.set_desired(
                     target.address,
                     expect,
-                    label=f"{plan.label} ({plan.tier})",
+                    label=self._desired_label(plan),
                     source=self._source or "reconciler",
                     meta={"mode": plan.mode_id, "tier": str(plan.tier), "device_id": device_id},
                 )

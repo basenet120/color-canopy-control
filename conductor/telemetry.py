@@ -14,6 +14,7 @@ Event kinds (field `kind`), all with `t` (wall epoch s) and usually `device_id`:
 - `lock`           action (acquire/release/expire/steal), owner (steal: previous_owner; expire: expired_at)
 - `token`          account, action (ensure_fresh: the pre-burst check, 07 §6), outcome, elapsed_s, error
 - `mode`           mode, tier, source (kiosk/ops/idle/reconciler)
+- `guest`          action (brightness/on/off/clear), brightness, power, mode, source — guest overrides (D60)
 - `tier`           mode, from, to, reason
 - `alert`          level (info/warn/error), message
 - `bench`          job, step, detail
