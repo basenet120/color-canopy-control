@@ -3,8 +3,8 @@
 Proves: the mode list is modes.yaml; select → the engine (source="kiosk") → state; the cooldown (429 +
 retry_after_s), paused guest input (423), unknown modes (404) and a missing or broken engine (503 "resting") are
 plain refusals — whether the engine reports them in its state or by raising ModeRefused; JSON only (415); an
-enrolled kiosk reaches /kiosk and /api/kiosk/* but nothing of ops or bench; the page is vendored and never writes
-its own Hubspace feature copy.
+enrolled kiosk reaches /kiosk and /api/kiosk/* but nothing of ops or bench; the guest panel page is vendored, built
+for touch and never writes its own Hubspace feature copy.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from technique_modes import PATH as TECHNIQUES
 
 from conductor.engine_api import (
     CanopyEngineAPI,
@@ -24,7 +25,7 @@ from conductor.engine_api import (
     PlanError,
     RefusalReason,
 )
-from conductor.routes.kiosk import RESTING, load_kiosk_modes
+from conductor.routes.kiosk import RESTING, _pattern, load_kiosk_modes
 
 ROOT = Path(__file__).resolve().parent.parent
 MODES_YAML = yaml.safe_load((ROOT / "config" / "modes.yaml").read_text())
@@ -140,6 +141,32 @@ def test_modes_list_matches_modes_yaml(app_client, engine):
 def test_modes_patterns_follow_each_modes_technique():
     patterns = {m["id"]: m["pattern"] for m in load_kiosk_modes()}
     assert patterns == {
+        "lowcountry-calm": "modules",
+        "rainbow-row-sunset": "gradient-x",
+        "garden-gathering": "gradient-x",
+        "coastal-tides": "modules",
+        "golden-hour": "gradient-x",
+        "goodnight-glow": "modules",
+    }
+
+
+def test_module_level_modes_picture_their_columns_without_a_plan(app_client, engine):
+    """No compiled plan (FakeEngine has no compile_best): a modules-first mode still lists its static column colours
+    in r0c0…r2c2 order, so the tile steps left to right like the ceiling (Calm mirrored), not row by row."""
+    by_id = {m["id"]: m for m in app_client.get("/api/kiosk/modes").json()}
+    for mode_id in ("lowcountry-calm", "coastal-tides", "goodnight-glow"):
+        columns = MODES_YAML["modes"][mode_id]["techniques"]["modules"]["columns"]
+        hexes = ["#" + "".join(f"{v:02X}" for v in c["rgb"]) for c in columns]
+        assert by_id[mode_id]["pattern"] == "modules"
+        assert by_id[mode_id]["module_colours"] == hexes * 3
+    calm = by_id["lowcountry-calm"]["module_colours"]
+    assert calm[0] == calm[2] != calm[1]  # ivory at both ends, sea glass in the middle
+    assert all(by_id[m]["module_colours"] is None for m in (SUNSET, "garden-gathering", "golden-hour"))
+
+
+def test_each_tier_draws_what_the_ceiling_shows():
+    specs = yaml.safe_load(TECHNIQUES.read_text())["modes"]  # the pre-D59 recipes: every technique kind
+    assert {m: _pattern(spec) for m, spec in specs.items()} == {
         "lowcountry-calm": "wash",
         "rainbow-row-sunset": "gradient",
         "garden-gathering": "pathway",
@@ -147,6 +174,11 @@ def test_modes_patterns_follow_each_modes_technique():
         "golden-hour": "bands",
         "goodnight-glow": "wash",
     }
+    sunset = specs["rainbow-row-sunset"]
+    assert _pattern(sunset, "slot") == "gradient"  # a hand-painted slot draws like the canvas
+    assert _pattern(sunset, "modules") == "modules"
+    assert _pattern(specs["lowcountry-calm"], "strand") == "modules"  # one colour per module
+    assert _pattern(specs["holiday-at-home"], "strand") == "scatter"  # a preset's heads differ
 
 
 def test_modes_serve_without_an_engine(app_client):
@@ -302,49 +334,73 @@ def test_a_tester_cant_use_the_kiosk_api(app_client_auth):
     assert app_client_auth.post("/api/kiosk/select", json={"mode": SUNSET}).status_code == 401
 
 
-# ---- the page --------------------------------------------------------------------------------------------------
+# ---- the page (the Hubspace-style guest panel, docs/design/guest-panel.md) -------------------------------------
+PAGE_FILES = ("index.html", "kiosk.css", "kiosk.js", "panel-model.mjs")
+FONT_FACE_URL = re.compile(r'url\("(/static/fonts/canopy-rounded/[\w.-]+\.woff2)"\)')
+
+
 def test_kiosk_page_is_served_and_vendored(app_client):
     r = app_client.get("/kiosk/")
     assert r.status_code == 200 and "The Color Canopy" in r.text
-    for name in ("index.html", "kiosk.css", "kiosk.js"):
+    for name in PAGE_FILES:
         text = (KIOSK_DIR / name).read_text().replace('"http://www.w3.org/2000/svg"', "")  # a namespace
         assert not re.search(r"https?://", text), f"{name} references an external URL"
-        assert "@import" not in text and "@font-face" not in text
+        assert "@import" not in text
+    # the only web font is the vendored Canopy Rounded (Quicksand, SIL OFL 1.1), served by the app itself
+    css = (KIOSK_DIR / "kiosk.css").read_text()
+    urls = FONT_FACE_URL.findall(css)
+    assert urls and css.count("@font-face") == len(urls)
+    for url in urls:
+        assert app_client.get(url).status_code == 200, url
+    assert (ROOT / "web" / "static" / "fonts" / "canopy-rounded" / "OFL.txt").is_file()
+    for asset in ("/kiosk/kiosk.js", "/kiosk/panel-model.mjs", "/kiosk/brand/hubspace-logo.svg"):
+        assert app_client.get(asset).status_code == 200, asset
     html = (KIOSK_DIR / "index.html").read_text()
-    assert 'src="/kiosk/kiosk.js"' in html and 'href="/static/base.css"' in html
-    assert "user-scalable=no" in html
+    assert 'src="/kiosk/kiosk.js"' in html and 'href="/kiosk/kiosk.css"' in html
+    assert "user-scalable=no" in html and "viewport-fit=cover" in html
+    assert 'name="apple-mobile-web-app-capable" content="yes"' in html
+    assert 'rel="apple-touch-icon"' in html
 
 
-def test_kiosk_copy_anchors_match_the_signage_plan():
-    copy = MODES_YAML["kiosk"]
+def test_kiosk_title_matches_the_signage_plan():
     html = (KIOSK_DIR / "index.html").read_text()
-    js = (KIOSK_DIR / "kiosk.js").read_text()
-    for key in ("title", "prompt", "tagline", "resting"):
-        assert copy[key] in html, key
-    for key in ("updating", "ready"):
-        assert f'"{copy[key]}"' in js, key
+    assert MODES_YAML["kiosk"]["title"] in html
 
 
 def test_kiosk_never_writes_its_own_hubspace_feature_copy():
-    """The feature sentence comes from state.feature; no technique's sentence (or 'Hubspace' claim) is in the page."""
-    page = "".join((KIOSK_DIR / n).read_text() for n in ("index.html", "kiosk.js"))
+    """The feature sentence comes from state.feature; no technique's sentence (or Hubspace claim) is in the page."""
+    page = "".join((KIOSK_DIR / n).read_text() for n in PAGE_FILES)
     for spec in MODES_YAML["modes"].values():
         for technique in spec["techniques"].values():
             for key in ("feature", "fallback_feature", "motion_feature"):
                 if key in technique:
                     assert technique[key] not in page
     js = (KIOSK_DIR / "kiosk.js").read_text()
-    assert "s.feature" in js
-    js = re.sub(r"(^|\s)//.*$", "", js, flags=re.MULTILINE)  # comments may name Hubspace; strings may not
-    assert not re.search(r"['\"`][^'\"`]*Hubspace[^'\"`]*['\"`]", js), "kiosk.js must not write Hubspace copy"
+    assert "state.feature" in js
+    for name in ("kiosk.js", "panel-model.mjs"):
+        js = re.sub(r"(^|\s)//.*$", "", (KIOSK_DIR / name).read_text(), flags=re.MULTILINE)
+        assert not re.search(r"['\"`][^'\"`\n]*Hubspace[^'\"`\n]*['\"`]", js), (
+            f"{name} must not write Hubspace copy"
+        )
 
 
-def test_kiosk_css_uses_system_fonts_and_big_targets():
+def test_kiosk_css_is_built_for_touch():
     css = (KIOSK_DIR / "kiosk.css").read_text()
-    assert "#F96302" in css
-    assert "ui-serif" in css and "Georgia" in css and "system-ui" in css
-    assert "min-height: 80px" in css and "min-width: 80px" in css
-    assert "user-select: none" in css
+    assert "#FA4616" in css  # Hubspace orange
+    assert '"Canopy Rounded"' in css and "system-ui" in css  # with the system fallback
+    for needle in (
+        "user-select: none",
+        "-webkit-touch-callout: none",
+        "touch-action: manipulation",
+        "overscroll-behavior: none",
+        "env(safe-area-inset-top",
+        "env(safe-area-inset-bottom",
+        "prefers-reduced-motion: reduce",
+    ):
+        assert needle in css, needle
+    assert "min-height: 72px" in css  # the switch's and slider's hit areas
+    # hover is only ever an extra (debug view), never needed on the iPad
+    assert all(css.rfind("@media (hover: hover)", 0, m.start()) != -1 for m in re.finditer(r":hover", css))
 
 
 def test_an_engine_that_cant_report_state_is_resting(app_client, engine):

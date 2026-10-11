@@ -396,7 +396,11 @@ def test_f8_t3_state_and_modes_carry_one_colour_per_module(t3_show):
     listing = {m["id"]: m for m in client.get("/api/kiosk/modes").json()}
     assert listing[SUNSET]["tier"] == "modules" and listing[SUNSET]["pattern"] == "modules"
     assert len(listing[SUNSET]["module_colours"]) == 9
-    assert listing[CALM]["pattern"] == "wash" and listing[CALM].get("module_colours") is None
+    calm = listing[
+        CALM
+    ]  # Lowcountry Calm starts at module level too (D59): mirrored, so the side columns match
+    assert calm["tier"] == "modules" and calm["pattern"] == "modules"
+    assert calm["module_colours"][0] == calm["module_colours"][2] != calm["module_colours"][1]
 
     assert client.post("/api/canopy/mode", json={"mode": SUNSET}).status_code == 200
     _settled(client, SUNSET)
@@ -407,14 +411,24 @@ def test_f8_t3_state_and_modes_carry_one_colour_per_module(t3_show):
     plan = _engine(client).current_plan()
     first = plan.modules["canopy-r0c0"].preview[0]
     assert colours[0] == "#{:02X}{:02X}{:02X}".format(first["r"], first["g"], first["b"])
-    assert len(set(colours)) > 1, "Sunset's rows differ at module level"
+    assert len(set(colours)) > 1, "Sunset's columns differ at module level"
+
+    # the safe look is Calm's whole-strand technique: one flat colour (soft ivory) on every module, drawn as such
+    assert client.post("/api/canopy/safe-look", json={}).status_code == 200
+    _settled(client, CALM)
+    st = client.get("/api/kiosk/state").json()
+    assert st["tier"] == "strand" and len(set(st["module_colours"])) == 1
+    listing = {m["id"]: m for m in client.get("/api/kiosk/modes").json()}
+    assert listing[CALM]["tier"] == "strand" and listing[CALM]["pattern"] == "modules"
 
 
-def test_f8_kiosk_js_draws_flat_modules_from_the_state():
+def test_f8_guest_panel_previews_what_is_lit_from_the_state():
+    """The guest panel replaced the mode kiosk; its preview follows state.look (one colour when the strands took the
+    solid fallback). Behaviour: tests/guest-panel.test.mjs ("now showing draws the one colour…")."""
     from pathlib import Path
 
-    js = (Path(__file__).resolve().parent.parent / "web" / "kiosk" / "kiosk.js").read_text()
-    assert 'case "modules"' in js and "module_colours" in js
+    js = (Path(__file__).resolve().parent.parent / "web" / "kiosk" / "panel-model.mjs").read_text()
+    assert 'state.look === "solid"' in js and "scene.solid" in js
 
 
 # ---- (a) the /ops device list is grouped by role / room ------------------------------------------------------

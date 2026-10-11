@@ -1,13 +1,12 @@
-"""/kiosk in a real browser (make e2e): the guest canopy touchscreen.
+"""/kiosk in a real browser (make e2e): the Hubspace-style guest panel on the iPad stand (docs/design/guest-panel.md).
 
 Two groups:
-- **Design, against a stubbed canopy** (always runs): /api/kiosk/state and /api/kiosk/select are answered in the
-  browser by a small stub engine (Playwright routing — nothing in the app changes), so the page's states can be
-  driven and photographed without P1: ready, updating + the cooldown ring, resting, and a lost connection.
-  Screenshots: docs/screenshots/kiosk-{1280x800,1920x1080,1024x768,updating,resting}.png.
-- **Against the real engine** (skips until the engine is wired, i.e. GET /api/kiosk/state is 200): tap a mode →
-  the state goes updating → ready, every canopy module's tracker reports the new look (the SimDriver's readback
-  matches the desired rows), the cooldown shows, and screenshots kiosk-live-*.png.
+- **Design, against a stubbed panel API** (always runs): /api/kiosk/panel and the scene/brightness/power writes are
+  answered in the browser by a small stub (Playwright routing; nothing in the app changes), so the page's states can
+  be driven and photographed: ready, changing, cooldown, a refusal, power off, paused, resting, a lost connection and
+  the solid-colour fallback. Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes.
+- **Against the real engine** (skips until GET /api/kiosk/panel serves a non-resting canopy): tap a scene, the state
+  goes changing then steady, and the feature line shows the server's sentence.
 """
 
 from __future__ import annotations
@@ -15,15 +14,18 @@ from __future__ import annotations
 import json
 import time
 import urllib.error
-from pathlib import Path
 
 import pytest
 
-KIOSK = {"width": 1280, "height": 800}
-HD = {"width": 1920, "height": 1080}
-TABLET = {"width": 1024, "height": 768}
+from conductor.guest_panel import scene_json
+from conductor.scenes import load_scenes
+
+LANDSCAPE = {"width": 1180, "height": 820}
+OLDER = {"width": 1024, "height": 768}
+PORTRAIT = {"width": 820, "height": 1180}
 COOLDOWN_S = 8.0
-ROOT = Path(__file__).resolve().parent.parent
+FEATURE = "Every light set individually as a Hubspace custom pattern on both strands."
+SOLID_FEATURE = "Each Hubspace strand set to one colour from the scene."
 
 
 def _wait(predicate, timeout=20.0, interval=0.2):
@@ -36,349 +38,334 @@ def _wait(predicate, timeout=20.0, interval=0.2):
     raise AssertionError("condition not met in time")
 
 
-def _modes() -> dict:
-    import yaml
+# ---- a stub panel for the design group --------------------------------------------------------------------------
+class StubPanel:
+    """Answers /api/kiosk/panel and the three writes like the guest panel backend would, on wall time."""
 
-    return yaml.safe_load((ROOT / "config" / "modes.yaml").read_text())["modes"]
-
-
-# ---- a stub canopy for the design group ----------------------------------------------------------------------
-class StubCanopy:
-    """Answers /api/kiosk/state and /select in the browser like the engine would, on wall time."""
-
-    def __init__(self, mode: str = "lowcountry-calm", settle_s: float = 1.2) -> None:
-        self.modes = _modes()
-        self.mode = mode
+    def __init__(self, scene: str | None = "lowcountry-calm", settle_s: float = 1.2) -> None:
+        self.scenes = [scene_json(s) for s in load_scenes().scenes]
+        self.scene = scene
+        self.power: bool | None = True
+        self.brightness = 70
+        self.look: str | None = "gradient"
         self.phase = "ready"
-        self.guest_input = True
-        self.cooldown_until: float | None = None
-        self.settle_s = settle_s
+        self.message = ""
+        self.cooldown_until = 0.0
         self.settle_at: float | None = None
-        self.selects: list[str] = []
-        self.refuse: tuple[int, dict] | None = None  # answer every select with this (a refused choice)
-        self.tier: str | None = None  # default: the mode's primary technique
-        self.module_colours: list[str] | None = None
-
-    def feature(self) -> str:
-        spec = self.modes[self.mode]
-        first = spec["ladder"][0]
-        return spec["techniques"][first]["feature"]
+        self.settle_s = settle_s
+        self.writes: list[tuple[str, dict]] = []
+        self.refuse: tuple[int, dict] | None = None  # answer every scene write with this
 
     def state(self) -> dict:
         now = time.time()
-        if self.settle_at is not None and now >= self.settle_at and self.phase == "updating":
+        if self.settle_at is not None and now >= self.settle_at:
+            self.settle_at = None
             self.phase = "ready"
-        remaining = max(0.0, (self.cooldown_until or 0) - now)
+        phase = self.phase
+        if phase == "ready" and now < self.cooldown_until:
+            phase = "cooldown"
+        changing = phase == "changing"
+        feature = None
+        if not changing and self.power is not False and self.look:
+            feature = FEATURE if self.look == "gradient" else SOLID_FEATURE
         return {
-            "mode": self.mode,
-            "label": self.modes[self.mode]["label"],
-            "tier": self.tier or self.modes[self.mode]["ladder"][0],
-            "feature": self.feature(),
-            "phase": self.phase,
-            "guest_input": self.guest_input,
-            "cooldown_until": self.cooldown_until,
-            "changed_at": now,
-            "modules": {},
-            "simulated": True,
-            "message": "",
-            "server_now": now,
-            "cooldown_remaining_s": round(remaining, 3),
-            "module_colours": self.module_colours,
+            "power": self.power,
+            "brightness": self.brightness,
+            "scene": self.scene,
+            "look": None if changing else self.look,
+            "phase": phase,
+            "message": "Changing the light…" if changing else self.message,
+            "feature": feature,
+            "cooldown_remaining_s": round(max(0.0, self.cooldown_until - now), 3),
         }
 
-    def select(self, mode: str) -> tuple[int, dict]:
-        self.selects.append(mode)
+    def panel(self) -> dict:
+        return {
+            "target": "workshop",
+            "target_label": "Two shop strands (60 lights)",
+            "simulated": True,
+            "viewer": "ops",
+            "scenes": self.scenes,
+            "capabilities": {"scene": True, "brightness": True, "power": True},
+            "brightness_range": [10, 100],
+            "state": self.state(),
+            "server_now": time.time(),
+        }
+
+    def _change(self) -> None:
+        self.phase = "changing"
+        self.settle_at = time.time() + self.settle_s
+
+    def write(self, kind: str, body: dict) -> tuple[int, dict]:
+        self.writes.append((kind, body))
         now = time.time()
-        if self.refuse is not None:
-            return self.refuse
-        if not self.guest_input:
-            return 423, {"detail": "The canopy is resting for a moment. It will be back shortly."}
-        if self.cooldown_until and now < self.cooldown_until:
-            return 429, {"detail": "The light is still changing.", "retry_after_s": self.cooldown_until - now}
-        self.mode = mode
-        self.phase = "updating"
-        self.settle_at = now + self.settle_s
-        self.cooldown_until = now + COOLDOWN_S
-        return 200, self.state()
+        if self.phase == "paused":
+            return 423, {"detail": "Guest choices are paused for a moment."}
+        if kind == "scene":
+            if self.refuse is not None:
+                return self.refuse
+            if now < self.cooldown_until:
+                left = self.cooldown_until - now
+                return 429, {"detail": "You can choose a new scene in a moment.", "retry_after_s": left}
+            self.scene, self.power = body["scene"], True
+            self.cooldown_until = now + COOLDOWN_S
+        elif kind == "brightness":
+            self.brightness = max(10, int(body["level"]))
+        elif kind == "power":
+            self.power = bool(body["on"])
+        self._change()
+        return 200, {"ok": True, "state": self.state(), "server_now": now}
 
     def install(self, page) -> None:
-        def on_state(route):
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(self.state()))
+        def on_panel(route):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(self.panel()))
 
-        def on_select(route):
-            body = json.loads(route.request.post_data or "{}")
-            status, payload = self.select(body.get("mode", ""))
-            route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
+        def writer(kind):
+            def on_write(route):
+                status, payload = self.write(kind, json.loads(route.request.post_data or "{}"))
+                route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
 
-        page.route("**/api/kiosk/state", on_state)
-        page.route("**/api/kiosk/select", on_select)
+            return on_write
 
-
-# Test instrumentation only: remember the page's WebSockets so a test can drop them like a restarting Conductor.
-TRACK_SOCKETS = """
-(() => {
-  const Real = window.WebSocket;
-  window.__sockets = [];
-  window.WebSocket = function (...args) {
-    const ws = new Real(...args);
-    window.__sockets.push(ws);
-    return ws;
-  };
-  window.WebSocket.prototype = Real.prototype;
-  Object.assign(window.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
-})();
-"""
+        page.route("**/api/kiosk/panel", on_panel)
+        for kind in ("scene", "brightness", "power"):
+            page.route(f"**/api/kiosk/{kind}", writer(kind))
 
 
-def _open(context_factory, viewport, stub: StubCanopy | None = None):
+def _open(context_factory, viewport, stub: StubPanel | None = None, path: str = "/kiosk/"):
     ctx = context_factory(viewport, has_touch=True)
-    ctx.add_init_script(TRACK_SOCKETS)
     page = ctx.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     if stub is not None:
         stub.install(page)
-    page.goto("/kiosk/")
-    page.wait_for_selector(".tile[data-mode='golden-hour']")
+    page.goto(path)
     return ctx, page, errors
 
 
-def _settle_fonts(page):
+def _ready(page):
+    page.wait_for_selector("body[data-view='panel']", state="attached")
+    page.wait_for_selector(".scene[data-scene='golden-hour']")
     page.evaluate("document.fonts.ready")
-    page.wait_for_timeout(900)  # the canopy's colour transition
+    page.wait_for_timeout(700)  # the header tint's crossfade
+
+
+def _no_overflow(page, viewport):
+    overflow = page.evaluate(
+        "[document.documentElement.scrollWidth - innerWidth, document.documentElement.scrollHeight - innerHeight,"
+        " (() => { const b = document.querySelector('#sheet-body'); return b.scrollHeight - b.clientHeight; })()]"
+    )
+    assert overflow[0] <= 0 and overflow[1] <= 0, overflow
+    assert overflow[2] <= 1, f"the sheet scrolls at {viewport}"
 
 
 # ---- design group --------------------------------------------------------------------------------------------
-def test_kiosk_design_ready_updating_cooldown(design_context_factory, screenshots):
-    stub = StubCanopy(mode="lowcountry-calm")
-    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
-    page.wait_for_selector("body[data-view='live']")
-    assert page.locator(".tile").count() == 6
-    assert page.eval_on_selector_all("#canopy-svg .core circle", "els => els.length") == 270
-    assert page.text_content("#status-text") == "Ready"
-    assert page.text_content("#feature-text") == stub.feature()
+def test_panel_ready_changing_cooldown(design_context_factory, screenshots):
+    stub = StubPanel(scene="lowcountry-calm")
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    assert page.locator(".scene").count() == 6
     assert page.text_content("h1") == "The Color Canopy"
-    assert page.locator(".sim-badge").is_visible()
-    # big targets
-    box = page.locator(".tile").first.bounding_box()
-    assert box["height"] >= 80 and box["width"] >= 80
-    _settle_fonts(page)
-    page.screenshot(path=str(screenshots / "kiosk-calm-1280x800.png"))
+    assert page.get_attribute(".scene[data-scene='lowcountry-calm']", "data-state") == "selected"
+    assert page.text_content("#feature-text") == FEATURE
+    assert page.text_content("#now-name") == "Lowcountry Calm"
+    assert page.eval_on_selector_all("#snake rect", "els => els.length") == 30
+    for card in page.locator(".scene").all():  # big targets for fingers at arm's length
+        box = card.bounding_box()
+        assert box["height"] >= 64 and box["width"] >= 64
+    switch = page.locator("#power").bounding_box()
+    assert switch["height"] >= 72 and switch["width"] >= 96
+    assert page.locator("#slider").bounding_box()["height"] >= 72
+    _no_overflow(page, LANDSCAPE)
+    page.screenshot(path=str(screenshots / "kiosk-1180x820.png"))
 
-    # tap: instant preview, then the server's updating, the cooldown ring, then ready
-    page.tap(".tile[data-mode='rainbow-row-sunset']")
-    page.wait_for_function("document.querySelector('#now-label').textContent === 'Rainbow Row Sunset'")
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Changing the light…'")
-    assert stub.selects == ["rainbow-row-sunset"]
-    assert page.evaluate("document.body.classList.contains('cooling')")
-    assert "rainbow-row-sunset" in page.get_attribute(".tile.current", "data-mode")
-    page.wait_for_timeout(300)
-    page.screenshot(path=str(screenshots / "kiosk-updating.png"))
-
-    # a tap during the cooldown doesn't send anything and says so gently
-    page.tap(".tile[data-mode='golden-hour']")
-    page.wait_for_function("document.querySelector('#hint').classList.contains('shown')")
-    assert stub.selects == ["rainbow-row-sunset"]
-
-    # the WS carries nothing here (no engine), so the page's poll picks up "ready" (≤ 30 s); nudge it instead
-    page.evaluate("window.dispatchEvent(new Event('online'))")
-    stub.cooldown_until = time.time()  # let the cooldown end for the photograph
-    page.reload()
-    page.wait_for_selector("body[data-view='live']")
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
-    page.wait_for_function("!document.body.classList.contains('cooling')")
-    _settle_fonts(page)
-    page.screenshot(path=str(screenshots / "kiosk-1280x800.png"))
-    assert errors == []
-
-
-# Test instrumentation only: every text the status line ever showed.
-WATCH_STATUS = """
-(() => {
-  window.__statusSeen = [];
-  const el = document.querySelector('#status-text');
-  window.__statusSeen.push(el.textContent);
-  new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, {
-    childList: true, characterData: true, subtree: true,
-  });
-})();
-"""
-
-
-@pytest.mark.parametrize(
-    ("status", "detail", "hint"),
-    [
-        (409, "That mood isn't available right now. Choose another.", "isn't available"),
-        (503, "The canopy is being set up. It will be back shortly.", "needs a moment"),
-    ],
-)
-def test_kiosk_refused_choice_never_says_changing(design_context_factory, status, detail, hint):
-    """Review F2: a refused choice keeps the mode now showing and says so gently — never "Changing the light…"."""
-    stub = StubCanopy(mode="lowcountry-calm")
-    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
-    page.wait_for_selector("body[data-view='live']")
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
-    page.evaluate(WATCH_STATUS)
-    stub.refuse = (status, {"detail": detail, "retry_after_s": 30.0} if status == 503 else {"detail": detail})
-    page.tap(".tile[data-mode='rainbow-row-sunset']")
+    # tap: the card goes pending at once, the server's "changing", then the cooldown chip
+    page.tap(".scene[data-scene='coastal-tides']")
     page.wait_for_function(
-        f"document.querySelector('#hint').textContent.includes({json.dumps(hint)})", timeout=10000
+        "document.querySelector(\"[data-scene='coastal-tides']\").dataset.state === 'pending'"
     )
-    assert stub.selects == ["rainbow-row-sunset"]
-    assert page.text_content("#now-label") == "Lowcountry Calm"
-    assert page.get_attribute(".tile.current", "data-mode") == "lowcountry-calm"
-    assert page.locator(".tile.chosen").count() == 0
-    assert not page.evaluate("document.body.classList.contains('cooling')")
-    seen = page.evaluate("window.__statusSeen")
-    assert "Changing the light…" not in seen, seen
-    page.wait_for_timeout(1500)
-    assert page.text_content("#status-text") == "Ready"
-    assert "Changing the light…" not in page.evaluate("window.__statusSeen")
+    assert stub.writes == [("scene", {"scene": "coastal-tides"})]
+    assert page.locator("#hdr-spinner").is_visible()
+    page.screenshot(path=str(screenshots / "kiosk-changing.png"))
+    page.wait_for_function(
+        "document.querySelector(\"[data-scene='coastal-tides']\").dataset.state === 'selected'"
+    )
+    page.wait_for_selector("#chip:not([hidden])")
+    assert page.text_content("#now-name") == "Coastal Tides"
+    assert page.get_attribute(".scene[data-scene='golden-hour']", "aria-disabled") == "true"
+
+    # a tap on a disabled card sends nothing and explains, never silently
+    page.tap(".scene[data-scene='golden-hour']")
+    page.wait_for_selector("#toast:not([hidden])")
+    assert "new scene in" in page.text_content("#toast-text")
+    assert len(stub.writes) == 1
+    page.screenshot(path=str(screenshots / "kiosk-cooldown.png"))
     assert errors == []
 
 
-def test_kiosk_draws_one_colour_per_module_at_module_level(design_context_factory, screenshots):
-    """Review F8: at T3 the ceiling shows one colour per module, so the illustration does too."""
-    stub = StubCanopy(mode="rainbow-row-sunset")
-    stub.tier = "modules"
-    stub.module_colours = ["#F96302"] * 3 + ["#FFA06E"] * 3 + ["#FFD9A8"] * 3
-    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
-    page.wait_for_selector("body[data-view='live']")
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
-    fills = page.eval_on_selector_all(
-        "#canopy-svg .halo circle", "els => els.map((e) => e.getAttribute('fill'))"
-    )
-    assert len(fills) == 270
-    per_module = [set(fills[m * 30 : (m + 1) * 30]) for m in range(9)]
-    assert all(len(colours) == 1 for colours in per_module), "every head of a module has the module's colour"
-    assert per_module[0] == {"rgb(249,99,2)"} and per_module[8] == {"rgb(255,217,168)"}
-    # the same mode above T3 draws its per-head gradient again
-    stub.tier = None
-    stub.module_colours = None
-    page.reload()
-    page.wait_for_selector("body[data-view='live']")
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
-    fills = page.eval_on_selector_all(
-        "#canopy-svg .halo circle", "els => els.map((e) => e.getAttribute('fill'))"
-    )
-    assert len(set(fills[:30])) > 1
+def test_panel_refusal_shows_the_calm_detail(design_context_factory):
+    stub = StubPanel(scene="lowcountry-calm")
+    stub.refuse = (409, {"detail": "Someone is using the module page right now. Try again in a moment."})
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    page.tap(".scene[data-scene='golden-hour']")
+    page.wait_for_selector("#toast:not([hidden])")
+    assert page.text_content("#toast-text") == stub.refuse[1]["detail"]
+    assert "409" not in page.inner_text("body")
+    page.wait_for_timeout(300)
+    assert page.get_attribute(".scene[data-scene='lowcountry-calm']", "data-state") == "selected"
+    assert page.get_attribute(".scene[data-scene='golden-hour']", "data-state") == "idle"
+    assert errors == []
+
+
+def test_panel_slider_paces_and_sends_the_final_value(design_context_factory):
+    stub = StubPanel()
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    box = page.locator("#slider").bounding_box()
+    y = box["y"] + box["height"] / 2
+    page.mouse.move(box["x"] + 40, y)
+    page.mouse.down()
+    for i in range(20):  # ~600 ms of dragging
+        page.mouse.move(box["x"] + 40 + i * (box["width"] - 80) / 20, y)
+        page.wait_for_timeout(30)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    levels = [b["level"] for kind, b in stub.writes if kind == "brightness"]
+    assert 1 <= len(levels) <= 3, levels  # ≤ 1/s while dragging, plus the final value
+    assert levels[-1] >= 90
+    assert page.text_content("#bright-value") == str(levels[-1])
+    assert errors == []
+
+
+def test_panel_power_off_and_solid_look(design_context_factory, screenshots):
+    stub = StubPanel(scene="golden-hour")
+    stub.look = "solid"
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    assert page.text_content("#feature-text") == SOLID_FEATURE
+    fills = page.eval_on_selector_all("#snake rect", "els => els.map((e) => e.getAttribute('fill'))")
+    assert len(set(fills)) == 1, "the solid fallback is drawn as the one colour lit"
+
+    page.tap("#power")
+    page.wait_for_function("document.querySelector('#power').getAttribute('aria-checked') === 'false'")
+    assert stub.writes[-1] == ("power", {"on": False})
+    page.wait_for_function("document.querySelector('#now-name').textContent === 'Lights are off'")
+    fills = page.eval_on_selector_all("#snake rect", "els => els.map((e) => e.getAttribute('fill'))")
+    assert set(fills) == {"rgb(211, 210, 216)"}
+    page.wait_for_timeout(1500)
+    page.screenshot(path=str(screenshots / "kiosk-power-off.png"))
     assert errors == []
 
 
 @pytest.mark.parametrize(
-    ("viewport", "mode", "name"),
-    [(HD, "golden-hour", "kiosk-1920x1080.png"), (TABLET, "garden-gathering", "kiosk-1024x768.png")],
+    ("viewport", "name"), [(OLDER, "kiosk-1024x768.png"), (PORTRAIT, "kiosk-820x1180.png")]
 )
-def test_kiosk_design_sizes(design_context_factory, screenshots, viewport, mode, name):
-    stub = StubCanopy(mode=mode)
+def test_panel_sizes(design_context_factory, screenshots, viewport, name):
+    stub = StubPanel(scene="rainbow-row-sunset")
     _ctx, page, errors = _open(design_context_factory, viewport, stub)
-    page.wait_for_selector("body[data-view='live']")
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'")
-    # nothing overflows the screen: the kiosk never scrolls
-    overflow = page.evaluate(
-        "[document.documentElement.scrollWidth - innerWidth, document.documentElement.scrollHeight - innerHeight]"
-    )
-    assert overflow[0] <= 0 and overflow[1] <= 0
-    for tile in page.locator(".tile").all():
-        box = tile.bounding_box()
-        assert box["height"] >= 80 and box["width"] >= 80
+    _ready(page)
+    _no_overflow(page, viewport)
+    for card in page.locator(".scene").all():
+        box = card.bounding_box()
+        assert box["height"] >= 64 and box["width"] >= 64
         assert box["y"] + box["height"] <= viewport["height"]
-    _settle_fonts(page)
     page.screenshot(path=str(screenshots / name))
     assert errors == []
 
 
-def test_kiosk_resting_when_paused_and_when_disconnected(design_context_factory, screenshots):
-    stub = StubCanopy(mode="goodnight-glow")
-    stub.guest_input = False
+def test_panel_paused_and_resting(design_context_factory, screenshots):
+    stub = StubPanel(scene="goodnight-glow")
+    stub.phase = "paused"
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    assert page.locator("#paused").is_visible()
+    assert page.get_attribute("#power", "aria-disabled") == "true"
+    page.screenshot(path=str(screenshots / "kiosk-paused.png"))
+
     stub.phase = "resting"
-    _ctx, page, errors = _open(design_context_factory, KIOSK, stub)
-    page.wait_for_selector("body[data-view='resting']", state="attached")
-    assert page.locator("#resting").is_visible()
-    assert page.text_content("#resting-text") == "The canopy is resting. It will be back shortly."
-    _settle_fonts(page)
+    stub.message = "The canopy is resting. It will be back shortly."
+    page.wait_for_selector("#resting:not([hidden])", timeout=5000)
+    assert page.text_content("#resting-text") == stub.message
     page.screenshot(path=str(screenshots / "kiosk-resting.png"))
-
-    # back: the kiosk follows the state
-    stub.guest_input = True
-    stub.phase = "ready"
-    page.reload()
-    page.wait_for_selector("body[data-view='live']")
-
-    # the Conductor goes away: after a short grace, the resting screen (never a browser error page)
-    page.wait_for_function("window.__sockets.some((ws) => ws.readyState === 1)")
-    page.unroute("**/api/kiosk/state")
-    page.route("**/api/**", lambda route: route.abort())
-    page.evaluate("window.__sockets.forEach((ws) => ws.close())")
-    page.wait_for_selector("body[data-view='resting']", state="attached", timeout=20000)
-    assert page.locator("#resting").is_visible()
-    assert page.url.endswith("/kiosk/")
-    # and back again once the Conductor answers
-    page.unroute("**/api/**")
-    stub.install(page)
-    page.wait_for_selector("body[data-view='live']", state="attached", timeout=40000)
     assert errors == []
 
 
-def test_kiosk_resting_when_engine_missing(design_context_factory):
-    """No stub: without the engine the real API answers 503, and the page rests calmly."""
-    _ctx, page, errors = _open(design_context_factory, KIOSK)
-    page.wait_for_selector("body[data-view='resting']", state="attached")
-    assert page.locator("#resting").is_visible()
+def test_panel_reconnects_calmly(design_context_factory):
+    stub = StubPanel()
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    page.unroute("**/api/kiosk/panel")
+    page.route("**/api/**", lambda route: route.abort())
+    page.wait_for_selector("#toast:not([hidden])", timeout=15000)
+    assert page.text_content("#toast-text") == "Hang on, we're reconnecting."
+    assert page.url.endswith("/kiosk/")
+    page.unroute("**/api/**")
+    stub.install(page)
+    page.wait_for_selector("#toast", state="hidden", timeout=10000)
+    assert errors == []
+
+
+def test_panel_rests_when_the_engine_is_missing(design_context_factory):
+    """No stub: without the engine the real panel API reports "resting", and the page rests calmly."""
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE)
+    page.wait_for_selector("#resting:not([hidden])", state="attached", timeout=10000)
     assert "503" not in page.inner_text("body")
     assert errors == []
 
 
+def test_debug_drawer_is_for_ops_only(design_context_factory, screenshots):
+    stub = StubPanel()
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub, path="/kiosk/?debug=1")
+    _ready(page)
+    page.tap(".dbg-btn")
+    page.wait_for_selector(".dbg")
+    assert "workshop" in page.inner_text(".dbg")
+    page.screenshot(path=str(screenshots / "kiosk-debug.png"))
+
+    stub_kiosk = StubPanel()
+    _ctx2, page2, errors2 = _open(design_context_factory, LANDSCAPE, stub_kiosk, path="/kiosk/?debug=1")
+    page2.route(
+        "**/api/kiosk/panel",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({**stub_kiosk.panel(), "viewer": "kiosk"}),
+        ),
+    )
+    page2.reload()
+    _ready(page2)
+    assert page2.locator(".dbg-btn").count() == 0  # a kiosk device gets the plain panel
+    assert errors == [] and errors2 == []
+
+
 # ---- against the real engine ------------------------------------------------------------------------------------
-def _engine_present(api) -> bool:
+def _panel_live(api) -> bool:
     try:
-        api("/api/kiosk/state")
+        return api("/api/kiosk/panel")["state"]["phase"] != "resting"
     except urllib.error.HTTPError:
         return False
-    return True
 
 
-def test_kiosk_selection_reaches_the_simulator(context_factory, api, screenshots):
-    if not _engine_present(api):
-        pytest.skip(
-            "The canopy engine isn't wired yet (GET /api/kiosk/state is 503); the lead runs this after P1."
-        )
-    # startup commissioning (sim) reads as "resting" on the kiosk; wait for the canopy to be ready and cool
-    _wait(lambda: api("/api/kiosk/state")["phase"] == "ready", timeout=60)
-    _wait(lambda: api("/api/kiosk/state")["cooldown_remaining_s"] == 0, timeout=15)
-    before = api("/api/kiosk/state")
-    modules = sorted(before["modules"])
-    assert len(modules) == 9
-    desired_before = {m: api(f"/api/devices/{m}")["tracker"]["desired"] for m in modules}
-    target = "rainbow-row-sunset" if before["mode"] != "rainbow-row-sunset" else "golden-hour"
-    label = _modes()[target]["label"]
+def test_panel_scene_reaches_the_simulator(context_factory, api, screenshots):
+    if not _panel_live(api):
+        pytest.skip("The canopy engine isn't serving the guest panel yet (GET /api/kiosk/panel is resting).")
+    _wait(lambda: api("/api/kiosk/panel")["state"]["phase"] == "ready", timeout=60)
+    before = api("/api/kiosk/panel")
+    ids = [s["id"] for s in before["scenes"]]
+    target = ids[1] if before["state"]["scene"] != ids[1] else ids[2]
 
-    _ctx, page, errors = _open(context_factory, KIOSK)
-    page.wait_for_selector("body[data-view='live']")
-    with page.expect_response("**/api/kiosk/select") as response:
-        page.tap(f".tile[data-mode='{target}']")
-    selected = response.value.json()
+    _ctx, page, errors = _open(context_factory, LANDSCAPE)
+    _ready(page)
+    with page.expect_response("**/api/kiosk/scene") as response:
+        page.tap(f".scene[data-scene='{target}']")
     assert response.value.status == 200
-    assert selected["mode"] == target and selected["phase"] == "updating"
-    page.wait_for_function(f"document.querySelector('#now-label').textContent === {json.dumps(label)}")
-    assert page.evaluate("document.body.classList.contains('cooling')")
-
-    # ready, honestly: the engine says ready and every module's readback matches what it sent
-    _wait(lambda: api("/api/kiosk/state")["phase"] == "ready", timeout=60)
-    page.wait_for_function("document.querySelector('#status-text').textContent === 'Ready'", timeout=40000)
-    after = api("/api/kiosk/state")
-    assert after["mode"] == target and after["feature"]
-    assert page.text_content("#feature-text") == after["feature"]
-    for m in modules:
-        tracker = api(f"/api/devices/{m}")["tracker"]
-        assert tracker["status"] == "ready", (m, tracker["reason"])
-        assert tracker["mismatches"] == [] and tracker["reported"]
-        assert tracker["desired"] != desired_before[m], m
-    _settle_fonts(page)
-    page.screenshot(path=str(screenshots / "kiosk-live-1280x800.png"))
-
-    _ctx2, page2, errors2 = _open(context_factory, HD)
-    page2.wait_for_selector("body[data-view='live']")
-    _settle_fonts(page2)
-    page2.screenshot(path=str(screenshots / "kiosk-live-1920x1080.png"))
-    assert errors == [] and errors2 == []
+    _wait(lambda: api("/api/kiosk/panel")["state"]["phase"] in ("ready", "cooldown"), timeout=60)
+    after = api("/api/kiosk/panel")["state"]
+    assert after["scene"] == target and after["feature"]
+    page.wait_for_function(
+        f"document.querySelector('#feature-text').textContent === {json.dumps(after['feature'])}",
+        timeout=10000,
+    )
+    page.screenshot(path=str(screenshots / "kiosk-live-1180x820.png"))
+    assert errors == []

@@ -616,8 +616,9 @@ class ModuleSession:
         tiers = ladder(mode_id, modes)
         t1_ok, t1_why = self.t1_status()
         notes: list[str] = []
-        # T2 is never previewed: the hand-painted show slot isn't this page's to select for a mode preview.
-        candidates = [t for t in (Tier.T1, Tier.STRAND, Tier.T3) if t in tiers]
+        # The mode's own ladder order (T1, then the position's module-level look, then the whole strand). T2 is never
+        # previewed: the hand-painted show slot isn't this page's to select for a mode preview.
+        candidates = [t for t in tiers if t is not Tier.T2]
         if Tier.T1 in candidates and not t1_ok:
             candidates.remove(Tier.T1)
             notes.append(f"Per-head frames aren't allowed here ({t1_why}) — showing the module-level look.")

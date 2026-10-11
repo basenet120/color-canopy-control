@@ -75,6 +75,13 @@ function renderState(st) {
     : `Guest input paused${st.paused_since ? ` since ${clock(st.paused_since)}` : ""}`;
   guest.title = st.guest_input ? "" : "Stays paused across a Conductor restart until someone presses Resume.";
   guest.className = `chip ${st.guest_input ? "ok" : "warn"}`;
+  // The guest panel's brightness / off (D60): the engine keeps it until a mood is chosen, the idle reset or ops clear it.
+  const off = st.guest_power === false;
+  const dimmed = st.guest_brightness != null;
+  const guestLook = $("canopy-guest-look");
+  guestLook.hidden = !off && !dimmed;
+  guestLook.textContent = off ? "Turned off from the guest panel" : dimmed ? `Guest brightness ${st.guest_brightness}%` : "";
+  $("guest-reset-btn").hidden = !off && !dimmed;
   const feature = $("canopy-feature");
   feature.hidden = !st.feature;
   fill(feature, st.feature ? [h("span", { class: "kicker" }, "Hubspace feature"), st.feature] : []);
@@ -101,7 +108,7 @@ function engineMissing(message) {
 }
 
 function setControlsEnabled(on) {
-  for (const id of ["pause-btn", "reassert-btn", "safe-btn", "commission-btn", "mode-btn", "mode-select", "test-mode-btn"]) {
+  for (const id of ["pause-btn", "reassert-btn", "safe-btn", "guest-reset-btn", "commission-btn", "mode-btn", "mode-select", "test-mode-btn"]) {
     $(id).disabled = !on;
   }
 }
@@ -242,6 +249,9 @@ function setupControls() {
   });
   $("reassert-btn").addEventListener("click", (e) => control(e.currentTarget, "/api/canopy/reassert", {}, "Re-asserting…"));
   $("safe-btn").addEventListener("click", (e) => control(e.currentTarget, "/api/canopy/safe-look", {}, "Sending…"));
+  $("guest-reset-btn").addEventListener("click", (e) =>
+    control(e.currentTarget, "/api/canopy/guest-reset", {}, "Clearing…"),
+  );
   $("mode-btn").addEventListener("click", (e) =>
     control(e.currentTarget, "/api/canopy/mode", { mode: $("mode-select").value }, "Changing…"),
   );

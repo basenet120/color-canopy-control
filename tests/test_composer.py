@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 
 import pytest
+from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test fixture
 
 from conductor.config import load_recipes, load_registry
 from conductor.engine_api import PlanError
@@ -23,8 +24,8 @@ def _placements(entries=MODULES, frame_length=30):
     return [placement_for(CANOPY, e, frame_length=frame_length) for e in entries]
 
 
-def _canvas(mode_id):
-    return MODES.mode(mode_id).techniques.canvas.canvas
+def _canvas(mode_id, modes=MODES):
+    return modes.mode(mode_id).techniques.canvas.canvas
 
 
 def _two_stop(axis, recipe="rgb_only"):
@@ -84,7 +85,7 @@ def test_gradient_is_monotonic_along_its_axis(axis):
 
 
 def test_sunset_runs_orange_at_the_top_to_warm_white_at_the_bottom():
-    canvas = _canvas("rainbow-row-sunset")
+    canvas = _canvas("rainbow-row-sunset", TM)
     top = evaluate(canvas, 100, 0, canopy=CANOPY, recipes=RECIPES)
     bottom = evaluate(canvas, 100, 120, canopy=CANOPY, recipes=RECIPES)
     assert top == FrameEntry(**RECIPES.colors["hd-orange"].blend.model_dump())
@@ -146,7 +147,7 @@ def test_head_count_guard_refuses_a_frame_of_the_wrong_length():
 
 
 def test_pathway_is_bright_on_the_path_and_dim_on_the_base():
-    canvas = _canvas("garden-gathering")
+    canvas = _canvas("garden-gathering", TM)
     assert isinstance(canvas, PathwayCanvas)
     on_path = evaluate(
         canvas, 0, 60, canopy=CANOPY, recipes=RECIPES
@@ -163,7 +164,7 @@ def test_pathway_is_bright_on_the_path_and_dim_on_the_base():
 
 
 def test_band_per_module_repeats_the_same_band_in_every_module_column():
-    canvas = _canvas("golden-hour")
+    canvas = _canvas("golden-hour", TM)
     assert isinstance(canvas, BandCanvas)
     for y in (5, 15, 55):
         row = [evaluate(canvas, c * 75 + 37.5, y, canopy=CANOPY, recipes=RECIPES) for c in range(3)]

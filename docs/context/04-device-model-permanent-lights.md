@@ -75,20 +75,26 @@ Host: semantics2.afero.net      Content-Type: application/json; charset=utf-8
 
 ## Canopy control model
 - 9 metadevices on one dedicated canopy account (vignettes on their own accounts). No group/scene/sync call exists, so **every mode compiles to exactly one PUT per module**: a burst of 9 concurrent PUTs over a warm session with a fresh token, then readback, then re-assert any module that differs (≤ 27 requests per change).
-- **Store and select**: the three painted looks (Rainbow Row Sunset, Garden Gathering, Golden Hour) are written into slots custom-1..3 at commissioning; at show time the kiosk only selects slots. The reconciler hashes slot contents via REST and rewrites (or alerts) on drift — this also undoes any staff edits made in the app.
+- **Store and select**: the three painted looks (Rainbow Row Sunset, Garden Gathering, Golden Hour — static gradients since D59) are written into slots custom-1..3 at commissioning; at show time the kiosk only selects slots. The reconciler hashes slot contents via REST and rewrites (or alerts) on drift — this also undoes any staff edits made in the app.
 - All animation runs on each controller with no ongoing cloud traffic — but on its **own free-running clock**. Nothing phase-syncs the 9 controllers.
 - **Fallback ladder per mode** (chosen by config/capabilities, not code): **T1** frames written by API + select (proven on Kingston only: Gate C plus a 30-head painted gradient, PHYSICAL; the Studio's paired per-head gradient has been seen only on screen, SCREEN, and never sent to hardware — preflight blocks it until String light 1 is commissioned, D56) → **T2** slots hand-painted in the Hubspace app (≈15–20 min/module) and selected by API (formal Gate B not run) → **T3** whole-strand CCT/RGB/preset, including module-level composition (each module = one coarse pixel). Kiosk copy follows the tier actually in use.
 
+The six modes are the six approved scenes (`config/scenes.yaml`, D59): each mode renders its scene's palette at every
+tier, at the scene's brightness, and every scene is static. Three controller slots hold three painted looks, so three
+modes have a canvas; the other three start at module level. (The original brief's table — white CCT, a holiday preset,
+a warm pathway, an amber band with motion — is in `02` and git history.)
+
 | Mode | Primary technique | Hubspace feature shown | Calls/change | Fallback |
 |---|---|---|---|---|
-| Lowcountry Calm | whole-strand white ~2700 K, 55–65% (`dinner-party`/`chill` aren't listed on SQHDK03 — CCT only) | tunable white + dimming | 9 | RGB-mixed ivory |
-| Rainbow Row Sunset | canvas gradient HD orange #F96302 → peach → warm white, stored in custom-1 | per-puck paint + saved patterns | 9 selects | T2 hand-paint → module rows orange/peach/white |
-| Garden Gathering | brighter warm "pathway" meandering over a dim amber base, custom-2 | per-puck color + brightness | 9 selects | T2 → centre-row modules as pathway |
-| Holiday at Home | firmware holiday preset (twinkle-type that looks fine unsynced), slow speed, ~70% | built-in holiday presets + speed | 9 | other preset / painted warm + red/green accents |
-| Golden Hour | amber band per module in custom-3 with slow on-device motion, all 9 started in one tight burst, re-triggered to re-align; **or** a Conductor-stepped sweep (≥ 2 s/step, bounded) | custom pattern + animated effect + speed | 9 (stepped: 3–9 per step) | static amber + slow brightness effect ("amber glow", not "moving") → last resort supplemental light, never credited to Hubspace |
-| The Goodnight Glow | whole-strand warmest CCT (2200 K) at 8–12% (optionally a 3-step dim-down) | dimming + warm white (+ `sleep` program — listed; no nightlight on SQHDK03) | 9 (+18) | RGB deep amber, low |
+| Lowcountry Calm | module level: the mirrored soft ivory → sea glass → soft ivory gradient, one colour per module column, 70% | colour + dimming | 9 | solid soft ivory (also the safe look) |
+| Rainbow Row Sunset | canvas gradient pastel coral → blush pink → lilac across the canopy (x), stored in custom-1, 85% | per-puck paint + saved patterns | 9 selects | T2 hand-paint → module columns → solid pastel coral |
+| Garden Gathering | canvas gradient sage green → pale lime → ivory across the canopy, custom-2, 75% | per-puck paint + saved patterns | 9 selects | T2 → module columns → solid sage green |
+| Coastal Tides | module level: ocean blue → aqua → seafoam → foam white, one colour per module column, 85% | colour + dimming | 9 | solid aqua |
+| Golden Hour | canvas gradient soft gold → peach → sunset pink → rose → lavender across the canopy, custom-3, 95%, static | per-puck paint + saved patterns | 9 selects | T2 → module columns → solid sunset pink |
+| The Goodnight Glow | module level: periwinkle → lavender → moonlight blue, one colour per module column, 28% | colour + dimming | 9 | solid periwinkle |
 
-Golden Hour only reads as one wash if on-device motion runs the same direction in every module: **ask VWBD to route every module's cable column-wise, starting at the module's canvas-left edge (B modules included), so the index rises with canvas X.** Software can't reverse on-device motion. Only code 1 has been seen moving (bounded, direction unknown) and `effects.enabled` is empty, so the custom-slot motion isn't available to this mode yet (gate 9).
+*Since D59 no mode uses on-device motion (the soak still enables a SIMULATED code on Golden Hour to measure the
+all-or-none re-trigger). The rest of this paragraph holds for any later motion look:* Golden Hour only reads as one wash if on-device motion runs the same direction in every module: **ask VWBD to route every module's cable column-wise, starting at the module's canvas-left edge (B modules included), so the index rises with canvas X.** Software can't reverse on-device motion. Only code 1 has been seen moving (bounded, direction unknown) and `effects.enabled` is empty, so the custom-slot motion isn't available to this mode yet (gate 9).
 
 ## Bench gates — one kit, now (don't wait for Prototype 01)
 Status after VWBD (Kingston unless stated) is in bold at the end of each gate.

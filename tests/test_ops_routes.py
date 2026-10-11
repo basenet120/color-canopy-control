@@ -7,6 +7,7 @@ heads and the test mode change see real (simulated) readback.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 
@@ -23,6 +24,7 @@ CONTROL_CALLS = [
     ("/api/canopy/pause", {"paused": True}, "pause_guest_input", {"paused": True, "source": "ops"}),
     ("/api/canopy/pause", {"paused": False}, "pause_guest_input", {"paused": False, "source": "ops"}),
     ("/api/canopy/safe-look", {}, "safe_look", {"source": "ops"}),
+    ("/api/canopy/guest-reset", {}, "clear_guest_overrides", {"source": "ops"}),
     ("/api/canopy/commission", {}, "commission", {"source": "ops"}),
     (
         "/api/canopy/mode",
@@ -109,6 +111,25 @@ def test_unknown_mode_and_engine_refusals_are_plain(app_client):
     assert "unexpected error" in response.json()["detail"] and "boom" not in response.json()["detail"]
 
 
+def test_guest_reset_says_what_it_cleared_and_refuses_an_engine_without_guest_settings(app_client):
+    engine = _install(app_client, RecordingEngine)
+    nothing = app_client.post("/api/canopy/guest-reset", json={})
+    assert nothing.status_code == 200 and nothing.json()["message"].startswith("Nothing to clear")
+    off = dataclasses.replace(engine.state(), guest_power=False, guest_brightness=20)
+    engine.state = lambda: off  # a guest turned it off; the recording engine "clears" nothing itself
+    cleared = app_client.post("/api/canopy/guest-reset", json={})
+    assert cleared.status_code == 200
+    assert cleared.json()["message"].startswith("Guest settings cleared, back on at the designed brightness")
+
+    class Older:  # an engine from before D60
+        def state(self):
+            return off
+
+    _services(app_client).extras["canopy"] = Older()
+    refused = app_client.post("/api/canopy/guest-reset", json={})
+    assert refused.status_code == 409 and "no guest brightness" in refused.json()["detail"]
+
+
 def test_posts_must_be_same_site_json(app_client):
     engine = _install(app_client, RecordingEngine)
     response = app_client.post(
@@ -152,7 +173,10 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     _wait_ready(app_client, "golden-hour")
     body = app_client.get("/api/canopy/heads").json()
     assert body["engine"] is True and body["mode"] == "golden-hour" and body["tier"] == "modules"
-    assert body["feature"] == "Each Hubspace strand set to its own shade of amber."
+    assert body["feature"] == (
+        "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy "
+        "column by column."
+    )
     assert len(body["heads"]) == 270 and body["counts"]["match"] == 270
     plan = engine.current_plan()
     by_module = {m["id"]: m for m in body["modules"]}
@@ -164,10 +188,10 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     for m in body["modules"]:
         assert m["status"] == "ready" and m["desired_source"] == "plan" and m["reported_at"]
         assert m["counts"] == {"match": 30, "mismatch": 0, "unknown": 0}
-    # left column deeper amber than the right (the modes.yaml columns), so colours really come per module
+    # left column soft gold, right rose-lavender (the modes.yaml columns), so colours really come per module
     left = next(h for h in body["heads"] if h["module"] == "r0c0")["reported"]
     right = next(h for h in body["heads"] if h["module"] == "r0c2")["reported"]
-    assert left["g"] < right["g"]
+    assert left["g"] > right["g"] and left["b"] < right["b"]
 
 
 def test_heads_flag_a_module_whose_readback_differs(app_client):

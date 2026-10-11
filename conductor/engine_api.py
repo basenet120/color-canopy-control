@@ -41,6 +41,8 @@ class ModuleTarget:
     preview: list[dict] = field(
         default_factory=list
     )  # per-head {r,g,b} as it should look (visualizer / kiosk)
+    # The device's own brightness range: a guest level is clamped to it, as the designed one was (D60).
+    brightness_range: tuple[int, int] | None = None
 
 
 @dataclass
@@ -128,6 +130,14 @@ class CanopyState:
     retry_after_s: float | None = None
     # Wall time guest input was paused (None while it's on). A pause survives a restart (saved under <data>/state/).
     paused_since: float | None = None
+    # Guest overrides (D60), part of the engine's desired state. `guest_brightness`: the device brightness a guest set
+    # for every module (None = the look's designed brightness); `guest_power`: False while a guest has the canopy off.
+    # `brightness`: the level the canopy is set to now (the guest's, else the designed one — the brightest module's
+    # when modules differ; None before the first look). `guest_brightness_min`: the lowest level a guest may set.
+    guest_brightness: int | None = None
+    guest_power: bool = True
+    brightness: int | None = None
+    guest_brightness_min: int | None = None
 
     def to_json(self) -> dict:
         return {
@@ -145,6 +155,10 @@ class CanopyState:
             "message": self.message,
             "refused": self.refused,
             "retry_after_s": self.retry_after_s,
+            "guest_brightness": self.guest_brightness,
+            "guest_power": self.guest_power,
+            "brightness": self.brightness,
+            "guest_brightness_min": self.guest_brightness_min,
         }
 
 
@@ -161,6 +175,19 @@ class CanopyEngineAPI(Protocol):
         """Guest/ops mode request. Kiosk requests honour the cooldown and paused guest input (refused with a
         plain message: raise `ModeRefused`); latest wins; returns immediately after the burst is queued (status
         via state()/WS)."""
+
+    async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
+        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (D60). It
+        becomes part of the desired state (the reconciler keeps it); it turns the canopy on; one write per module (the
+        brightness row of the full state vector, never a frame). Kiosk requests are refused like `request_mode`
+        (cooldown, paused, resting); the refusal comes back as a state with `refused=True`."""
+
+    async def set_guest_power(self, on: bool, *, source: str) -> CanopyState:
+        """Turn the whole canopy off (one `power off` write per module) or back on (the current look's full state
+        vector, with any guest brightness). Same refusals as `set_guest_brightness`."""
+
+    async def clear_guest_overrides(self, *, source: str) -> CanopyState:
+        """Ops and the idle reset: drop the guest's brightness and power settings (on, designed brightness)."""
 
     async def reassert_all(self, *, source: str) -> CanopyState: ...
 

@@ -24,6 +24,46 @@ only so far)._
    map from its own two answered `address_probe_safe` runs (D58, closes gap 9). It follows the agreed proof rule and
    only ever records the identity map. Also: taking back a Yes revokes it, the show re-reads that module at once,
    a CLI `map` command, and yes/no questions for the two map probes.
+5. **`claude/scene-modes` → after the scene catalog commit (`d897843`, `config/scenes.yaml`)**: the show's six modes
+   become the six approved scenes (D59). Coastal Tides replaces Holiday at Home, every tier renders the scene's
+   palette, and nothing moves. Three scenes are painted (one per slot); the other three start at module level.
+   Verified in sim only: the full pytest suite, the node tests, `make lint`, and an 8-hour soak with every target
+   PASS (24 SIMULATED motion plans; canvas 71 and module level 96 accepted changes). No light was touched.
+6. **`claude/guest-panel` (based on `d897843`, the six-scene catalog) → after the scene catalog**: the guest panel's
+   backend (part 1 of 2; the iPad UI follows on top). `conductor/guest_panel.py` + `conductor/routes/guest.py`:
+   `GET /api/kiosk/panel`, `POST /api/kiosk/scene|brightness|power`, ops-only `GET /api/kiosk/debug`. Workshop target
+   (CONDUCTOR_ENV=workshop* and both shop modules registered) drives the two shop strands only through ModuleSession /
+   `apply_pair` / `scene_gradient` as "guest panel" (never steals a lock; gradient when both kits have their own map,
+   else the scene's solid colour; Custom 1 only, the original Custom 1 backup kept); engine target everywhere else
+   (`request_mode(scene_id)`; brightness/power only if the engine has `set_guest_*`). "Guest panel" buttons on /ops
+   and the Studio header; `make guest-dev` runs it on the simulator (port 8100, 60-entry controllers, mapped).
+   **Verified (sim):** `tests/test_guest_panel.py` (30) + two new writer paths; full suite, lint, node tests; the
+   launcher exercised by curl (gradient applied, brightness coalesced, leases "guest panel").
+   **Needs real hardware:** a guest scene on Kingston + String light 1 (String light 1 needs its own Gate C and map
+   first, or the panel shows solid colours — by design).
+   **Part 2, the iPad UI (same branch):** `/kiosk/` is now the Hubspace-style guest panel (spec + as-built notes:
+   `docs/design/guest-panel.md`): dark device header with the master switch, light sheet with six scene cards, a
+   Now-showing serpentine of the 30 lights, the Hubspace brightness slider and the server's feature line. Pure logic
+   in `web/kiosk/panel-model.mjs` (`tests/guest-panel.test.mjs`). Touch: ≥ 64 pt targets, pressed states, the slider
+   sends ≤ 1/s while dragging plus the final value, no zoom / callout / overscroll, safe areas, attract after 2 min,
+   calm copy only. `?debug=1` (ops only) adds the debug drawer and the iPad-frame preview. The state now carries
+   `look` ("gradient" | "solid") and each scene its `solid` colour, so the preview draws what is actually lit.
+   Quicksand (OFL) is vendored as one variable file renamed "Canopy Rounded" (OFL Reserved Font Name) under
+   `web/static/fonts/canopy-rounded/`, so weights 500/600 really render — **needs Alon's OK** (convention is system
+   fonts; removing the `@font-face` rule falls back to SF Pro Rounded). Hubspace logos in `web/kiosk/brand/` — **logo use needs
+   Home Depot / Hearst brand confirmation**.
+   **Verified (sim):** node + Python suites; driven with Playwright on `make guest-dev` at 1180×820, 1024×768 and
+   820×1180 with touch emulation (scene, cooldown toast, slider drag pacing, power, debug, attract, frame preview; no
+   page errors, no overflow). `tests_e2e/test_kiosk.py` rewritten for the panel but **not run** (the pinned
+   Playwright browser isn't installed here). **Needs a real iPad:** Safari touch feel, Guided Access, home-screen
+   web-app mode.
+
+5. **`claude/guest-engine-controls` → after the scenes catalog (`d897843`)**: guest brightness and on/off in the
+   show engine for the iPad guest panel (D60). It adds `set_guest_brightness`, `set_guest_power` and
+   `clear_guest_overrides`, and the guest fields in `CanopyState`. The overrides are desired state, so the
+   reconciler keeps them. Choosing a mood, the safe look and an idle reset (`kiosk.idle_reset_s`, 300 s) clear them.
+   It also adds `POST /api/canopy/guest-reset` and a "Clear guest brightness / off" button on `/ops`. No kiosk routes:
+   the guest panel branch calls the engine methods.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -135,6 +175,22 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
     reason, showed **Apply map** after the Yes, recorded the map (`/api/devices` then said mapped), and a No took it
     back. That check wasn't repeated after the fixes.
 
+- **`claude/guest-engine-controls` (D60), 2026-10-11, simulator only:** lint clean; **1061 passed** with `test_deploy.py` excluded; JS 19/19 and the tracker check pass. `tests/test_guest_controls.py`
+  has 21 engine tests on the virtual clock, plus a guest-reset route test. They cover one write per module at every
+  tier (motion plans as one burst) and drift re-asserted to the guest's level, including drift onto the designed
+  value; two mutations of the reconciler fail that test. Also covered: power off/on, mood choice vs re-pick, the idle
+  reset and the idle scene, the shared cooldown, pause/outage/commissioning refusals, safe look and ops clear, lock
+  release, and the rate budget under rapid ops changes. Soak 9/9 PASS (report in the session scratchpad;
+  `docs/reports/sim-acceptance.md` not regenerated). The `/ops` chip and button were checked in a browser on a local
+  simulator server, with the state response faked to show a guest override.
+  **Review fixes (same day):** the idle reset now acts only while a guest setting is in force. Before, with
+  `idle_scene` set to something other than the idle hold's mood, the two alternated every few minutes, and the reset
+  could undo a mood ops chose later. `idle_scene` must name a mode, or startup refuses. Guest levels are clamped to
+  each device's brightness range. A brightness that isn't a whole number is refused. A reset that fell due during an
+  outage goes out with the recovery burst, and on resume the idle hold goes before the reset, so each is one burst.
+  Re-verified: lint clean; **1089 passed** (`test_deploy.py` excluded); soak 9/9 PASS (scratchpad report). There are
+  16 new tests, and each was mutation-checked: all 13 code mutations fail at least one test.
+
 ## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
 1. ~~The show path ignores the framebuffer mapping~~ **Done in `claude/show-path-mapping` (D57)**, in the simulator
    only. These now read each kit's own map under one rule: the T1 compiler and composer, previews, `/api/devices`, the
@@ -214,8 +270,16 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - Formal Gate B (slot select). No recorded run shows a slot select on the lights (the Sep 27 Slots-tab report has no
   run record); Gate C's BEFORE select was confirmed by readback only (CLOUD). Also readback semantics with the kit unplugged.
 - **Effect codes:** only code 1 has been tried, bounded. Vendor name, direction, period and phase restart are
+  unknown, and `effects.enabled` stays empty. Since D59 no show scene moves, Golden Hour included. Two-controller
+  phase alignment is unmeasured.
+- Per-puck white and colour recipes through Mylar (Prototype 01), including the six scene palettes at their draft
+  brightness (D59: they are RGB-only until then); per-entry CCT/white fields; the hue ramp; 1–10 % dimming smoothness.
+
   unknown, and `effects.enabled` stays empty, so Golden Hour remains a static glow and says so. Two-controller phase
   alignment is unmeasured.
+- **Guest brightness on painted looks (D60):** whether `brightness` dims a strand that shows a custom slot. A
+  rainbow-mode dim read back without being seen on Sep 28. Also unbenched: turning back on, which is one PUT that
+  starts from power-off.
 - Per-puck white and colour recipes through Mylar (Prototype 01); per-entry CCT/white fields; the hue ramp; 1–10 %
   dimming smoothness.
 - Real latency, throttling (writes and the 1.8 GET/s true-up reads), token rotation, 401/403 semantics.
@@ -226,8 +290,11 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - iOS Safari: enrollment cookies, beacon on page close, Guided Access.
 
 ## Decisions Alon owes
-- **Golden Hour technique and kiosk look** (06 #12–13, was due Oct 5). The new input is the bounded code-1 movement on
-  Kingston; there is no direction or multi-controller phase data yet.
+- **Which three scenes get the painted slots** (D59). Today Rainbow Row Sunset, Garden Gathering and Golden Hour keep
+  custom-1..3, and Lowcountry Calm (the idle look), Coastal Tides and The Goodnight Glow run at module level. Swapping
+  is a config change. Also the scenes' brightness drafts, at the physical mood approval. (Golden Hour's technique,
+  06 #12, is settled by D59: static.)
+- **Kiosk look** (06 #13, was due Oct 5): client copy and brand sign-off.
 - **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback
   criteria are in D26.
 - **Authorization letter** from Home Depot before any show-account writes (06 #20).

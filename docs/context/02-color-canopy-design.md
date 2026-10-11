@@ -53,6 +53,11 @@ Per-head color control is addressed by index along the strand (head 0 nearest th
 
 "Final scene behavior will be confirmed through fixture testing and supported Hubspace functionality." Golden Hour is the only mode that requires motion across modules — the hardest one through a cloud API.
 
+*Superseded (Oct 11, D59):* the table above is the original brief. The owner approved Paris's six scenes
+(`config/scenes.yaml`): Lowcountry Calm, Rainbow Row Sunset, Garden Gathering, **Coastal Tides** (replacing Holiday at
+Home), Golden Hour and The Goodnight Glow, each a named static palette with a mood. `config/modes.yaml` renders exactly
+those palettes; no scene moves, Golden Hour included. See `04` "Canopy control model" for how each one runs.
+
 ## Hubspace control strategy (client direction, verbatim intent)
 - Client prioritizes a visible **"bulb" lighting effect** over LED strip lighting.
 - Hubspace-connected fixtures demonstrate the selected app-controlled features and color states.

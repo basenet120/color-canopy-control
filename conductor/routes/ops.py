@@ -7,6 +7,7 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `POST /api/canopy/reassert`        re-assert: the engine resends only modules whose readback differs (07 §6)
 - `POST /api/canopy/pause`           `{paused}` pause / resume guest input (the kiosk shows "resting")
 - `POST /api/canopy/safe-look`       Lowcountry Calm at its strand technique, all modules, now
+- `POST /api/canopy/guest-reset`     clear the guest panel's brightness / off (D60): on, at the look's designed brightness
 - `POST /api/canopy/commission`      write T1 slot contents and record readback hashes (the engine rate-limits)
 - `POST /api/canopy/mode`            `{mode}` an ops mode change (no guest cooldown)
 - `GET  /api/canopy/state`           CanopyState + the mode list for the picker
@@ -362,6 +363,26 @@ async def safe_look(request: Request, _ops: Ops) -> JSONResponse:
         {"ok": True, "message": _sent_line(engine, state, "Safe look sent"), "state": state.to_json()},
         headers=NO_STORE,
     )
+
+
+@router.post("/api/canopy/guest-reset")
+async def guest_reset(request: Request, _ops: Ops) -> JSONResponse:
+    services = services_of(request)
+    engine = engine_of(services)
+    clear = getattr(engine, "clear_guest_overrides", None)
+    if clear is None:
+        raise HTTPException(
+            status_code=409, detail="This canopy engine has no guest brightness or on/off to clear."
+        )
+    before = await _engine_call("report its state", engine.state)
+    state = await _engine_call("clear the guest settings", lambda: clear(source="ops"))
+    _refused(state, "The engine refused to clear the guest settings.")
+    _publish(services, "guest_reset")
+    if getattr(before, "guest_power", True) and getattr(before, "guest_brightness", None) is None:
+        message = "Nothing to clear: the canopy is on, at its look's designed brightness."
+    else:
+        message = _sent_line(engine, state, "Guest settings cleared, back on at the designed brightness")
+    return JSONResponse({"ok": True, "message": message, "state": state.to_json()}, headers=NO_STORE)
 
 
 @router.post("/api/canopy/commission")

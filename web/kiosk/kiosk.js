@@ -1,668 +1,923 @@
-// The Color Canopy kiosk (P3 /kiosk). ES module, no build step, no dependencies, vendored helpers only.
+// The guest panel on the iPad stand (docs/design/guest-panel.md). ES module, no build step, vendored helpers only.
 //
-// Honesty rules (05 #12, 07 §6):
-//   - "Changing the light…" only while the server says the canopy phase is `updating`; "Ready" only when it says
-//     `ready`. The Hubspace feature sentence is always `state.feature` from the server — never written here.
-//   - The illustrated canopy is a preview drawn from the mode's own preview colours (config/modes.yaml), laid out
-//     for the tier actually in use: at module level (T3) it is one flat colour per module, from the plan the server
-//     reports (`module_colours`), because that is all the ceiling shows.
-//   - A refused choice (any non-2xx) never shows "Changing the light…": the tile falls back to the mode now
-//     showing and a gentle hint explains. Live events only trigger a re-read of /api/kiosk/state, so the page always
-//     shows the kiosk's view of the engine (e.g. slot commissioning reads as "resting", not "changing").
-//   - The 8 s cooldown and the 3 min return to Lowcountry Calm are the server's; this page only reflects them.
-//     The cooldown counts down in server-relative time (`cooldown_remaining_s`), so the kiosk clock can't skew it.
-// Resilience (07 §10): the page never navigates away and never shows a browser error. Every fetch and socket
-// failure is caught; a lost connection, a missing engine or paused guest input shows the calm resting screen.
+// Data: GET /api/kiosk/panel every 2 s (the scenes, capabilities and `state`), and POST /api/kiosk/scene|brightness|
+// power. A 200 on a write means "accepted"; the page shows the server's state (phase "changing" until the lights
+// read back) and reconciles its optimistic switch and slider to it.
+// Honesty (CLAUDE.md, 07 §6): the feature sentence is always `state.feature` from the server and the subtitle prefers
+// `state.message`; this page only adds the spec's calm fallbacks (panel-model.mjs COPY). A refusal shows the server's
+// calm `detail`, never an HTTP code; anything else reads "Hang on, we're reconnecting."
+// Resilience (07 §10): the page never navigates away; every fetch failure is caught.
+// Ops: `?debug=1` (only when the server says the viewer is ops) adds a debug drawer; `?debug=1&frame=1` is the iPad
+// frame preview. A kiosk-role device gets the plain panel whatever the URL says.
 
-import { api, connectLive, setSimBadge, simBadge } from "/static/app.js";
+import { api, setSimBadge } from "/static/app.js";
+import {
+  BRIGHTNESS_HOLD_MS,
+  COPY,
+  DRAG_CANCEL_PX,
+  FRAME_SIZES,
+  IDLE_MS,
+  LOST_AFTER_FAILURES,
+  POLL_MS,
+  POWER_HOLD_MS,
+  SAME_CARD_DEBOUNCE_MS,
+  attractDue,
+  cardState,
+  cardTap,
+  clampLevel,
+  cooldownChip,
+  cooldownLeft,
+  createPacer,
+  debugAllowed,
+  fractionForLevel,
+  frameScale,
+  headerSubtitle,
+  headerTint,
+  hexToRgb,
+  levelFromX,
+  nowShowing,
+  phaseOf,
+  reconcile,
+  refusalToast,
+  rgb,
+  sceneLabel,
+  snakeLayout,
+  stripGradient,
+  switchView,
+} from "/kiosk/panel-model.mjs";
 
-const COPY = {
-  updating: "Changing the light…",
-  ready: "Ready",
-  sending: "One moment…",
-  settling: "Some of the lights are still catching up.",
-  cooldown: "Enjoy the light — you can choose again in a moment.",
-  busy: "The light is still changing. Choose again in a moment.",
-  unavailable: "That mood isn't available right now. Choose another.",
-  later: "The canopy needs a moment. Choose again shortly.",
-  nowShowing: "Now showing",
-  yourChoice: "Your choice",
-};
-
-const OFFLINE_GRACE_MS = 6000; // no contact for this long (and no live socket) → the canopy is resting
-const POLL_LIVE_MS = 30000; // re-sync over HTTP even while the socket is open (a missed event can't stick)
-const POLL_DOWN_MS = 4000; // while the socket is down
-const MODES_RETRY_MS = 5000;
-const SELECT_TIMEOUT_MS = 8000;
-const CHOSEN_WAIT_MS = 10000; // an accepted choice the state hasn't shown yet stays previewed this long
-const MAX_COOLDOWN_S = 60;
-const LIVE_REFRESH_MS = 120; // a burst of live events becomes one state read
-const MODES_RELOAD_MS = 30000; // at most this often when the tier in use differs from the listing's
-const HEX = /^#[0-9a-f]{6}$/i;
-
-// ---- canopy geometry (config/canopy.yaml; 02): 3 × 3 modules of 75″ × 40″, heads staggered 8/7/8/7 ---------
-const MODULE_W = 75;
-const MODULE_H = 40;
-const ROWS_A = [
-  { y: 5, x0: 2.5, n: 8 },
-  { y: 15, x0: 7.5, n: 7 },
-  { y: 25, x0: 2.5, n: 8 },
-  { y: 35, x0: 7.5, n: 7 },
-];
-const ORIENT = [
-  ["A", "B", "A"],
-  ["A", "B", "A"],
-  ["A", "B", "A"],
-]; // p14 scheme; B = A rotated 180°
-
-export function canopyHeads() {
-  const out = [];
-  ORIENT.forEach((row, r) =>
-    row.forEach((orient, c) => {
-      for (const line of ROWS_A) {
-        for (let k = 0; k < line.n; k += 1) {
-          let x = line.x0 + 10 * k;
-          let y = line.y;
-          if (orient === "B") {
-            x = MODULE_W - x;
-            y = MODULE_H - y;
-          }
-          out.push({ x: c * MODULE_W + x, y: r * MODULE_H + y, module: r * 3 + c, i: out.length });
-        }
-      }
-    }),
-  );
-  return out;
-}
-
-// ---- colour ------------------------------------------------------------------------------------------------
-const rgbOf = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
-const css = (c, alpha = 1) =>
-  alpha >= 1
-    ? `rgb(${c.map((v) => Math.round(v)).join(",")})`
-    : `rgba(${c.map((v) => Math.round(v)).join(",")},${alpha})`;
-const clamp01 = (t) => Math.min(1, Math.max(0, t));
-const smooth = (e0, e1, x) => {
-  const t = clamp01((x - e0) / (e1 - e0));
-  return t * t * (3 - 2 * t);
-};
-
-function ramp(palette, t) {
-  if (palette.length === 1) return palette[0];
-  const scaled = clamp01(t) * (palette.length - 1);
-  const i = Math.min(palette.length - 2, Math.floor(scaled));
-  return mix(palette[i], palette[i + 1], scaled - i);
-}
-
-function hash01(i) {
-  const s = Math.sin(i * 127.1 + 311.7) * 43758.5453;
-  return s - Math.floor(s);
-}
-
-/** Per-head colours for a mode's illustration. `pattern` comes from the server (how the mode's technique lays out
- * at the tier in use); "modules" paints every head of a module in that module's colour (`module_colours`, r0c0…r2c2). */
-export function headColours(mode, heads) {
-  const palette = (mode.preview || []).filter((c) => HEX.test(c)).map(rgbOf);
-  if (!palette.length) palette.push([255, 228, 188]);
-  const [p0, p1 = p0, p2 = p1] = palette;
-  const W = MODULE_W * 3;
-  const H = MODULE_H * 3;
-  const flat = Array.isArray(mode.module_colours) ? mode.module_colours : [];
-  return heads.map((h) => {
-    const u = h.x / W;
-    const v = h.y / H;
-    switch (mode.pattern) {
-      case "modules": {
-        const c = flat[h.module];
-        return typeof c === "string" && HEX.test(c) ? rgbOf(c) : ramp(palette, h.module / 8);
-      }
-      case "gradient":
-        return ramp(palette, v + 0.03 * Math.sin(u * 9));
-      case "pathway": {
-        const centre = H / 2 + 30 * Math.sin(2 * Math.PI * 1.5 * u);
-        const d = Math.abs(h.y - centre);
-        let c = mix(p0, p2, smooth(26, 12, d));
-        c = mix(c, p1, smooth(13, 4, d));
-        return c;
-      }
-      case "bands": {
-        const d = Math.abs((h.x % MODULE_W) - MODULE_W / 2);
-        let c = mix(p0, p1, smooth(24, 10, d));
-        c = mix(c, p2, smooth(10, 2, d));
-        return c;
-      }
-      case "scatter": {
-        const r = hash01(h.i);
-        return r < 0.5 ? p1 : r < 0.76 ? p0 : p2;
-      }
-      default: {
-        const t = 0.5 + 0.32 * Math.sin(u * 5.1 + v * 2.3) + 0.16 * Math.sin(u * 11.7 - v * 7.9);
-        return ramp(palette, t);
-      }
-    }
-  });
-}
-
-// ---- DOM ---------------------------------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
-const svgEl = (name, attrs = {}) => {
-  const el = document.createElementNS(SVG_NS, name);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-  return el;
+const reducedMotion = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const TOAST_MS = 3500;
+const KNOB_HALF = 32;
+const TRACK_LEAD = 20; // always-filled track left of the knob at the floor, so 10% never looks like off
+
+const ui = {
+  panel: null, // the last GET /api/kiosk/panel
+  readAt: 0, // local ms when `panel.state` was read (cooldown countdown)
+  pendingId: null, // the scene this panel asked for, until the server has taken it and left "changing"
+  pendingPosted: 0, // local ms when the server accepted the pending scene (0 = not yet)
+  lastTapAt: new Map(),
+  powerHold: null,
+  brightHold: null,
+  dragging: null, // {pointerId, level}
+  failures: 0,
+  lost: false,
+  lastTouch: Date.now(),
+  attract: false,
+  debug: false,
+  latencyMs: null,
+  lastPollAt: null,
+  restingDetail: "",
+  stopped: false, // the iPad frame preview took over the page
+  writeSeq: 0, // bumped when a write is sent and when its answer lands: a poll that spans either is stale
 };
 
-const view = {
-  heads: canopyHeads(),
-  bloom: [],
-  halo: [],
-  core: [],
-  washes: [],
-  painted: null,
-};
+// ---- tiny DOM helpers -------------------------------------------------------------------------------------------
+function el(tag, attrs = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const kid of kids) if (kid) node.append(kid);
+  return node;
+}
 
-function buildCanopy() {
-  const svg = $("canopy-svg");
-  if (!svg) return;
-  svg.textContent = "";
-  const defs = svgEl("defs");
-  const soft = svgEl("filter", { id: "soft", x: "-50%", y: "-50%", width: "200%", height: "200%" });
-  soft.appendChild(svgEl("feGaussianBlur", { stdDeviation: "2.2" }));
-  const wide = svgEl("filter", { id: "wide", x: "-50%", y: "-50%", width: "200%", height: "200%" });
-  wide.appendChild(svgEl("feGaussianBlur", { stdDeviation: "5" }));
-  defs.append(soft, wide);
-  svg.appendChild(defs);
+function svg(tag, attrs = {}) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  return node;
+}
 
-  // nine painted-white panels, each catching a little of its own module's light
-  const panels = svgEl("g", { class: "panels" });
-  view.washes = [];
-  for (let r = 0; r < 3; r += 1) {
-    for (let c = 0; c < 3; c += 1) {
-      const box = { x: c * MODULE_W + 0.7, y: r * MODULE_H + 0.7, width: MODULE_W - 1.4, height: MODULE_H - 1.4, rx: 1.4 };
-      const wash = svgEl("rect", { ...box, class: "panel-wash", fill: "#2E241C", "fill-opacity": "0.16" });
-      panels.append(svgEl("rect", { ...box, class: "panel" }), wash);
-      view.washes.push(wash);
+const rgba = (hex, a) => `rgba(${hexToRgb(hex).join(", ")}, ${a})`;
+function tintBackground([a, b], alpha = 0.3) {
+  return (
+    `radial-gradient(60% 140% at 18% 30%, ${rgba(a, alpha)} 0%, transparent 70%), ` +
+    `radial-gradient(55% 140% at 82% 70%, ${rgba(b, alpha)} 0%, transparent 70%)`
+  );
+}
+
+/**
+ * A pressable control: `.is-pressed` while the finger is down (iOS fires :active late), cancelled when the finger
+ * moves more than 10 px; activates on click (immediate with touch-action: manipulation).
+ */
+function pressable(node, onActivate) {
+  let start = null;
+  let cancelled = false;
+  const clear = () => node.classList.remove("is-pressed");
+  node.addEventListener("pointerdown", (e) => {
+    if (!e.isPrimary) return;
+    start = { x: e.clientX, y: e.clientY };
+    cancelled = false;
+    node.classList.add("is-pressed");
+  });
+  node.addEventListener("pointermove", (e) => {
+    if (!start || !e.isPrimary) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > DRAG_CANCEL_PX) {
+      cancelled = true;
+      clear();
     }
-  }
-  const bloom = svgEl("g", { class: "bloom", filter: "url(#wide)", opacity: "0.55" });
-  const halo = svgEl("g", { class: "halo", filter: "url(#soft)" });
-  const core = svgEl("g", { class: "core" });
-  view.bloom = [];
-  view.halo = [];
-  view.core = [];
-  for (const h of view.heads) {
-    const b = svgEl("circle", { cx: h.x, cy: h.y, r: 6.5, fill: "#2E241C" });
-    const g = svgEl("circle", { cx: h.x, cy: h.y, r: 3.6, fill: "#2E241C", opacity: "0.9" });
-    const k = svgEl("circle", { cx: h.x, cy: h.y, r: 1.55, fill: "#3A2E24" });
-    // a gentle left-to-right sweep when the mood changes (an on-screen transition, not a claim about the lights)
-    const delay = `${Math.round((h.x / (MODULE_W * 3)) * 380)}ms`;
-    g.style.transitionDelay = delay;
-    k.style.transitionDelay = delay;
-    b.style.transitionDelay = delay;
-    bloom.appendChild(b);
-    halo.appendChild(g);
-    core.appendChild(k);
-    view.bloom.push(b);
-    view.halo.push(g);
-    view.core.push(k);
-  }
-  svg.append(panels, bloom, halo, core);
-}
-
-/** The picture for `mode`: its listing (the tier the engine would use), or — when it is the mode now showing — the
- * tier the server says is in use, with the plan's own module colours at module level. */
-function pictureOf(mode, s) {
-  if (!mode) return null;
-  if (!s || s.mode !== mode.id || typeof s.tier !== "string") return mode;
-  if (s.tier === "modules" && Array.isArray(s.module_colours)) {
-    return { ...mode, pattern: "modules", module_colours: s.module_colours };
-  }
-  if (s.tier !== "modules" && mode.pattern === "modules") {
-    return { ...mode, pattern: mode.pattern_primary || "wash", module_colours: null };
-  }
-  return mode;
-}
-
-function pictureKey(p) {
-  return `${p.id}|${p.pattern}|${Array.isArray(p.module_colours) ? p.module_colours.join(",") : ""}`;
-}
-
-function paintCanopy(mode) {
-  if (!mode) return;
-  const key = pictureKey(mode);
-  if (view.painted === key) return;
-  view.painted = key;
-  const colours = headColours(mode, view.heads);
-  const white = [255, 250, 240];
-  colours.forEach((c, i) => {
-    const lum = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
-    view.bloom[i].setAttribute("fill", css(c));
-    view.halo[i].setAttribute("fill", css(c));
-    view.halo[i].setAttribute("opacity", String(0.55 + 0.4 * lum));
-    view.core[i].setAttribute("fill", css(mix(c, white, 0.1 + 0.5 * lum)));
   });
-  const sums = view.washes.map(() => [0, 0, 0, 0]);
-  colours.forEach((c, i) => {
-    const m = sums[view.heads[i].module];
-    m[0] += c[0];
-    m[1] += c[1];
-    m[2] += c[2];
-    m[3] += 1;
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+    node.addEventListener(type, () => {
+      if (type !== "pointerup") cancelled = cancelled || type === "pointercancel";
+      start = null;
+      clear();
+    });
+  }
+  node.addEventListener("click", (e) => {
+    if (cancelled) {
+      cancelled = false;
+      e.preventDefault();
+      return;
+    }
+    onActivate(e);
   });
-  sums.forEach((m, k) => {
-    if (m[3]) view.washes[k].setAttribute("fill", css([m[0] / m[3], m[1] / m[3], m[2] / m[3]]));
-  });
-  const avg = colours.reduce((a, c) => a.map((v, j) => v + c[j] / colours.length), [0, 0, 0]);
-  $("canopy")?.style.setProperty("--wash", css(avg, 0.28));
 }
 
-// ---- state -------------------------------------------------------------------------------------------------
-const st = {
-  modes: [],
-  byId: new Map(),
-  server: null, // the last CanopyState JSON
-  engineMissing: false,
-  unauthorized: false,
-  skewMs: null, // server clock − kiosk clock, from the last HTTP state
-  lastContact: performance.now(), // the last successful exchange with the Conductor (page load counts)
-  liveOpen: false,
-  chosen: null, // the mode this guest just tapped, until the server's state shows it
-  chosenUntil: 0, // give up waiting for the server to show `chosen` after this (performance.now())
-  inflight: false,
-  cooldownEnd: 0, // performance.now() when the cooldown ends
-  cooldownTotal: 0,
-  hintUntil: 0,
-  hintText: "",
-  modesFailed: false,
-  modesLoadedAt: 0,
-};
-
-function contact() {
-  st.lastContact = performance.now();
-}
-
-function setCooldown(remainingS) {
-  const rem = Math.min(MAX_COOLDOWN_S, Math.max(0, Number(remainingS) || 0));
-  const now = performance.now();
-  if (rem <= 0.05) {
-    st.cooldownEnd = 0;
-    return;
+// ---- toast --------------------------------------------------------------------------------------------------------
+let toastTimer = null;
+let toastTick = null;
+function toast(text, { retryAfterS = 0, sticky = false, spinner = false } = {}) {
+  const box = $("toast");
+  clearTimeout(toastTimer);
+  clearInterval(toastTick);
+  box.classList.remove("is-leaving", "is-multiline");
+  $("toast-spinner").hidden = !spinner;
+  $("toast-text").textContent = text;
+  let count = box.querySelector(".toast-count");
+  if (count) count.remove();
+  const until = Date.now() + Math.max(TOAST_MS, retryAfterS * 1000);
+  if (retryAfterS > 0) {
+    count = el("span", { class: "chip toast-count" });
+    box.append(count);
+    const tick = () => {
+      const n = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      count.textContent = `${n} s`;
+    };
+    tick();
+    toastTick = setInterval(tick, 250);
   }
-  const end = now + rem * 1000;
-  const active = st.cooldownEnd > now;
-  if (!active || Math.abs(end - st.cooldownEnd) > 400) {
-    if (!active || end > st.cooldownEnd) st.cooldownTotal = rem;
-    st.cooldownEnd = end;
+  box.hidden = false;
+  box.style.animation = "none";
+  void box.offsetWidth; // restart the entrance
+  box.style.animation = "";
+  if (box.offsetHeight > 64) box.classList.add("is-multiline");
+  if (!sticky) toastTimer = setTimeout(hideToast, until - Date.now());
+}
+
+function hideToast() {
+  const box = $("toast");
+  clearTimeout(toastTimer);
+  clearInterval(toastTick);
+  if (box.hidden) return;
+  box.classList.add("is-leaving");
+  toastTimer = setTimeout(() => {
+    box.hidden = true;
+    box.classList.remove("is-leaving");
+  }, 180);
+}
+
+// ---- building ----------------------------------------------------------------------------------------------------
+let builtFor = "";
+function buildCards(scenes) {
+  const key = scenes.map((s) => s.id).join(",");
+  if (key === builtFor) return;
+  builtFor = key;
+  const grid = $("grid");
+  grid.replaceChildren();
+  for (const scene of scenes) {
+    const check = svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" });
+    check.append(svg("path", { d: "M5 12.5l4.5 4.5L19 7.5" }));
+    const mark = el("span", { class: "mark", "aria-hidden": "true" }, check, el("span", { class: "spinner" }));
+    const strip = el("span", { class: "strip", "aria-hidden": "true" });
+    strip.style.background = stripGradient(scene.frame);
+    const swatches = el("span", { class: "swatches", "aria-hidden": "true" });
+    for (const p of scene.palette || []) {
+      const dot = el("span", { class: "swatch" });
+      dot.style.background = p.hex;
+      swatches.append(dot);
+    }
+    const card = el(
+      "button",
+      { class: "card scene", type: "button", "data-scene": scene.id, "aria-label": sceneLabel(scene), "aria-pressed": "false" },
+      mark,
+      strip,
+      el("span", { class: "scene-name", text: scene.name }),
+      el("span", { class: "scene-mood", text: scene.mood }),
+      swatches,
+    );
+    pressable(card, () => chooseScene(scene.id));
+    grid.append(card);
   }
-  tickCooldown();
+  buildAttractStrips(scenes);
 }
 
-function applyState(data, { http = false } = {}) {
-  if (!data || typeof data !== "object") return;
-  const s = data.phase === undefined && data.state && typeof data.state === "object" ? data.state : data;
-  if (typeof s.phase !== "string") return;
-  st.server = s;
-  if (st.chosen !== null && !st.inflight && s.mode === st.chosen) st.chosen = null;
-  const listed = s.mode ? st.byId.get(s.mode) : null;
-  if (listed && listed.tier && s.tier && listed.tier !== s.tier && performance.now() - st.modesLoadedAt > MODES_RELOAD_MS) {
-    st.modesLoadedAt = performance.now(); // the tier changed (a downgrade, or flags set): re-read the pictures
-    loadModes();
+/** The 3 × 10 serpentine of the 30 lights, with half-round U-turns (the app's custom-pattern preview). */
+const SNAKE = { t: 30, gap: 2, rowGap: 22 };
+function buildSnake() {
+  const { t, gap, rowGap } = SNAKE;
+  const cap = t + rowGap / 2; // a U-turn's outer radius
+  const rowW = 10 * t + 9 * gap;
+  const w = 2 * cap + rowW;
+  const h = 3 * t + 2 * rowGap;
+  const snake = $("snake");
+  snake.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  snake.replaceChildren();
+  const tiles = [];
+  for (const { i, row, col } of snakeLayout(30, 10)) {
+    const r = svg("rect", { x: cap + col * (t + gap), y: row * (t + rowGap), width: t, height: t, rx: 3 });
+    tiles[i] = r;
+    snake.append(r);
   }
-  st.engineMissing = false;
-  st.unauthorized = false;
-  contact();
-  if (http && Number.isFinite(s.server_now)) st.skewMs = s.server_now * 1000 - Date.now();
-  if (Number.isFinite(s.cooldown_remaining_s)) {
-    setCooldown(s.cooldown_remaining_s);
-  } else if (Number.isFinite(s.cooldown_until)) {
-    const serverNowS = (Date.now() + (st.skewMs ?? 0)) / 1000;
-    setCooldown(s.cooldown_until - serverNowS);
-  } else {
-    setCooldown(0);
+  // U-turns: right between rows 0→1 (lights 9|10), left between rows 1→2 (lights 19|20). Each half takes the colour
+  // of the light it continues.
+  const half = (cx, cy, side, upper) => {
+    const ro = t + rowGap / 2;
+    const ri = rowGap / 2;
+    const sx = side === "right" ? 1 : -1;
+    const y0 = upper ? cy - ro : cy + ro;
+    const yi = upper ? cy - ri : cy + ri;
+    const sweepOut = (side === "right") === upper ? 1 : 0;
+    return svg("path", {
+      d:
+        `M${cx} ${y0} A${ro} ${ro} 0 0 ${sweepOut} ${cx + sx * ro} ${cy} ` +
+        `L${cx + sx * ri} ${cy} A${ri} ${ri} 0 0 ${1 - sweepOut} ${cx} ${yi} Z`,
+    });
+  };
+  const rightX = cap + rowW + 1;
+  const leftX = cap - 1;
+  const caps = [
+    { node: half(rightX, t + rowGap / 2, "right", true), light: 9 },
+    { node: half(rightX, t + rowGap / 2, "right", false), light: 10 },
+    { node: half(leftX, 2 * t + rowGap * 1.5, "left", true), light: 19 },
+    { node: half(leftX, 2 * t + rowGap * 1.5, "left", false), light: 20 },
+  ];
+  for (const c of caps) snake.append(c.node);
+  return { tiles, caps };
+}
+let snakeParts = null;
+
+function paintSnake(frame) {
+  snakeParts = snakeParts || buildSnake();
+  snakeParts.tiles.forEach((r, i) => r.setAttribute("fill", rgb(frame[i] || [211, 210, 216])));
+  for (const c of snakeParts.caps) c.node.setAttribute("fill", rgb(frame[c.light] || [211, 210, 216]));
+}
+
+// ---- rendering ----------------------------------------------------------------------------------------------------
+let tintKey = null;
+function setTint(layers, colors, alpha = 0.3) {
+  const key = colors ? colors.join() : "";
+  const [a, b] = layers.map($);
+  if (layers.key === key) return;
+  layers.key = key;
+  const next = a.classList.contains("is-on") ? b : a;
+  const prev = next === a ? b : a;
+  if (colors) {
+    next.style.background = tintBackground(colors, alpha);
+    next.classList.add("is-on");
   }
-  setSimBadge(s.simulated === true);
-  render();
+  prev.classList.remove("is-on");
+}
+const HEADER_LAYERS = Object.assign(["tint-a", "tint-b"], { key: null });
+const ATTRACT_LAYERS = Object.assign(["attract-a", "attract-b"], { key: null });
+
+function displayedPower(state) {
+  const r = reconcile(state.power, ui.powerHold, Date.now());
+  ui.powerHold = r.hold;
+  return r.value;
 }
 
-function hint(text, ms = 4000) {
-  st.hintText = text;
-  st.hintUntil = performance.now() + ms;
-  render();
-}
-
-function resting() {
-  if (st.engineMissing || st.unauthorized || st.modesFailed) return true;
-  if (!st.liveOpen && performance.now() - st.lastContact > OFFLINE_GRACE_MS) return true;
-  const s = st.server;
-  if (!s) return false; // still loading (the grace timer turns a failed start into "resting")
-  return s.phase === "resting" || s.guest_input === false;
-}
-
-function statusOf(s, pending) {
-  if (st.inflight) return ["sending", COPY.sending];
-  if (!s) return ["idle", "\u00a0"];
-  // accepted, but the server's state doesn't show the new mode yet: never "Ready" for the old one
-  if (pending && s.phase !== "updating") return ["sending", COPY.sending];
-  if (s.phase === "updating") return ["updating", COPY.updating];
-  if (s.phase === "ready") return ["ready", COPY.ready];
-  if (s.phase === "needs_attention") return ["settling", COPY.settling];
-  return ["idle", "\u00a0"];
+function displayedBrightness(state) {
+  if (ui.dragging) return ui.dragging.level;
+  const r = reconcile(state.brightness, ui.brightHold, Date.now());
+  ui.brightHold = r.hold;
+  return r.value;
 }
 
 function render() {
-  const now = performance.now();
-  const body = document.body;
-  const isResting = resting();
-  const viewName = isResting ? "resting" : st.server && st.modes.length ? "live" : "loading";
-  if (body.dataset.view !== viewName) body.dataset.view = viewName;
-  const rest = $("resting");
-  if (rest) rest.hidden = !isResting;
+  const panel = ui.panel;
+  if (!panel) return;
+  const state = panel.state || {};
+  const phase = phaseOf(state);
+  const now = Date.now();
+  const scenes = panel.scenes || [];
+  document.body.dataset.view = "panel";
+  document.body.dataset.lost = String(ui.lost);
+  $("app").dataset.phase = phase;
 
-  const s = st.server;
-  if (st.chosen !== null && !st.inflight && now > st.chosenUntil) st.chosen = null; // the server never showed it
-  const shownId = st.chosen ?? s?.mode ?? null;
-  const shown = shownId ? st.byId.get(shownId) : null;
-  if (shown) paintCanopy(pictureOf(shown, s));
-
-  const pending = st.chosen !== null && st.chosen !== s?.mode;
-  $("now-label").textContent = shown?.label ?? s?.label ?? "\u00a0";
-
-  const [state, text] = statusOf(s, pending);
-  const line = $("status-line");
-  if (line.dataset.state !== state) line.dataset.state = state;
-  $("status-text").textContent = text;
-
-  const feature = !pending && s && s.mode && typeof s.feature === "string" && s.feature ? s.feature : "";
-  $("feature").hidden = !feature;
-  $("feature-text").textContent = feature;
-
-  for (const tile of document.querySelectorAll(".tile")) {
-    const id = tile.dataset.mode;
-    const isChosen = pending && id === st.chosen;
-    const isCurrent = !pending && id === s?.mode;
-    tile.classList.toggle("chosen", isChosen);
-    tile.classList.toggle("current", isCurrent);
-    const chip = tile.querySelector(".chip");
-    if (chip) chip.textContent = isChosen ? COPY.yourChoice : COPY.nowShowing;
-    tile.setAttribute("aria-pressed", String(isCurrent || isChosen));
+  // resting covers everything; the panel stays underneath
+  $("resting").hidden = phase !== "resting";
+  if (phase === "resting") {
+    $("resting-text").textContent = state.message || COPY.resting;
+    const last = scenes.find((s) => s.id === state.scene) || scenes[0];
+    if (last) $("resting-glow").style.background = tintBackground(headerTint(last, true), 0.9);
   }
 
-  const cooling = st.cooldownEnd > now;
-  body.classList.toggle("cooling", cooling);
-  const hintEl = $("hint");
-  let hintText = "";
-  if (st.hintUntil > now) hintText = st.hintText;
-  else if (cooling) hintText = COPY.cooldown;
-  hintEl.textContent = hintText || "\u00a0";
-  hintEl.classList.toggle("shown", Boolean(hintText));
+  // header
+  const power = displayedPower(state);
+  const sub = headerSubtitle({ ...state, power });
+  $("hdr-sub-text").textContent = sub.text;
+  $("hdr-spinner").hidden = !sub.spinner;
+  const sw = switchView(power);
+  const powerBtn = $("power");
+  powerBtn.setAttribute("aria-checked", String(sw.checked));
+  powerBtn.dataset.unknown = String(sw.unknown);
+  $("power-label").textContent = sw.label;
+  const controlsOff = phase === "paused" || ui.lost || !panel.capabilities?.power;
+  powerBtn.setAttribute("aria-disabled", String(controlsOff));
+  const showing = nowShowing(scenes, { ...state, power });
+  setTint(HEADER_LAYERS, headerTint(showing.scene, power));
+
+  // cards
+  const left = cooldownLeft(state.cooldown_remaining_s, ui.readAt, now);
+  for (const card of $("grid").children) {
+    const id = card.dataset.scene;
+    let s = cardState(id, { ...state, power }, ui.pendingId);
+    if (phase === "cooldown" && left <= 0 && s === "disabled") s = "idle";
+    if (!panel.capabilities?.scene && s !== "selected") s = "disabled";
+    card.dataset.state = s;
+    card.setAttribute("aria-pressed", String(s === "selected" || s === "pending"));
+    card.setAttribute("aria-disabled", String(s === "disabled"));
+  }
+  const chip = $("chip");
+  chip.hidden = !(phase === "cooldown" && left > 0);
+  if (!chip.hidden) chip.textContent = cooldownChip(left);
+
+  // now showing
+  $("now-name").textContent = showing.name;
+  $("now-desc").textContent = showing.description;
+  paintSnake(showing.frame);
+
+  // brightness
+  const range = panel.brightness_range || [10, 100];
+  const level = displayedBrightness(state);
+  const slider = $("slider");
+  slider.setAttribute("aria-valuemin", range[0]);
+  slider.setAttribute("aria-valuemax", range[1]);
+  const sliderOff = phase === "paused" || ui.lost || !panel.capabilities?.brightness;
+  slider.setAttribute("aria-disabled", String(sliderOff));
+  paintSlider(level, range);
+
+  // feature line: the server's sentence, or the page's neutral fallback (both in index.html)
+  const kicker = $("feature-kicker");
+  const text = $("feature-text");
+  const feature = typeof state.feature === "string" && state.feature ? state.feature : null;
+  kicker.textContent = feature ? kicker.dataset.on : kicker.dataset.off;
+  const sentence = feature || text.dataset.fallback;
+  if (text.textContent !== sentence) text.textContent = sentence;
+
+  // paused
+  $("paused").hidden = phase !== "paused";
+  if (phase === "paused") $("paused-body").textContent = state.message || COPY.paused;
+
+  if (ui.debug) renderDebug();
 }
 
-let coolFrame = 0;
-function tickCooldown() {
-  if (coolFrame) return;
-  const step = () => {
-    coolFrame = 0;
-    const now = performance.now();
-    const left = Math.max(0, st.cooldownEnd - now);
-    const total = Math.max(0.001, st.cooldownTotal * 1000);
-    document.body.style.setProperty("--cool", String(clamp01(1 - left / total)));
-    if (left > 0) {
-      coolFrame = requestAnimationFrame(step);
-    } else {
-      render();
-    }
-  };
-  coolFrame = requestAnimationFrame(step);
+function paintSlider(level, range) {
+  const slider = $("slider");
+  const known = Number.isFinite(level);
+  const value = known ? clampLevel(level, range) : range[0];
+  const f = fractionForLevel(value, range);
+  const pos = `calc(${TRACK_LEAD + KNOB_HALF}px + ${f} * (100% - ${TRACK_LEAD + 2 * KNOB_HALF}px))`;
+  $("slider-knob").style.left = pos;
+  $("slider-fill").style.width = pos;
+  $("bright-value").textContent = known ? String(value) : "—";
+  $("bright-unit").hidden = !known;
+  slider.setAttribute("aria-valuenow", String(value));
+  slider.setAttribute("aria-valuetext", known ? `${value} percent` : "Unknown");
+}
+
+// ---- data ---------------------------------------------------------------------------------------------------------
+/** Drop the pending scene once the server has accepted it and is no longer changing (30 s at most, as a safety net). */
+function settlePending(state) {
+  if (!ui.pendingId || !ui.pendingPosted || !state) return;
+  if (phaseOf(state) !== "changing" || Date.now() - ui.pendingPosted > 30000) ui.pendingId = null;
+}
+
+function applyState(state) {
+  ui.writeSeq += 1;
+  if (!ui.panel || !state) return;
+  ui.panel.state = state;
+  ui.readAt = Date.now();
+  settlePending(state);
   render();
 }
 
-// ---- server ------------------------------------------------------------------------------------------------
-async function refresh() {
-  try {
-    applyState(await api("/api/kiosk/state"), { http: true });
-  } catch (err) {
-    if (err?.status === 503) {
-      st.engineMissing = true;
-      contact(); // the Conductor answered; only the engine is away
-    } else if (err?.status === 401 || err?.status === 403) {
-      st.unauthorized = true;
-    }
-    render();
-  }
-}
-
-// A live event says "something changed"; the kiosk re-reads its own view of it (/api/kiosk/state), which is what
-// guests should see (the raw engine state says "updating" while slots are commissioned, for example).
-let liveTimer = 0;
-let liveBusy = false;
-function liveRefresh() {
-  if (liveTimer) return;
-  liveTimer = setTimeout(async () => {
-    liveTimer = 0;
-    if (liveBusy) {
-      liveRefresh();
-      return;
-    }
-    liveBusy = true;
-    try {
-      await refresh();
-    } finally {
-      liveBusy = false;
-    }
-  }, LIVE_REFRESH_MS);
-}
-
-let pollTimer = 0;
-function schedulePoll() {
+let pollTimer = null;
+async function poll() {
   clearTimeout(pollTimer);
-  pollTimer = setTimeout(
-    async () => {
-      await refresh();
-      schedulePoll();
-    },
-    st.liveOpen ? POLL_LIVE_MS : POLL_DOWN_MS,
-  );
-}
-
-async function loadModes() {
+  const started = performance.now();
+  const seq = ui.writeSeq;
   try {
-    const list = await api("/api/kiosk/modes");
-    if (!Array.isArray(list) || !list.length) throw new Error("no modes");
-    st.modes = list.filter((m) => m && typeof m.id === "string");
-    st.byId = new Map(st.modes.map((m) => [m.id, m]));
-    st.modesFailed = false;
-    st.modesLoadedAt = performance.now();
-    view.painted = null;
-    contact();
-    buildTiles();
-    render();
-  } catch {
-    st.modesFailed = !st.modes.length;
-    render();
-    setTimeout(loadModes, MODES_RETRY_MS);
-  }
-}
-
-function buildTiles() {
-  const tiles = $("tiles");
-  tiles.textContent = "";
-  for (const mode of st.modes) {
-    const colours = (mode.preview || []).filter((c) => HEX.test(c));
-    const stops = colours.length ? colours : ["#FFE4BC"];
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "tile";
-    tile.dataset.mode = mode.id;
-    tile.setAttribute("aria-label", `${mode.label}. ${mode.blurb || ""}`.trim());
-
-    const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    const gradient =
-      stops.length === 1
-        ? `linear-gradient(115deg, ${stops[0]}, ${stops[0]})`
-        : `linear-gradient(115deg, ${stops.map((c, i) => `${c} ${Math.round((i / (stops.length - 1)) * 100)}%`).join(", ")})`;
-    swatch.style.setProperty("--swatch", gradient);
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.textContent = COPY.nowShowing;
-    const ring = document.createElement("span");
-    ring.className = "ring";
-    ring.setAttribute("aria-hidden", "true");
-    swatch.append(chip, ring);
-
-    const text = document.createElement("span");
-    text.className = "tile-text";
-    const label = document.createElement("span");
-    label.className = "tile-label";
-    label.textContent = mode.label;
-    const blurb = document.createElement("span");
-    blurb.className = "tile-blurb";
-    blurb.textContent = mode.blurb || "";
-    text.append(label, blurb);
-
-    tile.append(swatch, text);
-    tile.addEventListener("pointerdown", () => tile.classList.add("pressed"));
-    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
-      tile.addEventListener(ev, () => tile.classList.remove("pressed"));
-    }
-    tile.addEventListener("click", () => choose(mode.id, tile));
-    tiles.appendChild(tile);
-  }
-}
-
-function nudge(tile) {
-  tile.classList.remove("nudge");
-  void tile.offsetWidth; // restart the animation
-  tile.classList.add("nudge");
-}
-
-async function choose(modeId, tile) {
-  try {
-    if (resting()) return;
-    const s = st.server;
-    if (st.inflight || st.cooldownEnd > performance.now()) {
-      nudge(tile);
-      hint(COPY.cooldown);
+    const panel = await api("/api/kiosk/panel");
+    ui.latencyMs = Math.round(performance.now() - started);
+    ui.lastPollAt = Date.now();
+    const first = !ui.panel;
+    // A write was sent or answered while this poll was in flight: its state may predate the write, so keep the
+    // write's answer (otherwise a stale "ready" would clear the pending card and let a second scene through).
+    const stale = !first && seq !== ui.writeSeq;
+    if (stale) panel.state = ui.panel.state;
+    ui.panel = panel;
+    if (!stale) ui.readAt = Date.now();
+    settlePending(panel.state);
+    buildCards(panel.scenes || []);
+    if (ui.failures >= LOST_AFTER_FAILURES || ui.lost) hideToast();
+    ui.failures = 0;
+    ui.lost = false;
+    if (first && onFirstPanel(panel) === "frame") {
+      ui.stopped = true; // the frame preview replaced this page; its iframe runs its own panel
       return;
     }
-    if (s && s.mode === modeId && st.chosen === null) {
-      nudge(tile); // already showing: nothing to send
-      return;
-    }
-    st.chosen = modeId; // the instant on-screen preview
-    st.inflight = true;
     render();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SELECT_TIMEOUT_MS);
-    try {
-      const data = await api("/api/kiosk/select", {
-        method: "POST",
-        body: { mode: modeId },
-        signal: controller.signal,
-      });
-      st.inflight = false;
-      st.chosenUntil = performance.now() + CHOSEN_WAIT_MS; // kept until the state shows it (latest wins)
-      applyState(data, { http: true });
-    } catch (err) {
-      st.inflight = false;
-      st.chosen = null;
-      const status = err?.status ?? 0;
-      if (status === 429) {
-        setCooldown(err.body?.retry_after_s ?? 8);
-        hint(COPY.busy);
-      } else if (status === 404 || status === 409) {
-        hint(COPY.unavailable);
-      } else if (status === 423 || status === 503) {
-        await refresh(); // paused, resting or being set up: the resting screen says so
-        if (!resting()) hint(COPY.later);
-      } else if (status === 401 || status === 403) {
-        st.unauthorized = true;
-      } else {
-        // network trouble or a timeout: re-sync; if the Conductor is gone the grace timer shows "resting"
-        refresh();
-      }
-      render();
-    } finally {
-      clearTimeout(timer);
+    if (first) {
+      // controls paint in their real state first; only later changes animate
+      requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.remove("no-anim")));
     }
   } catch (err) {
-    st.inflight = false;
-    st.chosen = null;
-    console.error("kiosk selection failed", err);
-    render();
+    ui.failures += 1;
+    if (err && err.status === 503 && ui.panel) {
+      // the panel can't read its scenes or the show is down: rest calmly
+      ui.panel.state = { ...ui.panel.state, phase: "resting", message: (err.body && err.body.detail) || "" };
+      render();
+    } else if (ui.failures >= LOST_AFTER_FAILURES) {
+      if (!ui.panel) {
+        document.body.dataset.view = "panel";
+        $("resting").hidden = false;
+        $("resting-text").textContent = COPY.reconnecting;
+      } else if (!ui.lost) {
+        ui.lost = true;
+        toast(COPY.reconnecting, { sticky: true, spinner: true });
+        render();
+      }
+    }
+  } finally {
+    if (!document.hidden && !ui.stopped) pollTimer = setTimeout(poll, POLL_MS);
   }
 }
 
-// ---- guard rails: no zoom, no selection menus, no navigation, no error pages -----------------------------
-function guardRails() {
-  const stop = (e) => e.preventDefault();
-  window.addEventListener("error", (e) => {
-    console.error("kiosk error", e.error || e.message);
-    e.preventDefault();
+async function post(path, body) {
+  ui.writeSeq += 1;
+  return api(path, { method: "POST", body });
+}
+
+function refused(err) {
+  const t = refusalToast(err);
+  toast(t.text, { retryAfterS: t.retryAfterS });
+}
+
+// ---- actions ------------------------------------------------------------------------------------------------------
+async function chooseScene(id) {
+  const panel = ui.panel;
+  if (!panel || ui.lost) return;
+  const now = Date.now();
+  if (now - (ui.lastTapAt.get(id) || 0) < SAME_CARD_DEBOUNCE_MS) return;
+  ui.lastTapAt.set(id, now);
+  const state = panel.state || {};
+  if (!panel.capabilities?.scene) return;
+  const decision = cardTap(id, state, {
+    pendingId: ui.pendingId,
+    cooldownS: cooldownLeft(state.cooldown_remaining_s, ui.readAt, now),
   });
-  window.addEventListener("unhandledrejection", (e) => {
-    console.error("kiosk rejection", e.reason);
+  if (decision.toast) return toast(decision.toast);
+  if (!decision.send) return;
+  ui.pendingId = id;
+  ui.pendingPosted = 0;
+  render();
+  try {
+    const res = await post("/api/kiosk/scene", { scene: id });
+    ui.pendingPosted = Date.now();
+    ui.powerHold = null; // a scene turns the lights on; follow the server
+    applyState(res.state);
+  } catch (err) {
+    ui.pendingId = null;
+    render();
+    refused(err);
+  }
+}
+
+async function togglePower() {
+  const panel = ui.panel;
+  if (!panel || ui.lost || !panel.capabilities?.power) return;
+  if (phaseOf(panel.state) === "paused") return toast(panel.state.message || COPY.paused);
+  const current = displayedPower(panel.state || {});
+  const on = current !== true;
+  ui.powerHold = { value: on, until: Date.now() + POWER_HOLD_MS };
+  render();
+  try {
+    const res = await post("/api/kiosk/power", { on });
+    applyState(res.state);
+  } catch (err) {
+    ui.powerHold = null;
+    render();
+    refused(err);
+  }
+}
+
+const pacer = createPacer();
+async function sendBrightness(level) {
+  try {
+    const res = await post("/api/kiosk/brightness", { level });
+    if (ui.brightHold && ui.brightHold.value === level) ui.brightHold.until = Date.now() + BRIGHTNESS_HOLD_MS;
+    applyState(res.state);
+  } catch (err) {
+    ui.brightHold = null;
+    pacer.reset();
+    render();
+    refused(err);
+  }
+}
+
+function sliderBlocked() {
+  const panel = ui.panel;
+  if (!panel || ui.lost || !panel.capabilities?.brightness) return true;
+  const phase = phaseOf(panel.state);
+  if (phase === "paused") {
+    toast(panel.state.message || COPY.paused);
+    return true;
+  }
+  return false;
+}
+
+function levelAt(clientX) {
+  const box = $("slider").getBoundingClientRect();
+  const left = box.left + TRACK_LEAD + KNOB_HALF;
+  return levelFromX(clientX, left, box.width - TRACK_LEAD - 2 * KNOB_HALF, ui.panel.brightness_range || [10, 100]);
+}
+
+function wireSlider() {
+  const slider = $("slider");
+  slider.addEventListener("pointerdown", (e) => {
+    if (ui.dragging || !e.isPrimary || sliderBlocked()) return;
     e.preventDefault();
+    try {
+      slider.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic pointer can't be captured */
+    }
+    const level = levelAt(e.clientX);
+    ui.dragging = { pointerId: e.pointerId, level };
+    slider.classList.add("is-dragging");
+    paintSlider(level, ui.panel.brightness_range);
+    const send = pacer.move(level, Date.now());
+    if (send !== null) sendBrightness(send);
   });
-  document.addEventListener("contextmenu", stop);
-  document.addEventListener("dragstart", stop);
-  document.addEventListener("selectstart", stop);
-  document.addEventListener("gesturestart", stop); // iOS pinch
+  slider.addEventListener("pointermove", (e) => {
+    if (!ui.dragging || e.pointerId !== ui.dragging.pointerId) return;
+    const level = levelAt(e.clientX);
+    if (level === ui.dragging.level) return;
+    ui.dragging.level = level;
+    paintSlider(level, ui.panel.brightness_range);
+    const send = pacer.move(level, Date.now());
+    if (send !== null) sendBrightness(send);
+  });
+  const end = (e) => {
+    if (!ui.dragging || e.pointerId !== ui.dragging.pointerId) return;
+    const level = ui.dragging.level;
+    ui.dragging = null;
+    slider.classList.remove("is-dragging");
+    ui.brightHold = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
+    const send = pacer.release(level, Date.now());
+    if (send !== null) sendBrightness(send);
+    render();
+  };
+  slider.addEventListener("pointerup", end);
+  slider.addEventListener("pointercancel", end);
+  slider.addEventListener("lostpointercapture", end);
+  slider.addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 5, ArrowUp: 5, ArrowLeft: -5, ArrowDown: -5 }[e.key];
+    if (!step || sliderBlocked()) return;
+    e.preventDefault();
+    const range = ui.panel.brightness_range || [10, 100];
+    const from = displayedBrightness(ui.panel.state || {});
+    const level = clampLevel((Number.isFinite(from) ? from : range[0]) + step, range);
+    ui.brightHold = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
+    render();
+    const send = pacer.release(level, Date.now());
+    if (send !== null) sendBrightness(send);
+  });
+}
+
+// ---- idle attract --------------------------------------------------------------------------------------------------
+let attractTimer = null;
+let attractIndex = 0;
+function buildAttractStrips(scenes) {
+  const row = $("attract-strips");
+  row.replaceChildren(
+    ...scenes.map((s) => {
+      const strip = el("span");
+      strip.style.background = stripGradient(s.frame);
+      return strip;
+    }),
+  );
+}
+
+function attractStep() {
+  const scenes = (ui.panel && ui.panel.scenes) || [];
+  if (!scenes.length) return;
+  attractIndex = (attractIndex + 1) % scenes.length;
+  const scene = scenes[attractIndex];
+  setTint(ATTRACT_LAYERS, headerTint(scene, true), 0.42);
+  $("attract-mood").textContent = scene.mood;
+  [...$("attract-strips").children].forEach((s, i) => s.classList.toggle("is-on", i === attractIndex));
+}
+
+function showAttract() {
+  if (ui.attract || !ui.panel) return;
+  ui.attract = true;
+  const box = $("attract");
+  box.classList.remove("is-leaving");
+  box.hidden = false;
+  hideToast();
+  attractIndex = -1;
+  attractStep();
+  attractTimer = setInterval(attractStep, reducedMotion() ? 8000 : 6000);
+}
+
+let swallowUntil = 0;
+function dismissAttract() {
+  if (!ui.attract) return;
+  ui.attract = false;
+  clearInterval(attractTimer);
+  const box = $("attract");
+  box.classList.add("is-leaving");
+  setTimeout(() => {
+    if (!ui.attract) box.hidden = true;
+  }, 240);
+}
+
+function wireIdle() {
+  // The first touch on the attract screen only dismisses it; it never reaches a control underneath.
   document.addEventListener(
-    "touchmove",
+    "pointerdown",
     (e) => {
-      if (e.touches && e.touches.length > 1) e.preventDefault();
+      ui.lastTouch = Date.now();
+      if (ui.attract) {
+        e.preventDefault();
+        e.stopPropagation();
+        swallowUntil = Date.now() + 600;
+        dismissAttract();
+      }
     },
-    { passive: false },
+    { capture: true },
   );
-  window.addEventListener(
-    "wheel",
+  document.addEventListener(
+    "click",
     (e) => {
-      if (e.ctrlKey) e.preventDefault();
+      if (Date.now() < swallowUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     },
-    { passive: false },
+    { capture: true },
   );
-  window.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key)) e.preventDefault();
+  setInterval(() => {
+    if (ui.stopped) return;
+    const phase = ui.panel ? phaseOf(ui.panel.state) : "ready";
+    if (!ui.attract && !ui.lost && !ui.dragging && attractDue(ui.lastTouch, Date.now(), phase, IDLE_MS)) {
+      if (!document.querySelector(".dbg")) showAttract();
+    }
+    if (ui.attract && phase !== "ready" && phase !== "cooldown") dismissAttract();
+    if (ui.panel && phaseOf(ui.panel.state) === "cooldown") render(); // the countdown chip
+  }, 1000);
+}
+
+// ---- touch hygiene --------------------------------------------------------------------------------------------------
+function wireTouch() {
+  document.addEventListener("touchstart", () => {}, { passive: true }); // iOS: makes :active prompt
+  for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+    document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+  }
+  document.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
+  document.addEventListener("contextmenu", (e) => {
+    if (!e.target.closest || !e.target.closest(".dbg")) e.preventDefault();
   });
-  document.addEventListener("click", (e) => {
-    const link = e.target instanceof Element ? e.target.closest("a[href]") : null;
-    if (link) e.preventDefault();
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !ui.stopped) poll();
   });
+  $("toast").addEventListener("click", () => {
+    if (!ui.lost) hideToast();
+  });
+}
+
+// ---- ops debug --------------------------------------------------------------------------------------------------
+const BUG_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="7" width="8" height="12" rx="4"/><path d="M9.5 7.5 8 5M14.5 7.5 16 5M4 11h4M16 11h4M4 17h4M16 17h4M12 11v8"/></svg>';
+const X_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+const dbg = { open: false, data: null, forbidden: false, openRows: new Set(), timer: null, error: "" };
+
+function mountDebug() {
+  ui.debug = true;
+  const btn = el("button", { class: "dbg-btn", type: "button", "aria-label": "Open the debug drawer" });
+  btn.innerHTML = BUG_ICON;
+  pressable(btn, openDebug);
+  $("bar").prepend(btn);
+}
+
+async function fetchDebug() {
+  try {
+    dbg.data = await api("/api/kiosk/debug");
+    dbg.forbidden = false;
+    dbg.error = "";
+  } catch (err) {
+    dbg.forbidden = err && err.status === 403;
+    dbg.error = dbg.forbidden ? "" : String((err && err.message) || err);
+  }
+  renderDebug();
+}
+
+function openDebug() {
+  if (dbg.open) return;
+  dbg.open = true;
+  const scrim = el("div", { class: "dbg-scrim" });
+  scrim.addEventListener("click", closeDebug);
+  const close = el("button", { class: "dbg-x", type: "button", "aria-label": "Close" });
+  close.innerHTML = X_ICON;
+  close.addEventListener("click", closeDebug);
+  const drawer = el(
+    "aside",
+    { class: "dbg", role: "dialog", "aria-label": "Debug" },
+    el("div", { class: "dbg-head" }, close, el("p", { text: "Debug" }), el("span")),
+    el("div", { class: "dbg-body", id: "dbg-body" }),
+  );
+  document.body.append(scrim, drawer);
+  fetchDebug();
+  dbg.timer = setInterval(fetchDebug, POLL_MS);
+}
+
+function closeDebug() {
+  dbg.open = false;
+  clearInterval(dbg.timer);
+  for (const n of document.querySelectorAll(".dbg, .dbg-scrim")) n.remove();
+}
+
+function kv(pairs) {
+  const dl = el("dl", { class: "dbg-kv" });
+  for (const [k, v] of pairs) dl.append(el("dt", { text: k }), el("dd", {}, v instanceof Node ? v : document.createTextNode(String(v))));
+  return dl;
+}
+
+const card = (title, ...kids) => el("section", { class: "dbg-card" }, el("h3", { text: title }), ...kids);
+const fmtAt = (at) => (typeof at === "number" ? new Date(at * 1000).toLocaleTimeString() : String(at ?? ""));
+
+function renderDebug() {
+  const body = $("dbg-body");
+  if (!body || !dbg.open) return;
+  const panel = ui.panel || {};
+  const d = dbg.data || {};
+  const keepScroll = body.scrollTop;
+  const simChip = el("span", { class: `dbg-chip${panel.simulated ? "" : " is-live"}`, text: panel.simulated ? "Simulator" : "LIVE" });
+  const sections = [
+    card(
+      "Target",
+      kv([
+        ["target", panel.target ?? "—"],
+        ["label", panel.target_label ?? "—"],
+        ["environment", d.environment ?? "—"],
+        ["runtime", simChip],
+        ["viewer", panel.viewer ?? "—"],
+      ]),
+    ),
+    card(
+      "Live updates",
+      kv([
+        ["method", `polling /api/kiosk/panel every ${POLL_MS / 1000} s`],
+        ["status", ui.lost ? "reconnecting" : ui.failures ? `${ui.failures} failed` : "ok"],
+        ["latency", ui.latencyMs === null ? "—" : `${ui.latencyMs} ms`],
+        ["last poll", ui.lastPollAt ? new Date(ui.lastPollAt).toLocaleTimeString() : "—"],
+        ["idle", `${Math.round((Date.now() - ui.lastTouch) / 1000)} s (attract at ${IDLE_MS / 1000} s)`],
+      ]),
+    ),
+    card("Capabilities", el("pre", { class: "dbg-pre", text: JSON.stringify(panel.capabilities ?? {}, null, 2) })),
+    card("State", el("pre", { class: "dbg-pre", text: JSON.stringify(panel.state ?? {}, null, 2) })),
+  ];
+  const rows = el("div", { class: "dbg-rows" });
+  if (dbg.forbidden) rows.append(el("p", { text: "Sign in as ops to see command history." }));
+  else if (dbg.error) rows.append(el("p", { text: dbg.error }));
+  else if (!(d.commands || []).length) rows.append(el("p", { text: "No commands yet." }));
+  (d.commands || []).forEach((c, i) => {
+    const key = `${c.at}|${c.action}|${i}`;
+    const row = el("button", { class: `dbg-row${dbg.openRows.has(key) ? " is-open" : ""}`, type: "button" });
+    row.append(
+      document.createTextNode(
+        `${fmtAt(c.at)} · ${c.action} · ${c.outcome}${c.latency_ms != null ? ` · ${Math.round(c.latency_ms)} ms` : ""}`,
+      ),
+    );
+    if (c.error) row.append(el("div", { class: "err", text: c.error }));
+    if (dbg.openRows.has(key)) row.append(el("pre", { text: JSON.stringify({ params: c.params, target: c.target, error: c.error }, null, 2) }));
+    row.addEventListener("click", () => {
+      if (dbg.openRows.has(key)) dbg.openRows.delete(key);
+      else dbg.openRows.add(key);
+      renderDebug();
+    });
+    rows.append(row);
+  });
+  sections.push(card("Commands", rows));
+  if (d.internals) sections.push(card("Internals", el("pre", { class: "dbg-pre", text: JSON.stringify({ internals: d.internals, lease_holders: d.lease_holders }, null, 2) })));
+  const actions = el("div", { class: "dbg-actions" });
+  const action = (label, fn, primary = false) => {
+    const b = el("button", { class: `dbg-action${primary ? " is-primary" : ""}`, type: "button", text: label });
+    pressable(b, fn);
+    actions.append(b);
+  };
+  action("Show attract now", () => {
+    closeDebug();
+    swallowUntil = Date.now() + 400;
+    showAttract();
+  });
+  action("Simulate toast", () => toast("You can choose a new scene in 6 s.", { retryAfterS: 6 }));
+  action(
+    "iPad frame preview",
+    () => {
+      location.search = "?debug=1&frame=1";
+    },
+    true,
+  );
+  sections.push(card("Controls", actions));
+  body.replaceChildren(...sections);
+  body.scrollTop = keepScroll;
+}
+
+// ---- iPad frame preview -----------------------------------------------------------------------------------------
+function mountFrameView() {
+  document.body.className = "frame-view";
+  document.body.dataset.view = "frame";
+  for (const n of [...document.body.children]) n.remove();
+  const sizes = FRAME_SIZES;
+  let current = sizes[0];
+  try {
+    current = sizes.find((s) => s.id === localStorage.getItem("guestFrame")) || current;
+  } catch {
+    /* storage may be blocked */
+  }
+  const seg = el("div", { class: "seg", role: "group", "aria-label": "Device size" });
+  const safe = el("input", { type: "checkbox" });
+  const bar = el(
+    "div",
+    { class: "fv-bar" },
+    seg,
+    el("label", { class: "fv-toggle" }, safe, document.createTextNode("Show safe areas")),
+    el("a", { class: "fv-link", href: "/kiosk/?debug=1", text: "Back to the panel" }),
+  );
+  const iframe = el("iframe", { src: "/kiosk/", title: "Guest panel preview" });
+  const screen = el("div", { class: "fv-screen" }, iframe, el("div", { class: "fv-safe top", hidden: "" }), el("div", { class: "fv-safe bottom", hidden: "" }));
+  const device = el("div", { class: "fv-device" }, screen);
+  const stage = el("div", { class: "fv-stage" }, device);
+  document.body.append(el("div", { class: "fv" }, bar, stage));
+  const layout = () => {
+    iframe.width = current.w;
+    iframe.height = current.h;
+    screen.style.width = `${current.w}px`;
+    screen.style.height = `${current.h}px`;
+    const box = stage.getBoundingClientRect();
+    const s = frameScale(current.w, current.h, box.width + 64, box.height + 64);
+    device.style.transform = `translateX(-50%) scale(${s})`;
+    for (const b of seg.children) b.setAttribute("aria-pressed", String(b.dataset.id === current.id));
+  };
+  for (const s of sizes) {
+    const b = el("button", { type: "button", "data-id": s.id, text: s.label });
+    b.addEventListener("click", () => {
+      current = s;
+      try {
+        localStorage.setItem("guestFrame", s.id);
+      } catch {
+        /* storage may be blocked */
+      }
+      layout();
+    });
+    seg.append(b);
+  }
+  safe.addEventListener("change", () => {
+    for (const n of screen.querySelectorAll(".fv-safe")) n.hidden = !safe.checked;
+  });
+  window.addEventListener("resize", layout);
+  layout();
+}
+
+// ---- start ----------------------------------------------------------------------------------------------------------
+function onFirstPanel(panel) {
+  setSimBadge(Boolean(panel.simulated));
+  if (debugAllowed(location.search, panel.viewer)) {
+    const params = new URLSearchParams(location.search);
+    if (params.get("frame") === "1") {
+      mountFrameView();
+      return "frame";
+    }
+    mountDebug();
+  }
+  return "panel";
 }
 
 function start() {
-  guardRails();
-  buildCanopy();
-  render();
-  simBadge().catch(() => null);
-  loadModes();
-  refresh().finally(schedulePoll);
-  connectLive({
-    topics: ["canopy"],
-    onEvent: (topic) => {
-      if (topic === "canopy") liveRefresh();
-    },
-    onStatus: (state) => {
-      const was = st.liveOpen;
-      st.liveOpen = state === "open";
-      if (st.liveOpen) {
-        contact();
-        if (!was) refresh(); // the server-relative clock and anything missed while away
-      }
-      if (st.liveOpen !== was) schedulePoll();
-      render();
-    },
-  });
-  setInterval(render, 1000); // the offline grace and hint timers
+  wireTouch();
+  wireSlider();
+  wireIdle();
+  pressable($("power"), togglePower);
+  poll().catch(() => {});
 }
 
-try {
-  start();
-} catch (err) {
-  console.error("kiosk failed to start", err);
-  document.body.dataset.view = "resting";
-  const rest = document.getElementById("resting");
-  if (rest) rest.hidden = false;
-}
+start();

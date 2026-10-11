@@ -346,22 +346,22 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     top_row = [h["paint"] for h in heads]
     assert top_row == [e.to_json() for e in expected_frame("rainbow-row-sunset", "r0c1")]
     view = {row.key: row.value for row in _services(app_client).sim.cloud_view(f"sim-{BENCH}")}
-    assert view[("color-individual", "custom")] == "custom-3" and view[("brightness", None)] == 90
+    assert view[("color-individual", "custom")] == "custom-3" and view[("brightness", None)] == 85
     _wait(lambda: [h["reported"] for h in heads] == _ground_truth(app_client))  # the lights show it too
-    # the bottom row of the canopy is a different slice of the same gradient
-    bottom = _post(
+    # the right-hand column of the canopy is a different slice of the same gradient (it runs across the canopy)
+    right = _post(
         app_client,
         "card",
         lease,
         card="lowcountry-preview",
-        params={"mode": "rainbow-row-sunset", "position": "r2c1"},
+        params={"mode": "rainbow-row-sunset", "position": "r2c2"},
     )
-    assert [h["paint"] for h in bottom.json()["state"]["heads"]] == [
-        e.to_json() for e in expected_frame("rainbow-row-sunset", "r2c1")
+    assert [h["paint"] for h in right.json()["state"]["heads"]] == [
+        e.to_json() for e in expected_frame("rainbow-row-sunset", "r2c2")
     ]
-    assert bottom.json()["state"]["heads"][0]["paint"] != top_row[0]
+    assert right.json()["state"]["heads"][0]["paint"] != top_row[0]
 
-    # a whole-strand mode is its strand look, with the clamp note
+    # a mode without a canvas shows its module-level look for that position (the middle column's lavender)
     night = _post(
         app_client,
         "card",
@@ -369,15 +369,14 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
         card="lowcountry-preview",
         params={"mode": "goodnight-glow", "position": "r1c1"},
     ).json()
-    assert night["result"]["tier"] == "strand" and any(
-        "2200 K clamped" in n for n in night["result"]["notes"]
-    )
+    assert night["result"]["tier"] == "modules" and night["result"]["status"] == "applied"
 
-    def night_kelvin():
+    def night_lavender():
         view = {row.key: row.value for row in _services(app_client).sim.device_view(f"sim-{BENCH}")}
-        return str(view[("color-temperature", None)]) == "2700" and view[("brightness", None)] == 10
+        rgb = view.get(("color-rgb", None)) or {}
+        return rgb.get("color-rgb") == {"r": 190, "g": 169, "b": 230} and view[("brightness", None)] == 28
 
-    _wait(night_kelvin)
+    _wait(night_lavender)
 
     # where per-head frames aren't allowed, the module-level (T3) look for that position is shown instead
     session = _services(app_client).extras["module_sessions"][BENCH]
@@ -392,10 +391,10 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     assert golden["result"]["tier"] == "modules" and golden["result"]["status"] == "applied"
     assert any("Gate C" in n for n in golden["result"]["notes"])
     assert golden["state"]["heads"][4]["reported"] == {
-        "r": 255,
-        "g": 170,
-        "b": 60,
-    }  # the right-hand column's amber
+        "r": 203,
+        "g": 125,
+        "b": 183,
+    }  # the right-hand column's colour (214, 132, 193) at Golden Hour's 95 %
 
     bad = _post(
         app_client,

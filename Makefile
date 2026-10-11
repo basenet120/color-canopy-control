@@ -1,4 +1,4 @@
-.PHONY: setup test lint run e2e soak docker-smoke
+.PHONY: setup test lint run guest-dev e2e soak docker-smoke
 
 setup:
 	uv sync --frozen --all-extras
@@ -11,6 +11,11 @@ lint:
 
 run:
 	uv run uvicorn conductor.app:app --reload --port 8000
+
+# The guest panel on the simulator, no hardware: both shop modules mapped, CONDUCTOR_ENV=workshop-sim, auth off, a
+# throwaway data dir. Open http://127.0.0.1:8100/kiosk/?debug=1 (scripts/dev_guest_panel.py).
+guest-dev:
+	uv run python scripts/dev_guest_panel.py
 
 # Playwright end-to-end tests and screenshots, on the simulator. Not part of `make test` (CI has no browser).
 e2e:

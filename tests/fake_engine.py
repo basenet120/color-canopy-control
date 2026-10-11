@@ -47,11 +47,12 @@ def _look(d: dict, presets: list[str] | None = None) -> R.Look:
 
 
 def compile_t3(mode_id: str, module: str) -> tuple[R.Look, Tier, str]:
-    """The mode's look for one canopy position (`r1c2`) at its strand / module-level technique."""
+    """The mode's look for one canopy position (`r1c2`) at the first of its module-level / strand techniques on its
+    ladder."""
     mode = _modes()[mode_id]
     tech = mode["techniques"]
     row, col = int(module[1]), int(module[3])
-    if "strand" in tech:
+    if next(t for t in mode["ladder"] if t in ("modules", "strand")) == "strand":
         t = tech["strand"]
         return _look(t["look"], t.get("presets")), Tier.STRAND, t["feature"]
     t = tech["modules"]
@@ -118,6 +119,10 @@ class RecordingEngine:
     async def commission(self, *, source: str) -> dict:
         self._call("commission", source=source)
         return {"written": [], "message": "nothing to commission (recording engine)"}
+
+    async def clear_guest_overrides(self, *, source: str) -> CanopyState:
+        self._call("clear_guest_overrides", source=source)
+        return self.state()
 
 
 class FakeEngine:
