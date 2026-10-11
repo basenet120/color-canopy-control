@@ -45,12 +45,24 @@ CAPS_IDLE_S = (
 )
 
 
+def _check_idle_scene(scene: str | None, modes: list[str]) -> None:
+    """`kiosk.idle_scene` must name a mode in config/modes.yaml (D60): a typo would make every idle reset fail."""
+    if scene is not None and scene not in modes:
+        from conductor.config import ConfigError
+
+        raise ConfigError(
+            f"config/conductor.yaml → kiosk → idle_scene: {scene!r} isn't a mode; use one of "
+            f"{', '.join(modes)} (config/modes.yaml), or null to stay on the current look."
+        )
+
+
 class ShowWiring:
     def __init__(self, services: Any):
         from conductor.looks import load_modes
 
         self.services = services
         self.modes_file = load_modes(services.config_dir)
+        _check_idle_scene(services.settings.kiosk.idle_scene, list(self.modes_file.modes))
         self.caps: dict[str, Capabilities] = {}
         self.caps_errors: dict[str, str] = {}  # device id → why its profile couldn't be read (last attempt)
         self.slot_readback: dict[str, dict[str, Any]] = {}

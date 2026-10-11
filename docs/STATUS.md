@@ -149,6 +149,13 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
   release, and the rate budget under rapid ops changes. Soak 9/9 PASS (report in the session scratchpad;
   `docs/reports/sim-acceptance.md` not regenerated). The `/ops` chip and button were checked in a browser on a local
   simulator server, with the state response faked to show a guest override.
+  **Review fixes (same day):** the idle reset now acts only while a guest setting is in force. Before, with
+  `idle_scene` set to something other than the idle hold's mood, the two alternated every few minutes, and the reset
+  could undo a mood ops chose later. `idle_scene` must name a mode, or startup refuses. Guest levels are clamped to
+  each device's brightness range. A brightness that isn't a whole number is refused. A reset that fell due during an
+  outage goes out with the recovery burst, and on resume the idle hold goes before the reset, so each is one burst.
+  Re-verified: lint clean; **1089 passed** (`test_deploy.py` excluded); soak 9/9 PASS (scratchpad report). There are
+  16 new tests, and each was mutation-checked: all 13 code mutations fail at least one test.
 
 ## Known gaps from the merge review — not fixed here (Paris canon; each needs a decision or bench time)
 1. ~~The show path ignores the framebuffer mapping~~ **Done in `claude/show-path-mapping` (D57)**, in the simulator

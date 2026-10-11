@@ -422,9 +422,11 @@ The rules:
   included). Brightness is a control row: no slot object is sent and no frame is rewritten. The executor's
   ≤ 1 write/s per device and its coalescing are unchanged, and a test fires rapid ops changes to prove it.
 - **Absolute, for every module.** A guest level replaces each module's designed brightness, clamped to
-  [`kiosk.guest_brightness_min` (10), 100], as a Hubspace app group's brightness does. A T3 look whose modules
-  differ (Garden Gathering's bright centre row) flattens to one level. Moving the brightness also turns the canopy
-  on (a judgment call: a guest dragging the slider expects light).
+  [`kiosk.guest_brightness_min` (10), 100], as a Hubspace app group's brightness does, and then to each device's own
+  brightness range, as the compiler clamps a designed level. A level that isn't a whole number (true, 30.0, NaN,
+  "30") is refused, not coerced. A T3 look whose modules differ (Garden Gathering's bright centre row) flattens to
+  one level. Moving the brightness also turns the canopy on (a judgment call: a guest dragging the slider expects
+  light).
 - **Choosing a mood** clears the brightness and turns the canopy on, as choosing a scene in the Hubspace app does.
   That covers the kiosk, ops, the idle hold and the idle scene. Choosing the mood already showing counts as choosing
   it. Re-picking the look now showing keeps both settings: a tier change, new capabilities, recovery and the
@@ -438,8 +440,13 @@ The rules:
   the hold returns to `idle_mode`, and that clears the settings. A new **idle reset** acts `kiosk.idle_reset_s`
   (300 s) after the last guest input: if a guest setting is in force, the canopy goes back on at its designed
   brightness, so it is never left dark or dim. With `kiosk.idle_scene` set (default null), the reset also shows that
-  mood. Like the idle hold, the reset waits while guest input is paused (staff own the canopy then), during an outage
-  and during commissioning. It acts on the first reconciler tick after those end.
+  mood. With no guest setting in force the reset does nothing, so it never undoes a mood chosen after the last guest
+  input (ops' included: choosing a mood clears the settings) and never alternates with the idle hold. `idle_scene`
+  must name a mode in `config/modes.yaml`, or the Conductor refuses to start. Like the idle hold, the reset waits
+  while guest input is paused (staff own the canopy then), during an outage and during commissioning. It acts on the
+  first reconciler tick after a pause or commissioning ends; when the idle hold is due in that tick too, the hold goes
+  first and its mood does the clearing, so it is one change. A reset that fell due during an outage goes out with the
+  recovery burst, not as a second burst after it.
 - **Staff.** The safe look clears both settings: it is always on, at its designed brightness. `POST
   /api/canopy/guest-reset` and the `/ops` button "Clear guest brightness / off" also clear them. The button shows
   only while a guest setting is in force, beside a chip that names the setting. Re-assert keeps the guest settings,

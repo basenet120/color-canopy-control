@@ -314,3 +314,11 @@ def test_plan_json_is_serialisable():
     plan = compile_mode("rainbow-row-sunset", Tier.T1, _ctx())
     body = json.loads(json.dumps(plan.to_json()))
     assert body["tier"] == "canvas" and body["modules"]["canopy-r0c0"]["slot"] == "custom-1"
+
+
+@pytest.mark.parametrize(
+    ("mode_id", "tier"), [(m, t) for m, mode in MODES.modes.items() for t in (Tier(x) for x in mode.ladder)]
+)
+def test_each_target_carries_its_device_brightness_range_for_guest_dimming(mode_id, tier):
+    plan = compile_mode(mode_id, tier, _ctx(_caps(brightness_range=(20, 80)), **_painted()))
+    assert {mt.brightness_range for mt in plan.modules.values()} == {(20, 80)}

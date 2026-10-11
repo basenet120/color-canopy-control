@@ -413,10 +413,14 @@ class CanopyEngine:
     async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
         """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100]. Turns
         the canopy on. One write per module (the full state vector with this brightness row; never a frame)."""
+        floor = self.deps.settings.kiosk.guest_brightness_min
+        # True, 0.5, NaN, "30": refused, not coerced.
+        if isinstance(level, bool) or not isinstance(level, int):
+            return self._refused(f"Brightness must be a whole number from {floor} to 100.", None)
         refused = self._guest_refusal(source)
         if refused is not None:
             return refused
-        level = max(self.deps.settings.kiosk.guest_brightness_min, min(100, int(level)))
+        level = max(floor, min(100, level))
         if self._guest_power and level == self._guest_brightness:
             return self.state()  # already so: nothing is sent and no cooldown starts
         self._guest_brightness, self._guest_power = level, True
@@ -486,19 +490,24 @@ class CanopyEngine:
         """The rows a show command sends `device_id` now: the current plan's full state vector with the guest's
         settings applied. The reconciler judges readback against these, so it keeps the guest's choice."""
         plan = self._plan
-        return self._guest_rows(list(plan.modules[device_id].rows)) if plan is not None else []
+        if plan is None:
+            return []
+        mt = plan.modules[device_id]
+        return self._guest_rows(list(mt.rows), mt)
 
-    def _guest_rows(self, rows: list[StateRow]) -> list[StateRow]:
+    def _guest_rows(self, rows: list[StateRow], mt: ModuleTarget) -> list[StateRow]:
         if not self._guest_power:
             return [R.power(False)]
         if self._guest_brightness is None:
             return rows
-        # The brightness row is replaced in place, so the row order inside the PUT is kept.
-        level = R.brightness(self._guest_brightness)
+        # Within the device's own range, as the compiler clamps a designed level; the brightness row is replaced in
+        # place, so the row order inside the PUT is kept.
+        lo, hi = mt.brightness_range or (1, 100)
+        level = R.brightness(max(lo, min(hi, self._guest_brightness)))
         return [level if r.key == BRIGHTNESS_KEY else r for r in rows]
 
     def _desired_expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
-        return self._guest_rows(self._expect(device_id, mt, plan))
+        return self._guest_rows(self._expect(device_id, mt, plan), mt)
 
     def _desired_label(self, plan: ModePlan) -> str:
         label = f"{plan.label} ({plan.tier})"

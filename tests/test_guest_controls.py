@@ -9,13 +9,15 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from fake_compiler import MODULES, make_world, settings_with
+from fake_compiler import MODULES, FakeCompiler, frame_for, make_world, settings_with
 from pydantic import ValidationError
 
 from conductor import rows as R
 from conductor.clock import run_virtual
-from conductor.config import ConductorSettings, KioskSettings, load_settings
+from conductor.config import CONFIG_DIR, ConductorSettings, ConfigError, KioskSettings, load_settings
 from conductor.engine_api import CanopyPhase, Tier
+from conductor.gate import Purpose
+from conductor.show import ShowWiring
 
 QUIET = settings_with(kiosk={"idle_return_s": 100_000, "idle_reset_s": 100_000})
 CALM = R.full_state_vector(R.Look("white", cct=2700, brightness=60))  # FakeCompiler's lowcountry-calm
@@ -425,6 +427,7 @@ def test_resting_starting_and_stopped_refusals_and_an_outage_keeps_an_ops_change
         w.executor.add_submit_listener(sent.append)
         out["kiosk_resting"] = await w.engine.set_guest_power(False, source="kiosk")
         out["ops_resting"] = await w.engine.set_guest_brightness(30, source="ops")
+        await w.run_for(0.5)  # a burst runs on the loop: give one the chance to go out before counting
         out["sent_while_resting"] = len(sent)
         await w.run_for(120)
         w.sim.faults.set_outage(False)
@@ -564,3 +567,247 @@ def test_guest_settings_config_defaults_and_validation():
     for bad in ({"guest_brightness_min": 0}, {"guest_brightness_min": 101}, {"idle_reset_s": 0}):
         with pytest.raises(ValidationError):
             ConductorSettings.model_validate({"kiosk": bad})
+
+
+def test_idle_reset_does_nothing_without_a_guest_setting_so_it_never_alternates_with_the_idle_hold():
+    async def main():
+        w = make_world(
+            settings=settings_with(kiosk={"idle_return_s": 30, "idle_reset_s": 50, "idle_scene": "holiday"})
+        )
+        await w.engine.start(apply_initial=False)
+        await settled_on(
+            w, "lowcountry-calm", source="kiosk"
+        )  # the idle hold's mood: the hold has nothing to do
+        await w.engine.set_guest_brightness(30, source="ops")
+        await w.run_for(600)
+        idle = [e["mode"] for e in w.events("mode") if e["source"] == "idle"]
+        final = w.engine.state()
+        await w.close()
+        return idle, final
+
+    idle, final = run_virtual(main)
+    # The reset shows the idle scene once (clearing the dimming); the hold returns to its mood 30 s later; then quiet.
+    assert idle == ["holiday", "lowcountry-calm"]
+    assert final.mode == "lowcountry-calm" and final.guest_brightness is None and final.guest_power
+
+
+def test_idle_reset_never_undoes_a_mood_ops_chose_after_the_last_guest_input():
+    async def main():
+        w = make_world(
+            settings=settings_with(
+                kiosk={"idle_return_s": 100_000, "idle_reset_s": 20, "idle_scene": "holiday"}
+            )
+        )
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        await w.engine.set_guest_brightness(30, source="kiosk")
+        await w.run_for(10)
+        await w.engine.request_mode("sunset", source="ops")
+        await w.run_for(120)
+        final = w.engine.state()
+        await w.close()
+        return final
+
+    final = run_virtual(main)
+    assert final.mode == "sunset" and final.guest_brightness is None
+
+
+def test_an_idle_reset_due_during_an_outage_waits_and_rides_the_recovery_burst():
+    async def main():
+        w = make_world(settings=settings_with(kiosk={"idle_return_s": 100_000, "idle_reset_s": 20}))
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        await w.engine.set_guest_power(False, source="ops")
+        await w.until(lambda: everywhere(w, power, "off") and ready(w), timeout=10)
+        w.sim.faults.set_outage(True)
+        await w.until(lambda: w.engine.outage is not None, timeout=90)
+        await w.run_for(60)  # well past idle_reset_s: nothing may change while the canopy rests
+        resting = w.engine.state()
+        sent = []
+        w.executor.add_submit_listener(sent.append)
+        w.sim.faults.set_outage(False)
+        lit = await w.until(lambda: everywhere(w, power, "on") and everywhere(w, level, 60) and ready(w), 120)
+        await w.engine.wait_idle()
+        await w.run_for(10)
+        final = w.engine.state()
+        await w.close()
+        return resting, sent, lit, final
+
+    resting, sent, lit, final = run_virtual(main)
+    assert resting.guest_power is False
+    assert lit is not None and final.guest_power is True
+    # One recovery burst, already back on: no "off" burst followed by a second "on" one.
+    assert len(sent) == 9 and all(c.rows != [R.power(False)] for c in sent)
+
+
+def test_resuming_with_both_the_idle_hold_and_the_idle_reset_due_is_one_burst():
+    async def main():
+        w = make_world(settings=settings_with(kiosk={"idle_return_s": 30, "idle_reset_s": 20}))
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "holiday", source="kiosk")
+        await w.engine.set_guest_power(False, source="ops")
+        await w.until(lambda: everywhere(w, power, "off") and ready(w), timeout=10)
+        w.engine.pause_guest_input(True, source="ops")
+        await w.run_for(60)
+        await w.engine.wait_idle()
+        sent = []
+        w.executor.add_submit_listener(sent.append)
+        w.engine.pause_guest_input(False, source="ops")
+        shown = await w.until(lambda: w.all_correct() and everywhere(w, power, "on"), timeout=10)
+        await w.engine.wait_idle()
+        await w.run_for(5)
+        final = w.engine.state()
+        await w.close()
+        return sent, shown, final
+
+    sent, shown, final = run_virtual(main)
+    assert shown is not None and final.mode == "lowcountry-calm" and final.guest_power is True
+    assert len(sent) == 9
+
+
+def test_a_refused_idle_reset_is_tried_once_per_idle_period():
+    async def main():
+        w = make_world(settings=settings_with(kiosk={"idle_return_s": 100_000, "idle_reset_s": 20}))
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        await w.engine.set_guest_brightness(30, source="ops")
+        calls = []
+
+        async def refuse(*, source):
+            calls.append(w.clock.monotonic())
+            return w.engine._refused("no (test)", None)
+
+        w.engine.clear_guest_overrides = refuse
+        await w.run_for(35)
+        alerts = [e for e in w.events("alert") if "Idle reset refused" in e["message"]]
+        await w.close()
+        return calls, alerts
+
+    calls, alerts = run_virtual(main)
+    assert len(calls) == 1 and len(alerts) == 1
+
+
+def test_switching_off_again_sends_nothing_and_starts_no_cooldown():
+    async def main():
+        w = make_world(settings=QUIET)
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        await w.engine.set_guest_power(False, source="ops")
+        await w.until(lambda: everywhere(w, power, "off") and ready(w), timeout=10)
+        await w.engine.wait_idle()
+        writes = w.sim.stats()["writes"]
+        again = await w.engine.set_guest_power(False, source="kiosk")
+        await w.run_for(3)
+        repeat_writes = w.sim.stats()["writes"] - writes
+        events = [e for e in w.events("guest") if e["source"] == "kiosk"]
+        await w.close()
+        return again, repeat_writes, events
+
+    again, repeat_writes, events = run_virtual(main)
+    assert not again.refused and again.cooldown_until is None and again.guest_power is False
+    assert repeat_writes == 0 and events == []
+
+
+@pytest.mark.parametrize("bad", [True, False, float("nan"), 30.0, "30", None])
+def test_brightness_that_is_not_a_whole_number_is_refused_not_coerced(bad):
+    async def main():
+        w = make_world(settings=QUIET)
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        writes = w.sim.stats()["writes"]
+        state = await w.engine.set_guest_brightness(bad, source="ops")
+        await w.run_for(3)
+        repeat_writes = w.sim.stats()["writes"] - writes
+        await w.close()
+        return state, repeat_writes
+
+    state, repeat_writes = run_virtual(main)
+    assert state.refused and state.message == "Brightness must be a whole number from 10 to 100."
+    assert state.guest_brightness is None and repeat_writes == 0
+
+
+class _RangedCompiler(FakeCompiler):
+    """Modules whose profiles only allow 20–80 % (the compiler records each device's range on its target)."""
+
+    def _target(self, *args):
+        mt = super()._target(*args)
+        mt.brightness_range = (20, 80)
+        return mt
+
+
+def test_a_guest_level_is_clamped_to_each_device_s_own_range():
+    async def main():
+        w = make_world(settings=QUIET, compiler=_RangedCompiler())
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        await w.engine.set_guest_brightness(10, source="ops")
+        low = await w.until(lambda: everywhere(w, level, 20) and ready(w), timeout=10)
+        await w.engine.set_guest_brightness(100, source="ops")
+        high = await w.until(lambda: everywhere(w, level, 80) and ready(w), timeout=10)
+        await w.engine.wait_idle()
+        await w.run_for(30)  # the reconciler expects the clamped level too: nothing more is sent
+        stable = everywhere(w, level, 80) and ready(w)
+        await w.close()
+        return low, high, stable
+
+    low, high, stable = run_virtual(main)
+    assert low is not None and high is not None and stable
+
+
+def test_a_new_slot_record_keeps_the_guest_level_in_what_the_tracker_expects():
+    async def main():
+        w = make_world(settings=QUIET)
+        await w.engine.commission(source="ops")
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "sunset")  # T1: the expectation follows the slot's recorded hash
+        await w.engine.set_guest_brightness(20, source="ops")
+        await w.until(lambda: everywhere(w, level, 20) and ready(w), timeout=10)
+        await w.engine.wait_idle()
+        plan = w.engine.current_plan()
+        mt = plan.modules["canopy-r1c1"]
+        other = frame_for("sunset", 7, 30)  # a recalibration re-recorded the slot with another frame
+        assert R.slot_hash(other) != R.slot_hash(mt.slot_value)
+        w.engine._record_slot_value("canopy-r1c1", mt.slot, plan, other)
+        snap = w.engine.tracker.snapshot(w.address("canopy-r1c1"))
+        await w.close()
+        return snap
+
+    snap = run_virtual(main)
+    desired = {(r["functionClass"], r.get("functionInstance")): r["value"] for r in snap["desired"]}
+    assert desired[("brightness", None)] == 20
+
+
+def test_an_idle_scene_that_is_not_a_mode_refuses_to_start():
+    services = type("S", (), {"config_dir": CONFIG_DIR})()
+    services.settings = settings_with(kiosk={"idle_scene": "lowcountry-clam"})
+    with pytest.raises(ConfigError, match="idle_scene: 'lowcountry-clam' isn't a mode"):
+        ShowWiring(services)
+    services.settings = settings_with(kiosk={"idle_scene": "lowcountry-calm"})
+    ShowWiring(services)
+
+
+def test_a_scheduled_re_assert_judges_readback_against_the_guest_level():
+    async def main():
+        w = make_world(settings=QUIET)
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "lowcountry-calm")
+        await w.engine.set_guest_brightness(30, source="ops")
+        await w.until(lambda: everywhere(w, level, 30) and ready(w), timeout=10)
+        await w.engine.wait_idle()
+        target = w.engine.target_of("canopy-r2c0")
+        for d in MODULES:  # fresh readback everywhere: every module shows the guest's 30
+            t = w.engine.target_of(d)
+            w.engine.tracker.note_readback(
+                t.address, await t.driver.read_state(t.address, purpose=Purpose.ENGINE)
+            )
+        clean = await w.engine.reconciler.reassert()
+        app_edit(w, target.address, [R.brightness(60)])  # drift onto exactly the designed level
+        rr = await target.driver.read_state(target.address, purpose=Purpose.ENGINE)
+        w.engine.tracker.note_readback(target.address, rr)
+        drifted = await w.engine.reconciler.reassert()
+        await w.close()
+        return clean, drifted
+
+    clean, drifted = run_virtual(main)
+    assert clean == []  # 30 everywhere is what the engine wants: nothing to resend
+    assert drifted == ["canopy-r2c0"]

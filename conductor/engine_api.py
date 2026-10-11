@@ -41,6 +41,8 @@ class ModuleTarget:
     preview: list[dict] = field(
         default_factory=list
     )  # per-head {r,g,b} as it should look (visualizer / kiosk)
+    # The device's own brightness range: a guest level is clamped to it, as the designed one was (D60).
+    brightness_range: tuple[int, int] | None = None
 
 
 @dataclass
