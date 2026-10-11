@@ -51,6 +51,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const reducedMotion = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const TOAST_MS = 3500;
 const KNOB_HALF = 32;
+const TRACK_LEAD = 20; // always-filled track left of the knob at the floor, so 10% never looks like off
 
 const ui = {
   panel: null, // the last GET /api/kiosk/panel
@@ -381,7 +382,7 @@ function paintSlider(level, range) {
   const known = Number.isFinite(level);
   const value = known ? clampLevel(level, range) : range[0];
   const f = fractionForLevel(value, range);
-  const pos = `calc(${KNOB_HALF}px + ${f} * (100% - ${2 * KNOB_HALF}px))`;
+  const pos = `calc(${TRACK_LEAD + KNOB_HALF}px + ${f} * (100% - ${TRACK_LEAD + 2 * KNOB_HALF}px))`;
   $("slider-knob").style.left = pos;
   $("slider-fill").style.width = pos;
   $("bright-value").textContent = known ? String(value) : "—";
@@ -432,6 +433,10 @@ async function poll() {
       return;
     }
     render();
+    if (first) {
+      // controls paint in their real state first; only later changes animate
+      requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.remove("no-anim")));
+    }
   } catch (err) {
     ui.failures += 1;
     if (err && err.status === 503 && ui.panel) {
@@ -539,7 +544,8 @@ function sliderBlocked() {
 
 function levelAt(clientX) {
   const box = $("slider").getBoundingClientRect();
-  return levelFromX(clientX, box.left + KNOB_HALF, box.width - 2 * KNOB_HALF, ui.panel.brightness_range || [10, 100]);
+  const left = box.left + TRACK_LEAD + KNOB_HALF;
+  return levelFromX(clientX, left, box.width - TRACK_LEAD - 2 * KNOB_HALF, ui.panel.brightness_range || [10, 100]);
 }
 
 function wireSlider() {
