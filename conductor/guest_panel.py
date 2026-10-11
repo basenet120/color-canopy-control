@@ -96,7 +96,7 @@ FEATURE_GRADIENT = "Every light set individually as a Hubspace custom pattern on
 FEATURE_SOLID = "Each Hubspace strand set to one colour from the scene."
 FEATURES = {"gradient": FEATURE_GRADIENT, "solid": FEATURE_SOLID}
 
-CHANGING = "Changing the light…"
+CHANGING = "Changing the lights…"
 BUSY = "Someone is using the module page right now. Try again in a moment."
 LIGHTS_RESTING = "The lights are resting. They will be back shortly."
 DIDNT_FINISH = "That scene didn't finish. Choose it again in a moment."
