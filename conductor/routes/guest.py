@@ -6,9 +6,10 @@ same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
 - `GET  /api/kiosk/panel`       `{target, target_label, simulated, viewer, scenes, capabilities, brightness_range, state,
                                 server_now}`. `target` is "workshop" (the two VWBD shop strands) or "canopy" (the
                                 engine). Each scene is `{id, name, mood, description, palette: [{name, hex}],
-                                frame: [[r, g, b] × 30], brightness_draft}`. `state` is `{power, brightness, scene,
-                                phase, message, feature, cooldown_remaining_s}`: power/brightness/scene are null when
-                                unknown; phase is ready | changing | resting | paused | cooldown ("cooldown": the
+                                frame: [[r, g, b] × 30], solid: "#RRGGBB", brightness_draft}`. `state` is `{power,
+                                brightness, scene, look, phase, message, feature, cooldown_remaining_s}`:
+                                power/brightness/scene are null when unknown; look is "gradient" | "solid" (what the
+                                lights show, so the preview is true) or null; phase is ready | changing | resting | paused | cooldown ("cooldown": the
                                 lights are steady and a new scene can be chosen in cooldown_remaining_s; brightness
                                 and power still work); message is a calm sentence for the guest (or ""); feature is
                                 the true Hubspace sentence for what is showing, or null.

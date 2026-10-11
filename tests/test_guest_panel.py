@@ -220,8 +220,10 @@ def test_a_scene_is_the_gradient_on_both_mapped_strands(shop):
     assert r.json()["ok"] is True
     assert r.json()["state"]["phase"] == "changing" and r.json()["state"]["scene"] == COASTAL.id
     assert r.json()["state"]["feature"] is None  # nothing is claimed until the lights confirm
+    assert r.json()["state"]["look"] is None
     state = _settle(shop)["state"]
     assert state["scene"] == COASTAL.id and state["feature"] == FEATURE_GRADIENT
+    assert state["look"] == "gradient"  # the panel previews every light
     assert state["power"] is True and state["brightness"] == COASTAL.brightness_draft
     for d in PAIR_IDS:
         cloud = _cloud(shop, d)
@@ -285,6 +287,9 @@ def test_without_both_maps_a_scene_is_one_solid_colour(monkeypatch, tmp_path):
         assert c.post("/api/kiosk/scene", json={"scene": GOLDEN.id}).status_code == 200
         state = _settle(c)["state"]
         assert state["scene"] == GOLDEN.id and state["feature"] == FEATURE_SOLID
+        assert state["look"] == "solid"  # the panel previews one colour, the one lit
+        golden = next(s for s in c.get("/api/kiosk/panel").json()["scenes"] if s["id"] == GOLDEN.id)
+        assert golden["solid"] == GOLDEN.solid.hex
         assert state["brightness"] == GOLDEN.brightness_draft
         for d in PAIR_IDS:
             cloud = _cloud(c, d)

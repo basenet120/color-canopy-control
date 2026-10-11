@@ -53,7 +53,8 @@ Studio):
 
 **State.** power and brightness come from the modules' readback (the open sessions, else the state tracker). The scene
 is the one the last job applied, and only while no one else has written either module since (the tracker's last
-command). `feature` is the true sentence for what is showing (gradient or solid), else null.
+command). `feature` is the true sentence for what is showing (gradient or solid), else null, and `look` says which
+("gradient" | "solid", null while changing or on the engine target) so the panel's preview draws what is lit.
 
 Try it without hardware: `make guest-dev` (scripts/dev_guest_panel.py).
 """
@@ -240,6 +241,7 @@ def scene_json(scene: Scene) -> dict:
         "description": scene.description,
         "palette": [{"name": c.name, "hex": c.hex} for c in scene.palette],
         "frame": [list(rgb) for rgb in scene.frame(HEADS)],
+        "solid": scene.solid.hex,
         "brightness_draft": scene.brightness_draft,
     }
 
@@ -593,6 +595,7 @@ class WorkshopTarget:
             "power": power,
             "brightness": brightness,
             "scene": scene,
+            "look": None if scene_changing else shown,
             "phase": phase,
             "message": message,
             "feature": feature,
@@ -794,6 +797,7 @@ class EngineTarget:
             "power": None,
             "brightness": None,
             "scene": None,
+            "look": None,
             "phase": "resting",
             "message": K.RESTING,
             "feature": None,
@@ -828,6 +832,7 @@ class EngineTarget:
             "power": power,
             "brightness": brightness,
             "scene": st.mode if st.mode in ids else None,
+            "look": None,  # the engine's techniques aren't a 30-light frame; the panel previews the scene itself
             "phase": phase,
             "message": message,
             "feature": st.feature,
