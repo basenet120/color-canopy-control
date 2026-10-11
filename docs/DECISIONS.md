@@ -400,3 +400,41 @@ A newer markers or 30–59 probe, or a later Yes/No probe of part of 30–59, th
 Apply map. None of them removes a map already recorded; taking back the Yes on a run that recorded it does. Lower
 ranges keep the free-text question, so Apply map doesn't read them. Simulator only so far: the flow has never run
 against a real kit.
+
+## 2026-10-11 — the approved scenes
+
+**D59 — One scene catalog: the show's six modes are Paris's six approved scenes, and every scene is static.** Alon
+approved Paris's six scenes (`config/scenes.yaml`, d897843). That file is the one catalog the guest panel, the show's
+modes and the Studio build on. `config/modes.yaml` keeps its schema and its ladders, but each mode's id, label, blurb
+and preview are now the scene's id, name, mood and palette (in order), and every tier renders that palette:
+- **Coastal Tides replaces Holiday at Home** (`coastal-tides`). The other five ids are unchanged.
+- **Canvas (T1):** a static gradient across the canopy, x / 225 in (the Studio's illustration samples it the same
+  way), with the palette's colours as evenly spaced stops. The stops name new palette recipes in
+  `config/recipes.yaml`, painted `rgb_only` at full strength. Their `blend` is the same RGB with no white, because
+  per-puck white is unverified (gate 6). The composed frames equal `Scene.color_at(x / 225)` head for head.
+- **Slot (T2):** the same design, hand-painted in the Hubspace app, as before.
+- **Module level (T3):** each module shows the scene's gradient at its column centre (x = 37.5, 112.5, 187.5 in).
+  Lowcountry Calm's mirror shows here: its two side columns match, with sea glass in the middle.
+- **Strand:** the scene's solid colour (`default_solid`) on every strand. Every ladder now ends `modules, strand`.
+- **Brightness** is the scene's `brightness_draft` at every tier. It is a device setting, never multiplied into a
+  colour. The values are drafts until the physical mood approval.
+- **Three slots, three painted looks.** The controller holds custom-1..3, and painted looks are stored at
+  commissioning and only selected at show time (04). So Rainbow Row Sunset (custom-1), Garden Gathering (custom-2) and
+  Golden Hour (custom-3) keep their slots and ladders `canvas, slot, modules, strand`. Lowcountry Calm, Coastal Tides
+  and The Goodnight Glow start at module level (`modules, strand`). Giving a slot to another scene is a config change:
+  move `slot:`, add its canvas and slot techniques, and add its palette recipes.
+- **Static.** No mode has `motion: true`, a `motion_effect` or a `motion_feature`. The soak still enables a SIMULATED
+  code on Golden Hour and supplies its own motion copy (`config/sim/soak.yaml`), so the all-or-none re-trigger stays
+  measured.
+- **Copy.** T1 and T2 keep their sentences. T3 says "Colour and dimming: each Hubspace strand set to a single colour, so
+  the palette steps across the canopy column by column." Strand says "Colour and dimming: all nine Hubspace strands set
+  to <the solid colour>." The kiosk blurb is the scene's mood, which is true at every tier; the longer description
+  stays in `scenes.yaml`.
+- **What changes on the lights.** Live, before Gate B/C, every mode now runs at module level, where before three ran at
+  T3 and three as whole-strand white or a preset. The safe look (Calm at strand) is soft ivory RGB, not 2700 K white.
+  The kiosk draws a T1 gradient across the canopy (`gradient-x`), and draws a one-colour strand look as flat module
+  colours. The module page's mode preview now follows the mode's ladder order (T1, then T3, then strand).
+- **Kept.** The colour-study recipes (HD orange, amber, …) stay for the module page's cards. The compiler keeps its
+  other techniques (white CCT and its clamps, presets, pathway and band canvases, row and middle-row layouts, motion
+  copy). They are tested on the pre-D59 modes, kept as a fixture (`tests/fixtures_modes_techniques.yaml`).
+  `tests/test_modes_match_scenes.py` pins `modes.yaml` to `scenes.yaml`.

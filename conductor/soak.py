@@ -31,9 +31,9 @@ on the virtual clock with a temporary `CONDUCTOR_DATA_DIR` and `conductor.show.S
 lifespan builds it: capabilities read from each module's (simulated) profile in the background, the looks compiler,
 the commissioning gate on T1, slot records (hash, origin, effect fields) in the registry overlay, the same ladder and
 tier rules. Only the simulator's conditions (pinned) and one soak-only setting differ: `config/sim/soak.yaml` enables a
-SIMULATED on-device motion code for Golden Hour, so the all-or-none motion re-trigger (07 §6) is measured too. On real
-hardware code 1 has only bounded bench runs on Kingston (one physically observed, Oct 2) and `effects.enabled` stays
-empty; the report says so.
+SIMULATED on-device motion code for one painted mode (Golden Hour; every show scene is static, D59), so the
+all-or-none motion re-trigger (07 §6) is measured too. On real hardware code 1 has only bounded bench runs on Kingston
+(one physically observed, Oct 2) and `effects.enabled` stays empty; the report says so.
 
 `run_soak(compiler=...)` still takes any object with `compile(mode_id, tier)`, `ladder(mode_id)` and `modes()` and
 then runs the bare engine on it (the older world: every tier allowed, no overlay); `BuiltinCompiler` below is kept for
@@ -279,6 +279,10 @@ def _soak_config_dir(motion: dict | None) -> Path:
             **(canvas.get("motion_effect") or {}),
             "motionEffect": int(motion["motionEffect"]),
         }
+        # Every show scene is static (D59), so the show's modes carry no motion copy: the soak adds its own.
+        canvas.setdefault(
+            "motion_feature", str(motion.get("feature") or "SIMULATED on-device motion (soak only)")
+        )
         modes_path.write_text(yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8")
         settings_path = config / "conductor.yaml"
         settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}

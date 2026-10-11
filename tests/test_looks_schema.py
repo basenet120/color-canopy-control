@@ -37,7 +37,7 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
         "lowcountry-calm",
         "rainbow-row-sunset",
         "garden-gathering",
-        "holiday-at-home",
+        "coastal-tides",
         "golden-hour",
         "goodnight-glow",
     ]
@@ -46,15 +46,16 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
     assert modes.kiosk.title == "The Color Canopy"
     sunset = modes.mode("rainbow-row-sunset")
     assert isinstance(sunset.techniques.canvas.canvas, GradientCanvas)
-    assert [s.color for s in sunset.techniques.canvas.canvas.stops] == ["hd-orange", "peach", "warm-white"]
-    golden = modes.mode("golden-hour")
-    assert golden.motion is True and golden.techniques.canvas.motion_effect.motionEffect is None
-    assert golden.techniques.canvas.canvas.band.width_in == 20
-    # no static copy anywhere claims movement; only motion_feature does
+    assert [s.color for s in sunset.techniques.canvas.canvas.stops] == ["pastel-coral", "blush-pink", "lilac"]
+    # every scene is static (D59): no mode carries motion, and no copy claims movement
     for mode in modes.modes.values():
+        assert mode.motion is False
+        if mode.techniques.canvas is not None:
+            assert (
+                mode.techniques.canvas.motion_effect is None and mode.techniques.canvas.motion_feature is None
+            )
         for name in mode.ladder:
             assert not MOTION_WORDS.search(getattr(mode.techniques, name).feature)
-    assert MOTION_WORDS.search(golden.techniques.canvas.motion_feature)
 
 
 def test_load_modes_reads_a_config_dir(tmp_path):
@@ -108,7 +109,9 @@ def test_static_copy_that_claims_movement_is_refused():
 
 
 def test_a_motion_effect_needs_motion_copy():
-    msg = _bad(lambda d: d["modes"]["golden-hour"]["techniques"]["canvas"].pop("motion_feature"))
+    msg = _bad(
+        lambda d: d["modes"]["golden-hour"]["techniques"]["canvas"].update(motion_effect={"motionEffect": 1})
+    )
     assert "mode 'golden-hour' → techniques → canvas" in msg and "motion_feature" in msg
 
 
@@ -128,15 +131,25 @@ def test_out_of_range_values_and_typos_name_the_mode_and_field():
 
 
 def test_white_look_needs_a_colour_temperature_and_preset_needs_a_name():
-    msg = _bad(lambda d: d["modes"]["lowcountry-calm"]["techniques"]["strand"]["look"].pop("cct"))
+    msg = _bad(lambda d: d["modes"]["lowcountry-calm"]["techniques"]["strand"].update(look={"kind": "white"}))
     assert "white look needs cct" in msg
-    preset = _bad(lambda d: d["modes"]["holiday-at-home"]["techniques"]["strand"].pop("presets"))
-    assert "mode 'holiday-at-home'" in preset and "preset look needs" in preset
+    preset = _bad(
+        lambda d: d["modes"]["coastal-tides"]["techniques"]["strand"].update(look={"kind": "preset"})
+    )
+    assert "mode 'coastal-tides'" in preset and "preset look needs" in preset
+    colour = _bad(lambda d: d["modes"]["coastal-tides"]["techniques"]["strand"]["look"].pop("rgb"))
+    assert "rgb look needs rgb" in colour
 
 
 def test_module_level_rows_must_match_the_canopy_grid():
-    msg = _bad(lambda d: d["modes"]["rainbow-row-sunset"]["techniques"]["modules"]["rows"].pop())
-    assert "lists 2 looks but the canopy has 3 module rows" in msg
+    msg = _bad(lambda d: d["modes"]["rainbow-row-sunset"]["techniques"]["modules"]["columns"].pop())
+    assert "lists 2 looks but the canopy has 3 module columns" in msg
+
+    def two_rows(d):
+        modules = d["modes"]["rainbow-row-sunset"]["techniques"]["modules"]
+        modules["rows"] = modules.pop("columns")[:2]
+
+    assert "lists 2 looks but the canopy has 3 module rows" in _bad(two_rows)
 
 
 def test_invalid_yaml_is_a_config_error(tmp_path):

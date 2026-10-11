@@ -503,7 +503,7 @@ def test_writes_are_json_and_same_site_only(shop):
 
 # ---- the engine target (venue, staging, local) ----------------------------------------------------------------------
 def _engine(client, cls=None, **kw):
-    """tests/test_kiosk_routes.py's FakeEngine: it knows the modes.yaml ids, where coastal-tides doesn't exist yet."""
+    """tests/test_kiosk_routes.py's FakeEngine: it knows the modes.yaml ids (the six scenes, D59)."""
     from test_kiosk_routes import FakeEngine
 
     services = _services(client)
@@ -553,15 +553,16 @@ def test_engine_scene_asks_the_engine_and_reports_its_feature(app_client):
     assert engine.calls == [("rainbow-row-sunset", "kiosk")]
 
 
-def test_a_scene_the_engine_doesnt_know_yet_is_a_calm_409(app_client):
-    engine = _engine(app_client)  # FakeEngine knows modes.yaml, where coastal-tides doesn't exist yet
+def test_a_scene_the_engine_doesnt_know_is_a_calm_409(app_client):
+    from test_kiosk_routes import MODES_YAML
+
+    # an engine whose mode list lacks one scene (e.g. an older modes.yaml on the box)
+    engine = _engine(app_client, known=set(MODES_YAML["modes"]) - {COASTAL.id})
     r = app_client.post("/api/kiosk/scene", json={"scene": COASTAL.id})
     assert (
         r.status_code == 409 and r.json()["detail"] == "That scene isn't available right now. Choose another."
     )
     assert engine.calls == [(COASTAL.id, "kiosk")]
-    engine.mode = "holiday-at-home"  # a mode that isn't one of the scenes: no scene is claimed
-    assert _panel(app_client)["state"]["scene"] is None
 
 
 def test_engine_without_guest_brightness_or_power_refuses_them_calmly(app_client):

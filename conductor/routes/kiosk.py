@@ -6,12 +6,14 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
 - `GET  /api/kiosk/modes`   the six modes: `[{id, label, blurb, preview, pattern, feature, tier, module_colours}]`.
                             `preview` is the mode's colour swatch (config/modes.yaml); `pattern` says how the kiosk's
                             illustrated canopy spreads those colours *at the tier the engine would use now* ("modules"
-                            at T3: one flat colour per module, from `module_colours`); `feature` is the "Hubspace
-                            feature" sentence for the tier actually in use — known only for the mode now showing (from
-                            the engine), else null.
+                            at T3, and for a one-colour whole-strand look: one flat colour per module, from
+                            `module_colours`; a modules-first mode lists its static column colours until a plan says
+                            otherwise); `feature` is the "Hubspace feature" sentence for the tier actually in
+                            use — known only for the mode now showing (from the engine), else null.
 - `GET  /api/kiosk/state`   the engine's CanopyState JSON, plus `server_now` and `cooldown_remaining_s` so the page
                             counts the cooldown down in server-relative time (the kiosk's own clock may be off), and
-                            `module_colours` (nine "#RRGGBB", r0c0…r2c2) when the plan in use is module-level (T3).
+                            `module_colours` (nine "#RRGGBB", r0c0…r2c2) when the plan in use shows one flat colour per
+                            module (T3, or a one-colour whole-strand look).
                             While the engine commissions slots, the kiosk sees "resting" ("being set up"): no look is
                             changing, so it never says "Changing the light…".
 - `POST /api/kiosk/select`  `{"mode": "<id>"}` (JSON only) → `engine.request_mode(mode, source="kiosk")` → state.
@@ -107,30 +109,53 @@ class SelectBody(BaseModel):
 def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     """How the kiosk illustration spreads a mode's preview colours, at `tier` (default: the primary technique).
 
-    wash     — one whole-strand look (the colours vary gently, as warm white does across a room)
-    scatter  — a preset with mixed colours (Holiday)
-    gradient — a canvas gradient down the canopy (Sunset)
-    pathway  — a winding bright path over a darker base (Garden Gathering)
-    bands    — one soft band per module (Golden Hour)
-    modules  — module level (T3): one flat colour per module (`module_colours`)
+    wash       — one whole-strand look (the colours vary gently, as warm white does across a room)
+    scatter    — a preset with mixed colours
+    gradient   — a canvas gradient down the canopy (axis y)
+    gradient-x — a canvas gradient across the canopy, left to right (axis x: the scenes, D59)
+    pathway    — a winding bright path over a darker base
+    bands      — one soft band per module
+    modules    — one flat colour per module (`module_colours`): module level (T3), and a whole-strand look that
+                 isn't a preset (every module shows one colour)
     A hand-painted slot (T2) copies the canvas picture, so it draws like the canvas technique.
     """
+    ladder = spec.get("ladder") or ["strand"]
+    techniques = spec.get("techniques") or {}
     if tier == str(Tier.T3):
         return "modules"
-    ladder = spec.get("ladder") or ["strand"]
-    technique = (spec.get("techniques") or {}).get(ladder[0]) or {}
+    if tier == str(Tier.STRAND):
+        look = (techniques.get("strand") or {}).get("look") or {}
+        return "scatter" if look.get("kind") == "preset" else "modules"
+    if ladder[0] == "modules":
+        return "modules"
+    technique = techniques.get(ladder[0]) or {}
     if ladder[0] == "strand":
         look = technique.get("look") or {}
         return "scatter" if look.get("kind") == "preset" else "wash"
     canvas = technique.get("canvas") or {}
     kind = canvas.get("kind")
     if kind == "gradient":
-        return "gradient"
+        return "gradient-x" if canvas.get("axis") == "x" else "gradient"
     if kind == "pathway":
         return "pathway"
     if kind == "band_per_module":
         return "bands"
     return "wash"
+
+
+def _column_colours(spec: Mapping[str, Any]) -> list[str] | None:
+    """Nine "#RRGGBB" (r0c0…r2c2) from a modules-first mode's static `techniques.modules.columns`, so its picture
+    steps column by column like the ceiling even before the engine can compile a plan for it; else None."""
+    if (spec.get("ladder") or ["strand"])[0] != "modules":
+        return None
+    columns = ((spec.get("techniques") or {}).get("modules") or {}).get("columns") or []
+    if len(columns) != 3 or any((c or {}).get("kind") != "rgb" for c in columns):
+        return None
+    try:
+        hexes = ["#" + "".join(f"{int(v):02X}" for v in c["rgb"]) for c in columns]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return [hexes[i % 3] for i in range(9)]
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -193,7 +218,7 @@ def load_kiosk_modes(path: Path = MODES_FILE) -> list[dict[str, Any]]:
                 "pattern_primary": _pattern(spec),  # the picture above T3 (the kiosk falls back to it)
                 "feature": None,
                 "tier": None,
-                "module_colours": None,
+                "module_colours": _column_colours(spec),
             }
         )
     return modes
@@ -236,9 +261,12 @@ def _hex(preview: list[dict]) -> str | None:
 
 
 def module_colours(services: Any, plan: ModePlan | None) -> list[str | None] | None:
-    """Nine colours (r0c0…r2c2) when `plan` is module-level (T3) — what the ceiling shows — else None."""
-    if plan is None or str(plan.tier) != str(Tier.T3):
+    """Nine colours (r0c0…r2c2) when `plan` shows one flat colour per module — module level (T3), or a whole-strand
+    look whose every module previews as one colour — which is what the ceiling shows; else None."""
+    if plan is None or str(plan.tier) not in (str(Tier.T3), str(Tier.STRAND)):
         return None
+    if str(plan.tier) == str(Tier.STRAND) and not all(_flat(t.preview) for t in plan.modules.values()):
+        return None  # e.g. a preset: its heads differ, so the kiosk keeps the mode's own picture
     try:
         by_module = {e.module: e.id for e in services.registry.canopy_modules()}
     except Exception:  # noqa: BLE001 - no registry, no picture
@@ -248,6 +276,14 @@ def module_colours(services: Any, plan: ModePlan | None) -> list[str | None] | N
         target = plan.modules.get(by_module.get(position, ""))
         out.append(_hex(list(target.preview)) if target is not None and target.preview else None)
     return out
+
+
+def _flat(preview: Any) -> bool:
+    """True when every head of a module's preview is the same colour."""
+    try:
+        return len({(p.get("r"), p.get("g"), p.get("b")) for p in preview}) <= 1
+    except (TypeError, AttributeError):
+        return False
 
 
 def _current_plan(engine: Any) -> ModePlan | None:
@@ -273,7 +309,7 @@ def _remaining(until: float | None, now: float) -> float:
 
 def state_json(services: Any, state: CanopyState, engine: Any = None) -> dict[str, Any]:
     """CanopyState JSON + `server_now` + `cooldown_remaining_s` (server-relative, so clock skew can't matter), and
-    — given the engine — the kiosk's view of it plus `module_colours` for a module-level plan."""
+    — given the engine — the kiosk's view of it plus `module_colours` for a plan with one flat colour per module."""
     now = services.clock.now()
     if engine is not None:
         state = kiosk_view(engine, state)
@@ -407,7 +443,8 @@ def modes(request: Request) -> JSONResponse:
             mode["pattern"] = (
                 _pattern(specs.get(mode["id"]) or {}, mode["tier"]) if specs else mode["pattern"]
             )
-            mode["module_colours"] = module_colours(services, plan)
+            static = mode["module_colours"] if mode["tier"] == str(Tier.T3) else None
+            mode["module_colours"] = module_colours(services, plan) or static
     return JSONResponse(listing, headers=NO_STORE)
 
 
