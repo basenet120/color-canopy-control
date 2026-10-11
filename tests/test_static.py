@@ -18,7 +18,7 @@ def test_static_assets_are_vendored():
         text = f.read_text()
         assert not re.search(r"https?://", text), f"{f.name} references an external URL"
         assert "@import" not in text and "@font-face" not in text
-    # the one vendored web font (the guest panel's Quicksand) ships with its licence; nothing else lives in fonts/
+    # the one vendored web font (the guest panel's Canopy Rounded, a renamed Quicksand) ships with its licence; nothing else lives in fonts/
     for family in (STATIC / "fonts").iterdir():
         assert (family / "OFL.txt").is_file(), family.name
         assert {f.suffix for f in family.iterdir()} <= {".woff2", ".txt"}, family.name

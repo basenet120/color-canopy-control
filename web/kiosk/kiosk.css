@@ -1,19 +1,13 @@
 /* The guest panel: a Hubspace device sheet for the iPad on the stand (docs/design/guest-panel.md).
-   Everything vendored, no CDN. Quicksand (SIL OFL 1.1, web/static/fonts/quicksand/OFL.txt) is the closest open face
-   to the app's rounded sans; if it can't load, the system rounded face (SF Pro Rounded on iPadOS) stands in.
+   Everything vendored, no CDN. Canopy Rounded is Quicksand (SIL OFL 1.1), the closest open face to the app's rounded
+   sans, as one variable file (400-700) so the spec's 500 and 600 weights really render; renamed as the OFL requires
+   (web/static/fonts/canopy-rounded/OFL.txt). If it can't load, the system rounded face (SF Pro Rounded) stands in.
    Light theme only, on purpose: a kiosk must look the same on every iPad. */
 
 @font-face {
-  font-family: "Quicksand";
-  src: url("/static/fonts/quicksand/Quicksand-Regular.woff2") format("woff2");
-  font-weight: 300 500;
-  font-style: normal;
-  font-display: block;
-}
-@font-face {
-  font-family: "Quicksand";
-  src: url("/static/fonts/quicksand/Quicksand-Bold.woff2") format("woff2");
-  font-weight: 600 700;
+  font-family: "Canopy Rounded";
+  src: url("/static/fonts/canopy-rounded/CanopyRounded-VF.woff2") format("woff2");
+  font-weight: 400 700;
   font-style: normal;
   font-display: block;
 }
@@ -43,7 +37,7 @@
   --selected-row: #DCE8F6;
   --resting: #2A2A2E;
 
-  --font: "Quicksand", ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font: "Canopy Rounded", ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --r-sheet: 24px;

@@ -304,7 +304,7 @@ def test_a_tester_cant_use_the_kiosk_api(app_client_auth):
 
 # ---- the page (the Hubspace-style guest panel, docs/design/guest-panel.md) -------------------------------------
 PAGE_FILES = ("index.html", "kiosk.css", "kiosk.js", "panel-model.mjs")
-FONT_FACE_URL = re.compile(r'url\("(/static/fonts/quicksand/[\w.-]+\.woff2)"\)')
+FONT_FACE_URL = re.compile(r'url\("(/static/fonts/canopy-rounded/[\w.-]+\.woff2)"\)')
 
 
 def test_kiosk_page_is_served_and_vendored(app_client):
@@ -314,13 +314,13 @@ def test_kiosk_page_is_served_and_vendored(app_client):
         text = (KIOSK_DIR / name).read_text().replace('"http://www.w3.org/2000/svg"', "")  # a namespace
         assert not re.search(r"https?://", text), f"{name} references an external URL"
         assert "@import" not in text
-    # the only web font is the vendored Quicksand (SIL OFL 1.1), served by the app itself
+    # the only web font is the vendored Canopy Rounded (Quicksand, SIL OFL 1.1), served by the app itself
     css = (KIOSK_DIR / "kiosk.css").read_text()
     urls = FONT_FACE_URL.findall(css)
     assert urls and css.count("@font-face") == len(urls)
     for url in urls:
         assert app_client.get(url).status_code == 200, url
-    assert (ROOT / "web" / "static" / "fonts" / "quicksand" / "OFL.txt").is_file()
+    assert (ROOT / "web" / "static" / "fonts" / "canopy-rounded" / "OFL.txt").is_file()
     for asset in ("/kiosk/kiosk.js", "/kiosk/panel-model.mjs", "/kiosk/brand/hubspace-logo.svg"):
         assert app_client.get(asset).status_code == 200, asset
     html = (KIOSK_DIR / "index.html").read_text()
@@ -355,7 +355,7 @@ def test_kiosk_never_writes_its_own_hubspace_feature_copy():
 def test_kiosk_css_is_built_for_touch():
     css = (KIOSK_DIR / "kiosk.css").read_text()
     assert "#FA4616" in css  # Hubspace orange
-    assert '"Quicksand"' in css and "system-ui" in css  # with the system fallback
+    assert '"Canopy Rounded"' in css and "system-ui" in css  # with the system fallback
     for needle in (
         "user-select: none",
         "-webkit-touch-callout: none",

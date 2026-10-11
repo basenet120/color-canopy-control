@@ -1,7 +1,9 @@
 Copyright 2019 The Quicksand Project Authors (https://github.com/andrew-paglinawan/QuicksandFamily.git), with Reserved Font Name "Quicksand"
 
-Vendored unmodified: Quicksand-Regular.woff2 and Quicksand-Bold.woff2 (version 3.006), used by the guest panel
-(web/kiosk/kiosk.css).
+CanopyRounded-VF.woff2 is a Modified Version of Quicksand 3.006: a variable font (wght 400-700) built with fontTools
+varLib from the unmodified Quicksand-Regular and Quicksand-Bold (v3.006) as its two masters, so the guest panel
+(web/kiosk/kiosk.css) gets real Medium (500) and SemiBold (600). As the OFL requires for a Modified Version under the
+Reserved Font Name "Quicksand", it is renamed "Canopy Rounded". Glyph designs are unchanged at 400 and 700.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
