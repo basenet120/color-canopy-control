@@ -327,9 +327,15 @@ class WorkshopTarget:
             raise GuestRefused(
                 429, K.COOLDOWN, {"retry_after_s": STILL_CHANGING_S}, why="a scene is still being applied"
             )
-        await self._ensure_sessions()
+        # Claim the cooldown before opening the modules (a profile readback): a second scene arriving meanwhile is a
+        # 429, not a second accepted scene. Opening refused → the claim is given back.
+        claimed, self.cooldown_until = self.cooldown_until, now + float(self.deps.settings.kiosk.cooldown_s)
+        try:
+            await self._ensure_sessions()
+        except GuestRefused:
+            self.cooldown_until = claimed
+            raise
         level = guest_level(scene.brightness_draft)
-        self.cooldown_until = now + float(self.deps.settings.kiosk.cooldown_s)
         self.requested.update(scene=scene.id, power=True, brightness=level)
         self.message = ""
         self.lane.put("scene", (scene, level), drop=("brightness", "power"))

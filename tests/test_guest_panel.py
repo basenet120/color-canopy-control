@@ -390,6 +390,28 @@ def test_a_second_scene_inside_the_cooldown_is_a_429(monkeypatch, tmp_path):
         assert any(x["action"] == "scene" and x["outcome"] == "refused" for x in commands)
 
 
+def test_two_scenes_arriving_while_the_modules_open_are_one_200_and_one_429(monkeypatch, tmp_path):
+    import threading
+
+    with _workshop(monkeypatch, tmp_path) as c:
+        _fast(c, cooldown_s=8.0)
+        barrier, codes = threading.Barrier(2), []
+
+        def choose(scene_id):
+            barrier.wait()
+            codes.append(c.post("/api/kiosk/scene", json={"scene": scene_id}).status_code)
+
+        threads = [threading.Thread(target=choose, args=(s.id,)) for s in (COASTAL, GOLDEN)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert sorted(codes) == [200, 429], codes
+        _settle(c)
+        commands = c.get("/api/kiosk/debug").json()["commands"]
+        assert [x["outcome"] for x in commands if x["action"] == "scene"].count("accepted") == 1
+
+
 # ---- leases --------------------------------------------------------------------------------------------------------
 def test_a_module_held_by_the_module_page_is_a_calm_refusal_with_nothing_sent(shop):
     lease = shop.post("/api/module/bench-kit/open", json={}).json()["lease"]
