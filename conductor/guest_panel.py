@@ -571,7 +571,10 @@ class WorkshopTarget:
     def state(self, scene_ids: Iterable[str] = ()) -> dict:
         now = self.deps.clock.now()
         power, brightness = self._reported()
-        ours = self.scene_id is not None and self.fingerprint == self._fingerprint()
+        # Our own brightness/power job changes each module's last command before `fingerprint` is refreshed; the
+        # scene is still showing (at the new brightness), so it stays ours while that job runs.
+        own_job = self.lane.running in ("brightness", "power") and not self.lane.has("scene")
+        ours = self.scene_id is not None and (own_job or self.fingerprint == self._fingerprint())
         scene = self.scene_id if ours else None
         shown = self.shown if ours else None
         working = self.lane.busy

@@ -340,6 +340,26 @@ def test_brightness_and_power_reach_both_strands(shop):
     assert _violations(shop) == 0
 
 
+def test_the_scene_stays_shown_while_a_brightness_change_runs(shop):
+    assert shop.post("/api/kiosk/scene", json={"scene": COASTAL.id}).status_code == 200
+    assert _settle(shop)["state"]["look"] == "gradient"
+    _cooled(shop)
+    _services(shop).settings.executor.readback_delay_s = 0.3  # a job long enough to poll inside
+    assert shop.post("/api/kiosk/brightness", json={"level": 40}).status_code == 200
+    seen = []
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        state = _panel(shop)["state"]
+        seen.append(state)
+        if state["phase"] != "changing":
+            break
+        time.sleep(0.01)
+    assert len(seen) > 3 and seen[-1]["brightness"] == 40
+    for state in seen:  # the gradient never stopped showing: never 'no scene' or a missing Hubspace feature
+        shown = (state["scene"], state["look"], state["feature"])
+        assert shown == (COASTAL.id, "gradient", FEATURE_GRADIENT), state
+
+
 def test_a_dragging_slider_is_coalesced_inside_the_rate_budget(shop):
     levels = list(range(20, 100, 4))  # 20 requests, as fast as the client can send them
     before = _writes(shop)
