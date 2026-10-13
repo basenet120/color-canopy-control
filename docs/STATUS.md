@@ -87,9 +87,10 @@ Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu
   pass, and six guards were each broken in turn and a test failed each time (the `CONDUCTOR_AUTH` drop, the data-dir
   pin, the 0600 check, the hold, the wait for launchd, the watchdog's reload).
 - **Not verified:** a real reboot and a power cut (auto-login needs FileVault off — it's **on** now; Alon's call,
-  runbook §1); `autorestart` is still 0 (`sudo pmset -a autorestart 1`); the Mac is on Wi-Fi, not wired to a show
-  router; the 7 am checklist's *Clock synced* item can't see macOS's NTP state (warns; `canopy-mac status` shows the
-  sntp offset); a phone/iPad reaching it over the network.
+  runbook §1); the Mac is on Wi-Fi, not wired to a show router; the 7 am checklist's *Clock synced* item can't see
+  macOS's NTP state (warns; `canopy-mac status` shows the sntp offset); a phone/iPad reaching it over the network.
+  Done on the Mac (Alon, Oct 13): `sudo pmset -a autorestart 1`; the AC profile already had sleep, display sleep and
+  disk sleep at 0 (never) and wake for network on.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -275,9 +276,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 ## Next step
 0. **The Mac show box (D61), Alon:** merge `claude/mac-show-box`, then point `~/canopy-show` at `main` or the release
    tag and run `canopy-mac install`. On the Mac: add the show accounts (`canopy-mac install --accounts …`), decide
-   FileVault vs automatic login, `sudo pmset -a autorestart 1`, wire it to the show router with a reserved address,
-   then restart it and pull the plug once (`mac-show-box.md` §1–§2). Signing in (`canopy-mac login`) waits for
-   Home Depot's authorization (06 #20).
+   FileVault vs automatic login, wire it to the show router with a reserved address, then restart it and pull the plug
+   once (`mac-show-box.md` §1–§2). Signing in (`canopy-mac login`) waits for Home Depot's authorization (06 #20).
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
    registry after the redeploy.
