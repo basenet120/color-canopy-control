@@ -77,8 +77,12 @@ Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu
   release tag once merged); settings and data under `~/Library/Application Support/ColorCanopy/` (generated ops login
   and key, 0600); `HUBSPACE_ACCOUNT_ALLOWLIST` allows only VWBD's shop account (the bench kits' account, not a show
   account); Alon signed it in on Oct 13 (`canopy-mac login --account bench`, password typed by him, no emailed code).
-  It sees Kingston test and String light 1, both unregistered and so read-only: nothing has been written to a light
-  from this Mac.
+  It sees Kingston test and String light 1, both now registered and writable (Alon's go, Oct 13): Kingston test as
+  `bench-kit`, String light 1 as `shop-string-1`, a new overlay entry copied from VWBD's (role `spare` on the bench
+  account, so the engine never drives it). Neither has bench flags or a map on this Mac yet (they're in VWBD's
+  overlay; per D19/D54 a kit's own flags may move with it, never another kit's). Nothing has been written to a light
+  from this Mac. The guest panel's target here is the canopy engine (nine modules, none registered), so on the test
+  iPad (kiosk-enrolled "Test iPad") scenes don't change a light; the module page drives the two kits.
 - **Verified on this Mac (how):** `/api/version` says live/venue; `/healthz` 200 and `/ops/` 401 without the login,
   both over the LAN address; `kill -9` → launchd restarted it, healthy within ~1 s; a frozen process (`kill -STOP`) →
   the watchdog logged 2 failed checks, then restarted it on the 3rd (`kickstart -k`; launchd force-killed the frozen
