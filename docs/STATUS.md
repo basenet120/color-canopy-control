@@ -9,7 +9,7 @@ only so far)._
 ## PR stack (merge order — merge commits, not squash)
 0. **`claude/mac-show-box` → `main` (independent; based on `d21b4e5`)**: the show runs on the Mac mini under launchd
    instead of the Ubuntu mini PC (D61). `deploy/mac/` (`canopy-mac` helper, `run-conductor.sh`, settings template),
-   `docs/runbooks/mac-show-box.md`, `tests/test_mac_box.py` (23). No Conductor code changes. Details under
+   `docs/runbooks/mac-show-box.md`, `tests/test_mac_box.py` (27). No Conductor code changes. Details under
    "The Mac show box" below. (Items 1–5 below are merged; PR #17, `claude/cloud-dev-setup`, is separate docs work.)
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
@@ -80,9 +80,12 @@ Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu
 - **Verified on this Mac (how):** `/api/version` says live/venue; `/healthz` 200 and `/ops/` 401 without the login,
   both over the LAN address; `kill -9` → launchd restarted it, healthy within ~1 s; a frozen process (`kill -STOP`) →
   the watchdog logged 2 failed checks, then restarted it on the 3rd (`kickstart -k`; launchd force-killed the frozen
-  process after the 30 s shutdown allowance); healthy again 231 s after the freeze (120 s of that is the start-up
-  grace); `tests/test_mac_box.py` 23 pass, and four guards were each broken in turn and a test failed each time (the
-  `CONDUCTOR_AUTH` drop, the data-dir pin, the 0600 check, the hold).
+  process after the 30 s shutdown allowance), healthy again 231 s after the freeze (120 s of that is the start-up
+  grace); re-running `install` over the running Conductor (this failed at first and left it unloaded: `bootout`
+  returns before the process exits — fixed, `install` now waits for launchd, and the watchdog loads a Conductor that
+  is neither loaded nor held, which it did on the real launchd at 14:50); a manual backup. `tests/test_mac_box.py` 27
+  pass, and six guards were each broken in turn and a test failed each time (the `CONDUCTOR_AUTH` drop, the data-dir
+  pin, the 0600 check, the hold, the wait for launchd, the watchdog's reload).
 - **Not verified:** a real reboot and a power cut (auto-login needs FileVault off — it's **on** now; Alon's call,
   runbook §1); `autorestart` is still 0 (`sudo pmset -a autorestart 1`); the Mac is on Wi-Fi, not wired to a show
   router; the 7 am checklist's *Clock synced* item can't see macOS's NTP state (warns; `canopy-mac status` shows the
@@ -270,6 +273,11 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+0. **The Mac show box (D61), Alon:** merge `claude/mac-show-box`, then point `~/canopy-show` at `main` or the release
+   tag and run `canopy-mac install`. On the Mac: add the show accounts (`canopy-mac install --accounts …`), decide
+   FileVault vs automatic login, `sudo pmset -a autorestart 1`, wire it to the show router with a reserved address,
+   then restart it and pull the plug once (`mac-show-box.md` §1–§2). Signing in (`canopy-mac login`) waits for
+   Home Depot's authorization (06 #20).
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
    registry after the redeploy.
