@@ -20,7 +20,8 @@ die() {
 	exit 1
 }
 
-file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# GNU stat (CI's Linux) reads -f as "file system", so try its -c form first; BSD stat (macOS) has no -c.
+file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 
 [ -f "$ENV_FILE" ] || die "No settings at $ENV_FILE. Run: deploy/mac/canopy-mac install"
 case $(file_mode "$ENV_FILE") in
