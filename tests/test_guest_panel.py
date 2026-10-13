@@ -684,6 +684,29 @@ def test_a_partial_canopy_takes_every_scene_and_counts_only_its_strands(monkeypa
         assert _panel(c)["target_label"] == "The Color Canopy (2 of 9 strands)"
 
 
+def test_a_driven_strand_that_loses_its_address_hides_the_feature_line(monkeypatch, tmp_path):
+    """Module 2 stays in the look's plan but its address lookup fails: nothing reaches that strand, so the panel
+    shows no feature sentence for it (look_phase needs attention, not Ready)."""
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = showing(c)
+        _settled_panel(c, engine)
+        assert _panel(c)["state"]["feature"] == TWO_STRANDS
+        lookup = engine.deps.target
+
+        def target(device_id, purpose):
+            if device_id == "canopy-r0c1":
+                raise LookupError(f"{device_id} lost its address (test)")
+            return lookup(device_id, purpose)
+
+        engine.deps.target = target
+        engine._resolve("canopy-r0c1")
+        ops = engine.state()
+        state = _panel(c)["state"]
+    assert "canopy-r0c1" in engine.current_plan().modules
+    assert ops.look_phase == CanopyPhase.NEEDS_ATTENTION and ops.modules["canopy-r0c1"]["left_out"] is False
+    assert state["feature"] is None, state
+
+
 def test_before_the_first_look_the_label_counts_the_registered_strands(monkeypatch, tmp_path):
     """With no plan yet (an engine that hasn't shown a look) the label counts what is registered (D62)."""
     with partial_show(monkeypatch, tmp_path, LIVE) as c:

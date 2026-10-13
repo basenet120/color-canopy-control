@@ -502,7 +502,13 @@ def test_ops_pages_are_served_and_vendored(app_client):
     ):
         page = app_client.get(path)
         assert page.status_code == 200 and needle in page.text, path
-    for asset in ("/ops/ops.js", "/ops/ops.css", "/ops/calibrate/calibrate.js", "/visualizer/"):
+    for asset in (
+        "/ops/ops.js",
+        "/ops/counts-model.mjs",
+        "/ops/ops.css",
+        "/ops/calibrate/calibrate.js",
+        "/visualizer/",
+    ):
         text = app_client.get(asset).text
         assert "http://" not in text and "https://" not in text, f"{asset} references an external URL"
     visualizer = app_client.get("/visualizer/").text
@@ -574,6 +580,29 @@ def test_partial_canopy_test_mode_change_times_only_the_registered_modules_and_s
     assert after["status"] == "fail" and after["detail"] == message and after["fix"] == result["fix"]
 
 
+def test_partial_canopy_test_mode_change_names_only_the_registered_module_that_missed_the_window(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(ops_routes, "TEST_WINDOW_S", 3.0)  # Module 2 is held, so it never reaches Ready
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        lease = services.locks.acquire("sim-canopy-r0c1", "VWBD shop phone")
+        try:
+            result = c.post("/api/ops/checklist/test-mode-change", json={}).json()
+        finally:
+            services.locks.release("sim-canopy-r0c1", lease.token)
+    assert result["ok"] is False
+    message = result["message"]
+    assert message.startswith("Module 2 didn't reach Ready within 3 s of changing to "), message
+    assert (
+        " Not timed: Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9 have no Hubspace "
+        "device registered (register them on /ops/accounts)." in message
+    )
+    assert result["fix"].startswith("Open the modules that didn't reach Ready"), result["fix"]
+    assert "/ops/accounts" in result["fix"]
+
+
 def test_partial_canopy_checklist_counts_registered_of_nine(monkeypatch, tmp_path):
     with partial_show(monkeypatch, tmp_path, LIVE) as c:
         _partial_settled(c)
@@ -601,6 +630,69 @@ def test_partial_canopy_checklist_counts_registered_of_nine(monkeypatch, tmp_pat
     )
     assert slots["fix"].startswith("Press Commission slots.") and "/ops/accounts" in slots["fix"]
     assert "T1) shows only once all nine have their slots recorded" in slots["fix"]
+
+
+def test_partial_canopy_slots_never_pass_on_hashes_no_device_can_read_back(monkeypatch, tmp_path):
+    # the full canopy commissioned (hashes on all nine), then seven registrations lost: the hashes stay on the
+    # registry entries, but nothing reads them back, so the item warns and names those positions
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        snap = services.tracker.snapshot("sim-canopy-r0c0")
+        from conductor.rows import slot_hash
+
+        good = {
+            r["functionInstance"]: slot_hash(r["value"])
+            for r in snap["reported"]
+            if r["functionClass"] == "color-sequence-v2"
+        }
+        assert good, "the simulator's readback carries the slot objects"
+        for entry in services.registry.canopy_modules():
+            services.update_registry(entry.id, {"slot_hashes": good})
+        slots = _items(c.get("/api/ops/checklist").json())["slots"]
+    assert slots["status"] == "warn", slots
+    assert "reads back with its recorded hash" not in slots["detail"]
+    assert slots["detail"] == (
+        "Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9 have slot hashes recorded but no "
+        "Hubspace device registered, so they can't be read back."
+    )
+    assert "Commission slots" not in slots["fix"] and "/ops/accounts" in slots["fix"]
+
+
+def test_partial_canopy_modules_item_fails_and_names_the_unregistered_in_every_branch(monkeypatch, tmp_path):
+    # Module 2 waiting on readback (just after a reboot), offline, then held on a test page: each branch still fails
+    # and names the seven positions with no device, and its fix ends by sending them to /ops/accounts
+    gap = " No Hubspace device registered: Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9."
+    then = " Then register a device on /ops/accounts for each position that has none."
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        real = services.tracker.snapshot
+        override: dict = {}
+
+        def snapshot(address):
+            snap = real(address)
+            return {**snap, **override} if address == "sim-canopy-r0c1" else snap
+
+        monkeypatch.setattr(services.tracker, "snapshot", snapshot)
+        override.update(reported_at=None, status="updating")
+        waiting = _items(c.get("/api/ops/checklist").json())["modules"]
+        override.clear()
+        override.update(available=False)
+        offline = _items(c.get("/api/ops/checklist").json())["modules"]
+        override.clear()
+        lease = services.locks.acquire("sim-canopy-r0c1", "VWBD shop phone")
+        try:
+            held = _items(c.get("/api/ops/checklist").json())["modules"]
+        finally:
+            services.locks.release("sim-canopy-r0c1", lease.token)
+    assert waiting["status"] == "fail" and waiting["title"] == "1/9 modules online", waiting
+    assert waiting["detail"].endswith(f"No confirmed readback yet: Module 2.{gap}"), waiting
+    assert waiting["fix"].startswith("Press Re-assert all") and waiting["fix"].endswith(then), waiting
+    assert offline["status"] == "fail" and offline["detail"].endswith(f"Offline: Module 2.{gap}"), offline
+    assert offline["fix"].endswith(then), offline
+    assert held["status"] == "fail" and "Needs attention: Module 2 (open on the module page" in held["detail"]
+    assert held["detail"].endswith(gap) and held["fix"].endswith(then), held
 
 
 def test_partial_canopy_heads_count_the_dark_positions_apart(monkeypatch, tmp_path):
@@ -658,6 +750,12 @@ def test_ops_page_counts_positions_not_nine(app_client):
     # an unregistered position's grid cell and its issue line both link to /ops/accounts, not a module page
     assert 'const href = unregistered\n        ? "/ops/accounts/"' in script
     assert 'h("a", { href: "/ops/accounts/" }, "Register a device")' in script
+    # the counts' wording is the pure module tests/ops-counts.test.mjs pins, served as JavaScript
+    assert 'from "/ops/counts-model.mjs"' in script
+    assert "headsCounts(headsData.counts)" in script and "commissionScope(p)" in script
+    model = app_client.get("/ops/counts-model.mjs")
+    assert model.status_code == 200 and "javascript" in model.headers["content-type"]
+    assert "export function headsCounts" in model.text
 
 
 class _PlanEngine:

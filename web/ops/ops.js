@@ -2,6 +2,7 @@
 // devices, device enrollment and the log tail. Live over WebSocket topics "canopy" and "ops", plus a 10 s poll.
 import { api, connectLive, copyJSON, simBadge } from "/static/app.js";
 import { fill, fmtAge, h, pill, show, simTag, statusPill } from "/ops/dom.js";
+import { commissionScope, headsCounts, moduleScope, positions, testWaitNote } from "/ops/counts-model.mjs";
 
 const POLL_MS = 10000;
 const LOG_POLL_MS = 5000;
@@ -200,37 +201,15 @@ function drawGrid() {
       ),
     ),
   );
-  const c = headsData.counts;
-  const p = positions();
-  let counts = `${c.match} of ${c.heads} heads match their look · ${c.mismatch} differ · ${c.unknown} not read back yet. `;
-  if (p && p.registered < p.total) {
-    // D62: only the registered modules are read back; the other positions stay dark and are counted apart.
-    const dark = p.total - p.registered;
-    counts =
-      `${c.match} of ${c.heads - c.no_device} heads on the ${p.registered} registered module${plural(p.registered)} ` +
-      `match their look · ${c.mismatch} differ · ${c.unknown} not read back yet · ` +
-      `${c.no_device} heads on ${dark} position${plural(dark)} with no Hubspace device registered. `;
-  }
-  $("heads-note").textContent = counts + `Tap a module to open its page. ${headsData.readback_note}`;
-}
-
-function plural(n) {
-  return n === 1 ? "" : "s";
+  // D62: the counts' wording (registered of nine) lives in counts-model.mjs, where node tests pin it
+  $("heads-note").textContent =
+    headsCounts(headsData.counts) + `Tap a module to open its page. ${headsData.readback_note}`;
 }
 
 // How many canopy positions have a Hubspace device registered (D62), from the last heads read: {registered, total},
 // or null before the first read.
-function positions() {
-  const mc = headsData && headsData.counts && headsData.counts.modules;
-  return mc ? { registered: mc.registered, total: mc.total } : null;
-}
-
-// "all 9 modules" on the full canopy, "the 2 registered modules" on a partial one.
-function moduleScope() {
-  const p = positions();
-  if (!p) return "every registered module";
-  if (p.registered === p.total) return `all ${p.total} modules`;
-  return `the ${p.registered} registered module${plural(p.registered)}`;
+function registeredPositions() {
+  return positions(headsData && headsData.counts);
 }
 
 function statusWord(status) {
@@ -294,10 +273,10 @@ function setupControls() {
   );
   const dialog = $("commission-dialog");
   $("commission-btn").addEventListener("click", () => {
-    const p = positions();
-    $("commission-scope").textContent = p ? `${p.registered} of ${p.total} now` : "as registered";
+    const p = registeredPositions();
+    $("commission-scope").textContent = commissionScope(p);
     if (typeof dialog.showModal === "function") dialog.showModal();
-    else if (window.confirm(`Commission slots on ${moduleScope()} now?`)) commission();
+    else if (window.confirm(`Commission slots on ${moduleScope(p)} now?`)) commission();
   });
   dialog.addEventListener("close", () => {
     if (dialog.returnValue === "go") commission();
@@ -347,12 +326,9 @@ async function runChecklist() {
 async function testModeChange() {
   const btn = $("test-mode-btn");
   btn.disabled = true;
-  const p = positions();
-  btn.textContent = `Timing ${moduleScope()}…`;
-  note(
-    $("test-result"),
-    `Changing the mode once and waiting up to 10 s for every ${p && p.registered < p.total ? "registered " : ""}module to read back Ready…`,
-  );
+  const p = registeredPositions();
+  btn.textContent = `Timing ${moduleScope(p)}…`;
+  note($("test-result"), testWaitNote(p));
   try {
     const r = await api("/api/ops/checklist/test-mode-change", { method: "POST", body: {} });
     // Positions with no device registered aren't timed: the message names them ("Not timed: …"), never "Not ready".

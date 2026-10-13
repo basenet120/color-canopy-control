@@ -1101,12 +1101,16 @@ def _needed_slots(services: Any) -> list[str]:
 def _check_slots(services: Any) -> dict:
     needed = _needed_slots(services)
     unregistered_ids = set(_positions(services)[1])
-    missing, unread, drifted, no_device = [], [], [], []
+    missing, unread, drifted, no_device, unchecked = [], [], [], [], []
     for entry in services.registry.canopy_modules():
         name = entry.label or entry.id
         recorded = dict(entry.slot_hashes or {})
         if entry.id in unregistered_ids:  # D62: nothing can be written or read back there yet
-            if any(s not in recorded for s in needed):
+            # hashes outlive a lost registration: recorded, but nothing to read them back from. Either way an
+            # unregistered position is named, so this item never passes while one exists.
+            if recorded and all(s in recorded for s in needed):
+                unchecked.append(name)
+            else:
                 no_device.append(name)
             continue
         if any(s not in recorded for s in needed):
@@ -1134,7 +1138,7 @@ def _check_slots(services: Any) -> dict:
             "Someone may have edited them in the Hubspace app. Press Commission slots (it rewrites a slot at most "
             "once per 10 min); for hand-painted (T2) slots, repaint them in the app and record them again.",
         )
-    if missing or no_device:
+    if missing or no_device or unchecked:
         detail, fixes = [], []
         if missing:
             detail.append(f"No recorded slot hash for {_module_names(missing)} ({', '.join(needed)}).")
@@ -1150,6 +1154,16 @@ def _check_slots(services: Any) -> dict:
             fixes.append(
                 "Register a device on /ops/accounts for each position that has none, then commission it: the canvas "
                 "tier (T1) shows only once all nine have their slots recorded."
+            )
+        if unchecked:
+            verb = "has" if len(unchecked) == 1 else "have"
+            detail.append(
+                f"{_module_names(unchecked)} {verb} slot hashes recorded but no Hubspace device registered, so "
+                "they can't be read back."
+            )
+            fixes.append(
+                "Register a device on /ops/accounts for each position that has none, then show each saved scene once "
+                "(or press Re-assert all) so its slots are read back."
             )
         return _item("slots", title, "warn", " ".join(detail), " ".join(fixes))
     if unread:

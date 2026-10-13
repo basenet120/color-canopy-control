@@ -427,6 +427,35 @@ def test_a_driven_module_stuck_past_the_window_is_the_looks_problem_too():
     assert not late.modules[DRIVEN[0]]["stuck"]
 
 
+def test_a_driven_module_with_no_address_is_the_looks_problem_too():
+    # in the plan (not left out), but its address lookup fails: nothing reaches that strand, so the look isn't Ready
+    async def main():
+        w = partial_world()
+        lookup = w.engine.deps.target
+
+        def target(device_id, purpose):
+            if device_id == DRIVEN[1]:
+                raise LookupError(f"{device_id} lost its address (test)")
+            return lookup(device_id, purpose)
+
+        w.engine.deps.target = target
+        await w.engine.start(apply_initial=False)
+        await w.engine.request_mode("holiday", source="ops")
+        await w.engine.wait_idle()
+        await w.run_for(5)
+        state = w.engine.state()
+        plan = w.engine.current_plan()
+        await w.close()
+        return state, plan
+
+    state, plan = run_virtual(main)
+    assert DRIVEN[1] in plan.modules and DRIVEN[1] not in plan.skipped
+    assert state.modules[DRIVEN[0]]["status"] == "ready"
+    assert state.phase is CanopyPhase.NEEDS_ATTENTION and state.look_phase is CanopyPhase.NEEDS_ATTENTION
+    assert state.modules[DRIVEN[1]]["left_out"] is False
+    assert "lost its address" in state.modules[DRIVEN[1]]["reason"]
+
+
 def test_on_the_full_canopy_the_look_phase_is_the_phase():
     async def main():
         w = make_world(settings=QUIET, compiler=FakeCompiler(broken={("holiday", Tier.STRAND)}))
