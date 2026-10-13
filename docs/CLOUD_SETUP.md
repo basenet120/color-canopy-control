@@ -1,5 +1,8 @@
 # Working on the Color Canopy from any computer (Claude Code cloud sessions)
 
+> For a session that runs on the Mac mini, next to the lights, and that you drive from anywhere, see
+> docs/REMOTE_CONTROL_SETUP.md (Remote Control). Use a cloud session for simulator-only work away from the hardware.
+
 A cloud session runs on an Anthropic-hosted Ubuntu machine with this repo checked out. You start and reopen it from the
 Claude Code app's Code tab (choose **Cloud** instead of **Local**), from claude.ai/code in a browser, or from the
 Claude app on a phone. All of these run the same session, so you can start on one computer and carry on from another.
