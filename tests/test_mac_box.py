@@ -228,18 +228,36 @@ def stubs(box):
     bin_dir = box["tmp"] / "bin"
     bin_dir.mkdir()
     calls = box["tmp"] / "launchctl.calls"
-    (bin_dir / "launchctl").write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\n')
+    # Models launchd: the Conductor starts loaded; bootout takes `linger` more `print`s to finish (it returns before
+    # the process has exited); bootstrap loads it again.
+    unloaded, linger = box["tmp"] / "unloaded", box["tmp"] / "linger"
+    linger.write_text("0")
+    (bin_dir / "launchctl").write_text(
+        f"""#!/bin/sh
+echo "$*" >> "{calls}"
+case "$1" in
+print)
+  n=$(cat "{linger}")
+  if [ "$n" -gt 0 ]; then echo $((n - 1)) > "{linger}"; exit 0; fi
+  [ -f "{unloaded}" ] && exit 113
+  exit 0 ;;
+bootout) touch "{unloaded}"; echo "$LINGER" > "{linger}" ;;
+bootstrap) rm -f "{unloaded}" ;;
+esac
+exit 0
+"""
+    )
     health = box["tmp"] / "health"  # contains the exit code curl should return
     health.write_text("0")
     (bin_dir / "curl").write_text(f'#!/bin/sh\nexit "$(cat "{health}")"\n')
     for f in bin_dir.iterdir():
         f.chmod(0o755)
-    env = {**box["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env = {**box["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}", "LINGER": "0"}
     install(box)
     state = box["home"] / "state"
     state.mkdir(exist_ok=True)
     (state / "started_at").write_text(str(int(time.time()) - 600))
-    return {"env": env, "calls": calls, "health": health, "state": state}
+    return {"env": env, "calls": calls, "health": health, "state": state, "unloaded": unloaded}
 
 
 def watchdog(stubs) -> subprocess.CompletedProcess:
@@ -353,3 +371,38 @@ def test_restore_refuses_a_backup_that_fails_its_checksum(stubs, box):
     Path(str(backup) + ".sha256").write_text("0" * 64 + f"  {backup.name}\n")
     result = run([HELPER, "restore", backup, "--yes"], stubs["env"])
     assert result.returncode != 0 and "checksum" in result.stderr
+
+
+def test_watchdog_loads_a_conductor_that_is_neither_loaded_nor_held(stubs, box):
+    stubs["unloaded"].touch()
+    watchdog(stubs)
+    plist = box["agents"] / "com.colorcanopy.conductor.plist"
+    assert f"bootstrap gui/{os.getuid()} {plist}" in stubs["calls"].read_text().splitlines()
+    assert not stubs["unloaded"].exists()
+
+
+def test_watchdog_leaves_a_held_conductor_unloaded(stubs):
+    stubs["unloaded"].touch()
+    (stubs["state"] / "hold").write_text("held")
+    watchdog(stubs)
+    assert not stubs["calls"].exists()  # a hold means the watchdog doesn't even ask launchd
+
+
+def test_stop_waits_until_launchd_has_let_go(stubs):
+    # bootout returns while the Conductor is still saving its sign-ins; "Stopped" must only be said after that.
+    env = {**stubs["env"], "LINGER": "3"}
+    result = run([HELPER, "stop", "--yes"], env)
+    assert result.returncode == 0, result.stderr
+    calls = stubs["calls"].read_text().splitlines()
+    after = calls[calls.index(f"bootout gui/{os.getuid()}/com.colorcanopy.conductor") + 1 :]
+    assert sum(c.startswith("print ") for c in after) == 4  # three while it lingers, one that finds it gone
+
+
+def test_start_after_a_hold_loads_it_again(stubs, box):
+    assert run([HELPER, "stop", "--yes"], stubs["env"]).returncode == 0
+    result = run([HELPER, "start"], stubs["env"])
+    assert result.returncode == 0, result.stderr
+    calls = stubs["calls"].read_text().splitlines()
+    assert f"enable gui/{os.getuid()}/com.colorcanopy.conductor" in calls
+    assert calls[-1] == f"bootstrap gui/{os.getuid()} {box['agents'] / 'com.colorcanopy.conductor.plist'}"
+    assert not (stubs["state"] / "hold").exists()

@@ -180,10 +180,24 @@ EOF
 	fi
 }
 
+# bootout returns before the process has exited (the Conductor gets up to 30 s to save its sign-ins), and a
+# bootstrap in the meantime fails. So wait until launchd has really let go.
+unload_agent() {
+	local i
+	loaded "$1" || return 0
+	launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+	for i in $(seq 1 45); do
+		loaded "$1" || return 0
+		sleep 1
+	done
+	die "launchd still has $1 after 45 s. Look at: canopy-mac logs"
+}
+
 load_agent() {
 	launchctl enable "$DOMAIN/$1" 2>/dev/null || true
-	loaded "$1" && launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
-	launchctl bootstrap "$DOMAIN" "$AGENTS_DIR/$1.plist"
+	unload_agent "$1"
+	# The watchdog may have loaded it in between (same file): that's fine.
+	launchctl bootstrap "$DOMAIN" "$AGENTS_DIR/$1.plist" || loaded "$1" || die "launchd didn't load $1."
 }
 
 cmd_install() {
@@ -254,7 +268,7 @@ cmd_stop() {
 	mkdir -p "$STATE_DIR"
 	date '+%Y-%m-%dT%H:%M:%S%z' >"$HOLD"
 	launchctl disable "$DOMAIN/$LABEL" 2>/dev/null || true
-	loaded "$LABEL" && launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+	unload_agent "$LABEL"
 	say "Stopped and held. The canopy keeps its last look. canopy-mac start hands back."
 }
 
@@ -273,6 +287,14 @@ cmd_watchdog() {
 	case $failures in '' | *[!0-9]*) failures=0 ;; esac
 	if [ -f "$HOLD" ]; then
 		echo 0 >"$counter" # stopped on purpose
+		return 0
+	fi
+	if ! loaded "$LABEL"; then # not held, yet not loaded (an install cut short, a stray bootout): load it again
+		echo 0 >"$counter"
+		[ -f "$AGENTS_DIR/$LABEL.plist" ] || return 0
+		say "$(date '+%FT%T%z') the Conductor wasn't loaded and isn't held: loading it."
+		launchctl enable "$DOMAIN/$LABEL" 2>/dev/null || true
+		launchctl bootstrap "$DOMAIN" "$AGENTS_DIR/$LABEL.plist" || say "Loading it failed; next try in 30 s."
 		return 0
 	fi
 	started=$(cat "$STATE_DIR/started_at" 2>/dev/null || echo 0)
@@ -375,7 +397,7 @@ timed_agent_state() {
 }
 
 cmd_status() {
-	local version accounts ip iface
+	local version accounts ip iface newest
 	say "Color Canopy — Mac show box"
 	"$RUNNER" --check 2>&1 | sed 's/^/  /' || true
 	say ""
@@ -385,7 +407,9 @@ cmd_status() {
 		say "  Conductor        $(agent_state "$LABEL")"
 	fi
 	say "  Watchdog         $(timed_agent_state "$WATCHDOG_LABEL" 'checks every 30 s')"
-	say "  Nightly backup   $(timed_agent_state "$BACKUP_LABEL" 'runs at 04:30'); newest: $(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null || echo none)"
+	newest=$(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -1 || true)
+	newest=${newest:+$(basename "$newest")}
+	say "  Nightly backup   $(timed_agent_state "$BACKUP_LABEL" 'runs at 04:30'); newest: ${newest:-none}"
 	if healthy; then
 		say "  /healthz         OK"
 		if version=$(api /api/version); then
@@ -452,8 +476,9 @@ cmd_password() {
 
 cmd_uninstall() {
 	local label
-	for label in "$LABEL" "$WATCHDOG_LABEL" "$BACKUP_LABEL"; do
-		loaded "$label" && launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+	# The watchdog first, so it can't load the Conductor again while it is being removed.
+	for label in "$WATCHDOG_LABEL" "$BACKUP_LABEL" "$LABEL"; do
+		unload_agent "$label"
 		rm -f "$AGENTS_DIR/$label.plist"
 	done
 	say "Removed the LaunchAgents. Settings, data and backups are still in $CANOPY_MAC_HOME."
