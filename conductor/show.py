@@ -8,7 +8,8 @@
   one (`ModePlan.skipped`); the safe look (Lowcountry Calm) compiles with conservative defaults. As soon as new
   capabilities arrive the current mode is compiled again — or, before the first look, the idle mode is shown. The
   reads also fill `services.extras["capabilities"]` (the cache /api/devices and the checklist use) when the bench
-  target is the same device.
+  target is the same device. A module with no device registered on the engine's driver is never read or retried; it
+  has its own attention line (register one on /ops/accounts) and is left out of every look, the safe one too (D62).
 - The compile context is rebuilt per change from the live registry (calibration, flags, recorded slot hashes) and
   each module's engine address, so a kit's controller map (D54) applies only on the kit it was proven on.
 - **Head count** (`conductor.framemap.head_check`): a module whose frame can't take per-head looks is flagged on the
@@ -82,15 +83,33 @@ class ShowWiring:
         self._cleanup: list[Any] = []
 
     # ---- capabilities --------------------------------------------------------------------------------------------
+    def _registered(self, entry: Any) -> bool:
+        """The module has a device on the engine's driver (D62): one without is never read, retried or driven."""
+        services = self.services
+        return bool(services.registry.address(entry.id, services.engine_driver.name))
+
     def missing(self) -> list[str]:
-        """Canopy modules whose capabilities haven't been read yet."""
-        return [e.id for e in self.services.registry.canopy_modules() if e.id not in self.caps]
+        """Registered canopy modules whose capabilities haven't been read yet."""
+        return [
+            e.id
+            for e in self.services.registry.canopy_modules()
+            if e.id not in self.caps and self._registered(e)
+        ]
 
     async def refresh_capabilities(self, device_ids: list[str] | None = None) -> list[str]:
-        """Read the profiles of `device_ids` (default: every canopy module) concurrently. Never raises; a module that
-        can't be read keeps its reason in `caps_errors`. Returns the modules whose capabilities are new or changed."""
+        """Read the profiles of `device_ids` (default: every registered canopy module) concurrently. Never raises; a
+        module that can't be read keeps its reason in `caps_errors`. Returns the modules whose capabilities are new
+        or changed. A module with no device registered is never read (nothing to ask, so no warning every retry)."""
         services = self.services
-        entries = [e for e in services.registry.canopy_modules() if device_ids is None or e.id in device_ids]
+        entries = []
+        for e in services.registry.canopy_modules():
+            if device_ids is not None and e.id not in device_ids:
+                continue
+            if not self._registered(e):
+                if device_ids is not None:
+                    self.caps_errors[e.id] = "no Hubspace device is registered for it on this runtime"
+                continue
+            entries.append(e)
         results = await asyncio.gather(*(self._read_one(e) for e in entries))
         changed = [device_id for device_id in results if device_id]
         if changed and self.engine is not None:
@@ -159,29 +178,51 @@ class ShowWiring:
         self._wake.set()
 
     def attention(self) -> list[str]:
-        """ "Needs attention" lines for /ops: modules whose capabilities haven't been read."""
+        """ "Needs attention" lines for /ops: modules with no device registered, and modules whose capabilities
+        haven't been read."""
+        return [message for message, _link in self.attention_items()]
+
+    def attention_items(self) -> list[tuple[str, str]]:
+        """`attention()` with the /ops page that fixes each line."""
         out = []
         for entry in self._modules():
+            name = entry.label or entry.id
+            if not self._registered(entry):
+                message = (
+                    f"{name} has no Hubspace device registered on this runtime, so the canopy leaves it out of "
+                    "every look, the safe one included. Register one on /ops/accounts."
+                )
+                out.append((message, "/ops/accounts/"))
+                continue
             if entry.id in self.caps:
                 continue
             why = self.caps_errors.get(entry.id) or "not read yet"
-            out.append(
-                f"{entry.label or entry.id}: its Hubspace profile hasn't been read ({why}). The canopy leaves it "
-                "out of every look but the safe one and keeps retrying; Refresh on the device list retries now."
+            message = (
+                f"{name}: its Hubspace profile hasn't been read ({why}). The canopy leaves it out of every look but "
+                "the safe one and keeps retrying; Refresh on the device list retries now."
             )
+            out.append((message, "/ops/"))
         return out
 
     def _modules(self) -> list[Any]:
         return list(self.services.registry.canopy_modules())
 
+    def _registered_ids(self) -> frozenset[str]:
+        return frozenset(e.id for e in self._modules() if self._registered(e))
+
     async def _caps_loop(self) -> None:
         attempt = 0
         first = True
+        registered = self._registered_ids()
         while True:
             todo = sorted(set(self.missing()) | self._wanted)
             self._wanted.clear()
             changed = await self.refresh_capabilities(todo) if todo else []
-            if changed or first or self._reapply:
+            # A module registered (or unregistered) since the last round changes the current look even when its
+            # profile read fails: the safe look covers it with assumed capabilities (D36, D62).
+            now = self._registered_ids()
+            moved, registered = now != registered, now
+            if changed or first or moved or self._reapply:
                 await self._apply_new_caps(first=first)
             first = False
             if self.missing():

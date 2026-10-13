@@ -633,6 +633,115 @@ def test_engine_paused_resting_and_missing(app_client):
     assert app_client.post("/api/kiosk/scene", json={"scene": CALM.id}).status_code == 503
 
 
+# ---- the engine target on a partial canopy (D62) -----------------------------------------------------------------
+LIVE = ("canopy-r0c0", "canopy-r0c1")  # the two shop kits registered at canopy positions
+
+
+def _canopy_ids() -> list[str]:
+    from conductor.config import load_registry
+
+    return [m.id for m in load_registry().canopy_modules()]
+
+
+def _partial_show(monkeypatch, tmp_path, registered):
+    """The real engine as live runs before Gate B/C (as tests/test_surfaces_review_fixes.py's t3_show), with only
+    `registered` canopy positions having a device on the engine's driver."""
+    from conftest import _env as _show_env
+
+    from conductor.app import app
+    from conductor.config import Registry
+    from conductor.engine_api import Tier
+    from conductor.show import ShowWiring
+
+    def only_t3(self, mode_id, tier):
+        if tier in (Tier.T1, Tier.T2):
+            return False, "Gate C isn't proven on this kit (test)"
+        return True, ""
+
+    real = Registry.address
+
+    def address(self, device_id, driver_name):
+        return real(self, device_id, driver_name) if device_id in registered else None
+
+    monkeypatch.setattr(ShowWiring, "tier_allowed", only_t3)
+    monkeypatch.setattr(Registry, "address", address)
+    _show_env(monkeypatch, tmp_path, engine=True, CONDUCTOR_AUTH="off")
+    return TestClient(app)
+
+
+def _showing(c, timeout: float = 30.0):
+    """The engine once its first look is out and startup commissioning is over (a partial canopy never reads
+    READY: the modules left out keep it at needs attention)."""
+    engine = _services(c).extras["canopy"]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if engine.current_plan() is not None and not engine.commissioning:
+            return engine
+        time.sleep(0.05)
+    raise AssertionError(f"the canopy never showed a look: {engine.state()}")
+
+
+def test_a_partial_canopy_takes_every_scene_and_counts_only_its_strands(monkeypatch, tmp_path):
+    with _partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = _showing(c)
+        body = _panel(c)
+        assert body["target"] == "canopy" and body["target_label"] == "The Color Canopy (2 of 9 strands)"
+        features = []
+        for scene in SCENES.scenes:
+            engine._last_kiosk_mono = None  # no guest cooldown left over from the last scene
+            r = c.post("/api/kiosk/scene", json={"scene": scene.id})
+            assert r.status_code == 200, (scene.id, r.text)
+            assert sorted(engine.current_plan().modules) == list(LIVE)
+            deadline = time.monotonic() + 10
+            while engine.state().phase == CanopyPhase.UPDATING and time.monotonic() < deadline:
+                time.sleep(0.05)
+            feature = _panel(c)["state"]["feature"]
+            assert feature is not None, scene.id
+            features.append(feature)
+        assert all("nine" not in f and "270" not in f and "column by column" not in f for f in features)
+        assert set(features) == {
+            "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
+        }
+        assert _panel(c)["target_label"] == "The Color Canopy (2 of 9 strands)"
+
+
+def test_the_full_canopy_label_says_nine_strands(app_client_show):
+    deadline = time.monotonic() + 30
+    engine = _services(app_client_show).extras["canopy"]
+    while engine.current_plan() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert engine.current_plan() is not None and not engine.current_plan().skipped
+    assert _panel(app_client_show)["target_label"] == "The Color Canopy (nine strands)"
+
+
+def test_with_no_strand_registered_a_scene_is_a_503_resting(monkeypatch, tmp_path):
+    with _partial_show(monkeypatch, tmp_path, ()) as c:
+        time.sleep(1.0)  # the capability loop's first round (it has nothing to read)
+        engine = _services(c).extras["canopy"]
+        assert engine.current_plan() is None and engine.state().phase == CanopyPhase.RESTING
+        body = _panel(c)
+        assert body["state"]["phase"] == "resting"
+        r = c.post("/api/kiosk/scene", json={"scene": CALM.id})
+        assert r.status_code == 503, r.text
+
+
+def test_an_unregistered_position_needing_attention_links_to_the_accounts_page(monkeypatch, tmp_path):
+    with _partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _showing(c)
+        items = c.get("/api/ops/summary").json()["attention"]
+        unregistered = [i for i in items if "no Hubspace device registered" in i["message"]]
+        assert len(unregistered) == 7, items
+        assert all(i["link"] == "/ops/accounts/" for i in unregistered)
+
+
+def test_the_ops_safe_look_help_doesnt_promise_all_nine_modules():
+    html = (ROOT / "web" / "ops" / "index.html").read_text()
+    start = html.index("Safe look = ")
+    help_text = " ".join(html[start : html.index(".", start)].split())
+    assert "nine" not in help_text and "warm white" not in help_text, help_text  # D62; Calm isn't warm white
+    assert "registered" in help_text
+
+
 # ---- who may call --------------------------------------------------------------------------------------------------
 def _enroll(client, role: str, grants: list[str] | None = None) -> None:
     link = client.post(

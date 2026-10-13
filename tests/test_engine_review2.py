@@ -17,12 +17,13 @@ from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test
 from conductor import rows as R
 from conductor.capabilities import detect
 from conductor.clock import VirtualClock, run_virtual
-from conductor.config import load_registry
+from conductor.config import DeviceFlags, Registry, load_registry
 from conductor.drivers import sim as simmod
 from conductor.drivers.base import Outcome
 from conductor.engine_api import CanopyPhase, PlanError, Tier
 from conductor.gate import Purpose
-from conductor.looks import CompileContext, compile_mode, load_modes
+from conductor.looks import CompileContext, compile_first, compile_mode, load_modes
+from conductor.looks.compile import _counted, _generic_feature
 from conductor.looks.schema import MotionEffect
 from conductor.services import build_services
 from conductor.show import ShowWiring
@@ -264,6 +265,301 @@ def test_f2_partial_plans_count_only_the_modules_they_drive():
         assert "hasn't been read yet" in str(e)
     else:  # pragma: no cover
         raise AssertionError("a look other than the safe one can't be planned without any profile")
+
+
+# ---- F2 / D62: a partial canopy (only some positions have a Hubspace device registered) ----------------------------
+LIVE = ("canopy-r0c0", "canopy-r0c1")  # the two shop kits registered at canopy positions on the Mac
+OTHERS = sorted(m.id for m in CANOPY if m.id not in LIVE)
+PARTIAL_T3 = "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
+
+
+def _partial_ctx(*, caps_on=LIVE, addressed=LIVE, flags=True, profile="sqhdk03-sim-60"):
+    """The show's compile context with only `addressed` registered (live: no bench flags proven on any module)."""
+    caps = detect(*profile_parts(profile))
+    return CompileContext(
+        registry=REGISTRY,
+        capabilities={i: caps for i in caps_on},
+        flags={m.id: DeviceFlags() for m in CANOPY} if flags else None,
+        addresses={m.id: (f"md-{m.id}" if m.id in addressed else None) for m in CANOPY},
+    )
+
+
+def _unregister(monkeypatch, ids) -> set[str]:
+    """Registry.address answers None for these ids (what live has before a kit is registered there); the set it
+    returns can be edited to register one mid-run."""
+    gone = set(ids)
+    real = Registry.address
+
+    def address(self, device_id, driver_name):
+        return None if device_id in gone else real(self, device_id, driver_name)
+
+    monkeypatch.setattr(Registry, "address", address)
+    return gone
+
+
+def _record_writes(services) -> list[str]:
+    writes: list[str] = []
+    real = services.sim._exchange
+
+    async def exchange(device_id, *, write):
+        if write:
+            writes.append(device_id)
+        return await real(device_id, write=write)
+
+    services.sim._exchange = exchange
+    return writes
+
+
+def test_d62_a_partial_canopy_compiles_every_mode_at_module_level_on_the_registered_modules_only():
+    ctx = _partial_ctx()
+    for mode_id, mode in MODES.modes.items():
+        plan = compile_first(mode_id, ctx)
+        assert plan.tier is Tier.T3, (mode_id, plan.notes)
+        assert sorted(plan.modules) == list(LIVE)
+        assert sorted(plan.skipped) == OTHERS
+        assert all("no Hubspace device registered" in why for why in plan.skipped.values())
+        assert "/ops/accounts" in plan.skipped[OTHERS[0]]
+        assert plan.feature == PARTIAL_T3
+        assert "column by column" not in plan.feature and "nine" not in plan.feature
+        # each strand's colour is the gradient sampled at its column, usually not one of the palette's colours
+        assert "palette" not in plan.feature
+        assert any(n.startswith("Left out (no Hubspace device registered)") for n in plan.notes)
+        assert not any("capabilities yet" in n for n in plan.notes)
+        if "canvas" in mode.ladder:
+            for tier, gate in ((Tier.T1, "Gate C"), (Tier.T2, "Gate B")):
+                try:
+                    compile_mode(mode_id, tier, ctx)
+                except PlanError as e:
+                    assert gate in str(e), e
+                else:  # pragma: no cover
+                    raise AssertionError(f"{mode_id} compiled at {tier} without its bench gate")
+    calm = compile_mode("lowcountry-calm", Tier.STRAND, ctx)
+    assert sorted(calm.modules) == list(LIVE) and sorted(calm.skipped) == OTHERS
+    assert calm.feature == "Colour and dimming: both Hubspace strands set to soft ivory."
+    assert not any("assumes" in n for n in calm.notes), (
+        "the safe look assumes nothing for an unregistered module"
+    )
+
+
+def test_d62_keeps_d36_for_registered_modules_whose_profile_hasnt_been_read():
+    ctx = _partial_ctx(addressed=[m.id for m in CANOPY])
+    calm = compile_mode("lowcountry-calm", Tier.STRAND, ctx)
+    assert len(calm.modules) == 9 and not calm.skipped and any("assumes" in n for n in calm.notes)
+    assert calm.feature == "Colour and dimming: all nine Hubspace strands set to soft ivory."
+    tides = compile_mode("coastal-tides", Tier.T3, ctx)
+    assert sorted(tides.modules) == list(LIVE) and sorted(tides.skipped) == OTHERS
+    assert all("profile hasn't been read" in why for why in tides.skipped.values())
+    assert any(n.startswith("Left out (no capabilities yet)") for n in tides.notes)
+    assert tides.feature == PARTIAL_T3
+
+
+def test_d62_the_no_profile_refusal_names_only_the_registered_modules():
+    try:
+        compile_mode("coastal-tides", Tier.T3, _partial_ctx(caps_on=()))  # two registered, neither read yet
+    except PlanError as e:
+        message = str(e)
+    else:  # pragma: no cover
+        raise AssertionError("coastal-tides compiled with no profile read")
+    assert all(d in message for d in LIVE), message
+    assert not any(d in message for d in OTHERS), "an unregistered position is not 'not read yet'"
+
+
+def test_d62_with_nothing_registered_no_look_can_be_planned_and_stale_capabilities_are_never_used():
+    every = [m.id for m in CANOPY]
+    ctx = _partial_ctx(caps_on=every, addressed=())  # capabilities read before the registration went away
+    for mode_id, mode in MODES.modes.items():
+        for tier in mode.ladder:
+            try:
+                compile_mode(mode_id, tier, ctx)
+            except PlanError as e:
+                assert "register one on /ops/accounts" in str(e), (mode_id, tier, e)
+            else:  # pragma: no cover
+                raise AssertionError(f"{mode_id} compiled at {tier} with no module registered")
+    one = _partial_ctx(caps_on=every, addressed=["canopy-r0c0"], flags=False, profile="sqhdk03-sim")
+    calm = compile_mode("lowcountry-calm", Tier.STRAND, one)
+    assert list(calm.modules) == ["canopy-r0c0"] and len(calm.skipped) == 8
+    assert calm.feature == "Colour and dimming: one Hubspace strand set to soft ivory."
+    canvas = compile_mode("rainbow-row-sunset", Tier.T1, one)
+    assert list(canvas.modules) == ["canopy-r0c0"]
+    assert canvas.feature == (
+        "Every one of the 30 lights set individually, saved as a Hubspace custom pattern on its one strand."
+    )
+    assert compile_mode("goodnight-glow", Tier.T3, one).feature == (
+        "Colour and dimming: one Hubspace strand set to a single colour from the scene."
+    )
+
+
+def test_d62_counted_copy_says_both_and_one_and_leaves_eight_alone():
+    two, one, eight = CANOPY[:2], CANOPY[:1], CANOPY[:8]
+    calm = "Colour and dimming: all nine Hubspace strands set to soft ivory."
+    canvas = "Every one of the 270 lights set individually, saved as a Hubspace custom pattern on each of nine strands."
+    assert _counted(calm, two, CANOPY) == "Colour and dimming: both Hubspace strands set to soft ivory."
+    assert (
+        _counted("All nine Hubspace strands switched off.", two, CANOPY)
+        == "Both Hubspace strands switched off."
+    )
+    assert _counted(canvas, two, CANOPY).startswith("Every one of the 60 lights")
+    assert _counted(calm, one, CANOPY) == "Colour and dimming: one Hubspace strand set to soft ivory."
+    assert _counted(canvas, one, CANOPY).endswith("on its one strand.")
+    assert _counted("A built-in Hubspace lighting program on all nine strands.", one, CANOPY) == (
+        "A built-in Hubspace lighting program on one strand."
+    )
+    eight_copy = _counted(canvas, eight, CANOPY)
+    assert "240 lights" in eight_copy and "each of eight strands" in eight_copy
+    spec = MODES.mode("coastal-tides").techniques.strand.look
+    assert _generic_feature(spec, 2) == "Colour and dimming: both Hubspace strands set to one colour."
+    assert _generic_feature(spec, 1) == "Colour and dimming: one Hubspace strand set to one colour."
+    assert _generic_feature(spec, 9) == "Colour and dimming: all nine Hubspace strands set to one colour."
+
+
+def test_d62_the_engine_drives_only_the_registered_modules_and_stops_asking_for_the_others(
+    tmp_path, monkeypatch, caplog
+):
+    _unregister(monkeypatch, OTHERS)
+
+    async def main():
+        box: dict = {}
+        services, wiring, engine = await _boot(
+            tmp_path, before_start=lambda s: box.setdefault("writes", _record_writes(s))
+        )
+        writes = box["writes"]
+        clock = services.clock
+        assert await _until(clock, lambda: engine.current_plan() is not None and not engine.commissioning, 60)
+        idle = engine.current_plan()
+        await _hold(services, engine, 20)
+        scenes = []
+        for mode_id in MODES.modes:
+            await clock.sleep(services.settings.kiosk.cooldown_s + 1)
+            state = await engine.request_mode(mode_id, source="kiosk")
+            await _hold(services, engine, 10)
+            scenes.append((mode_id, state.refused, engine.current_plan(), engine.state().feature))
+        await clock.sleep(services.settings.kiosk.cooldown_s + 1)
+        before = len(writes)
+        await engine.set_guest_brightness(50, source="kiosk")
+        await _hold(services, engine, 10)
+        brightness = writes[before:]
+        wiring.request_refresh()  # what an outage's end or /api/devices?refresh=1 asks for: every module
+        await _hold(services, engine, 600)  # ten minutes of the capability loop's retries
+        out = (
+            idle,
+            scenes,
+            brightness,
+            sorted(set(writes)),
+            wiring.missing(),
+            engine.state(),
+            wiring.attention(),
+        )
+        await wiring.close()
+        await services.close()
+        return out
+
+    with caplog.at_level("WARNING", logger="conductor.show"):
+        idle, scenes, brightness, written, missing, final, attention = run_virtual(main)
+    assert sorted(idle.modules) == list(LIVE) and sorted(idle.skipped) == OTHERS
+    for mode_id, refused, plan, feature in scenes:
+        assert not refused, mode_id
+        assert plan.mode_id == mode_id and sorted(plan.modules) == list(LIVE), mode_id
+        assert "nine" not in feature and "270" not in feature, (mode_id, feature)
+    assert sorted(brightness) == [f"sim-{d}" for d in LIVE]  # one command per driven module
+    assert written == [f"sim-{d}" for d in LIVE]
+    assert missing == []
+    assert not [r for r in caplog.records if "Couldn't read canopy-" in r.getMessage()]
+    assert final.phase is CanopyPhase.NEEDS_ATTENTION
+    assert len(attention) == 7 and all("/ops/accounts" in line for line in attention)
+
+
+def test_d62_registering_a_module_mid_run_brings_the_canopy_out_of_rest(tmp_path, monkeypatch):
+    gone = _unregister(monkeypatch, [m.id for m in CANOPY])
+
+    async def live_commissions_by_hand(self):
+        return None  # live never commissions at startup (the simulator's would write the slots too)
+
+    monkeypatch.setattr(ShowWiring, "_sim_commission", live_commissions_by_hand)
+
+    async def main():
+        box: dict = {}
+        services, wiring, engine = await _boot(
+            tmp_path, before_start=lambda s: box.setdefault("writes", _record_writes(s))
+        )
+        writes = box["writes"]
+        clock = services.clock
+        await _hold(services, engine, 30)
+        resting = (engine.state().phase, engine.current_plan(), await engine.safe_look(source="ops"))
+        before = len(writes)
+        gone.discard("canopy-r0c0")  # registered on /ops/accounts (which asks for a refresh)
+        wiring.request_refresh(["canopy-r0c0"])
+        shown = await _until(clock, lambda: engine.current_plan() is not None, 30)
+        await _hold(services, engine, 20)
+        out = (resting, shown, engine.current_plan(), writes[before:], wiring.attention())
+        await wiring.close()
+        await services.close()
+        return out
+
+    (phase, plan_before, safe), shown, plan, sent, attention = run_virtual(main)
+    assert phase is CanopyPhase.RESTING and plan_before is None
+    assert safe.refused and "register one on /ops/accounts" in safe.message
+    assert shown is not None
+    assert plan.mode_id == "lowcountry-calm" and list(plan.modules) == ["canopy-r0c0"]
+    assert sent == ["sim-canopy-r0c0"]  # Calm, as one command
+    assert len(attention) == 8
+
+
+def test_d62_a_module_registered_mid_run_joins_the_safe_look_even_when_its_profile_cant_be_read(
+    tmp_path, monkeypatch
+):
+    gone = _unregister(monkeypatch, [m.id for m in CANOPY if m.id != "canopy-r0c0"])
+
+    async def live_commissions_by_hand(self):
+        return None
+
+    monkeypatch.setattr(ShowWiring, "_sim_commission", live_commissions_by_hand)
+
+    def before_start(services):
+        writes = _record_writes(services)
+        real = services.sim.fetch_profile
+
+        async def fetch_profile(address, **kwargs):
+            if address == "sim-canopy-r0c1":
+                raise RuntimeError("simulated profile read failure")
+            return await real(address, **kwargs)
+
+        services.sim.fetch_profile = fetch_profile
+        return writes
+
+    async def main():
+        box: dict = {}
+        services, wiring, engine = await _boot(
+            tmp_path, before_start=lambda s: box.setdefault("writes", before_start(s))
+        )
+        writes = box["writes"]
+        clock = services.clock
+        assert await _until(clock, lambda: engine.current_plan() is not None, 60)
+        calm = engine.current_plan()
+        before = len(writes)
+        gone.discard("canopy-r0c1")  # registered on /ops/accounts, as conductor/routes/accounts.py does it
+        wiring.caps.pop("canopy-r0c1", None)
+        wiring.request_refresh(["canopy-r0c1"])
+        await _hold(services, engine, 120)
+        out = (
+            calm,
+            engine.current_plan(),
+            writes[before:],
+            engine.state().modules["canopy-r0c1"],
+            wiring.attention(),
+        )
+        await wiring.close()
+        await services.close()
+        return out
+
+    calm, plan, sent, module, attention = run_virtual(main)
+    assert calm.mode_id == "lowcountry-calm" and list(calm.modules) == ["canopy-r0c0"]
+    assert plan.mode_id == "lowcountry-calm"
+    assert sorted(plan.modules) == list(LIVE) and len(plan.skipped) == 7
+    assert any("assumes" in n and "canopy-r0c1" in n for n in plan.notes), plan.notes
+    assert "sim-canopy-r0c1" in sent
+    assert "no Hubspace device registered" not in (module.get("reason") or "")
+    line = next(a for a in attention if "simulated profile read failure" in a)
+    assert "hasn't been read" in line
 
 
 # ---- F3 ------------------------------------------------------------------------------------------------------------

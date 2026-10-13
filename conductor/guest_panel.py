@@ -674,7 +674,7 @@ class EngineTarget:
     """The canopy engine at `services.extras["canopy"]` (see the module docstring)."""
 
     kind = "canopy"
-    label = "The Color Canopy (nine strands)"
+    FULL_LABEL = "The Color Canopy (nine strands)"
 
     def __init__(self, services: Any, log: CommandLog | None = None):
         self.services = services
@@ -686,6 +686,21 @@ class EngineTarget:
 
     def engine(self) -> Any:
         return self.services.extras.get(K.ENGINE_KEY)
+
+    @property
+    def label(self) -> str:
+        """Names the strands the current look actually drives when it leaves some out (D62)."""
+        plan = None
+        current = getattr(self.engine(), "current_plan", None)
+        if callable(current):
+            try:
+                plan = current()
+            except Exception:  # noqa: BLE001 - a label never fails the panel
+                plan = None
+        if plan is None or not getattr(plan, "skipped", None):
+            return self.FULL_LABEL
+        total = len(self.services.registry.canopy_modules())
+        return f"The Color Canopy ({len(plan.modules)} of {total} strands)"
 
     def capabilities(self) -> dict[str, bool]:
         engine = self.engine()

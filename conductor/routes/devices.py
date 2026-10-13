@@ -311,9 +311,10 @@ def _attention(services: Any, accounts: dict) -> list[dict]:
                 "/ops/accounts/",
             )
     wiring = services.extras.get("show")
-    if wiring is not None and hasattr(wiring, "attention"):
-        for line in wiring.attention():  # canopy modules whose profile the engine hasn't read yet
-            add(line, "/ops/")
+    if wiring is not None and hasattr(wiring, "attention_items"):
+        # canopy modules with no device registered (fixed on /ops/accounts) or whose profile hasn't been read yet
+        for line, link in wiring.attention_items():
+            add(line, link)
     caps_cache = services.extras.get(CAPS_KEY, {})
     for entry in services.registry.devices:
         try:

@@ -24,8 +24,11 @@ Rules implemented:
   `motion` (re-trigger all nine as one burst) is set whenever a slot may animate. At T2, a `motion: true` mode whose
   hand-painted slot animates — or whose header is unknown — is a motion plan too.
 - **Partial plans.** A module without capabilities is left out (`ModePlan.skipped`; the engine shows it as needing
-  attention) and copy that counts strands or lights counts the modules actually driven. The safe look
-  (`SAFE_MODES`) never waits: it assumes `SAFE_DEFAULT_CAPS` for an unread module.
+  attention) and copy that counts strands or lights counts the modules actually driven ("both strands", "its one
+  strand"); at module level the "column by column across the canopy" sentence becomes one that says what each
+  driven strand shows. The safe look (`SAFE_MODES`) never waits: it assumes `SAFE_DEFAULT_CAPS` for an unread
+  module. With `addresses` (the show), a module with no device on the engine's driver is left out of every look,
+  the safe one included (D62); with none registered at all, no look can be planned.
 - **Kelvin in the copy.** A strand look whose copy names its Kelvin value uses the configured fallback look when a
   module's range would clamp that value (Lowcountry Calm never says "2700 K" at 3000 K).
 - **A kit's controller map (D54).** With `addresses` (the show), a module whose `framebuffer_mapping` was proven on
@@ -112,7 +115,9 @@ class CompileContext:
     - `flags`: device id → bench `DeviceFlags` (already resolved for the kit at that address). None = simulator:
       every tier allowed.
     - `addresses`: device id → the driver address its capabilities were read from (the Afero metadevice id live, the
-      sim address in sim). A kit's `framebuffer_mapping` applies only through this (D54, D25). None = no map is used.
+      sim address in sim). A kit's `framebuffer_mapping` applies only through this (D54, D25). A module whose address
+      is missing here has no device registered on this runtime and is left out of every look, the safe one included
+      (D62). None = no map is used and no module is left out for want of an address.
     - `modes`, `recipes`, `canopy`: loaded from `config_dir` when not given.
     """
 
@@ -234,23 +239,39 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
     devices = ctx.devices
     if not devices:
         raise PlanError("there are no canopy modules in the registry")
+    # D62: a module with no device on the engine's driver can't be written, so it is left out of every look — the
+    # safe one included (never assumed capabilities, never stale ones). Without `addresses` nothing is left out here.
+    unregistered = {
+        d.id: f"{d.label or d.id} has no Hubspace device registered on this runtime, so it was left out of this look "
+        "(register one on /ops/accounts)"
+        for d in devices
+        if ctx.addresses is not None and not ctx.addresses.get(d.id)
+    }
+    drivable = [d for d in devices if d.id not in unregistered]
     assumed = []
     if mode_id in ctx.safe_modes:
         # The safe look never waits for profiles: a module that hasn't been read gets conservative capabilities.
-        assumed = [d for d in devices if d.id not in ctx.capabilities]
+        assumed = [d for d in drivable if d.id not in ctx.capabilities]
         if assumed:
             ctx = replace(
                 ctx, capabilities={**ctx.capabilities, **{d.id: SAFE_DEFAULT_CAPS for d in assumed}}
             )
-    ready = [d for d in devices if d.id in ctx.capabilities]
+    ready = [d for d in drivable if d.id in ctx.capabilities]
+    unread = [d.id for d in drivable if d.id not in ctx.capabilities]
     skipped = {
-        d.id: f"{d.label or d.id}'s profile hasn't been read yet (no capabilities), so it was left out of this look"
+        d.id: unregistered.get(d.id)
+        or f"{d.label or d.id}'s profile hasn't been read yet (no capabilities), so it was left out of this look"
         for d in devices
-        if d.id not in ctx.capabilities
+        if d.id in unregistered or d.id not in ctx.capabilities
     }
     if not ready:
+        if not drivable:
+            raise PlanError(
+                "no canopy module has a Hubspace device registered on this runtime yet (register one on "
+                "/ops/accounts), so no look can be planned"
+            )
         raise PlanError(
-            f"no module's profile has been read yet ({', '.join(skipped)} hasn't been read yet), so no look can "
+            f"no module's profile has been read yet ({', '.join(unread)} hasn't been read yet), so no look can "
             "be planned"
         )
     if tier is Tier.STRAND:
@@ -268,8 +289,15 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
         )
     if skipped:
         plan.skipped = skipped
-        plan.feature = _counted(plan.feature, ready, devices)
-        plan.notes.append(f"Left out (no capabilities yet): {', '.join(skipped)}")
+        if tier is Tier.T3:
+            # "the palette steps across the canopy column by column" isn't true of the modules that are left
+            plan.feature = _partial_modules_feature(len(ready))
+        else:
+            plan.feature = _counted(plan.feature, ready, devices)
+        if unregistered:
+            plan.notes.append(f"Left out (no Hubspace device registered): {', '.join(unregistered)}")
+        if unread:
+            plan.notes.append(f"Left out (no capabilities yet): {', '.join(unread)}")
     return plan
 
 
@@ -286,7 +314,35 @@ def _counted(feature: str, ready: Sequence[DeviceEntry], devices: Sequence[Devic
         )
     heads_all = sum(d.expected_heads or 30 for d in devices)
     heads_ready = sum(d.expected_heads or 30 for d in ready)
-    return re.sub(rf"\b{heads_all}\b", str(heads_ready), out)
+    return _small_counts(re.sub(rf"\b{heads_all}\b", str(heads_ready), out), n)
+
+
+def _small_counts(text: str, n: int) -> str:
+    """English for two and one: "all two strands" → "both strands", "all one strands" → "one strand"."""
+    if n == 2:
+        return re.sub(
+            r"\ball two\b", lambda m: "Both" if m.group(0)[0].isupper() else "both", text, flags=re.IGNORECASE
+        )
+    if n == 1:
+        text = re.sub(
+            r"\ball one (Hubspace )?strands\b",
+            lambda m: ("One " if m.group(0)[0].isupper() else "one ") + (m.group(1) or "") + "strand",
+            text,
+            flags=re.IGNORECASE,
+        )
+        return re.sub(r"\beach of one strands\b", "its one strand", text)
+    return text
+
+
+def _partial_modules_feature(n: int) -> str:
+    """The module-level (T3) sentence for a plan that leaves modules out: what each driven strand shows."""
+    if n == 1:
+        return "Colour and dimming: one Hubspace strand set to a single colour from the scene."
+    # Not "from the scene's palette": each colour is the scene's gradient sampled at the module's column centre,
+    # usually a blend between two palette colours (config/modes.yaml).
+    return (
+        f"Colour and dimming: {_count_words(n)} Hubspace strands, each set to a single colour from the scene."
+    )
 
 
 def compile_first(mode_id: str, ctx: CompileContext, *, skip: Sequence[Tier | str] = ()) -> ModePlan:
@@ -423,14 +479,16 @@ def _generic_feature(spec: LookSpec, count: int) -> str:
     """A true sentence for a fallback look the mode's config gave no copy for."""
     n = _count_words(count)
     if spec.kind == "white":
-        return f"Tunable white and dimming: all {n} Hubspace strands set to one white."
-    if spec.kind == "rgb":
-        return f"Colour and dimming: all {n} Hubspace strands set to one colour."
-    if spec.kind == "program":
-        return f"A built-in Hubspace lighting program on all {n} strands."
-    if spec.kind == "preset":
-        return "A built-in Hubspace preset, running on each strand's own controller."
-    return f"All {n} Hubspace strands switched off."
+        out = f"Tunable white and dimming: all {n} Hubspace strands set to one white."
+    elif spec.kind == "rgb":
+        out = f"Colour and dimming: all {n} Hubspace strands set to one colour."
+    elif spec.kind == "program":
+        out = f"A built-in Hubspace lighting program on all {n} strands."
+    elif spec.kind == "preset":
+        out = "A built-in Hubspace preset, running on each strand's own controller."
+    else:
+        out = f"All {n} Hubspace strands switched off."
+    return _small_counts(out, count)
 
 
 def _target(

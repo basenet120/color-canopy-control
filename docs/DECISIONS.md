@@ -526,3 +526,48 @@ superseded for this show; `deploy/venue/` stays for a Linux box or spare). Runbo
 - **Not carried over:** the Chromium kiosk on the box (the guest panel is the iPad), the `/run/systemd/timesync`
   flag (the 7 am checklist's *Clock synced* item warns "can't see" on macOS; `canopy-mac status` shows the sntp
   offset), and the USB backup copy.
+
+## 2026-10-13 — a partial canopy
+
+**D62 — A canopy position with no Hubspace device registered is left out of every look, the safe one included
+(refines D36).** Registering VWBD's two shop kits at `canopy-r0c0`/`canopy-r0c1` on the Mac show box leaves the
+other seven positions with no Afero address. Before this, Lowcountry Calm assumed capabilities for all nine and said
+"all nine Hubspace strands", a strand fallback said "all two", and module-level copy said the palette steps "across
+the canopy column by column" — false on two of nine (CLAUDE.md: kiosk copy must be true).
+- **The rule** (`conductor/looks/compile.py` `compile_mode`): with `CompileContext.addresses` (the show), a module
+  whose address on the engine's driver is missing is *unregistered*. It goes in `ModePlan.skipped` with "… has no
+  Hubspace device registered on this runtime, so it was left out of this look (register one on /ops/accounts)". It
+  never gets `SAFE_DEFAULT_CAPS`, and capabilities it still holds from before are ignored. Without `addresses`
+  (`EngineCompiler`, the soak, plain compile tests) nothing changes; in sim every module has its sim address.
+- **D36 is unchanged for registered modules:** one whose profile hasn't been read is left out of every mode but
+  the safe look, which assumes conservative capabilities for it.
+- **Nothing registered → no look.** compile raises PlanError naming /ops/accounts and the canopy rests ("getting
+  ready"): the guest panel answers 503 resting instead of 409, and the ops Safe look is refused with that reason.
+  Before, Calm "went out" while lighting nothing; resting is the honest state.
+- **Tiers never mix.** Only the address predicate drops a module. A registered, read module that can't do a tier
+  still sends the whole canopy down the ladder (07 §6; motion stays all-or-none over the driven set). There is no
+  generic "drop whatever doesn't compile" fallback in `request_mode` or `compile_best`.
+- **Copy counts the driven strands.** `_counted` and `_generic_feature` say "both Hubspace strands" for two and
+  "one Hubspace strand" / "its one strand" for one ("eight strands", "240 lights" unchanged). At module level (T3)
+  with anything left out, the sentence is generated: "Colour and dimming: two Hubspace strands, each set to a single
+  colour from the scene." Not "from the scene's palette": each strand shows the scene's gradient sampled at its
+  column centre, which is usually a blend (r0c0 is no palette colour in any of the six scenes). The guest panel's
+  target label reads "The Color Canopy (2 of 9 strands)" while the look leaves modules out, "(nine strands)"
+  otherwise.
+- **/ops stays loud.** `ShowWiring.missing()`, `refresh_capabilities()` and `attention()` consider registered
+  modules only (no profile read, retry or warning every 60 s for a position with nothing to ask), and `attention()`
+  gives each unregistered one its own line naming /ops/accounts, linked there (`attention_items()`). The engine's
+  phase stays NEEDS_ATTENTION while any module is left out, the 7 am module check still counts nine, and the T1
+  gate still needs slot records on all nine registry modules — so a lost registration on show day is never quiet.
+  No opt-in date flag is needed.
+- **A registration recompiles.** The capability loop compiles the current look again whenever the set of
+  registered modules changes, not only when a profile read brings new capabilities, so a kit registered while Calm
+  is showing joins it with assumed capabilities even if its first read fails (D36), and its /ops reason moves from
+  "no device registered" to "profile hasn't been read". The ops help text says the Safe look goes to every module
+  with a device registered.
+- **Not changed:** the engine's runtime paths (`canopy.send`, `active_modules`), the reconciler, the executor, the
+  live gate and the allowlist; they already key on a resolved target.
+
+Follow-ups (separate PRs): derive the guest panel's "changing" state and feature line from the driven modules'
+readback; an honest Now Showing preview at the strand and module tiers; "N of 9 modules" in the rest of the ops copy
+(the commissioning dialog and the timing button still say "all nine modules").
