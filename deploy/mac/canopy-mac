@@ -1,0 +1,503 @@
+#!/usr/bin/env bash
+# canopy-mac — run the Color Canopy Conductor on a Mac as the show box (D61, docs/runbooks/mac-show-box.md).
+#
+#   canopy-mac install [--accounts EMAILS] [--no-load]   set up settings, Python, and the three LaunchAgents; start
+#   canopy-mac status                                    everything on one screen (never prints secrets)
+#   canopy-mac start | stop | restart                   stop = break-glass hold: stays stopped, even after a reboot
+#   canopy-mac logs [-f]                                 the Conductor's log (and the watchdog's)
+#   canopy-mac login [--account canopy]                  sign a Hubspace account in (you type the password)
+#   canopy-mac password                                  show the ops login for /ops (on this Mac only)
+#   canopy-mac backup [--list]                           back up the data folder now (nightly at 04:30 anyway)
+#   canopy-mac restore FILE [--skip-tokens] [--yes]      put a backup back (--skip-tokens on a spare or another Mac)
+#   canopy-mac uninstall                                remove the LaunchAgents; keeps settings, data and backups
+#   canopy-mac watchdog                                  one health check (the watchdog agent runs it every 30 s)
+#
+# Settings: ~/Library/Application Support/ColorCanopy/conductor.env (0600). Data: …/ColorCanopy/data. Logs:
+# ~/Library/Logs/ColorCanopy/. Every path can be overridden by the environment (the tests use temporary folders).
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+CANOPY_MAC_HOME=${CANOPY_MAC_HOME:-"$HOME/Library/Application Support/ColorCanopy"}
+export CANOPY_MAC_HOME # run-conductor.sh reads the same folder
+ENV_FILE="$CANOPY_MAC_HOME/conductor.env"
+DATA_DIR="$CANOPY_MAC_HOME/data"
+STATE_DIR="$CANOPY_MAC_HOME/state"
+BACKUP_DIR="$CANOPY_MAC_HOME/backups"
+HOLD="$STATE_DIR/hold"
+LOG_DIR=${CANOPY_MAC_LOG_DIR:-"$HOME/Library/Logs/ColorCanopy"}
+AGENTS_DIR=${CANOPY_MAC_AGENTS:-"$HOME/Library/LaunchAgents"}
+LABEL=com.colorcanopy.conductor
+WATCHDOG_LABEL=com.colorcanopy.watchdog
+BACKUP_LABEL=com.colorcanopy.backup
+DOMAIN="gui/$(id -u)"
+EXAMPLE="$ROOT/deploy/mac/conductor.env.example"
+RUNNER="$ROOT/deploy/mac/run-conductor.sh"
+SELF="$ROOT/deploy/mac/canopy-mac"
+FAILURES_TO_RESTART=3
+START_GRACE_S=120
+BACKUP_KEEP_DAYS=14
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+die() {
+	printf 'STOP: %s\n' "$*" >&2
+	exit 1
+}
+
+usage() { sed -n '2,16p' "$SELF" | sed 's/^# \{0,1\}//'; }
+
+# env_value KEY → the value of the last KEY=... line in the settings file. Never echo secrets with it.
+env_value() {
+	local key=$1 line value=""
+	[ -r "$ENV_FILE" ] || return 0
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in "$key="*) value=${line#"$key="} ;; esac
+	done <"$ENV_FILE"
+	printf '%s' "${value%$'\r'}"
+}
+
+# set_env KEY VALUE → replace (or append) KEY=VALUE in the settings file, atomically, keeping mode 0600.
+set_env() {
+	local key=$1 value=$2 tmp found=0 line
+	tmp=$(mktemp "$CANOPY_MAC_HOME/.conductor.env.XXXXXX")
+	chmod 600 "$tmp"
+	while IFS= read -r line || [ -n "$line" ]; do
+		if [[ $line == "$key="* ]]; then
+			[ $found -eq 0 ] && printf '%s=%s\n' "$key" "$value"
+			found=1
+		else
+			printf '%s\n' "$line"
+		fi
+	done <"$ENV_FILE" >"$tmp"
+	[ $found -eq 1 ] || printf '%s=%s\n' "$key" "$value" >>"$tmp"
+	mv -f "$tmp" "$ENV_FILE"
+}
+
+port() {
+	local p
+	p=$(env_value CANOPY_PORT)
+	printf '%s' "${p:-8000}"
+}
+
+url() { printf 'http://127.0.0.1:%s' "$(port)"; }
+
+healthy() { curl -fsS -m 4 -o /dev/null "$(url)/healthz" 2>/dev/null; }
+
+# api PATH → GET with the ops login, passed on stdin so it never shows in `ps`.
+api() {
+	local auth
+	auth=$(env_value CONDUCTOR_BASIC_AUTH)
+	printf 'user = "%s"\n' "$auth" | curl -fsS -m 6 -K - "$(url)$1" 2>/dev/null
+}
+
+loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
+
+# ---- install ------------------------------------------------------------------------------------------------------
+init_env() {
+	local accounts=$1
+	umask 077
+	mkdir -p "$CANOPY_MAC_HOME" "$DATA_DIR" "$STATE_DIR" "$BACKUP_DIR"
+	chmod 700 "$CANOPY_MAC_HOME"
+	if [ ! -f "$ENV_FILE" ]; then
+		install -m 600 "$EXAMPLE" "$ENV_FILE"
+		say "Created $ENV_FILE"
+	fi
+	chmod 600 "$ENV_FILE"
+	if [ -z "$(env_value CONDUCTOR_BASIC_AUTH)" ]; then
+		set_env CONDUCTOR_BASIC_AUTH "ops:$(openssl rand -hex 12)"
+		say "Generated the ops login (see it with: canopy-mac password)."
+	fi
+	if [ -z "$(env_value CONDUCTOR_SECRET_KEY)" ]; then
+		set_env CONDUCTOR_SECRET_KEY "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n')"
+		say "Generated the key that encrypts stored Hubspace sign-ins."
+	fi
+	if [ -n "$accounts" ]; then
+		accounts=$(printf '%s' "$accounts" | tr 'A-Z' 'a-z' | tr -d ' ')
+		[[ $accounts =~ ^[^,@]+@[^,@]+(,[^,@]+@[^,@]+)*$ ]] || die "--accounts takes emails separated by commas."
+		set_env HUBSPACE_ACCOUNT_ALLOWLIST "$accounts"
+		say "Hubspace accounts allowed to sign in: $accounts"
+	elif [ -z "$(env_value HUBSPACE_ACCOUNT_ALLOWLIST)" ]; then
+		warn "No Hubspace account is allowed to sign in yet. Add them with: canopy-mac install --accounts a@x,b@y"
+	fi
+}
+
+write_plist() { # LABEL FILE PROGRAM-ARGS... ; the extra keys come on stdin (already-indented plist XML)
+	local label=$1 file=$2 extra arg
+	shift 2
+	extra=$(cat)
+	{
+		printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+			'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+			'<plist version="1.0">' '<dict>' \
+			"	<key>Label</key><string>$label</string>" \
+			'	<key>ProgramArguments</key>' '	<array>'
+		for arg in "$@"; do printf '		<string>%s</string>\n' "$arg"; done
+		printf '%s\n' '	</array>' "$extra" '</dict>' '</plist>'
+	} >"$file.tmp"
+	mv -f "$file.tmp" "$file"
+}
+
+write_agents() {
+	mkdir -p "$AGENTS_DIR" "$LOG_DIR"
+	write_plist "$LABEL" "$AGENTS_DIR/$LABEL.plist" "$RUNNER" <<EOF
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>10</integer>
+	<key>ExitTimeOut</key><integer>30</integer>
+	<key>ProcessType</key><string>Interactive</string>
+	<key>StandardOutPath</key><string>$LOG_DIR/conductor.log</string>
+	<key>StandardErrorPath</key><string>$LOG_DIR/conductor.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CANOPY_MAC_HOME</key><string>$CANOPY_MAC_HOME</string>
+		<key>CANOPY_MAC_LOG</key><string>$LOG_DIR/conductor.log</string>
+	</dict>
+EOF
+	write_plist "$WATCHDOG_LABEL" "$AGENTS_DIR/$WATCHDOG_LABEL.plist" "$SELF" watchdog <<EOF
+	<key>StartInterval</key><integer>30</integer>
+	<key>StandardOutPath</key><string>$LOG_DIR/watchdog.log</string>
+	<key>StandardErrorPath</key><string>$LOG_DIR/watchdog.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CANOPY_MAC_HOME</key><string>$CANOPY_MAC_HOME</string>
+		<key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+EOF
+	write_plist "$BACKUP_LABEL" "$AGENTS_DIR/$BACKUP_LABEL.plist" "$SELF" backup --nightly <<EOF
+	<key>StartCalendarInterval</key>
+	<dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>30</integer></dict>
+	<key>StandardOutPath</key><string>$LOG_DIR/backup.log</string>
+	<key>StandardErrorPath</key><string>$LOG_DIR/backup.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CANOPY_MAC_HOME</key><string>$CANOPY_MAC_HOME</string>
+		<key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+EOF
+	if command -v plutil >/dev/null 2>&1; then
+		plutil -lint -s "$AGENTS_DIR/$LABEL.plist" "$AGENTS_DIR/$WATCHDOG_LABEL.plist" \
+			"$AGENTS_DIR/$BACKUP_LABEL.plist" || die "A LaunchAgent file didn't validate."
+	fi
+}
+
+# bootout returns before the process has exited (the Conductor gets up to 30 s to save its sign-ins), and a
+# bootstrap in the meantime fails. So wait until launchd has really let go.
+unload_agent() {
+	local i
+	loaded "$1" || return 0
+	launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+	for i in $(seq 1 45); do
+		loaded "$1" || return 0
+		sleep 1
+	done
+	die "launchd still has $1 after 45 s. Look at: canopy-mac logs"
+}
+
+load_agent() {
+	launchctl enable "$DOMAIN/$1" 2>/dev/null || true
+	unload_agent "$1"
+	# The watchdog may have loaded it in between (same file): that's fine.
+	launchctl bootstrap "$DOMAIN" "$AGENTS_DIR/$1.plist" || loaded "$1" || die "launchd didn't load $1."
+}
+
+cmd_install() {
+	local accounts="" no_load=0
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--accounts) accounts=${2:?--accounts needs emails}; shift 2 ;;
+		--accounts=*) accounts=${1#*=}; shift ;;
+		--no-load) no_load=1; shift ;;
+		*) die "install doesn't take $1 (see --help)" ;;
+		esac
+	done
+	[ "$(uname -s)" = Darwin ] || [ $no_load -eq 1 ] || die "This is the Mac show box; use deploy/venue/ on Linux."
+	case $ROOT in
+	"$HOME/Desktop"* | "$HOME/Documents"* | "$HOME/Downloads"*)
+		die "macOS keeps LaunchAgents out of Desktop, Documents and Downloads. Clone the repo somewhere else (e.g. ~/canopy-show)."
+		;;
+	esac
+	init_env "$accounts"
+	if [ $no_load -eq 0 ]; then
+		command -v uv >/dev/null 2>&1 || die "uv isn't installed: brew install uv"
+		say "Installing the Conductor's Python environment (uv sync, live extra)…"
+		(cd "$ROOT" && uv sync --frozen --no-dev --extra live --quiet)
+		"$ROOT/.venv/bin/python" -c 'import aioafero' || die "aioafero didn't install."
+	fi
+	"$RUNNER" --check >/dev/null
+	write_agents
+	if [ $no_load -eq 1 ]; then
+		say "Wrote the LaunchAgents to $AGENTS_DIR (not loaded)."
+		return 0
+	fi
+	rm -f "$HOLD"
+	load_agent "$LABEL"
+	load_agent "$WATCHDOG_LABEL"
+	load_agent "$BACKUP_LABEL"
+	wait_healthy
+	cmd_status
+}
+
+wait_healthy() {
+	local i
+	for i in $(seq 1 45); do
+		healthy && return 0
+		sleep 1
+	done
+	warn "The Conductor didn't answer within 45 s. Look at: canopy-mac logs"
+	return 1
+}
+
+# ---- run control --------------------------------------------------------------------------------------------------
+cmd_start() {
+	[ -f "$AGENTS_DIR/$LABEL.plist" ] || die "Not installed: run canopy-mac install"
+	rm -f "$HOLD"
+	if loaded "$LABEL"; then
+		launchctl kickstart "$DOMAIN/$LABEL"
+	else
+		load_agent "$LABEL"
+	fi
+	wait_healthy && say "The Conductor is running: $(url)/ops/"
+}
+
+cmd_stop() {
+	[ "${1:-}" = "--yes" ] || {
+		say "This stops the Conductor and keeps it stopped (even after a reboot) until canopy-mac start."
+		say "The lights keep their last look. Run again with --yes to do it."
+		return 1
+	}
+	mkdir -p "$STATE_DIR"
+	date '+%Y-%m-%dT%H:%M:%S%z' >"$HOLD"
+	launchctl disable "$DOMAIN/$LABEL" 2>/dev/null || true
+	unload_agent "$LABEL"
+	say "Stopped and held. The canopy keeps its last look. canopy-mac start hands back."
+}
+
+cmd_restart() {
+	[ -f "$HOLD" ] && die "The Conductor is held (canopy-mac stop). Use canopy-mac start."
+	loaded "$LABEL" || die "The Conductor isn't loaded: canopy-mac start"
+	launchctl kickstart -k "$DOMAIN/$LABEL"
+	wait_healthy && say "Restarted."
+}
+
+# ---- watchdog (every 30 s) ----------------------------------------------------------------------------------------
+cmd_watchdog() {
+	local counter="$STATE_DIR/watchdog.failures" failures started now
+	mkdir -p "$STATE_DIR"
+	failures=$(cat "$counter" 2>/dev/null || echo 0)
+	case $failures in '' | *[!0-9]*) failures=0 ;; esac
+	if [ -f "$HOLD" ]; then
+		echo 0 >"$counter" # stopped on purpose
+		return 0
+	fi
+	if ! loaded "$LABEL"; then # not held, yet not loaded (an install cut short, a stray bootout): load it again
+		echo 0 >"$counter"
+		[ -f "$AGENTS_DIR/$LABEL.plist" ] || return 0
+		say "$(date '+%FT%T%z') the Conductor wasn't loaded and isn't held: loading it."
+		launchctl enable "$DOMAIN/$LABEL" 2>/dev/null || true
+		launchctl bootstrap "$DOMAIN" "$AGENTS_DIR/$LABEL.plist" || say "Loading it failed; next try in 30 s."
+		return 0
+	fi
+	started=$(cat "$STATE_DIR/started_at" 2>/dev/null || echo 0)
+	case $started in '' | *[!0-9]*) started=0 ;; esac
+	now=$(date +%s)
+	if [ $((now - started)) -lt $START_GRACE_S ]; then
+		echo 0 >"$counter" # still starting
+		return 0
+	fi
+	if healthy; then
+		[ "$failures" -gt 0 ] && say "$(date '+%FT%T%z') /healthz answers again (after $failures failed check(s))."
+		echo 0 >"$counter"
+		return 0
+	fi
+	failures=$((failures + 1))
+	if [ "$failures" -lt "$FAILURES_TO_RESTART" ]; then
+		echo "$failures" >"$counter"
+		say "$(date '+%FT%T%z') no answer from /healthz ($failures of $FAILURES_TO_RESTART before a restart)."
+		return 0
+	fi
+	echo 0 >"$counter"
+	say "$(date '+%FT%T%z') restarting the Conductor: /healthz failed $FAILURES_TO_RESTART times in a row."
+	launchctl kickstart -k "$DOMAIN/$LABEL"
+}
+
+# ---- backups ------------------------------------------------------------------------------------------------------
+cmd_backup() {
+	local kind=manual name
+	case ${1:-} in
+	--list) ls -lh "$BACKUP_DIR" 2>/dev/null || say "No backups yet."; return 0 ;;
+	--nightly) kind=nightly ;;
+	'') ;;
+	*) die "backup doesn't take $1" ;;
+	esac
+	[ -d "$DATA_DIR" ] || die "No data folder at $DATA_DIR yet."
+	umask 077
+	mkdir -p "$BACKUP_DIR"
+	name="canopy-data-$(date +%Y%m%d-%H%M%S)-$kind.tar.gz"
+	tar -czf "$BACKUP_DIR/$name" -C "$CANOPY_MAC_HOME" data
+	(cd "$BACKUP_DIR" && shasum -a 256 "$name" >"$name.sha256")
+	find "$BACKUP_DIR" -name 'canopy-data-*' -mtime +$BACKUP_KEEP_DAYS -delete
+	say "$(date '+%FT%T%z') backed up the data folder: $BACKUP_DIR/$name"
+	say "(The stored sign-ins in it are encrypted with CONDUCTOR_SECRET_KEY, which is not in the backup.)"
+}
+
+# restore FILE [--skip-tokens] [--yes]: hold the Conductor, keep what's there now, unpack, hand back.
+cmd_restore() {
+	local file="" skip_tokens=0 yes=0 listing aside
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--skip-tokens) skip_tokens=1 ;;
+		--yes) yes=1 ;;
+		-*) die "restore doesn't take $1" ;;
+		*) file=$1 ;;
+		esac
+		shift
+	done
+	[ -f "$file" ] || die "Give the backup file: canopy-mac restore <file>.tar.gz [--skip-tokens] (canopy-mac backup --list)"
+	if [ -f "$file.sha256" ]; then
+		(cd "$(dirname "$file")" && shasum -a 256 -c "$(basename "$file").sha256" >/dev/null) ||
+			die "$file doesn't match its checksum."
+	fi
+	listing=$(tar -tzf "$file") || die "$file isn't a readable backup."
+	printf '%s\n' "$listing" | grep -Eq '^data/(overrides|roles|tokens|telemetry)(/|$)' ||
+		die "$file doesn't look like a canopy data backup (no data/overrides, roles, tokens or telemetry)."
+	if [ $yes -eq 0 ]; then
+		say "This stops the Conductor, puts $(basename "$file") in place of the data folder (the current one is kept"
+		say "beside it) and starts the Conductor again.$([ $skip_tokens -eq 1 ] && printf ' Stored sign-ins are left out.')"
+		say "Run again with --yes to do it."
+		return 1
+	fi
+	cmd_stop --yes >/dev/null
+	aside="$CANOPY_MAC_HOME/data-before-restore-$(date +%Y%m%d-%H%M%S)"
+	[ -d "$DATA_DIR" ] && mv "$DATA_DIR" "$aside" && say "Kept the previous data folder: $aside"
+	umask 077
+	if [ $skip_tokens -eq 1 ]; then
+		tar -xzf "$file" -C "$CANOPY_MAC_HOME" --exclude 'data/tokens' --exclude 'data/tokens/*'
+	else
+		tar -xzf "$file" -C "$CANOPY_MAC_HOME"
+	fi
+	say "Restored $(basename "$file")."
+	cmd_start
+}
+
+# ---- status, logs, sign-in ----------------------------------------------------------------------------------------
+agent_state() {
+	local out
+	if ! out=$(launchctl print "$DOMAIN/$1" 2>/dev/null); then
+		printf 'not loaded'
+		return
+	fi
+	printf '%s' "$(printf '%s\n' "$out" | awk -F' = ' '/^\tstate = /{s=$2} /^\tpid = /{p=$2} END{printf "%s%s", s, (p ? " (pid " p ")" : "")}')"
+}
+
+# For the timed agents "not running" between runs is normal: say "loaded" instead.
+timed_agent_state() {
+	local state
+	state=$(agent_state "$1")
+	case $state in "not running") printf 'loaded, %s' "$2" ;; *) printf '%s' "$state" ;; esac
+}
+
+cmd_status() {
+	local version accounts ip iface newest
+	say "Color Canopy — Mac show box"
+	"$RUNNER" --check 2>&1 | sed 's/^/  /' || true
+	say ""
+	if [ -f "$HOLD" ]; then
+		say "  Conductor        BREAK-GLASS HOLD since $(cat "$HOLD") (canopy-mac start hands back)"
+	else
+		say "  Conductor        $(agent_state "$LABEL")"
+	fi
+	say "  Watchdog         $(timed_agent_state "$WATCHDOG_LABEL" 'checks every 30 s')"
+	newest=$(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -1 || true)
+	newest=${newest:+$(basename "$newest")}
+	say "  Nightly backup   $(timed_agent_state "$BACKUP_LABEL" 'runs at 04:30'); newest: ${newest:-none}"
+	if healthy; then
+		say "  /healthz         OK"
+		if version=$(api /api/version); then
+			say "  /api/version     $version"
+		else
+			say "  /api/version     refused (check the ops login in the settings file)"
+		fi
+		if accounts=$(api /api/accounts); then
+			say "  Hubspace accounts:"
+			printf '%s' "$accounts" | "$ROOT/.venv/bin/python" -c '
+import json, sys
+for a in json.load(sys.stdin).get("accounts", []):
+    state = "connected" if a.get("connected") else ("RE-SIGN-IN REQUIRED" if a.get("needs_reauth") else "not connected")
+    print("    %-10s %s, %s device(s)" % (a.get("account", "?"), state, a.get("device_count", 0)))
+' 2>/dev/null || true
+		fi
+	else
+		say "  /healthz         NO ANSWER (canopy-mac logs)"
+	fi
+	say ""
+	say "  Open on this Mac:     $(url)/ops/"
+	for iface in en0 en1; do
+		ip=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
+		[ -n "$ip" ] && say "  On the network ($iface): http://$ip:$(port)/ops/   (guest panel: /kiosk/)"
+	done
+	say "  Clock: $(sntp -t 2 time.apple.com 2>/dev/null | tail -1 || echo 'sntp unavailable') (offset from Apple time, seconds)"
+	return 0
+}
+
+cmd_logs() {
+	if [ "${1:-}" = "-f" ]; then
+		exec tail -n 50 -f "$LOG_DIR/conductor.log"
+	fi
+	tail -n 80 "$LOG_DIR/conductor.log" 2>/dev/null || say "No Conductor log yet."
+	say "---- watchdog"
+	tail -n 10 "$LOG_DIR/watchdog.log" 2>/dev/null || say "(nothing yet)"
+}
+
+cmd_login() {
+	local account=canopy auth
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--account) account=${2:?--account needs a name}; shift 2 ;;
+		--account=*) account=${1#*=}; shift ;;
+		*) die "login doesn't take $1" ;;
+		esac
+	done
+	healthy || die "The Conductor isn't answering at $(url). Start it first: canopy-mac start"
+	auth=$(env_value CONDUCTOR_BASIC_AUTH)
+	# The CLI talks to the running Conductor, which does the sign-in (07 §3). Your password goes from this terminal
+	# straight to it, once; only an encrypted sign-in token is kept.
+	CONDUCTOR_BASIC_AUTH="$auth" exec "$ROOT/.venv/bin/python" -m conductor.auth login --server "$(url)" \
+		--account "$account"
+}
+
+cmd_password() {
+	[ -t 1 ] || die "Only shown in a terminal on this Mac."
+	local auth
+	auth=$(env_value CONDUCTOR_BASIC_AUTH)
+	[ -n "$auth" ] || die "No ops login yet: run canopy-mac install"
+	say "Ops login for /ops:  user '${auth%%:*}'   password '${auth#*:}'"
+	say "Write it on the ops card. Never paste it into chat, email or a ticket."
+}
+
+cmd_uninstall() {
+	local label
+	# The watchdog first, so it can't load the Conductor again while it is being removed.
+	for label in "$WATCHDOG_LABEL" "$BACKUP_LABEL" "$LABEL"; do
+		unload_agent "$label"
+		rm -f "$AGENTS_DIR/$label.plist"
+	done
+	say "Removed the LaunchAgents. Settings, data and backups are still in $CANOPY_MAC_HOME."
+}
+
+case ${1:-} in
+install) shift; cmd_install "$@" ;;
+status) cmd_status ;;
+start) cmd_start ;;
+stop) shift; cmd_stop "$@" ;;
+restart) cmd_restart ;;
+logs) shift; cmd_logs "$@" ;;
+login) shift; cmd_login "$@" ;;
+password) cmd_password ;;
+backup) shift; cmd_backup "$@" ;;
+restore) shift; cmd_restore "$@" ;;
+watchdog) cmd_watchdog ;;
+uninstall) cmd_uninstall ;;
+-h | --help | help) usage ;;
+'') usage; exit 2 ;;
+*) die "Unknown command $1 (see --help)" ;;
+esac

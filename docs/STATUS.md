@@ -1,11 +1,16 @@
 # Status
 
-_Last updated: 2026-10-07. Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into `main` as
+_Last updated: 2026-10-13. **The show box is now the Mac mini** (D61, `claude/mac-show-box`, below); it is installed
+and running live with no account signed in yet. Before that (Oct 7): Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into `main` as
 canon (D54). One kit, Kingston, is commissioned for per-head frames. The follow-ups make the show engine read each
 kit's own map (D57) and let `/ops/bench` record a kit's map from its own bench evidence (D58, **Apply map**; simulator
 only so far)._
 
 ## PR stack (merge order — merge commits, not squash)
+0. **`claude/mac-show-box` → `main` (independent; based on `d21b4e5`)**: the show runs on the Mac mini under launchd
+   instead of the Ubuntu mini PC (D61). `deploy/mac/` (`canopy-mac` helper, `run-conductor.sh`, settings template),
+   `docs/runbooks/mac-show-box.md`, `tests/test_mac_box.py` (27). No Conductor code changes. Details under
+   "The Mac show box" below. (Items 1–5 below are merged; PR #17, `claude/cloud-dev-setup`, is separate docs work.)
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
      (`1eb8551`);
@@ -64,6 +69,34 @@ only so far)._
    reconciler keeps them. Choosing a mood, the safe look and an idle reset (`kiosk.idle_reset_s`, 300 s) clear them.
    It also adds `POST /api/canopy/guest-reset` and a "Clear guest brightness / off" button on `/ops`. No kiosk routes:
    the guest panel branch calls the engine methods.
+
+## The Mac show box (D61) — 2026-10-13
+Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu mini PC. Runbook:
+`docs/runbooks/mac-show-box.md`; helper: `deploy/mac/canopy-mac`.
+- **Installed on the Mac mini, live:** show checkout `~/canopy-show` at `claude/mac-show-box` (switch it to the
+  release tag once merged); settings and data under `~/Library/Application Support/ColorCanopy/` (generated ops login
+  and key, 0600); `HUBSPACE_ACCOUNT_ALLOWLIST` allows only VWBD's shop account (the bench kits' account, not a show
+  account); Alon signed it in on Oct 13 (`canopy-mac login --account bench`, password typed by him, no emailed code).
+  It sees Kingston test and String light 1, both now registered and writable (Alon's go, Oct 13): Kingston test as
+  `bench-kit`, String light 1 as `shop-string-1`, a new overlay entry copied from VWBD's (role `spare` on the bench
+  account, so the engine never drives it). Neither has bench flags or a map on this Mac yet (they're in VWBD's
+  overlay; per D19/D54 a kit's own flags may move with it, never another kit's). Nothing has been written to a light
+  from this Mac. The guest panel's target here is the canopy engine (nine modules, none registered), so on the test
+  iPad (kiosk-enrolled "Test iPad") scenes don't change a light; the module page drives the two kits.
+- **Verified on this Mac (how):** `/api/version` says live/venue; `/healthz` 200 and `/ops/` 401 without the login,
+  both over the LAN address; `kill -9` → launchd restarted it, healthy within ~1 s; a frozen process (`kill -STOP`) →
+  the watchdog logged 2 failed checks, then restarted it on the 3rd (`kickstart -k`; launchd force-killed the frozen
+  process after the 30 s shutdown allowance), healthy again 231 s after the freeze (120 s of that is the start-up
+  grace); re-running `install` over the running Conductor (this failed at first and left it unloaded: `bootout`
+  returns before the process exits — fixed, `install` now waits for launchd, and the watchdog loads a Conductor that
+  is neither loaded nor held, which it did on the real launchd at 14:50); a manual backup. `tests/test_mac_box.py` 27
+  pass, and six guards were each broken in turn and a test failed each time (the `CONDUCTOR_AUTH` drop, the data-dir
+  pin, the 0600 check, the hold, the wait for launchd, the watchdog's reload).
+- **Not verified:** a real reboot and a power cut (FileVault is now off; automatic login still to be switched on,
+  runbook §1); the Mac is on Wi-Fi, not wired to a show router; the 7 am checklist's *Clock synced* item can't see
+  macOS's NTP state (warns; `canopy-mac status` shows the sntp offset); a phone/iPad reaching it over the network.
+  Done on the Mac (Alon, Oct 13): FileVault off; `sudo pmset -a autorestart 1`; the AC profile already had sleep,
+  display sleep and disk sleep at 0 (never) and wake for network on.
 
 ## What the consolidation did
 - **Source of Paris's work:** `NEW STUFF FROM PARIS/color-canopy-integration-2026-10-07/source/` (gitignored drop
@@ -247,6 +280,12 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+0. **The Mac show box (D61), Alon:** merge `claude/mac-show-box`, then point `~/canopy-show` at `main` or the release
+   tag and run `canopy-mac install`. On the Mac: add the show accounts when they exist (`canopy-mac install --accounts
+   …` replaces the list, so include VWBD's if it should stay), turn on automatic login (FileVault is off), wire it to
+   the show router with a reserved address, then restart it and pull the plug once (`mac-show-box.md` §1–§2). Signing
+   in a show account (`canopy-mac login --account canopy`) waits for Home Depot's authorization (06 #20); VWBD's bench
+   account can be signed in now (`--account bench`).
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
    registry after the redeploy.
@@ -286,7 +325,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - Stale-clock writes, rewriting the showing slot, the 12-puck fault. Whether that fault shows in the cloud (frame
   length, `connected-light-count`) is unbenched (gate 10); until then the check is visual.
 - Vignette device profiles and the deadbolt readback.
-- The venue box itself: systemd, the Chromium kiosk and resting page, install from a tag, BIOS/UPS/NTP, cold spare.
+- The show box itself (now the Mac mini, D61): a real reboot and power cut with automatic login, wired to the show
+  router with a fixed address, install from a tag, UPS, the cold spare, and an iPad on the show network.
 - iOS Safari: enrollment cookies, beacon on page close, Guided Access.
 
 ## Decisions Alon owes
@@ -309,5 +349,5 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    unanswered run. Any canopy kit that fails Gate C falls back to T2 (hand-paint in the app, ~15–20 min per module,
    then "record it" on `/ops/module`) or T3.
 3. **Real throttling** may differ from the soak's model; the rate-ramp job and the venue box measure it.
-4. **The venue box is untested on real hardware.** Do the dry-run steps in `venue-box.md` §4 as soon as the mini PC
-   arrives.
+4. **The show box (the Mac mini, D61) hasn't been through a reboot or a power cut.** It runs live under launchd;
+   do `mac-show-box.md` §1–§2's checks (FileVault/auto-login decision, `autorestart`, wired + fixed address).
