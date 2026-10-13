@@ -214,8 +214,16 @@ def _as_field(gradient: GradientCanvas) -> FieldCanvas:
 
 @pytest.mark.parametrize("mode_id", PAINTED)
 def test_a_linear_0_field_paints_exactly_the_x_gradient_head_for_head(mode_id):
-    gradient = _canvas(mode_id)
-    assert isinstance(gradient, GradientCanvas) and gradient.axis == "x"
+    design = _canvas(mode_id)  # a 2-D field since D63; its stops across x are D59's gradient
+    assert isinstance(design, FieldCanvas)
+    gradient = GradientCanvas.model_validate(
+        {
+            "kind": "gradient",
+            "axis": "x",
+            "stops": [s.model_dump() for s in design.stops],
+            "recipe": design.recipe,
+        }
+    )
     field = _as_field(gradient)
     expected = compose_canvas(gradient, canopy=CANOPY, recipes=RECIPES, placements=_placements())
     assert compose_canvas(field, canopy=CANOPY, recipes=RECIPES, placements=_placements()) == expected

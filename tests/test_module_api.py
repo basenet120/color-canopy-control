@@ -361,7 +361,7 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     ]
     assert right.json()["state"]["heads"][0]["paint"] != top_row[0]
 
-    # a mode without a canvas shows its module-level look for that position (the middle column's lavender)
+    # a mode without a canvas shows its module-level look for that position (the moon design at r1c1, D63)
     night = _post(
         app_client,
         "card",
@@ -374,7 +374,7 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     def night_lavender():
         view = {row.key: row.value for row in _services(app_client).sim.device_view(f"sim-{BENCH}")}
         rgb = view.get(("color-rgb", None)) or {}
-        return rgb.get("color-rgb") == {"r": 190, "g": 169, "b": 230} and view[("brightness", None)] == 28
+        return rgb.get("color-rgb") == {"r": 191, "g": 178, "b": 233} and view[("brightness", None)] == 28
 
     _wait(night_lavender)
 
@@ -391,10 +391,10 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     assert golden["result"]["tier"] == "modules" and golden["result"]["status"] == "applied"
     assert any("Gate C" in n for n in golden["result"]["notes"])
     assert golden["state"]["heads"][4]["reported"] == {
-        "r": 203,
-        "g": 125,
-        "b": 183,
-    }  # the right-hand column's colour (214, 132, 193) at Golden Hour's 95 %
+        "r": 209,
+        "g": 122,
+        "b": 178,
+    }  # the design's colour at r1c2, the far side from the sun (220, 128, 187), at Golden Hour's 95 %
 
     bad = _post(
         app_client,

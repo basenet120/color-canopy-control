@@ -19,9 +19,11 @@ from typing import Any
 import yaml
 
 from conductor import rows as R
+from conductor.config import DeviceEntry
 from conductor.engine_api import CanopyPhase, CanopyState, ModePlan, ModuleTarget, PlanError, Tier
 from conductor.executor_api import Command
 from conductor.gate import Purpose
+from conductor.looks import CompileContext, load_modes, module_look
 from conductor.render import head_colors
 
 MODES_PATH = Path(__file__).resolve().parent.parent / "config" / "modes.yaml"
@@ -46,6 +48,12 @@ def _look(d: dict, presets: list[str] | None = None) -> R.Look:
     return R.Look("white", brightness=d.get("brightness", 100), cct=max(2700, int(d.get("cct", 2700))))
 
 
+def _sampled_look(mode_id: str, module: str) -> R.Look:
+    entry = DeviceEntry(id=f"fake-{module}", role="canopy_module", account="fake", module=module)
+    spec = module_look(load_modes().mode(mode_id), entry, CompileContext(registry=[], capabilities={}))
+    return R.Look("rgb", brightness=spec.brightness, rgb=tuple(spec.rgb))
+
+
 def compile_t3(mode_id: str, module: str) -> tuple[R.Look, Tier, str]:
     """The mode's look for one canopy position (`r1c2`) at the first of its module-level / strand techniques on its
     ladder."""
@@ -56,6 +64,8 @@ def compile_t3(mode_id: str, module: str) -> tuple[R.Look, Tier, str]:
         t = tech["strand"]
         return _look(t["look"], t.get("presets")), Tier.STRAND, t["feature"]
     t = tech["modules"]
+    if "sample" in t:  # a design sampled at the module (D63): the real compiler's sampling
+        return _sampled_look(mode_id, module), Tier.T3, t["feature"]
     if "rows" in t:
         look = t["rows"][row]
     elif "columns" in t:

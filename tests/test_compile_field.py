@@ -1,9 +1,9 @@
 """Module level (T3) sampled from a 2-D design field (tests/fixtures_modes_field.yaml): the x-linear field at the
-module centres is the scenes' literal columns byte for byte (D59), and a radial design is truly 2-D."""
+module centres is D59's literal columns byte for byte (pinned here since D63 replaced them in config/modes.yaml), and
+a radial design is truly 2-D."""
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -14,7 +14,7 @@ from conductor.capabilities import detect
 from conductor.config import ColorRecipe, RecipesFile, load_recipes, load_registry
 from conductor.engine_api import Tier
 from conductor.geometry import load_canopy_config
-from conductor.looks import CompileContext, compile_mode, load_modes, module_look, parse_modes
+from conductor.looks import CompileContext, compile_mode, module_look, parse_modes
 from conductor.looks.compile import FINER_THAN_GRID
 from conductor.looks.schema import ModesFile
 from conductor.scenes import load_scenes
@@ -25,32 +25,37 @@ REGISTRY = load_registry()
 MODULES = REGISTRY.canopy_modules()
 BY_POSITION = {m.module: m for m in MODULES}
 SCENES = load_scenes()
-SHOW = load_modes()
 CANOPY = load_canopy_config()
 
 
-def _with_scene_palettes(recipes: RecipesFile) -> RecipesFile:
-    """config/recipes.yaml plus the palette colours of the scenes that have no canvas (so no recipe yet)."""
-    colors = dict(recipes.colors)
-    for scene in SCENES.scenes:
-        if SHOW.mode(scene.id).techniques.canvas is not None:
-            continue
-        for colour in scene.palette:
-            key = re.sub(r"[^a-z0-9]+", "-", colour.name.lower()).strip("-")
-            if key in colors:
-                key = f"{scene.id}-{key}"
-            r, g, b = colour.rgb
-            entry = {"r": r, "g": g, "b": b, "colorBrightness": 100}
-            colors[key] = ColorRecipe(
-                label=colour.name, hex=colour.hex, rgb_only=entry, blend=entry, strand={"rgb": [r, g, b]}
-            )
-    return RecipesFile(colors=colors)
+# D59's module-level columns (config/modes.yaml before D63): each scene's x / 225 gradient at x = 37.5, 112.5, 187.5 in
+D59_COLUMNS = {
+    "lowcountry-calm": [(234, 239, 230), (209, 234, 227), (234, 239, 230)],
+    "rainbow-row-sunset": [(255, 175, 175), (255, 210, 224), (216, 189, 232)],
+    "garden-gathering": [(172, 207, 174), (230, 238, 209), (241, 241, 224)],
+    "coastal-tides": [(111, 181, 213), (150, 219, 211), (206, 238, 221)],
+    "golden-hour": [(255, 194, 156), (255, 155, 196), (214, 132, 193)],
+    "goodnight-glow": [(156, 149, 216), (190, 169, 230), (194, 199, 239)],
+}
 
 
-RECIPES = _with_scene_palettes(load_recipes())
+RECIPES = load_recipes()  # every scene's palette is a recipe since D63
 FIELD = parse_modes(
     yaml.safe_load(PATH.read_text(encoding="utf-8")), recipes=RECIPES, canopy=CANOPY, path=PATH
 )
+
+
+def _literal_columns() -> ModesFile:
+    """The fixture's six scenes with D59's literal columns in place of the sample (same brightness and copy)."""
+    data = yaml.safe_load(PATH.read_text(encoding="utf-8"))
+    for mode_id, columns in D59_COLUMNS.items():
+        modules = data["modes"][mode_id]["techniques"]["modules"]
+        level = modules.pop("sample")["brightness"]
+        modules["columns"] = [{"kind": "rgb", "rgb": list(rgb), "brightness": level} for rgb in columns]
+    return parse_modes(data, recipes=RECIPES, canopy=CANOPY, path=PATH)
+
+
+LITERAL = _literal_columns()
 CAPS = detect(*profile_parts("sqhdk03-sim"))
 
 
@@ -71,18 +76,24 @@ def _brightness(target) -> int:
 
 
 @pytest.mark.parametrize("mode_id", [s.id for s in SCENES.scenes])
-def test_an_x_linear_field_at_the_module_centres_is_todays_literal_columns(mode_id):
+def test_an_x_linear_field_at_the_module_centres_is_d59s_literal_columns(mode_id):
     sampled = compile_mode(mode_id, Tier.T3, _ctx())
-    literal = compile_mode(mode_id, Tier.T3, _ctx(modes=SHOW))
+    literal = compile_mode(mode_id, Tier.T3, _ctx(modes=LITERAL))
     assert sampled.modules == literal.modules  # every row, expectation and preview, byte for byte
     assert (sampled.feature, sampled.motion, sampled.notes) == (
         literal.feature,
         literal.motion,
         literal.notes,
     )
-    columns = [tuple(look.rgb) for look in SHOW.mode(mode_id).techniques.modules.columns]
     for m in MODULES:
-        assert R.color_rgb(*columns[int(m.module[3])]) in sampled.modules[m.id].rows
+        assert R.color_rgb(*D59_COLUMNS[mode_id][int(m.module[3])]) in sampled.modules[m.id].rows
+
+
+@pytest.mark.parametrize("mode_id", [s.id for s in SCENES.scenes])
+def test_d59s_columns_are_each_scenes_x_gradient_at_the_column_centres(mode_id):
+    """The pinned anchor is no typo: each column is the scene catalog's own gradient at its centre."""
+    scene = SCENES.get(mode_id)
+    assert D59_COLUMNS[mode_id] == [scene.color_at((c + 0.5) * 75 / 225) for c in range(3)]
 
 
 def test_a_radial_design_gives_four_levels_from_the_centre_out():

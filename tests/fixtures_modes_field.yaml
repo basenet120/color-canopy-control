@@ -2,13 +2,12 @@
 # field instead of literal columns (P3), plus one radial design. tests/test_compile_field.py loads it.
 #
 # - The six scene modes: an x-linear field (angle 0; Lowcountry Calm mirrored) with the scene's palette as evenly
-#   spaced stops, sampled at each module's centre. Compiled, each must equal config/modes.yaml's literal columns
-#   (the D59 anchor), byte for byte.
+#   spaced stops, sampled at each module's centre. Compiled, each must equal D59's literal columns (the anchor,
+#   pinned in the test since D63 replaced them in config/modes.yaml with 2-D designs), byte for byte.
 # - `radial-sunset`: the Rainbow Row Sunset palette from the canopy's centre out, in inches.
 #
-# Colours: the three painted scenes' palettes are in config/recipes.yaml. Lowcountry Calm, Coastal Tides and The
-# Goodnight Glow have no canvas, so their palette colours aren't recipes; the test adds them from config/scenes.yaml
-# (key = the colour's name, or <scene id>-<name> when the name is taken, the recipes.yaml rule).
+# Colours: every scene's palette is in config/recipes.yaml (D63; key = the colour's name, or <scene id>-<name> when
+# the name is taken).
 kiosk:
   title: The Color Canopy
   prompt: "Choose a mood. Watch the light change."

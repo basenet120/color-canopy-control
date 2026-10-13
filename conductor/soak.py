@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import logging
 import random
 import shutil
@@ -106,6 +107,7 @@ class BuiltinCompiler:
     def __init__(self, registry: Registry, config_dir: Path = CONFIG_DIR, frame_length: int = 30) -> None:
         with open(config_dir / "modes.yaml", encoding="utf-8") as f:
             self._modes: dict[str, dict] = (yaml.safe_load(f) or {})["modes"]
+        self._config_dir = config_dir
         self._modules = registry.canopy_modules()
         self._frame_length = frame_length
 
@@ -155,6 +157,8 @@ class BuiltinCompiler:
             raw = dict(technique["look"])
             if raw.get("kind") == "preset" and not raw.get("preset"):
                 raw["preset"] = (technique.get("presets") or ["snowfall"])[0]
+        elif "sample" in technique:
+            return self._sampled(technique["sample"], position, notes)
         elif "rows" in technique:
             raw = dict(technique["rows"][row % len(technique["rows"])])
         elif "columns" in technique:
@@ -172,6 +176,38 @@ class BuiltinCompiler:
             notes.append(f"{raw['cct']} K clamped to the device floor {self.CCT_FLOOR} K")
             raw["cct"] = self.CCT_FLOOR
         return R.Look.from_json(raw)
+
+    def _sampled(self, sample: dict, position: str, notes: list[str]) -> R.Look:
+        """A module-level design (D63): the field at the module's centre between its stops' `rgb_only` colours, rounded
+        half up. PlanError (so the engine steps down the ladder) when the field module can't be loaded."""
+        try:
+            from pydantic import TypeAdapter
+
+            from conductor.config import load_recipes
+            from conductor.geometry import load_canopy_config
+            from conductor.looks import field as F
+        except ImportError as e:  # pragma: no cover - this compiler is the fallback for a broken looks
+            raise PlanError(f"a sampled module look needs conductor.looks.field ({e})") from None
+        canvas = sample["canvas"]
+        if canvas.get("kind") != "field":
+            raise PlanError("the built-in compiler samples only `field` canvases")
+        path = self._config_dir / "canopy.yaml"
+        canopy = load_canopy_config(path) if path.exists() else load_canopy_config()
+        recipes = load_recipes(self._config_dir)
+        spec = TypeAdapter(F.FieldSpec).validate_python(canvas["field"])
+        if sample.get("at", "centre") != "centre":
+            notes.append("module-level designs are sampled at each module's centre (built-in compiler)")
+        ((x, y),) = F.module_centres(canopy, [position]).values()
+        t = F.value(spec, x, y, canopy)
+        stops = [(float(s["at"]), recipes.colors[s["color"]].rgb_only) for s in canvas["stops"]]
+        (a_at, a), (b_at, b) = stops[0], stops[-1]
+        for (lo_at, lo), (hi_at, hi) in itertools.pairwise(stops):
+            if lo_at <= t <= hi_at:
+                (a_at, a), (b_at, b) = (lo_at, lo), (hi_at, hi)
+                break
+        f = 0.0 if b_at == a_at else min(1.0, max(0.0, (t - a_at) / (b_at - a_at)))
+        rgb = tuple(int(getattr(a, c) * (1 - f) + getattr(b, c) * f + 0.5) for c in "rgb")
+        return R.Look("rgb", brightness=sample.get("brightness", 100), rgb=rgb)
 
     def _frame(self, look: R.Look, module_index: int) -> list[R.FrameEntry]:
         out = []

@@ -571,3 +571,42 @@ the canopy column by column" — false on two of nine (CLAUDE.md: kiosk copy mus
 Follow-ups (separate PRs): derive the guest panel's "changing" state and feature line from the driven modules'
 readback; an honest Now Showing preview at the strand and module tiers; "N of 9 modules" in the rest of the ops copy
 (the commissioning dialog and the timing button still say "all nine modules").
+
+## 2026-10-13 — the scenes as 2-D designs
+
+**D63 — Each scene is one 2-D design over the canopy, and module level samples it (supersedes D59's x / 225 canvas
+and column-only T3).** Alon asked for designs that use the canopy's geometry; these layouts are drafts for Paris to
+review in the PR. Palettes, names, moods, brightness, ladders, slots and the strand looks are D59's, unchanged.
+- **One design per scene** (`config/modes.yaml`): a `field` canvas (`conductor/looks/field.py`, canopy inches in the
+  reflected-ceiling view) whose stops are the scene's palette, in order and evenly spaced, painted `rgb_only`. The
+  painted three name it once with a YAML anchor, so T1's canvas and T3's sample are the same design.
+  - Lowcountry Calm: radial from the canopy's centre, inverted (sea glass in the middle, paling toward ivory at
+    the corners).
+  - Rainbow Row Sunset (custom-1): linear at 45°, corner to corner.
+  - Garden Gathering (custom-2): radial from the middle of one long edge (112.5, 120), inverted (ivory there).
+  - Coastal Tides: a tilted shoreline, linear at 78°.
+  - Golden Hour (custom-3): a radial sun at the middle of the left edge (0, 60).
+  - The Goodnight Glow: a radial moon over r0c2 (187.5, 20), inverted (moonlight blue there).
+  Radii are `auto` (the farthest corner from the centre) and every design is static (`cycles: 1`).
+- **T1** paints the design at each of the 270 heads (the palette at `field.value`, head for head). **T3** sets each
+  module to the design at its centre (`sample: {at: centre}`, the scene's brightness): 4 to 9 distinct module
+  colours per scene, never three columns. **T2** is still "a custom pattern painted light by light in the Hubspace
+  app"; matching a hand-painted slot to the new design needs a per-module painting guide (P12's illustration).
+- **Copy.** T1, T2 and strand sentences are unchanged. Each T3 sentence names its layout in the words
+  `field.layout_words` requires ("from the centre out", "diagonally", "from one edge", "from one spot") and no other
+  layout's, with no movement words. On a partial canopy the T3 sentence is still D62's generated one ("two Hubspace
+  strands, each set to a single colour from the scene"), which never claims a canopy-wide layout. On the Mac box's
+  two kits (r0c0, r0c1) all six scenes show two different colours.
+- **Recipes.** Lowcountry Calm, Coastal Tides and The Goodnight Glow get palette recipes too (D59's rule: the colour's
+  name, or `<scene id>-<name>` when taken: `goodnight-glow-lavender`).
+- **Kiosk.** `/api/kiosk/modes` draws a field canvas as pattern `design`, and a modules-first mode's tile lists its
+  design at each module (through the compiler's own `module_look`) until a plan says otherwise.
+- **Slot hashes.** Changing any canvas changes the compiled T1 frames, so every recorded slot hash of a painted scene
+  goes stale and the reconciler would report drift. Freeze the designs (this decision merged) before commissioning at
+  install, and commission at install rather than relying on show-time rewrites: re-painting after commissioning costs
+  27 slot writes, each slot at most once per 10 minutes. No live runtime holds T1 records on a canopy module today, so
+  this change triggers no live slot writes.
+- **Not changed here.** The Studio's illustration and `config/scenes.yaml` still describe D59's x / 225 strand
+  gradient (P12), and the guest panel's preview is P5's. D59's columns stay pinned in `tests/test_compile_field.py`
+  as the regression anchor (an x-linear field at the module centres reproduces them byte for byte), so reverting
+  this one change restores D59 exactly.

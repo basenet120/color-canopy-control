@@ -122,3 +122,33 @@ def test_the_ripple_scenario_is_configured_and_its_verdicts_hold_the_targets():
     assert soak._result(soak._ripple_rows(failing[0])[0]) == "FAIL (reported)"
     results = {"ripple": _ripple(early=1)}
     assert soak._ripple_line(results["ripple"]).count("1 commands reached a module before its ring") == 1
+
+
+def test_builtin_compiler_samples_each_design_like_the_looks_compiler(tmp_path):
+    """D63: module level is a 2-D design sampled at each module's centre; the soak's fallback compiler sends the
+    same colours as conductor.looks, and refuses (so the engine steps down) a canvas it can't sample."""
+    import shutil
+
+    import pytest
+    import yaml
+
+    from conductor.config import CONFIG_DIR, load_registry
+    from conductor.engine_api import PlanError, Tier
+    from conductor.looks import engine_compiler
+
+    registry = load_registry(CONFIG_DIR, None)
+    builtin, looks = soak.BuiltinCompiler(registry), engine_compiler(registry=registry)
+    for mode_id in builtin.modes():
+        ours, theirs = builtin.compile(mode_id, Tier.T3), looks.compile(mode_id, Tier.T3)
+        assert {d: t.rows for d, t in ours.modules.items()} == {d: t.rows for d, t in theirs.modules.items()}
+    for name in ("modes.yaml", "recipes.yaml"):  # no canopy.yaml: the default canopy, as CompileContext does
+        shutil.copy(CONFIG_DIR / name, tmp_path / name)
+    data = yaml.safe_load((tmp_path / "modes.yaml").read_text())
+    data["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["at"] = "mean"
+    calm = data["modes"]["lowcountry-calm"]["techniques"]["modules"]["sample"]["canvas"]
+    calm.update(kind="gradient", axis="x")
+    (tmp_path / "modes.yaml").write_text(yaml.safe_dump(data))
+    edited = soak.BuiltinCompiler(registry, config_dir=tmp_path)
+    assert any("sampled at each module's centre" in n for n in edited.compile("coastal-tides", Tier.T3).notes)
+    with pytest.raises(PlanError, match="samples only `field` canvases"):
+        edited.compile("lowcountry-calm", Tier.T3)

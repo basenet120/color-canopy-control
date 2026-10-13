@@ -12,7 +12,7 @@ import yaml
 from conductor.config import CONFIG_DIR, ConfigError, load_recipes
 from conductor.geometry import load_canopy_config
 from conductor.looks import load_modes, parse_modes
-from conductor.looks.schema import MOTION_WORDS, GradientCanvas
+from conductor.looks.schema import MOTION_WORDS, FieldCanvas
 
 RAW = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
 RECIPES = load_recipes()
@@ -45,8 +45,9 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
     assert sorted(slots) == ["custom-1", "custom-2", "custom-3"]
     assert modes.kiosk.title == "The Color Canopy"
     sunset = modes.mode("rainbow-row-sunset")
-    assert isinstance(sunset.techniques.canvas.canvas, GradientCanvas)
+    assert isinstance(sunset.techniques.canvas.canvas, FieldCanvas)  # a 2-D design since D63
     assert [s.color for s in sunset.techniques.canvas.canvas.stops] == ["pastel-coral", "blush-pink", "lilac"]
+    assert sunset.techniques.modules.sample.canvas == sunset.techniques.canvas.canvas  # one design, two tiers
     # every scene is static (D59): no mode carries motion, and no copy claims movement
     for mode in modes.modes.values():
         assert mode.motion is False
@@ -141,13 +142,19 @@ def test_white_look_needs_a_colour_temperature_and_preset_needs_a_name():
     assert "rgb look needs rgb" in colour
 
 
+def _literal(d, layout: str, n: int) -> None:
+    """Rainbow Row Sunset's module level as `n` literal looks by `layout` (rows or columns) instead of its sample."""
+    modules = d["modes"]["rainbow-row-sunset"]["techniques"]["modules"]
+    modules.pop("sample")
+    modules[layout] = [{"kind": "rgb", "rgb": [255, 158, 150], "brightness": 85}] * n
+
+
 def test_module_level_rows_must_match_the_canopy_grid():
-    msg = _bad(lambda d: d["modes"]["rainbow-row-sunset"]["techniques"]["modules"]["columns"].pop())
+    msg = _bad(lambda d: _literal(d, "columns", 2))
     assert "lists 2 looks but the canopy has 3 module columns" in msg
 
     def two_rows(d):
-        modules = d["modes"]["rainbow-row-sunset"]["techniques"]["modules"]
-        modules["rows"] = modules.pop("columns")[:2]
+        _literal(d, "rows", 2)
 
     assert "lists 2 looks but the canopy has 3 module rows" in _bad(two_rows)
 
@@ -249,9 +256,9 @@ def test_a_sampled_canvas_is_rgb_only_and_one_layout_at_a_time():
     assert "needs recipe: rgb_only" in _bad(blend)
 
     def both(d):
-        columns = d["modes"]["coastal-tides"]["techniques"]["modules"]["columns"]
         _sampled(RADIAL)(d)
-        d["modes"]["coastal-tides"]["techniques"]["modules"]["columns"] = columns
+        aqua = {"kind": "rgb", "rgb": [121, 206, 212]}
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["columns"] = [aqua] * 3
 
     assert "give exactly one of rows, columns, middle_row (+ others), or sample" in _bad(both)
 

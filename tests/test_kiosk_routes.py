@@ -140,28 +140,61 @@ def test_modes_list_matches_modes_yaml(app_client, engine):
 
 def test_modes_patterns_follow_each_modes_technique():
     patterns = {m["id"]: m["pattern"] for m in load_kiosk_modes()}
-    assert patterns == {
+    assert patterns == {  # the painted three's canvas is a 2-D design (D63); the rest start at module level
         "lowcountry-calm": "modules",
-        "rainbow-row-sunset": "gradient-x",
-        "garden-gathering": "gradient-x",
+        "rainbow-row-sunset": "design",
+        "garden-gathering": "design",
         "coastal-tides": "modules",
-        "golden-hour": "gradient-x",
+        "golden-hour": "design",
         "goodnight-glow": "modules",
     }
+    # a hand-painted slot draws like its canvas
+    assert _pattern(MODES_YAML["modes"][SUNSET], "slot") == "design"
+    assert _pattern(MODES_YAML["modes"][SUNSET], "modules") == "modules"
 
 
-def test_module_level_modes_picture_their_columns_without_a_plan(app_client, engine):
-    """No compiled plan (FakeEngine has no compile_best): a modules-first mode still lists its static column colours
-    in r0c0…r2c2 order, so the tile steps left to right like the ceiling (Calm mirrored), not row by row."""
+def test_module_level_modes_picture_their_designs_without_a_plan(app_client, engine):
+    """No compiled plan (FakeEngine has no compile_best): a modules-first mode still lists its design at each
+    module's centre in r0c0…r2c2 order (D63), so the tile shows what module level puts on the ceiling."""
+    from conductor.geometry import load_canopy_config
+    from conductor.looks import field as F
+    from conductor.looks import load_modes
+    from conductor.scenes import load_scenes
+
+    canopy, modes, scenes = load_canopy_config(), load_modes(), load_scenes()
     by_id = {m["id"]: m for m in app_client.get("/api/kiosk/modes").json()}
     for mode_id in ("lowcountry-calm", "coastal-tides", "goodnight-glow"):
-        columns = MODES_YAML["modes"][mode_id]["techniques"]["modules"]["columns"]
-        hexes = ["#" + "".join(f"{v:02X}" for v in c["rgb"]) for c in columns]
+        spec = modes.mode(mode_id).techniques.modules.sample.canvas.field
+        palette = scenes.get(mode_id).model_copy(update={"transform": "linear"})  # the design's stops
+        expected = [
+            "#" + "".join(f"{v:02X}" for v in palette.color_at(F.value(spec, x, y, canopy)))
+            for x, y in F.module_centres(canopy, [f"r{r}c{c}" for r in range(3) for c in range(3)]).values()
+        ]
         assert by_id[mode_id]["pattern"] == "modules"
-        assert by_id[mode_id]["module_colours"] == hexes * 3
+        assert by_id[mode_id]["module_colours"] == expected
+        assert len(set(expected)) >= 4  # a 2-D design, not three columns
+    # radial: sea glass in the centre, the four corners alike
     calm = by_id["lowcountry-calm"]["module_colours"]
-    assert calm[0] == calm[2] != calm[1]  # ivory at both ends, sea glass in the middle
+    assert calm[0] == calm[2] == calm[6] == calm[8] != calm[4] == "#D1EAE3"
+    assert calm[1] == calm[7] and calm[3] == calm[5] and calm[1] != calm[3]
     assert all(by_id[m]["module_colours"] is None for m in (SUNSET, "garden-gathering", "golden-hour"))
+
+
+def test_a_design_tile_needs_the_validated_mode_and_says_nothing_it_cant_work_out(caplog):
+    """Raw YAML can't be sampled (the looks loader refused it, or a fixture path): no colours rather than a guess."""
+    from conductor.looks import load_modes
+    from conductor.routes.kiosk import _static_module_colours
+
+    spec = MODES_YAML["modes"][CALM]
+    with caplog.at_level("WARNING", logger="conductor.routes.kiosk"):
+        assert _static_module_colours(spec, None) is None
+    assert not caplog.text  # the refusal was logged where the loader failed; nothing to add here
+    broken = load_modes().mode(CALM).model_copy(deep=True)
+    broken.techniques.modules.sample.canvas.stops[0].color = "no-such-colour"
+    with caplog.at_level("WARNING", logger="conductor.routes.kiosk"):
+        assert _static_module_colours(spec, broken) is None
+    assert "couldn't sample a module-level design" in caplog.text
+    assert len(_static_module_colours(spec, load_modes().mode(CALM))) == 9
 
 
 def test_each_tier_draws_what_the_ceiling_shows():
