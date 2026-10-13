@@ -16,12 +16,16 @@ Rules implemented:
   wire index i in entry `indices[i]`, every other entry OFF (all fields 0), so frames and slot hashes stay
   deterministic. A longer frame without one is refused as controller capacity with no proven map, not lost pucks.
 - **Colours are recipes** (`config/recipes.yaml`, `rgb_only` or `blend`); between recipe colours every frame field
-  is interpolated (a side with no white keeps the other side's Kelvin and only fades white brightness). A colour
-  level (`colorBrightness` in modes.yaml) scales the recipe entry's colour *and* white brightness.
+  is interpolated (a side with no white keeps the other side's Kelvin and only fades white brightness) and rounded
+  half up with the scene catalog's formula (`conductor/scenes.py`, JavaScript's Math.round), so a design lands on
+  the same colour as the scene it renders even on an exact half. A colour level (`colorBrightness` in modes.yaml)
+  scales the recipe entry's colour *and* white brightness.
 - **Deterministic.** Same config in, same frames out: no clock, no randomness.
 
 Canvas kinds (config/modes.yaml `techniques.canvas.canvas`):
 - `gradient`        colour stops at 0..1 along the canopy's x (0 = left edge) or y (0 = top edge).
+- `field`           colour stops at 0..1 over a 2-D design field (`conductor/looks/field.py`): linear at any angle,
+                    radial (rings) or a sweep, with mirror / invert / repeat. Linear at 0° is the x `gradient`.
 - `pathway`         a meandering band `width_in` wide around y = H/2 + amplitude·sin(2π·periods·x/W), over a base.
 - `band_per_module` one soft band per module width, centred in each module column, over a base: every module shows
                     the same band at the same canopy-local x, so in-phase on-device motion reads as waves. With
@@ -40,7 +44,8 @@ from conductor.config import RecipesFile
 from conductor.engine_api import PlanError
 from conductor.framemap import capacity_problem, unmapped_capacity
 from conductor.geometry import panel_lattice, panel_order
-from conductor.looks.schema import BandCanvas, ColorLevel, GradientCanvas, PathwayCanvas
+from conductor.looks import field as F
+from conductor.looks.schema import BandCanvas, ColorLevel, FieldCanvas, GradientCanvas, PathwayCanvas
 from conductor.rows import FrameEntry
 
 Point = tuple[float, float]
@@ -172,7 +177,8 @@ def head_count_problem(placement: Placement, lattice_size: int) -> str | None:
 
 # ---- colour maths ------------------------------------------------------------------------------------------------
 def _lerp(a: int, b: int, t: float) -> int:
-    return round(a + (b - a) * t)
+    # The scene catalog's rounding (conductor/scenes.py `color_at`): the same formula, rounded half up.
+    return math.floor(a * (1 - t) + b * t + 0.5)
 
 
 def mix(a: FrameEntry, b: FrameEntry, t: float) -> FrameEntry:
@@ -231,9 +237,10 @@ class _Evaluator:
         self.w = float(canopy["width_in"])
         self.h = float(canopy["height_in"])
         self.mw = float(canopy["module"]["width_in"])
+        self.canopy = canopy
         self.recipes = recipes
         kind = canvas.recipe
-        if isinstance(canvas, GradientCanvas):
+        if isinstance(canvas, GradientCanvas | FieldCanvas):
             self.stops = [(s.at, recipe_entry(recipes, s.color, kind)) for s in canvas.stops]
         elif isinstance(canvas, PathwayCanvas):
             self.base = _level(recipes, canvas.base, kind)
@@ -258,6 +265,8 @@ class _Evaluator:
         if isinstance(c, GradientCanvas):
             t = (x / self.w) if c.axis == "x" else (y / self.h)
             return self._gradient(min(1.0, max(0.0, t)))
+        if isinstance(c, FieldCanvas):
+            return self._gradient(F.value(c.field, x, y, self.canopy))
         if isinstance(c, PathwayCanvas):
             d = min(math.hypot(x - cx, y - cy) for cx, cy in self.curve)
             half = c.path.width_in / 2

@@ -10,8 +10,16 @@ from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test
 from conductor.config import load_recipes, load_registry
 from conductor.engine_api import PlanError
 from conductor.geometry import build_layout, load_canopy_config
-from conductor.looks import canvas_heads, compose_canvas, evaluate, head_positions, load_modes, placement_for
-from conductor.looks.schema import BandCanvas, GradientCanvas, PathwayCanvas
+from conductor.looks import (
+    Placement,
+    canvas_heads,
+    compose_canvas,
+    evaluate,
+    head_positions,
+    load_modes,
+    placement_for,
+)
+from conductor.looks.schema import BandCanvas, FieldCanvas, GradientCanvas, PathwayCanvas
 from conductor.rows import FrameEntry
 
 CANOPY = load_canopy_config()
@@ -187,3 +195,61 @@ def test_a_bench_kit_placed_at_a_canopy_position_samples_that_slice():
         placement_for(CANOPY, bench, frame_length=30, module="r3c0")
     with pytest.raises(PlanError, match="isn't a canopy position"):
         placement_for(CANOPY, bench, frame_length=30, module="middle")
+
+
+PAINTED = ["rainbow-row-sunset", "garden-gathering", "golden-hour"]
+
+
+def _as_field(gradient: GradientCanvas) -> FieldCanvas:
+    """The same stops over a linear field at 0° (x / 225) instead of the x-axis gradient."""
+    return FieldCanvas.model_validate(
+        {
+            "kind": "field",
+            "field": {"kind": "linear", "angle_deg": 0},
+            "stops": [s.model_dump() for s in gradient.stops],
+            "recipe": gradient.recipe,
+        }
+    )
+
+
+@pytest.mark.parametrize("mode_id", PAINTED)
+def test_a_linear_0_field_paints_exactly_the_x_gradient_head_for_head(mode_id):
+    gradient = _canvas(mode_id)
+    assert isinstance(gradient, GradientCanvas) and gradient.axis == "x"
+    field = _as_field(gradient)
+    expected = compose_canvas(gradient, canopy=CANOPY, recipes=RECIPES, placements=_placements())
+    assert compose_canvas(field, canopy=CANOPY, recipes=RECIPES, placements=_placements()) == expected
+    # a kit's 60-entry controller map: heads at their mapped entries, OFF elsewhere, identical either way
+    mapped = [
+        Placement(**{**p.__dict__, "frame_length": 60, "indices": tuple(range(1, 60, 2))})
+        for p in _placements()
+    ]
+    via_field = compose_canvas(field, canopy=CANOPY, recipes=RECIPES, placements=mapped)
+    via_gradient = compose_canvas(gradient, canopy=CANOPY, recipes=RECIPES, placements=mapped)
+    assert via_field == via_gradient
+    for device_id, frame in via_field.items():
+        assert (
+            len(frame) == 60
+            and frame[1::2] == expected[device_id]
+            and set(frame[0::2]) == {FrameEntry(0, 0, 0, 0, 0, 0)}
+        )
+
+
+def test_a_radial_field_canvas_is_2d_and_evaluates_its_stops():
+    canvas = FieldCanvas.model_validate(
+        {
+            "kind": "field",
+            "field": {"kind": "radial", "centre_in": [112.5, 60], "radius_in": 100},
+            "stops": [{"at": 0, "color": "hd-orange"}, {"at": 1, "color": "peach"}],
+            "recipe": "rgb_only",
+        }
+    )
+    centre = evaluate(canvas, 112.5, 60, canopy=CANOPY, recipes=RECIPES)
+    assert centre == FrameEntry(**RECIPES.colors["hd-orange"].rgb_only.model_dump())
+    assert evaluate(canvas, 12.5, 60, canopy=CANOPY, recipes=RECIPES) == FrameEntry(
+        **RECIPES.colors["peach"].rgb_only.model_dump()
+    )
+    # the same distance from the centre in any direction is the same colour
+    assert evaluate(canvas, 112.5, 20, canopy=CANOPY, recipes=RECIPES) == evaluate(
+        canvas, 152.5, 60, canopy=CANOPY, recipes=RECIPES
+    )

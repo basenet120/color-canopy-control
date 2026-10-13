@@ -158,3 +158,117 @@ def test_invalid_yaml_is_a_config_error(tmp_path):
     Path(tmp_path / "modes.yaml").write_text("modes:\n  calm: [unclosed\n")
     with pytest.raises(ConfigError, match="not valid YAML"):
         load_modes(tmp_path)
+
+
+# ---- module level sampled from a 2-D design field (P3) ------------------------------------------------------------
+def _sampled(
+    field: dict, feature: str = "Each strand set to one colour, so the palette steps from the centre out."
+):
+    """modes.yaml with Coastal Tides' module level sampled from a field canvas (a valid radial design by default)."""
+
+    def mutate(d):
+        d["modes"]["coastal-tides"]["techniques"]["modules"] = {
+            "sample": {
+                "canvas": {
+                    "kind": "field",
+                    "field": field,
+                    "stops": [{"at": 0, "color": "pastel-coral"}, {"at": 1, "color": "lilac"}],
+                    "recipe": "rgb_only",
+                },
+                "brightness": 85,
+            },
+            "feature": feature,
+        }
+
+    return mutate
+
+
+RADIAL = {"kind": "radial", "centre_in": [112.5, 60]}
+
+
+def test_a_sampled_field_design_loads():
+    data = copy.deepcopy(RAW)
+    _sampled(RADIAL)(data)
+    sample = _parse(data).mode("coastal-tides").techniques.modules.sample
+    assert sample.at == "centre" and sample.canvas.field.radius_in == "auto"
+
+
+def test_sampled_copy_must_name_the_designs_layout():
+    msg = _bad(
+        _sampled(RADIAL, feature="Each strand set to one colour, so the palette steps column by column.")
+    )
+    assert "mode 'coastal-tides' → techniques → modules → feature" in msg
+    assert "laid out 'from the centre out'" in msg
+    diagonal = _bad(
+        _sampled({"kind": "linear", "angle_deg": 30}, feature="Steps across the canopy row by row.")
+    )
+    assert "mode 'coastal-tides'" in diagonal and "'diagonally'" in diagonal
+    rows = copy.deepcopy(RAW)
+    _sampled({"kind": "linear", "angle_deg": 90}, feature="Each strand one colour, stepping row by row.")(
+        rows
+    )
+    assert _parse(rows).mode("coastal-tides").techniques.modules.sample is not None
+
+
+def test_a_wave_in_sampled_static_copy_is_still_refused():
+    msg = _bad(_sampled(RADIAL, feature="A wave of colour from the centre out."))
+    assert "mode 'coastal-tides': techniques → modules → feature mentions movement ('wave')" in msg
+
+
+@pytest.mark.parametrize(
+    ("field", "where", "message"),
+    [
+        ({"kind": "spiral"}, "sample → canvas → field", "does not match any of the expected tags"),
+        (
+            {**RADIAL, "cycles": 0},
+            "sample → canvas → field → cycles",
+            "cycles must be a whole number from 1 to 6",
+        ),
+        (
+            {**RADIAL, "radius_in": 0},
+            "sample → canvas → field → radius_in",
+            "radius_in must be auto or a distance",
+        ),
+        ({**RADIAL, "radius_in": -10}, "sample → canvas → field → radius_in", "greater than 0"),
+    ],
+)
+def test_bad_field_specs_name_the_mode_and_field_plainly(field, where, message):
+    msg = _bad(_sampled(field))
+    assert f"mode 'coastal-tides' → techniques → modules → {where}:" in msg and message in msg
+
+
+def test_a_sampled_canvas_is_rgb_only_and_one_layout_at_a_time():
+    def blend(d):
+        _sampled(RADIAL)(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["canvas"]["recipe"] = "blend"
+
+    assert "needs recipe: rgb_only" in _bad(blend)
+
+    def both(d):
+        columns = d["modes"]["coastal-tides"]["techniques"]["modules"]["columns"]
+        _sampled(RADIAL)(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["columns"] = columns
+
+    assert "give exactly one of rows, columns, middle_row (+ others), or sample" in _bad(both)
+
+    def unknown(d):
+        _sampled(RADIAL)(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["canvas"]["stops"][1]["color"] = "teal"
+
+    msg = _bad(unknown)
+    assert "mode 'coastal-tides' → techniques → modules → sample → canvas → stops → [1] → color" in msg
+    assert "unknown colour 'teal'" in msg
+
+
+def test_a_sweep_centred_on_a_module_centre_is_refused_at_the_centre_only():
+    sweep = {"kind": "sweep", "centre_in": [112.5, 60]}
+    words = "Each strand set to one colour, so the palette steps around the centre."
+    msg = _bad(_sampled(sweep, feature=words))
+    assert "mode 'coastal-tides' → techniques → modules → sample" in msg and "module r1c1's centre" in msg
+    data = copy.deepcopy(RAW)
+    _sampled(sweep, feature=words)(data)
+    data["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["at"] = "mean"
+    assert _parse(data).mode("coastal-tides").techniques.modules.sample.at == "mean"
+    off_centre = copy.deepcopy(RAW)
+    _sampled({"kind": "sweep", "centre_in": [112.5, 50]}, feature=words)(off_centre)
+    assert _parse(off_centre).mode("coastal-tides").techniques.modules.sample is not None

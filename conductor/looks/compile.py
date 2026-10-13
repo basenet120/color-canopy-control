@@ -36,12 +36,18 @@ Rules implemented:
   heads at their mapped entries, every other entry OFF. A saved map that doesn't match the kit, or a longer frame with
   no map, refuses T1 with `conductor.framemap.head_check`'s reason (whole-strand tiers and app-painted T2 slots still
   compile). Without `addresses` no map is consulted.
+- **A sampled module look (T3 `sample`).** Each module is set to one RGB colour: the canvas (a 2-D field or a
+  gradient) at the module's centre ((col + ½)·75, (row + ½)·40 in), or the mean of its 30 heads' colours with
+  `at: mean`, at the sample's brightness — the same on every module (D60). An x-linear field sampled at the centres
+  is the scene's literal columns (D59). When the design is finer than the module grid (it repeats with
+  centre sampling, or a whole canopy samples to one colour) a note says so.
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
   kit's map when it has one).
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -56,8 +62,9 @@ from conductor.config import CONFIG_DIR, DeviceEntry, DeviceFlags, RecipesFile, 
 from conductor.drivers.base import StateRow
 from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Tier
 from conductor.geometry import load_canopy_config, panel_lattice
-from conductor.looks.composer import compose_canvas, parse_position, placement_for
-from conductor.looks.schema import LookSpec, Mode, ModesFile, load_modes
+from conductor.looks import field as F
+from conductor.looks.composer import compose_canvas, evaluate, head_positions, parse_position, placement_for
+from conductor.looks.schema import FieldCanvas, LookSpec, Mode, ModesFile, ModuleSample, load_modes
 
 NUMBER_WORDS = {
     1: "one",
@@ -71,6 +78,9 @@ NUMBER_WORDS = {
     9: "nine",
 }
 STATIC_EFFECTS = {"motionEffect": 0, "brightnessEffect": 0}
+FINER_THAN_GRID = (
+    "The pattern repeats faster than the module grid; at module level some bands disappear (try at: mean)"
+)
 SAFE_MODES = frozenset({"lowcountry-calm"})  # the safe look: must compile even before a profile is read
 # What the safe look assumes for a module whose profile hasn't been read (the sibling string's documented white
 # range, 04): enough for a whole-strand white or RGB look, nothing painted.
@@ -779,10 +789,36 @@ def _design_frames(
 
 
 # ---- modules (T3) ------------------------------------------------------------------------------------------------
-def module_look(mode: Mode, row: int, col: int, n_rows: int) -> LookSpec:
-    """The T3 strand look for the module at (row, col)."""
+def _half_up(x: float) -> int:
+    return math.floor(x + 0.5)
+
+
+def _sampled_rgb(sample: ModuleSample, entry: DeviceEntry, ctx: CompileContext) -> tuple[int, int, int]:
+    """The sample's one RGB colour for this module: the canvas at the module's centre, or its heads' mean."""
+    assert ctx.canopy is not None and ctx.recipes is not None
+    if sample.at == "centre":
+        points = list(F.module_centres(ctx.canopy, [str(entry.module)]).values())
+    else:
+        points = head_positions(ctx.canopy, placement_for(ctx.canopy, entry, frame_length=None))
+    colours = [evaluate(sample.canvas, x, y, canopy=ctx.canopy, recipes=ctx.recipes) for x, y in points]
+    # rgb_only (the schema insists): a colour level dims the RGB itself, since a strand look has one brightness
+    channels = [
+        [c.r * c.colorBrightness / 100, c.g * c.colorBrightness / 100, c.b * c.colorBrightness / 100]
+        for c in colours
+    ]
+    r, g, b = (_half_up(sum(ch[i] for ch in channels) / len(channels)) for i in range(3))
+    return r, g, b
+
+
+def module_look(mode: Mode, entry: DeviceEntry, ctx: CompileContext) -> LookSpec:
+    """The T3 strand look for this module at its canopy position."""
     tech = mode.techniques.modules
-    assert tech is not None
+    assert tech is not None and ctx.canopy is not None
+    row, col = parse_position(entry.module, ctx.canopy)
+    n_rows = len(ctx.canopy["orientations"][ctx.canopy["orientation_scheme"]])
+    if tech.sample is not None:
+        rgb = _sampled_rgb(tech.sample, entry, ctx)
+        return LookSpec(kind="rgb", rgb=rgb, brightness=tech.sample.brightness)
     if tech.rows is not None:
         return tech.rows[min(row, len(tech.rows) - 1)]
     if tech.columns is not None:
@@ -797,14 +833,21 @@ def _modules(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
     grid = ctx.canopy["orientations"][ctx.canopy["orientation_scheme"]]
     notes = _Notes()
     modules = {}
+    sampled = set()
     for d in devices:
         c = ctx.caps(d.id)
-        row, col = parse_position(d.module, ctx.canopy)
-        spec = module_look(mode, row, col, len(grid))
+        spec = module_look(mode, d, ctx)
         if problem := _look_problem(spec, c):
             raise PlanError(f"{mode.label} (module level) can't run on {d.id}: {problem}")
+        sampled.add(spec.rgb)
         look = _to_look(spec, c, notes, d.id)
         modules[d.id] = _target(d, c, _vector(look, c), indices=ctx.frame_indices(d, c))
+    sample = tech.sample
+    if sample is not None:
+        repeats = isinstance(sample.canvas, FieldCanvas) and sample.canvas.field.cycles > 1
+        whole = len(devices) == sum(len(row) for row in grid)
+        if (repeats and sample.at == "centre") or (whole and len(sampled) < 2):
+            notes.add(FINER_THAN_GRID)
     return ModePlan(mode_id, mode.label, Tier.T3, tech.feature, False, modules, notes.lines(len(devices)))
 
 

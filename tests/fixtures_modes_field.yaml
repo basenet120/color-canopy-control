@@ -1,0 +1,154 @@
+# TEST FIXTURE — not show config. The six approved scenes' module level (T3) written as a `sample` of a 2-D design
+# field instead of literal columns (P3), plus one radial design. tests/test_compile_field.py loads it.
+#
+# - The six scene modes: an x-linear field (angle 0; Lowcountry Calm mirrored) with the scene's palette as evenly
+#   spaced stops, sampled at each module's centre. Compiled, each must equal config/modes.yaml's literal columns
+#   (the D59 anchor), byte for byte.
+# - `radial-sunset`: the Rainbow Row Sunset palette from the canopy's centre out, in inches.
+#
+# Colours: the three painted scenes' palettes are in config/recipes.yaml. Lowcountry Calm, Coastal Tides and The
+# Goodnight Glow have no canvas, so their palette colours aren't recipes; the test adds them from config/scenes.yaml
+# (key = the colour's name, or <scene id>-<name> when the name is taken, the recipes.yaml rule).
+kiosk:
+  title: The Color Canopy
+  prompt: "Choose a mood. Watch the light change."
+  tagline: "Make it your mood."
+  resting: "The canopy is resting. It will be back shortly."
+  updating: "Changing the light…"
+  ready: "Ready"
+
+modes:
+  lowcountry-calm:
+    label: Lowcountry Calm
+    blurb: Settle in
+    preview: ["#F7F2E7", "#D1EAE3"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: linear, angle_deg: 0, transform: mirror}
+            stops:
+              - {at: 0.0, color: soft-ivory}
+              - {at: 1.0, color: sea-glass}
+            recipe: rgb_only
+          brightness: 70
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+
+  rainbow-row-sunset:
+    label: Rainbow Row Sunset
+    blurb: Stay a little longer
+    preview: ["#FF9E96", "#FFD2E0", "#C4B3EC"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: linear, angle_deg: 0}
+            stops:
+              - {at: 0.0, color: pastel-coral}
+              - {at: 0.5, color: blush-pink}
+              - {at: 1.0, color: lilac}
+            recipe: rgb_only
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+
+  garden-gathering:
+    label: Garden Gathering
+    blurb: Bring everyone together
+    preview: ["#8FBF9D", "#E6EED1", "#F7F2E7"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: linear, angle_deg: 0}
+            stops:
+              - {at: 0.0, color: sage-green}
+              - {at: 0.5, color: pale-lime}
+              - {at: 1.0, color: ivory}
+            recipe: rgb_only
+          brightness: 75
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+
+  coastal-tides:
+    label: Coastal Tides
+    blurb: Find your coast
+    preview: ["#659BD5", "#79CED4", "#B2E8D2", "#E9F3E7"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: linear, angle_deg: 0}
+            stops:
+              - {at: 0.0, color: ocean-blue}
+              - {at: 0.3333333333333333, color: aqua}
+              - {at: 0.6666666666666666, color: seafoam}
+              - {at: 1.0, color: foam-white}
+            recipe: rgb_only
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+
+  golden-hour:
+    label: Golden Hour
+    blurb: Let the evening glow
+    preview: ["#FFDB9B", "#FFB69D", "#FF9BC4", "#E779B0", "#B59AE2"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: linear, angle_deg: 0}
+            stops:
+              - {at: 0.0, color: soft-gold}
+              - {at: 0.25, color: golden-hour-peach}
+              - {at: 0.5, color: sunset-pink}
+              - {at: 0.75, color: rose}
+              - {at: 1.0, color: lavender}
+            recipe: rgb_only
+          brightness: 95
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+
+  goodnight-glow:
+    label: The Goodnight Glow
+    blurb: Slow the night down
+    preview: ["#8B8BD1", "#BEA9E6", "#C4D6F3"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: linear, angle_deg: 0}
+            stops:
+              - {at: 0.0, color: periwinkle}
+              - {at: 0.5, color: goodnight-glow-lavender}
+              - {at: 1.0, color: moonlight-blue}
+            recipe: rgb_only
+          brightness: 28
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+
+  radial-sunset:
+    label: Radial Sunset
+    blurb: A test design from the centre
+    preview: ["#FF9E96", "#FFD2E0", "#C4B3EC"]
+    ladder: [modules]
+    techniques:
+      modules:
+        sample:
+          canvas:
+            kind: field
+            field: {kind: radial, centre_in: [112.5, 60]}
+            stops:
+              - {at: 0.0, color: pastel-coral}
+              - {at: 0.5, color: blush-pink}
+              - {at: 1.0, color: lilac}
+            recipe: rgb_only
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps from the centre out."
