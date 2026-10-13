@@ -212,6 +212,8 @@ def test_the_panel_lists_the_six_approved_scenes(shop):
     assert body["state"]["scene"] is None and body["state"]["feature"] is None
     assert body["state"]["phase"] == "ready" and isinstance(body["server_now"], float)
     assert shop.get("/api/kiosk/panel").headers["cache-control"] == "no-store"
+    # no canopy picture on the workshop: the panel draws the two strands' own 30-light serpentine
+    assert body["canopy"] is None and body["state"]["lit"] is None
 
 
 # ---- workshop scenes -----------------------------------------------------------------------------------------------
@@ -783,6 +785,86 @@ def test_the_ops_safe_look_help_doesnt_promise_all_nine_modules():
     assert "registered" in help_text
 
 
+# ---- the canopy picture (conductor/canopy_view.py) -----------------------------------------------------------------
+def _lit_settled(c, timeout: float = 15.0, want=("lit",), driven=None) -> dict:
+    """The panel once every driven position of its picture reads one of `want`."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        body = _panel(c)
+        lit = body["state"]["lit"]
+        if lit is not None and all(
+            m["state"] in want for m in lit["modules"] if driven is None or m["pos"] in driven
+        ):
+            return body
+        time.sleep(0.05)
+    raise AssertionError(f"the picture never settled on {want}: {body['state']}")
+
+
+def _no_device_names(body: dict) -> None:
+    text = json.dumps({"canopy": body["canopy"], "lit": body["state"]["lit"]})
+    for word in ("canopy-r", "sim-", "Module ", "reason", "Hubspace", "label"):
+        assert word not in text, word
+
+
+def test_the_engine_panel_serves_the_canopy_and_the_lit_state_of_the_installed_plan(app_client_show):
+    from conductor.canopy_view import load_canopy, module_colours
+
+    c = app_client_show
+    engine = showing(c)
+    body = _lit_settled(c)
+    canopy = body["canopy"]
+    assert [m["pos"] for m in canopy["modules"]] == [f"r{r}c{col}" for r in range(3) for col in range(3)]
+    assert sum(len(m["heads"]) for m in canopy["modules"]) == 270
+    assert canopy["view"] == {"mirror_x": False, "rotate_deg": 0, "dim_floor": 0.35}
+    plan = engine.current_plan()
+    cfg = load_canopy(str(_services(c).config_dir))
+    by_position = {e.module: e for e in _services(c).registry.canopy_modules()}
+    lit = body["state"]["lit"]
+    assert lit["level"] == engine.state().brightness and lit["motion"] is None
+    for m in lit["modules"]:
+        entry = by_position[m["pos"]]
+        colours = module_colours(cfg, entry, plan.modules[entry.id].colors)
+        assert (m["colors"] or [m["color"]] * 30) == colours, m
+    _no_device_names(body)
+
+    assert c.post("/api/kiosk/power", json={"on": False}).status_code == 200
+    body = _lit_settled(c, want=("off",))
+    assert body["state"]["lit"]["level"] is None and body["state"]["power"] is False
+    assert all(m["color"] is None and m["colors"] is None for m in body["state"]["lit"]["modules"])
+
+
+def test_a_partial_canopy_picture_is_two_lit_and_seven_dark(monkeypatch, tmp_path):
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = showing(c)
+        body = _lit_settled(c, want=("lit",), driven={"r0c0", "r0c1"})
+        lit = {m["pos"]: m for m in body["state"]["lit"]["modules"]}
+        assert [lit[p]["state"] for p in ("r0c0", "r0c1")] == ["lit", "lit"]
+        assert all(lit[p]["color"] or lit[p]["colors"] for p in ("r0c0", "r0c1"))
+        dark = [m for p, m in lit.items() if p not in ("r0c0", "r0c1")]
+        assert len(dark) == 7 and all(m["state"] == "dark" and m["color"] is None for m in dark)
+        assert engine.state().phase == CanopyPhase.NEEDS_ATTENTION  # /ops stays loud (D62)
+        _no_device_names(body)
+
+
+def test_a_picture_that_cant_be_worked_out_is_no_picture_never_a_failed_panel(monkeypatch, app_client_show):
+    from conductor import canopy_view
+
+    showing(app_client_show)
+
+    def broken(*_a, **_kw):
+        raise RuntimeError("test")
+
+    monkeypatch.setattr(canopy_view, "lit_state", broken)
+    body = _panel(app_client_show)
+    assert body["state"]["lit"] is None and body["state"]["phase"] in ("ready", "cooldown", "changing")
+
+
+def test_an_engine_with_no_plan_serves_the_canopy_but_no_picture(app_client):
+    _engine(app_client)  # tests/test_kiosk_routes.py's FakeEngine: current_plan() is None
+    body = _panel(app_client)
+    assert len(body["canopy"]["modules"]) == 9 and body["state"]["lit"] is None
+
+
 # ---- who may call --------------------------------------------------------------------------------------------------
 def _enroll(client, role: str, grants: list[str] | None = None) -> None:
     link = client.post(
@@ -800,6 +882,8 @@ def test_the_kiosk_reaches_the_panel_but_not_its_debug_view(app_client_auth):
     _enroll(client, "kiosk")
     body = _panel(client)
     assert body["viewer"] == "kiosk"
+    # the kiosk reads the canopy picture
+    assert len(body["canopy"]["modules"]) == 9 and "lit" in body["state"]
     assert client.post("/api/kiosk/scene", json={"scene": "rainbow-row-sunset"}).status_code == 200
     assert client.post("/api/kiosk/brightness", json={"level": 40}).status_code == 200
     assert client.post("/api/kiosk/power", json={"on": True}).status_code == 200

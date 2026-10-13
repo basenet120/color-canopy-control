@@ -88,6 +88,26 @@ class ReconcilerSettings(_Strict):
     outage_probe_interval_s: float = 10
 
 
+class PreviewSettings(_Strict):
+    """How the guest panel draws the canopy's 270 lights (the reflected-ceiling view, as config/canopy.yaml lists it:
+    looking up, origin at the canopy's top-left). Set at install so the iPad's picture matches what a guest standing
+    at the stand sees overhead: `mirror_x` flips it left to right, `rotate_deg` turns it by quarter turns, and
+    `dim_floor` is the opacity of the dimmest guest level (the level is drawn as opacity, from this up to 1)."""
+
+    mirror_x: bool = False
+    rotate_deg: int = 0
+    dim_floor: float = Field(0.35, ge=0.0, le=1.0)
+
+    @field_validator("rotate_deg")
+    @classmethod
+    def _quarter_turn(cls, v: int) -> int:
+        if v not in (0, 90, 180, 270):
+            raise ValueError(
+                f"rotate_deg must be 0, 90, 180 or 270 (a quarter turn of the ceiling view), not {v}"
+            )
+        return v
+
+
 class KioskSettings(_Strict):
     cooldown_s: float = 8
     idle_return_s: float = 180
@@ -98,6 +118,7 @@ class KioskSettings(_Strict):
     guest_brightness_min: int = Field(10, ge=1, le=100)
     idle_reset_s: float = Field(300, gt=0)
     idle_scene: str | None = None
+    preview: PreviewSettings = Field(default_factory=PreviewSettings)
 
 
 class ModulePageSettings(_Strict):

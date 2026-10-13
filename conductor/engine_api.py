@@ -40,7 +40,11 @@ class ModuleTarget:
     slot_hash: str | None = None  # canonical hash of slot_value (or the recorded hash for T2)
     preview: list[dict] = field(
         default_factory=list
-    )  # per-head {r,g,b} as it should look (visualizer / kiosk)
+    )  # per-head {r,g,b} as it should look at the look's brightness (visualizer, /ops)
+    # Per-head {r,g,b} at full strength (the same rows with brightness 100), in wire order like `preview`: the guest
+    # panel's preview draws these and shows the level separately, so a guest brightness never changes a colour.
+    # Empty when the compiler can't say what the heads show (a T2 slot whose content isn't known).
+    colors: list[dict] = field(default_factory=list)
     # The device's own brightness range: a guest level is clamped to it, as the designed one was (D60).
     brightness_range: tuple[int, int] | None = None
 

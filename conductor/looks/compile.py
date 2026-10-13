@@ -43,7 +43,8 @@ Rules implemented:
   centre sampling, or a whole canopy samples to one colour) a note says so; when the whole canopy samples to one
   colour the feature says that instead of the design's layout (kiosk copy is true).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
-  kit's map when it has one).
+  kit's map when it has one); `ModuleTarget.colors` is the same render with the brightness row at 100 (full-strength
+  colours for the guest panel, which shows the level on its own).
 """
 
 from __future__ import annotations
@@ -515,12 +516,12 @@ def _target(
     indices: list[int] | None = None,
 ) -> ModuleTarget:
     rows = R.dedupe(rows)
-    preview = render.head_colors(
-        preview_rows if preview_rows is not None else rows,
-        len(indices) if indices is not None else _heads(entry, caps),
-        caps,
-        indices,
-    )
+    shown = preview_rows if preview_rows is not None else rows
+    n = len(indices) if indices is not None else _heads(entry, caps)
+    preview = render.head_colors(shown, n, caps, indices)
+    # the same heads at full strength: the brightness row replaced by 100 (the device level is shown on its own)
+    full = [R.brightness(100) if r.key == ("brightness", None) else r for r in shown]
+    colors = render.head_colors(full, n, caps, indices)
     return ModuleTarget(
         device_id=entry.id,
         rows=rows,
@@ -530,6 +531,7 @@ def _target(
         slot_hash=slot_hash,
         brightness_range=caps.brightness_range,
         preview=preview,
+        colors=colors,
     )
 
 
@@ -763,7 +765,7 @@ def _slot(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEnt
             d, c, rows, slot=slot, slot_hash=recorded, preview_rows=preview_rows, indices=indices
         )
         if preview_rows is None:
-            modules[d.id].preview = []
+            modules[d.id].preview, modules[d.id].colors = [], []
     return ModePlan(mode_id, mode.label, Tier.T2, tech.feature, motion, modules, notes.lines(len(devices)))
 
 

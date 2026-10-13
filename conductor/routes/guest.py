@@ -3,16 +3,34 @@
 Who: an enrolled kiosk or ops, with the kiosk router's own checks (kiosk role or ops; writes are JSON-only and
 same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
 
-- `GET  /api/kiosk/panel`       `{target, target_label, simulated, viewer, scenes, capabilities, brightness_range, state,
-                                server_now}`. `target` is "workshop" (the two VWBD shop strands) or "canopy" (the
-                                engine). Each scene is `{id, name, mood, description, palette: [{name, hex}],
+- `GET  /api/kiosk/panel`       `{target, target_label, simulated, viewer, scenes, capabilities, brightness_range, canopy,
+                                state, server_now}`. `target` is "workshop" (the two VWBD shop strands) or "canopy"
+                                (the engine). Each scene is `{id, name, mood, description, palette: [{name, hex}],
                                 frame: [[r, g, b] × 30], solid: "#RRGGBB", brightness_draft}`. `state` is `{power,
-                                brightness, scene, look, phase, message, feature, cooldown_remaining_s}`:
+                                brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit}`:
                                 power/brightness/scene are null when unknown; look is "gradient" | "solid" (what the
-                                lights show, so the preview is true) or null; phase is ready | changing | resting | paused | cooldown ("cooldown": the
-                                lights are steady and a new scene can be chosen in cooldown_remaining_s; brightness
-                                and power still work); message is a calm sentence for the guest (or ""); feature is
-                                the true Hubspace sentence for what is showing, or null.
+                                lights show, so the preview is true) or null; phase is ready | changing | resting |
+                                paused | cooldown ("cooldown": the lights are steady and a new scene can be chosen in
+                                cooldown_remaining_s; brightness and power still work); message is a calm sentence for
+                                the guest (or ""); feature is the true Hubspace sentence for what is showing, or null.
+
+The canopy picture (`conductor/canopy_view.py`; the engine target only — the workshop target sends `canopy: null` and
+`state.lit: null`, and the panel draws its 30-light serpentine instead). A fixed contract:
+
+    canopy    = null | {width_in, height_in, module_w_in, module_h_in,
+                        view: {mirror_x, rotate_deg: 0|90|180|270, dim_floor},          (kiosk.preview, set at install)
+                        modules: [{pos: "r0c0"…"r2c2", row, col, heads: [[x, y] × 30]} × 9]}
+                (canopy inches, reflected-ceiling view, origin top-left; each module's heads top to bottom, then left
+                to right: its lattice order, never its wiring)
+    state.lit = null (no look yet, or the workshop)
+              | {level: 1–100 | null (off),
+                 modules: [{pos, state: off|dark|unknown|lit|changing,
+                            color: "#RRGGBB" | null, colors: ["#RRGGBB" × 30 in lattice order] | null} × 9],
+                 motion: null | {kind: "ripple", t0, stagger_s, rings}
+                              | {kind: "steps", t0, step_s, frames: [[hex | null × 9]], ends_at}}
+
+Colours are full strength (the level is drawn separately); `color` is set when every head is the same, else `colors`;
+`off`, `dark` and `unknown` carry no colour. Neither part carries a device id, label, reason or the vendor's name.
 - `POST /api/kiosk/scene`       `{"scene": "<scene id>"}` → `{ok, state, server_now}`
 - `POST /api/kiosk/brightness`  `{"level": 1–100}` (raised to the guest floor, 10; coalesced — the last level wins)
                                 → `{ok, level, state, server_now}`
@@ -116,6 +134,7 @@ async def panel_view(request: Request) -> JSONResponse:
             "scenes": [scene_json(s) for s in catalog.scenes],
             "capabilities": target.capabilities(),
             "brightness_range": [GUEST_FLOOR, 100],
+            "canopy": target.canopy(),
             "state": _state(panel, target),
             "server_now": services.clock.now(),
         },
