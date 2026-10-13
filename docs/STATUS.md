@@ -73,11 +73,12 @@ only so far)._
 ## The Mac show box (D61) — 2026-10-13
 Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu mini PC. Runbook:
 `docs/runbooks/mac-show-box.md`; helper: `deploy/mac/canopy-mac`.
-- **Installed on the Mac mini, live, no account signed in:** show checkout `~/canopy-show` at `claude/mac-show-box`
-  (switch it to the release tag once merged); settings and data under `~/Library/Application Support/ColorCanopy/`
-  (generated ops login and key, 0600); `HUBSPACE_ACCOUNT_ALLOWLIST` allows only VWBD's shop account (the bench kits'
-  account, not a show account); nothing is signed in yet, so nothing has reached Hubspace. Alon signs in himself
-  (`canopy-mac login`).
+- **Installed on the Mac mini, live:** show checkout `~/canopy-show` at `claude/mac-show-box` (switch it to the
+  release tag once merged); settings and data under `~/Library/Application Support/ColorCanopy/` (generated ops login
+  and key, 0600); `HUBSPACE_ACCOUNT_ALLOWLIST` allows only VWBD's shop account (the bench kits' account, not a show
+  account); Alon signed it in on Oct 13 (`canopy-mac login --account bench`, password typed by him, no emailed code).
+  It sees Kingston test and String light 1, both unregistered and so read-only: nothing has been written to a light
+  from this Mac.
 - **Verified on this Mac (how):** `/api/version` says live/venue; `/healthz` 200 and `/ops/` 401 without the login,
   both over the LAN address; `kill -9` → launchd restarted it, healthy within ~1 s; a frozen process (`kill -STOP`) →
   the watchdog logged 2 failed checks, then restarted it on the 3rd (`kickstart -k`; launchd force-killed the frozen
