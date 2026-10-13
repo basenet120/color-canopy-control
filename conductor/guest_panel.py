@@ -81,6 +81,7 @@ from conductor.module.pair import PAIR_IDS, apply_pair
 from conductor.module.session import ModuleError, ModuleSession
 from conductor.routes import kiosk as K
 from conductor.scenes import Scene, SceneCatalog, load_scenes
+from conductor.show import registered_canopy_ids
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ FEATURE_SOLID = "Each Hubspace strand set to one colour from the scene."
 FEATURES = {"gradient": FEATURE_GRADIENT, "solid": FEATURE_SOLID}
 
 CHANGING = "Changing the lights…"
+BARE_LABEL = "The Color Canopy"  # the engine target's label while no strand is registered (D62)
 BUSY = "Someone is using the module page right now. Try again in a moment."
 LIGHTS_RESTING = "The lights are resting. They will be back shortly."
 DIDNT_FINISH = "That scene didn't finish. Choose it again in a moment."
@@ -689,7 +691,8 @@ class EngineTarget:
 
     @property
     def label(self) -> str:
-        """Names the strands the current look actually drives when it leaves some out (D62)."""
+        """Names the strands the current look actually drives when it leaves some out (D62). Before the first look
+        (no plan) it counts the strands registered on the engine's driver: all of them, some, or none."""
         plan = None
         current = getattr(self.engine(), "current_plan", None)
         if callable(current):
@@ -697,9 +700,19 @@ class EngineTarget:
                 plan = current()
             except Exception:  # noqa: BLE001 - a label never fails the panel
                 plan = None
-        if plan is None or not getattr(plan, "skipped", None):
-            return self.FULL_LABEL
         total = len(self.services.registry.canopy_modules())
+        if plan is None:
+            try:
+                registered = len(registered_canopy_ids(self.services))
+            except Exception:  # noqa: BLE001 - a label never fails the panel, and never claims a count it can't make
+                return BARE_LABEL
+            if registered == total:
+                return self.FULL_LABEL
+            if registered == 0:
+                return BARE_LABEL
+            return f"The Color Canopy ({registered} of {total} strands)"
+        if not getattr(plan, "skipped", None):
+            return self.FULL_LABEL
         return f"The Color Canopy ({len(plan.modules)} of {total} strands)"
 
     def capabilities(self) -> dict[str, bool]:
@@ -835,11 +848,14 @@ class EngineTarget:
             log.exception("The canopy engine couldn't report its state.")
             return resting
         cooldown = K._remaining(st.cooldown_until, now)
+        # The look's own phase, over the strands it drives: on a partial canopy `phase` stays needs attention for
+        # /ops (D62) while the guest still sees the change and its end. An engine without it: `phase`.
+        look = getattr(st, "look_phase", None) or st.phase
         if not st.guest_input:
             phase, message = "paused", K.PAUSED
         elif st.phase == CanopyPhase.RESTING:
             phase, message = "resting", (K.BEING_SET_UP if st.message == K.BEING_SET_UP else K.RESTING)
-        elif st.phase == CanopyPhase.UPDATING or self.lane.busy:
+        elif look == CanopyPhase.UPDATING or self.lane.busy:
             phase, message = "changing", CHANGING
         elif cooldown > 0:
             phase, message = "cooldown", self.message
@@ -861,8 +877,11 @@ class EngineTarget:
             "look": None,  # the engine's techniques aren't a 30-light frame; the panel previews the scene itself
             "phase": phase,
             "message": message,
-            # never a technique sentence for lights that are off or still changing scene (kiosk copy must be true)
-            "feature": None if power is False or st.phase == CanopyPhase.UPDATING else st.feature,
+            # never a technique sentence for lights that are off, still changing scene or stuck on a driven strand
+            # (kiosk copy must be true)
+            "feature": None
+            if power is False or look in (CanopyPhase.UPDATING, CanopyPhase.NEEDS_ATTENTION)
+            else st.feature,
             "cooldown_remaining_s": cooldown,
         }
 

@@ -21,11 +21,13 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from partial_canopy import LIVE, partial_show, showing
 
 from conductor import rows as R
 from conductor.engine_api import CanopyPhase
 from conductor.guest_panel import (
     BUSY,
+    CHANGING,
     FEATURE_GRADIENT,
     FEATURE_SOLID,
     GUEST_OWNER,
@@ -634,75 +636,79 @@ def test_engine_paused_resting_and_missing(app_client):
 
 
 # ---- the engine target on a partial canopy (D62) -----------------------------------------------------------------
-LIVE = ("canopy-r0c0", "canopy-r0c1")  # the two shop kits registered at canopy positions
-
-
 def _canopy_ids() -> list[str]:
     from conductor.config import load_registry
 
     return [m.id for m in load_registry().canopy_modules()]
 
 
-def _partial_show(monkeypatch, tmp_path, registered):
-    """The real engine as live runs before Gate B/C (as tests/test_surfaces_review_fixes.py's t3_show), with only
-    `registered` canopy positions having a device on the engine's driver."""
-    from conftest import _env as _show_env
-
-    from conductor.app import app
-    from conductor.config import Registry
-    from conductor.engine_api import Tier
-    from conductor.show import ShowWiring
-
-    def only_t3(self, mode_id, tier):
-        if tier in (Tier.T1, Tier.T2):
-            return False, "Gate C isn't proven on this kit (test)"
-        return True, ""
-
-    real = Registry.address
-
-    def address(self, device_id, driver_name):
-        return real(self, device_id, driver_name) if device_id in registered else None
-
-    monkeypatch.setattr(ShowWiring, "tier_allowed", only_t3)
-    monkeypatch.setattr(Registry, "address", address)
-    _show_env(monkeypatch, tmp_path, engine=True, CONDUCTOR_AUTH="off")
-    return TestClient(app)
+TWO_STRANDS = "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
 
 
-def _showing(c, timeout: float = 30.0):
-    """The engine once its first look is out and startup commissioning is over (a partial canopy never reads
-    READY: the modules left out keep it at needs attention)."""
-    engine = _services(c).extras["canopy"]
+def _settled_panel(c, engine, timeout: float = 10.0) -> dict:
+    """The panel's state once it stops reading "changing" (≤ 10 s in the fast simulator). The engine's own phase
+    (/ops) stays at needs attention the whole time: seven positions have no device registered (D62)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if engine.current_plan() is not None and not engine.commissioning:
-            return engine
+        assert engine.state().phase == CanopyPhase.NEEDS_ATTENTION
+        state = _panel(c)["state"]
+        if state["phase"] != "changing":
+            return state
         time.sleep(0.05)
-    raise AssertionError(f"the canopy never showed a look: {engine.state()}")
+    raise AssertionError(f"the panel never settled: {_panel(c)['state']} / {engine.state()}")
 
 
 def test_a_partial_canopy_takes_every_scene_and_counts_only_its_strands(monkeypatch, tmp_path):
-    with _partial_show(monkeypatch, tmp_path, LIVE) as c:
-        engine = _showing(c)
+    """The panel follows the look over the strands it drives (`look_phase`), not the engine's /ops phase: each
+    scene reads "Changing the lights…" with no feature line, then settles with the two-strand sentence, while /ops
+    stays needs attention naming the positions left out."""
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = showing(c)
         body = _panel(c)
         assert body["target"] == "canopy" and body["target_label"] == "The Color Canopy (2 of 9 strands)"
-        features = []
         for scene in SCENES.scenes:
             engine._last_kiosk_mono = None  # no guest cooldown left over from the last scene
             r = c.post("/api/kiosk/scene", json={"scene": scene.id})
             assert r.status_code == 200, (scene.id, r.text)
+            changing = r.json()["state"]
+            assert changing["phase"] == "changing" and changing["message"] == CHANGING, (scene.id, changing)
+            assert changing["feature"] is None, (scene.id, changing)
             assert sorted(engine.current_plan().modules) == list(LIVE)
-            deadline = time.monotonic() + 10
-            while engine.state().phase == CanopyPhase.UPDATING and time.monotonic() < deadline:
-                time.sleep(0.05)
-            feature = _panel(c)["state"]["feature"]
-            assert feature is not None, scene.id
-            features.append(feature)
-        assert all("nine" not in f and "270" not in f and "column by column" not in f for f in features)
-        assert set(features) == {
-            "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
-        }
+            assert engine.state().phase == CanopyPhase.NEEDS_ATTENTION
+            settled = _settled_panel(c, engine)
+            assert settled["phase"] in ("ready", "cooldown"), (scene.id, settled)
+            assert settled["feature"] == TWO_STRANDS, (scene.id, settled)
+            ops = engine.state()
+            assert ops.phase == CanopyPhase.NEEDS_ATTENTION and ops.look_phase == CanopyPhase.READY
+            assert all(m in ops.message for m in ("Module 3", "Module 9")), ops.message
         assert _panel(c)["target_label"] == "The Color Canopy (2 of 9 strands)"
+
+
+def test_before_the_first_look_the_label_counts_the_registered_strands(monkeypatch, tmp_path):
+    """With no plan yet (an engine that hasn't shown a look) the label counts what is registered (D62)."""
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        showing(c)
+        _engine(c)  # tests/test_kiosk_routes.py's FakeEngine: current_plan() is None
+        assert _panel(c)["target_label"] == "The Color Canopy (2 of 9 strands)"
+
+
+def test_the_full_canopy_label_without_a_plan_says_nine_strands(app_client):
+    _engine(app_client)
+    assert _panel(app_client)["target_label"] == "The Color Canopy (nine strands)"
+
+
+def test_an_engine_without_look_phase_still_drives_the_panel_by_its_phase(app_client):
+    """tests/test_kiosk_routes.py's FakeEngine never sets `look_phase`: the panel reads its `phase` as before, and
+    hides the feature line while it needs attention (a stuck strand) as well as while it changes."""
+    engine = _engine(app_client)
+    state = _panel(app_client)["state"]
+    assert state["phase"] == "ready" and state["feature"] is not None
+    engine.phase = CanopyPhase.UPDATING
+    state = _panel(app_client)["state"]
+    assert state["phase"] == "changing" and state["feature"] is None
+    engine.phase = CanopyPhase.NEEDS_ATTENTION
+    state = _panel(app_client)["state"]
+    assert state["phase"] == "ready" and state["feature"] is None
 
 
 def test_the_full_canopy_label_says_nine_strands(app_client_show):
@@ -714,20 +720,32 @@ def test_the_full_canopy_label_says_nine_strands(app_client_show):
     assert _panel(app_client_show)["target_label"] == "The Color Canopy (nine strands)"
 
 
+def test_while_commissioning_the_kiosk_view_rests_the_look_phase_too(app_client):
+    """kiosk_view rests the guest's view while slots are written: `look_phase` with `phase`, so nothing reading
+    either says the look is changing for minutes."""
+    engine = _engine(app_client)
+    engine.phase = CanopyPhase.UPDATING
+    engine.commissioning = True
+    state = app_client.get("/api/kiosk/state").json()
+    assert state["phase"] == "resting" and state["look_phase"] == "resting"
+    assert _panel(app_client)["state"]["phase"] == "resting"
+
+
 def test_with_no_strand_registered_a_scene_is_a_503_resting(monkeypatch, tmp_path):
-    with _partial_show(monkeypatch, tmp_path, ()) as c:
+    with partial_show(monkeypatch, tmp_path, ()) as c:
         time.sleep(1.0)  # the capability loop's first round (it has nothing to read)
         engine = _services(c).extras["canopy"]
         assert engine.current_plan() is None and engine.state().phase == CanopyPhase.RESTING
         body = _panel(c)
         assert body["state"]["phase"] == "resting"
+        assert body["target_label"] == "The Color Canopy"  # no strand to count (D62)
         r = c.post("/api/kiosk/scene", json={"scene": CALM.id})
         assert r.status_code == 503, r.text
 
 
 def test_an_unregistered_position_needing_attention_links_to_the_accounts_page(monkeypatch, tmp_path):
-    with _partial_show(monkeypatch, tmp_path, LIVE) as c:
-        _showing(c)
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        showing(c)
         items = c.get("/api/ops/summary").json()["attention"]
         unregistered = [i for i in items if "no Hubspace device registered" in i["message"]]
         assert len(unregistered) == 7, items

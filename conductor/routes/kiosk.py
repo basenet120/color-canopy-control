@@ -297,7 +297,9 @@ def kiosk_view(engine: Any, state: CanopyState) -> CanopyState:
     """The engine's state as the guest should read it: while slots are being commissioned no look is changing, so
     the kiosk rests ("being set up") instead of saying "Changing the light…" for minutes."""
     if _flag(engine, "commissioning") is True and state.phase != CanopyPhase.RESTING:
-        return dataclasses.replace(state, phase=CanopyPhase.RESTING, message=BEING_SET_UP)
+        return dataclasses.replace(
+            state, phase=CanopyPhase.RESTING, look_phase=CanopyPhase.RESTING, message=BEING_SET_UP
+        )
     return state
 
 

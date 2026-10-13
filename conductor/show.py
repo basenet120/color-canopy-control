@@ -57,6 +57,25 @@ def _check_idle_scene(scene: str | None, modes: list[str]) -> None:
         )
 
 
+def _is_registered(services: Any, entry: Any) -> bool:
+    return bool(services.registry.address(entry.id, services.engine_driver.name))
+
+
+def registered_canopy_ids(services: Any) -> frozenset[str]:
+    """The canopy modules with a device registered on the engine's driver (D62): the only ones that are ever read,
+    retried or driven. A position without one is left out of every look."""
+    return frozenset(e.id for e in services.registry.canopy_modules() if _is_registered(services, e))
+
+
+def split_canopy_positions(services: Any) -> tuple[list[str], list[str]]:
+    """(registered, unregistered) canopy module ids, each in registry order (`registered_canopy_ids`' predicate)."""
+    registered: list[str] = []
+    unregistered: list[str] = []
+    for entry in services.registry.canopy_modules():
+        (registered if _is_registered(services, entry) else unregistered).append(entry.id)
+    return registered, unregistered
+
+
 class ShowWiring:
     def __init__(self, services: Any):
         from conductor.looks import load_modes
@@ -85,8 +104,7 @@ class ShowWiring:
     # ---- capabilities --------------------------------------------------------------------------------------------
     def _registered(self, entry: Any) -> bool:
         """The module has a device on the engine's driver (D62): one without is never read, retried or driven."""
-        services = self.services
-        return bool(services.registry.address(entry.id, services.engine_driver.name))
+        return _is_registered(self.services, entry)
 
     def missing(self) -> list[str]:
         """Registered canopy modules whose capabilities haven't been read yet."""
@@ -208,7 +226,7 @@ class ShowWiring:
         return list(self.services.registry.canopy_modules())
 
     def _registered_ids(self) -> frozenset[str]:
-        return frozenset(e.id for e in self._modules() if self._registered(e))
+        return registered_canopy_ids(self.services)
 
     async def _caps_loop(self) -> None:
         attempt = 0

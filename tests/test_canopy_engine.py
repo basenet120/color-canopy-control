@@ -3,7 +3,7 @@ locks, tiers, safe look, commissioning and the published state."""
 
 from __future__ import annotations
 
-from fake_compiler import MODULES, FakeCompiler, make_world
+from fake_compiler import MODULES, FakeCompiler, make_world, settings_with
 
 from conductor import rows as R
 from conductor.clock import run_virtual
@@ -355,3 +355,147 @@ def test_engine_from_services_runs_on_the_app_and_saves_slot_hashes(app_client):
         assert saved["custom-1"] == report["modes"]["sunset"]["modules"][device_id]["hash"]
     assert not state.refused and state.simulated
     assert final.phase is CanopyPhase.READY and final.mode == "holiday"
+
+
+# ---- a partial canopy: the look's own phase over the modules it drives (look_phase, D62) ---------------------------
+DRIVEN = MODULES[:2]  # the positions with a device registered (the Mac show box's two test kits)
+LEFT_OUT = MODULES[2:]
+QUIET = settings_with(kiosk={"idle_return_s": 100_000})  # no idle hold
+
+
+class PartialCompiler(FakeCompiler):
+    """Compiles for DRIVEN only and leaves the other positions out, as compile_mode does for a position with no
+    device registered on the engine's driver."""
+
+    def compile(self, mode_id: str, tier: Tier):
+        plan = super().compile(mode_id, tier)
+        plan.skipped = {d: f"{d} has no Hubspace device registered on this runtime (fake)" for d in LEFT_OUT}
+        return plan
+
+
+def partial_world(**kw):
+    w = make_world(settings=QUIET, compiler=PartialCompiler(module_ids=list(DRIVEN), **kw))
+    real = w.engine.deps.target
+
+    def target(device_id, purpose):
+        if device_id in LEFT_OUT:  # services.target: no address on the engine's driver
+            raise LookupError(f"{device_id} has no sim address yet (connect the account and register it)")
+        return real(device_id, purpose)
+
+    w.engine.deps.target = target
+    return w
+
+
+def test_a_partial_canopy_changes_and_settles_its_look_while_ops_needs_attention():
+    async def main():
+        w = partial_world()
+        await w.engine.start(apply_initial=False)
+        changing = await w.engine.request_mode("holiday", source="ops")
+        settled = await w.until(w.all_correct, timeout=10)
+        await w.engine.wait_idle()
+        await w.run_for(1)
+        ready = w.engine.state()
+        await w.close()
+        return changing, settled, ready
+
+    changing, settled, ready = run_virtual(main)
+    assert changing.phase is CanopyPhase.NEEDS_ATTENTION and changing.look_phase is CanopyPhase.UPDATING
+    assert settled is not None
+    assert ready.phase is CanopyPhase.NEEDS_ATTENTION and ready.look_phase is CanopyPhase.READY
+    assert ready.to_json()["look_phase"] == "ready" and ready.to_json()["phase"] == "needs_attention"
+    assert "M3" in ready.message and "M9" in ready.message  # /ops still names the positions left out
+    assert all(ready.modules[d]["left_out"] and not ready.modules[d]["stuck"] for d in LEFT_OUT)
+    assert all(not ready.modules[d]["left_out"] and not ready.modules[d]["stuck"] for d in DRIVEN)
+
+
+def test_a_driven_module_stuck_past_the_window_is_the_looks_problem_too():
+    async def main():
+        w = partial_world(broken={("holiday", Tier.STRAND)}, broken_module=DRIVEN[1])
+        await w.engine.start(apply_initial=False)
+        await w.engine.request_mode("holiday", source="ops")
+        await w.run_for(5)
+        early = w.engine.state()
+        await w.run_for(12)  # past reconciler.downgrade_after_wrong_s (10 s)
+        late = w.engine.state()
+        await w.close()
+        return early, late
+
+    early, late = run_virtual(main)
+    assert early.look_phase is CanopyPhase.UPDATING  # still re-asserting inside the window
+    assert late.phase is CanopyPhase.NEEDS_ATTENTION and late.look_phase is CanopyPhase.NEEDS_ATTENTION
+    assert late.modules[DRIVEN[1]]["stuck"] and not late.modules[DRIVEN[1]]["left_out"]
+    assert not late.modules[DRIVEN[0]]["stuck"]
+
+
+def test_on_the_full_canopy_the_look_phase_is_the_phase():
+    async def main():
+        w = make_world(settings=QUIET, compiler=FakeCompiler(broken={("holiday", Tier.STRAND)}))
+        seen = [w.engine.state()]  # before the first look: resting
+        await w.engine.start(apply_initial=False)
+        seen.append(await w.engine.request_mode("lowcountry-calm", source="ops"))  # updating
+        await w.until(w.all_correct, timeout=10)
+        await w.engine.wait_idle()
+        await w.run_for(1)
+        seen.append(w.engine.state())  # ready
+        lease = w.locks.acquire(w.address("canopy-r1c1"), "module page · test")
+        seen.append(w.engine.state())  # ready, one module on a test page
+        w.locks.release(w.address("canopy-r1c1"), lease.token)
+        w.compiler.broken_module = "canopy-r2c2"
+        await w.engine.request_mode("holiday", source="ops")
+        await w.run_for(17)
+        seen.append(w.engine.state())  # needs attention: r2c2 stuck
+        seen.append(w.engine.pause_guest_input(True, source="ops"))  # resting
+        await w.close()
+        return seen
+
+    seen = run_virtual(main)
+    phases = [s.phase for s in seen]
+    assert phases == [
+        CanopyPhase.RESTING,
+        CanopyPhase.UPDATING,
+        CanopyPhase.READY,
+        CanopyPhase.READY,
+        CanopyPhase.NEEDS_ATTENTION,
+        CanopyPhase.RESTING,
+    ]
+    assert [s.look_phase for s in seen] == phases
+    assert seen[4].modules["canopy-r2c2"]["stuck"] and not any(
+        m["left_out"] for m in seen[4].modules.values()
+    )
+
+
+def test_a_partial_canopys_commission_report_and_alerts_say_what_was_driven():
+    async def main():
+        w = partial_world()
+        report = await w.engine.commission(source="ops")
+        await w.engine.start(apply_initial=False)
+        await w.engine.request_mode("holiday", source="ops")
+        await w.engine.wait_idle()
+        w.engine._commissioning = True  # the /ops line while slots are written
+        writing = w.engine.state().message
+        w.engine._commissioning = False
+        w.engine.enter_outage("test")
+        w.engine.exit_outage("test")
+        await w.engine.wait_idle()
+        alerts = [a["message"] for a in w.events("alert")]
+        await w.close()
+        return report, writing, alerts
+
+    report, writing, alerts = run_virtual(main)
+    assert report["ok"] and set(report["modes"]["sunset"]["modules"]) == set(DRIVEN)
+    assert report["message"].endswith(
+        "; M3, M4, M5, M6, M7, M8, M9 have no Hubspace device registered, so nothing was written there."
+    ), report["message"]
+    assert writing == "Writing the saved patterns to every registered strand…"
+    assert any(a.endswith("re-applying Holiday to every driven module.") for a in alerts), alerts
+
+
+def test_a_full_canopys_commission_report_names_nothing_left_out():
+    async def main():
+        w = make_world()
+        report = await w.engine.commission(source="ops")
+        await w.close()
+        return report
+
+    report = run_virtual(main)
+    assert report["message"] == "Wrote 18 slot(s)."
