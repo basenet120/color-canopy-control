@@ -6,10 +6,12 @@ Rules implemented:
   `slot` is one of custom-1..3 and no two modes share one (store-and-select, 04); every ladder entry has its
   technique; a canvas/slot tier needs the mode's slot; module-level (T3) row/column lists match the canopy grid.
 - **A sampled module look (T3 `sample`)** paints each module one colour from a canvas (a 2-D `field` or a `gradient`,
-  `conductor/looks/field.py`). Its `feature` must use the field's layout words (`field.layout_words`: "column by
-  column", "row by row", "diagonally", "from the centre out", "around the centre"), so a radial design can't say
-  "column by column". A sweep centred exactly on a module's centre has no colour there and is refused when sampled
-  at the centre.
+  `conductor/looks/field.py`). Its `feature` must use the design's layout words (`field.layout_words`: "column by
+  column", "row by row", "diagonally", "from the centre out" only for a radial design centred on the canopy, "from
+  one edge", "from two points", …) and no other layout's words, compared without regard to case, so a radial design
+  can't say "column by column" and an off-centre one can't say "from the centre out". A design whose module
+  centres all sample to one colour (`at: centre`) on the full canopy is refused (it has no layout to describe). A sweep centred
+  exactly on a module's centre has no colour there and is refused when sampled at the centre.
 - **Copy honesty (05 #12, 07 §6):** a technique's `feature` sentence is shown while that technique runs, so it may
   never promise movement. Only `motion_feature` — used when a bench-enabled motion code is actually running — may
   say "moving" or "animated".
@@ -353,30 +355,62 @@ def _colour_refs(mode: Mode) -> list[tuple[str, str]]:
     return out
 
 
-def layout_words(canvas: FieldCanvas | GradientCanvas) -> str:
-    """How copy must describe a sampled canvas's layout (`field.layout_words`; a gradient is linear at 0 or 90°)."""
+def layout_words(canvas: FieldCanvas | GradientCanvas, canopy: dict | None) -> str | None:
+    """How copy must describe a sampled canvas's layout (`field.layout_words`; a gradient is linear at 0 or 90°).
+    None when that depends on the canopy (a radial or sweep design's centre) and there is none to check against."""
     if isinstance(canvas, GradientCanvas):
         return "column by column" if canvas.axis == "x" else "row by row"
-    return F.layout_words(canvas.field)
+    if isinstance(canvas.field, F.LinearField) or canopy is not None:
+        return F.layout_words(canvas.field, canopy or {})
+    return None
 
 
-def _sample_problems(mode_id: str, mods: ModulesTechnique, canopy: dict | None) -> list[str]:
-    """A sampled module look's copy names its layout; a sweep isn't centred on a module it samples at the centre."""
+def _one_colour(sample: ModuleSample, recipes: RecipesFile, canopy: dict, names: list[str]) -> bool:
+    """Whether the canvas has the same colour at every module centre (only asked when its colours are all known)."""
+    from conductor.looks.composer import evaluate  # composer imports this module
+
+    colours = {
+        evaluate(sample.canvas, x, y, canopy=canopy, recipes=recipes)
+        for x, y in F.module_centres(canopy, names).values()
+    }
+    return len(colours) < 2
+
+
+def _sample_problems(
+    mode_id: str, mods: ModulesTechnique, recipes: RecipesFile, canopy: dict | None
+) -> list[str]:
+    """A sampled module look's copy names its layout (and no other); its design has more than one colour across the
+    module centres; a sweep isn't centred on a module it samples at the centre."""
     sample = mods.sample
     if sample is None:
         return []
     out = []
     at = f"mode {mode_id!r} → techniques → modules"
-    words = layout_words(sample.canvas)
-    if words not in mods.feature:
+    words = layout_words(sample.canvas, canopy)
+    feature = mods.feature.lower()
+    if words is not None and words not in feature:
         out.append(
             f"{at} → feature: the sampled design is laid out {words!r}, so the copy must say {words!r} "
             f"(it reads {mods.feature!r})"
         )
+    others = [p for p in F.LAYOUT_PHRASES if p != words and p in feature]
+    if words is not None and others:
+        out.append(
+            f"{at} → feature: the sampled design is laid out {words!r}, but the copy also says "
+            f"{', '.join(repr(p) for p in others)}, which it isn't"
+        )
+    if canopy is None:
+        return out
+    grid = canopy["orientations"][canopy["orientation_scheme"]]
+    names = [f"r{r}c{c}" for r, row in enumerate(grid) for c in range(len(row))]
+    known = all(s.color in recipes.colors for s in sample.canvas.stops)
+    if sample.at == "centre" and known and _one_colour(sample, recipes, canopy, names):
+        out.append(
+            f"{at} → sample: the design has the same colour at every module centre, so module level shows one "
+            "colour, not a layout; change the field (fewer cycles, another centre), the stops, or use at: mean"
+        )
     spec = sample.canvas.field if isinstance(sample.canvas, FieldCanvas) else None
-    if canopy is not None and isinstance(spec, F.SweepField) and sample.at == "centre":
-        grid = canopy["orientations"][canopy["orientation_scheme"]]
-        names = [f"r{r}c{c}" for r, row in enumerate(grid) for c in range(len(row))]
+    if isinstance(spec, F.SweepField) and sample.at == "centre":
         for pos, centre in F.module_centres(canopy, names).items():
             if tuple(centre) == tuple(spec.centre_in):
                 out.append(
@@ -413,7 +447,7 @@ def cross_check(modes: ModesFile, recipes: RecipesFile, canopy: dict | None = No
                 slots[mode.slot] = mode_id
         mods = mode.techniques.modules
         if mods is not None:
-            problems += _sample_problems(mode_id, mods, canopy)
+            problems += _sample_problems(mode_id, mods, recipes, canopy)
         if mods is not None and grid is not None:
             if mods.rows is not None and len(mods.rows) != len(grid):
                 problems.append(

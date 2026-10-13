@@ -161,14 +161,78 @@ def test_bands_group_modules_by_the_field_at_their_centres():
 
 
 def test_layout_words():
-    assert F.layout_words(_spec(kind="linear")) == "column by column"
-    assert F.layout_words(_spec(kind="linear", angle_deg=180)) == "column by column"
-    assert F.layout_words(_spec(kind="linear", angle_deg=90)) == "row by row"
-    assert F.layout_words(_spec(kind="linear", angle_deg=270)) == "row by row"
-    assert F.layout_words(_spec(kind="linear", angle_deg=45)) == "diagonally"
-    assert F.layout_words(_spec(kind="radial", centre_in=[0, 0])) == "from the centre out"
-    assert F.layout_words(_spec(kind="radial", centre_in=[0, 0], cycles=3)) == "from the centre out"
-    assert F.layout_words(_spec(kind="sweep", centre_in=[0, 0])) == "around the centre"
+    def words(**data):
+        return F.layout_words(_spec(**data), CANOPY)
+
+    assert words(kind="linear") == "column by column"
+    assert words(kind="linear", angle_deg=180) == "column by column"
+    assert words(kind="linear", angle_deg=90) == "row by row"
+    assert words(kind="linear", angle_deg=270) == "row by row"
+    assert words(kind="linear", angle_deg=45) == "diagonally"
+    # a radial design is only "from the centre out" when it is centred on the canopy (rings or not)
+    assert words(kind="radial", centre_in=[112.5, 60]) == "from the centre out"
+    assert words(kind="radial", centre_in=[112.5, 60], cycles=3, invert=True) == "from the centre out"
+    # the D63 drafts: Garden Gathering from a long edge, Golden Hour's sun at the left edge, a moon over r0c2
+    assert words(kind="radial", centre_in=[112.5, 120]) == "from one edge"
+    assert words(kind="radial", centre_in=[0, 60]) == "from one edge"
+    assert words(kind="radial", centre_in=[-40, 60]) == "from one edge"  # beyond the edge it rises from
+    assert words(kind="radial", centre_in=[187.5, 20]) == "from one spot"
+    assert words(kind="radial", centre_in=[112.5, 59]) == "from one spot"
+    assert words(kind="radial", centre_in=[0, 0]) == "from one corner"
+    assert words(kind="radial", centre_in=[260, -5]) == "from one corner"
+    assert words(kind="radial", centres_in=[[0, 0], [225, 120]]) == "from two points"
+    assert words(kind="radial", centres_in=[[0, 0], [225, 0], [0, 120], [225, 120]]) == "from four points"
+    assert words(kind="radial", centres_in=[[112.5, 60], [112.5, 60]]) == "from the centre out"
+    assert words(kind="sweep", centre_in=[112.5, 60]) == "around the centre"
+    assert words(kind="sweep", centre_in=[0, 0]) == "around one corner"
+    assert words(kind="sweep", centre_in=[30, 50]) == "around one spot"
+    for spec in (
+        _spec(kind="radial", centre_in=[5, 5]),
+        _spec(kind="radial", centres_in=[[1, 2], [3, 4], [5, 6]]),
+        _spec(kind="sweep", centre_in=[225, 7]),
+        _spec(kind="linear", angle_deg=10),
+    ):
+        assert F.layout_words(spec, CANOPY) in F.LAYOUT_PHRASES
+
+
+def _dense_max(spec) -> float:
+    """The largest raw t over a 2.5-inch grid of the whole canopy (a brute-force check on the auto radius)."""
+    return max(F._raw(spec, x * 2.5, y * 2.5, CANOPY) for x in range(91) for y in range(49))
+
+
+def test_auto_radius_with_several_centres_is_the_farthest_canopy_point_from_its_nearest_centre():
+    # two centres at the short edges' middles: the corners are only 60 in from one, but the long edges' middles are
+    # 127.5 in from both (where their regions meet), so that is the radius and raw t never passes 1
+    two = _spec(kind="radial", centres_in=[[0, 60], [225, 60]])
+    assert F.radius(two, CANOPY) == pytest.approx(127.5)
+    assert F.value(two, 112.5, 0, CANOPY) == pytest.approx(1.0)
+    assert max(F._raw(two, h.x, h.y, CANOPY) for h in HEADS) <= 1 + 1e-12
+    rings = _spec(kind="radial", centres_in=[[0, 60], [225, 60]], cycles=2)
+    assert F._raw(rings, 112.5, 0, CANOPY) == pytest.approx(1.0)  # the outer ring, not 2.125 radii out
+    # one centre per corner: the farthest point is the canopy's centre, not 0 (no division by zero)
+    corners = _spec(kind="radial", centres_in=[[0, 0], [225, 0], [0, 120], [225, 120]])
+    assert F.radius(corners, CANOPY) == pytest.approx(127.5)
+    assert F.value(corners, 112.5, 60, CANOPY) == pytest.approx(1.0)
+    # not measured from the first centre only: the far corner is 255 in from (0, 0) but much nearer the second
+    assert F.radius(_spec(kind="radial", centres_in=[[0, 0], [187.5, 100]]), CANOPY) < 200
+    for spec in (
+        two,
+        corners,
+        _spec(kind="radial", centres_in=[[0, 0], [187.5, 100]]),
+        _spec(kind="radial", centres_in=[[37.5, 20], [187.5, 100], [187.5, 20]]),
+        _spec(kind="radial", centres_in=[[10, 110], [200, 15], [90, 70], [150, 100]]),
+        _spec(kind="radial", centres_in=[[-30, 60], [300, 60]]),
+        _spec(kind="radial", centres_in=[[0, 60], [225, 60]], metric="canopy"),
+        _spec(kind="radial", centre_in=[112.5, 60]),
+    ):
+        top = _dense_max(spec)
+        assert 0.98 <= top <= 1 + 1e-12
+
+
+def test_a_canopy_with_nothing_to_fill_refuses_auto_plainly():
+    point = {"width_in": 0, "height_in": 0}
+    with pytest.raises(ValueError, match="radius_in: auto has no distance to fill"):
+        F.radius(_spec(kind="radial", centre_in=[0, 0]), point)
 
 
 def test_the_field_is_deterministic():
@@ -192,6 +256,18 @@ def test_the_field_is_deterministic():
         ({"kind": "linear", "angle_deg": 360}, "angle_deg must be at least 0 and less than 360"),
         ({"kind": "radial", "centre_in": [0, 0], "radius_in": 0}, "radius_in must be auto or a distance"),
         ({"kind": "radial", "centre_in": [0, 0], "radius_in": -5}, "radius_in must be auto or a distance"),
+        (
+            {"kind": "radial", "centre_in": [0, 0], "radius_in": math.inf},
+            "radius_in must be auto or a distance",
+        ),
+        (
+            {"kind": "radial", "centre_in": [0, 0], "radius_in": math.nan},
+            "radius_in must be auto or a distance",
+        ),
+        ({"kind": "radial", "centre_in": [0, 0], "radius_in": True}, "radius_in must be auto or a distance"),
+        ({"kind": "radial", "centre_in": [math.inf, 0]}, "centre_in must be \\[x, y\\] in canopy inches"),
+        ({"kind": "radial", "centres_in": [[0, 0], [0, math.nan]]}, "each of centres_in must be"),
+        ({"kind": "sweep", "centre_in": [0, -math.inf]}, "centre_in must be \\[x, y\\] in canopy inches"),
         ({"kind": "radial"}, "give exactly one of centre_in"),
         ({"kind": "radial", "centre_in": [0, 0], "centres_in": [[1, 1]]}, "give exactly one of centre_in"),
         ({"kind": "radial", "centres_in": [[0, 0]] * 5}, "at most 4"),

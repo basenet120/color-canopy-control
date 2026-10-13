@@ -16,6 +16,7 @@ from conductor.engine_api import Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, load_modes, module_look, parse_modes
 from conductor.looks.compile import FINER_THAN_GRID
+from conductor.looks.schema import ModesFile
 from conductor.scenes import load_scenes
 from conductor.sim.profiles import profile_parts
 
@@ -160,3 +161,86 @@ def test_a_partial_canopy_keeps_the_d62_copy():
     one_colour = compile_mode("radial-sunset", Tier.T3, _ctx(modes=flat, addresses=addresses))
     assert all(R.color_rgb(196, 179, 236) in t.rows for t in one_colour.modules.values())
     assert FINER_THAN_GRID not in one_colour.notes
+
+
+def _flat(colour: str):
+    """The fixture with radial-sunset's stops all one colour (bypassing the load check that refuses it)."""
+    modes = FIELD.model_copy(deep=True)
+    for stop in modes.modes["radial-sunset"].techniques.modules.sample.canvas.stops:
+        stop.color = colour
+    return modes
+
+
+def test_a_whole_canopy_of_one_colour_doesnt_claim_a_layout():
+    # all stops one colour: nine strands of lilac aren't "the palette steps from the centre out"
+    plan = compile_mode("radial-sunset", Tier.T3, _ctx(modes=_flat("lilac")))
+    assert plan.feature == "Colour and dimming: all nine Hubspace strands set to one colour from the scene."
+    assert FINER_THAN_GRID in plan.notes
+    # three repeats across the width: every module column's centre lands half way through a repeat
+    data = yaml.safe_load(PATH.read_text(encoding="utf-8"))
+    data["modes"]["radial-sunset"]["techniques"]["modules"]["sample"]["canvas"]["field"] = {
+        "kind": "linear",
+        "cycles": 3,
+    }
+    modes = ModesFile.model_validate(data)  # the load check refuses this; compile must still tell the truth
+    thrice = compile_mode("radial-sunset", Tier.T3, _ctx(modes=modes))
+    assert len(set(_colours("radial-sunset", _ctx(modes=modes)).values())) == 1
+    assert "one colour" in thrice.feature and "from the centre out" not in thrice.feature
+    # a design with a layout keeps its copy
+    assert compile_mode("radial-sunset", Tier.T3, _ctx()).feature.endswith("steps from the centre out.")
+
+
+def test_a_sampled_gradient_down_the_canopy_steps_row_by_row():
+    data = yaml.safe_load(PATH.read_text(encoding="utf-8"))
+    techniques = data["modes"]["rainbow-row-sunset"]["techniques"]["modules"]
+    techniques["sample"]["canvas"] = {
+        "kind": "gradient",
+        "axis": "y",
+        "stops": techniques["sample"]["canvas"]["stops"],
+        "recipe": "rgb_only",
+    }
+    techniques["feature"] = techniques["feature"].replace("column by column", "row by row")
+    modes = parse_modes(data, recipes=RECIPES, canopy=CANOPY, path=PATH)
+    colours = _colours("rainbow-row-sunset", _ctx(modes=modes))
+    for row in "012":
+        assert len({colours[f"r{row}c{c}"] for c in "012"}) == 1
+    assert len({colours[f"r{r}c0"] for r in "012"}) == 3
+    # the same stops as the x-linear columns, turned: row r is what column c = r was
+    across = _colours("rainbow-row-sunset", _ctx())
+    assert [colours[f"r{i}c1"] for i in range(3)] == [across[f"r1c{i}"] for i in range(3)]
+    plan = compile_mode("rainbow-row-sunset", Tier.T3, _ctx(modes=modes))
+    assert plan.feature.endswith("row by row.")
+
+
+def _recipes_with(name: str, r: int, g: int, b: int, level: int) -> RecipesFile:
+    entry = {"r": r, "g": g, "b": b, "colorBrightness": level}
+    colours = dict(RECIPES.colors)
+    colours[name] = ColorRecipe(
+        label=name, hex="#000000", rgb_only=entry, blend=entry, strand={"rgb": [r, g, b]}
+    )
+    return RecipesFile(colors=colours)
+
+
+def _sampled_with(recipes: RecipesFile, at: str) -> tuple[int, int, int]:
+    modes = _flat("test-colour")
+    modes.modes["radial-sunset"].techniques.modules.sample.at = at
+    ctx = CompileContext(
+        registry=REGISTRY, capabilities={m.id: CAPS for m in MODULES}, modes=modes, recipes=recipes
+    )
+    (colour,) = set(_colours("radial-sunset", ctx).values())
+    return colour
+
+
+def test_a_colour_level_below_100_dims_the_sampled_rgb():
+    full = _recipes_with("test-colour", 196, 179, 236, 100)
+    half = _recipes_with("test-colour", 196, 179, 236, 50)
+    assert _sampled_with(full, "centre") == (196, 179, 236)
+    assert _sampled_with(half, "centre") == (98, 90, 118)  # 89.5 rounds up
+    assert _sampled_with(half, "mean") == (98, 90, 118)
+
+
+def test_a_channel_exactly_on_a_half_rounds_up_at_the_centre_and_in_the_mean():
+    # 1, 3, 5 at level 50 are 0.5, 1.5, 2.5: half up gives 1, 2, 3 (round() would give 0, 2, 2)
+    halves = _recipes_with("test-colour", 1, 3, 5, 50)
+    assert _sampled_with(halves, "centre") == (1, 2, 3)
+    assert _sampled_with(halves, "mean") == (1, 2, 3)

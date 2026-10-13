@@ -40,7 +40,8 @@ Rules implemented:
   gradient) at the module's centre ((col + ½)·75, (row + ½)·40 in), or the mean of its 30 heads' colours with
   `at: mean`, at the sample's brightness — the same on every module (D60). An x-linear field sampled at the centres
   is the scene's literal columns (D59). When the design is finer than the module grid (it repeats with
-  centre sampling, or a whole canopy samples to one colour) a note says so.
+  centre sampling, or a whole canopy samples to one colour) a note says so; when the whole canopy samples to one
+  colour the feature says that instead of the design's layout (kiosk copy is true).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
   kit's map when it has one).
 """
@@ -843,12 +844,22 @@ def _modules(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
         look = _to_look(spec, c, notes, d.id)
         modules[d.id] = _target(d, c, _vector(look, c), indices=ctx.frame_indices(d, c))
     sample = tech.sample
+    feature = tech.feature
     if sample is not None:
         repeats = isinstance(sample.canvas, FieldCanvas) and sample.canvas.field.cycles > 1
-        whole = len(devices) == sum(len(row) for row in grid)
-        if (repeats and sample.at == "centre") or (whole and len(sampled) < 2):
+        # a partial canopy's copy is D62's, which is true of any colours (compile_mode)
+        one_colour = len(devices) == sum(len(row) for row in grid) and len(sampled) < 2
+        if (repeats and sample.at == "centre") or one_colour:
             notes.add(FINER_THAN_GRID)
-    return ModePlan(mode_id, mode.label, Tier.T3, tech.feature, False, modules, notes.lines(len(devices)))
+        if one_colour:
+            # the copy's layout ("column by column", "from the centre out") isn't what the strands show
+            feature = _one_colour_feature(len(devices))
+    return ModePlan(mode_id, mode.label, Tier.T3, feature, False, modules, notes.lines(len(devices)))
+
+
+def _one_colour_feature(n: int) -> str:
+    """The module-level (T3) sentence when a sampled design gives every strand of the full canopy the same colour."""
+    return f"Colour and dimming: all {_count_words(n)} Hubspace strands set to one colour from the scene."
 
 
 class EngineCompiler:

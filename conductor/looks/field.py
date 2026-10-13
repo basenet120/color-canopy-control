@@ -11,7 +11,9 @@ Rules implemented:
     y from y = 0 (the top edge); 45 runs corner to corner. It is normalised so the canopy's four corners project onto
     [0, 1]: angle 0 is exactly x / width and 90 exactly y / height, the existing `gradient` canvas.
   - `radial{centre_in | centres_in, radius_in, metric}`: distance from a centre (1–4 centres: the nearest wins) over
-    `radius_in`. `radius_in: auto` is the distance to the farthest canopy corner (from its nearest centre).
+    `radius_in` (a finite distance > 0). `radius_in: auto` is the largest distance any canopy point has from its
+    nearest centre (one centre: the farthest corner; several: often where two centres' regions meet an edge), so
+    the rings fill the canopy exactly.
     `metric: inches` measures true inches; `metric: canopy` measures in the canopy's proportions (a vertical inch
     counts as width / height inches, so a ring is an ellipse that fills the canopy and `radius_in` is along the width).
   - `sweep{centre_in, start_deg}`: the angle around a centre, clockwise in the reflected-ceiling view from
@@ -22,7 +24,8 @@ Rules implemented:
 - **Clamp or wrap.** t wraps (sawtooth) only when `cycles` > 1 or a runtime `phase` ≠ 0; with the defaults it clamps
   to [0, 1] exactly like the `gradient` canvas. `phase` is a runtime argument only: no data sets it.
 - `bands` groups modules by the field at their centres (equal-width bins of t, empty bins dropped) and
-  `layout_words` is how the copy must describe the layout (the modes schema checks module-level copy against it).
+  `layout_words` is how the copy must describe the layout (the modes schema checks module-level copy against it):
+  a radial or sweep design is only "from the centre out" / "around the centre" when its centre is the canopy's.
 """
 
 from __future__ import annotations
@@ -30,17 +33,27 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from itertools import combinations
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Point = tuple[float, float]
 BAND_EPSILON = 1e-9  # a centre whose t lands on a bin edge up to float error joins the higher bin
+PLACE_EPSILON = 1e-6  # inches: a centre this close to the canopy's centre, an edge or a corner is on it
 _POSITION = re.compile(r"^r(\d)c(\d)$")
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+def _finite_point(v: Any, name: str) -> Any:
+    if isinstance(v, list | tuple) and any(
+        isinstance(c, int | float) and not isinstance(c, bool) and not math.isfinite(c) for c in v
+    ):
+        raise ValueError(f"{name} must be [x, y] in canopy inches (finite numbers)")
+    return v
 
 
 class _FieldBase(_Strict):
@@ -84,9 +97,22 @@ class RadialField(_FieldBase):
     def _radius(cls, v: Any) -> Any:
         if v == "auto":
             return v
-        if isinstance(v, bool) or not isinstance(v, int | float) or not v > 0:
-            raise ValueError("radius_in must be auto or a distance in inches greater than 0")
+        if isinstance(v, bool) or not isinstance(v, int | float) or not math.isfinite(v) or not v > 0:
+            raise ValueError("radius_in must be auto or a distance in inches greater than 0 (and finite)")
         return float(v)
+
+    @field_validator("centre_in", mode="before")
+    @classmethod
+    def _centre(cls, v: Any) -> Any:
+        return _finite_point(v, "centre_in")
+
+    @field_validator("centres_in", mode="before")
+    @classmethod
+    def _centres(cls, v: Any) -> Any:
+        if isinstance(v, list):
+            for p in v:
+                _finite_point(p, "each of centres_in")
+        return v
 
     @model_validator(mode="after")
     def _one_centre(self) -> RadialField:
@@ -104,6 +130,11 @@ class SweepField(_FieldBase):
     centre_in: Point
     start_deg: float = 0.0
 
+    @field_validator("centre_in", mode="before")
+    @classmethod
+    def _centre(cls, v: Any) -> Any:
+        return _finite_point(v, "centre_in")
+
     @field_validator("start_deg")
     @classmethod
     def _angle_range(cls, v: float) -> float:
@@ -119,11 +150,6 @@ def _size(canopy: Mapping[str, Any]) -> tuple[float, float]:
     return float(canopy["width_in"]), float(canopy["height_in"])
 
 
-def _corners(canopy: Mapping[str, Any]) -> list[Point]:
-    w, h = _size(canopy)
-    return [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
-
-
 def _cos_sin(deg: float) -> tuple[float, float]:
     """Exact for multiples of 90° (so angle 0 is x / width and 90 is y / height to the last bit)."""
     exact = {0.0: (1.0, 0.0), 90.0: (0.0, 1.0), 180.0: (-1.0, 0.0), 270.0: (0.0, -1.0)}
@@ -133,17 +159,61 @@ def _cos_sin(deg: float) -> tuple[float, float]:
     return math.cos(rad), math.sin(rad)
 
 
-def _distance(spec: RadialField, x: float, y: float, canopy: Mapping[str, Any]) -> float:
+def _stretch(spec: RadialField, canopy: Mapping[str, Any]) -> float:
     w, h = _size(canopy)
-    stretch = w / h if spec.metric == "canopy" else 1.0
+    return w / h if spec.metric == "canopy" else 1.0
+
+
+def _distance(spec: RadialField, x: float, y: float, canopy: Mapping[str, Any]) -> float:
+    stretch = _stretch(spec, canopy)
     return min(math.hypot(x - cx, (y - cy) * stretch) for cx, cy in spec.centres)
 
 
+def _farthest_from_nearest(centres: Sequence[Point], w: float, h: float) -> float:
+    """max over the w × h rectangle of the distance to the nearest centre. The maximum sits on a vertex of the
+    centres' nearest-centre regions clipped to the rectangle: a corner, a point where two centres' perpendicular
+    bisector meets an edge, or a point equidistant from three centres inside it. Evaluating the nearest-centre
+    distance at every such candidate (whether or not that pair or triple is actually nearest there) gives exactly
+    the maximum, since every candidate is a canopy point."""
+    cs = list(dict.fromkeys(centres))  # duplicate centres add nothing
+    candidates: list[Point] = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+
+    def inside(px: float, py: float) -> bool:
+        return -PLACE_EPSILON <= px <= w + PLACE_EPSILON and -PLACE_EPSILON <= py <= h + PLACE_EPSILON
+
+    for (ax, ay), (bx, by) in combinations(cs, 2):
+        # the bisector: nx·x + ny·y = c
+        nx, ny, c = bx - ax, by - ay, (bx * bx + by * by - ax * ax - ay * ay) / 2
+        if ny:
+            candidates += [(x, (c - nx * x) / ny) for x in (0.0, w) if inside(x, (c - nx * x) / ny)]
+        if nx:
+            candidates += [((c - ny * y) / nx, y) for y in (0.0, h) if inside((c - ny * y) / nx, y)]
+    for (ax, ay), (bx, by), (qx, qy) in combinations(cs, 3):
+        d = 2 * (ax * (by - qy) + bx * (qy - ay) + qx * (ay - by))
+        if not d:
+            continue  # collinear: no point is equidistant from all three
+        a2, b2, q2 = ax * ax + ay * ay, bx * bx + by * by, qx * qx + qy * qy
+        px = (a2 * (by - qy) + b2 * (qy - ay) + q2 * (ay - by)) / d
+        py = (a2 * (qx - bx) + b2 * (ax - qx) + q2 * (bx - ax)) / d
+        if inside(px, py):
+            candidates.append((px, py))
+    clamped = [(min(w, max(0.0, px)), min(h, max(0.0, py))) for px, py in candidates]
+    return max(min(math.hypot(px - cx, py - cy) for cx, cy in cs) for px, py in clamped)
+
+
 def radius(spec: RadialField, canopy: Mapping[str, Any]) -> float:
-    """The radial field's radius in its metric: `radius_in`, or (auto) the farthest corner from its nearest centre."""
+    """The radial field's radius in its metric: `radius_in`, or (auto) the largest distance any canopy point has
+    from its nearest centre, so the rings just fill the canopy. ValueError when that is 0 (no canopy to fill)."""
     if spec.radius_in != "auto":
         return float(spec.radius_in)
-    return max(_distance(spec, x, y, canopy) for x, y in _corners(canopy))
+    w, h = _size(canopy)
+    stretch = _stretch(spec, canopy)
+    r = _farthest_from_nearest([(cx, cy * stretch) for cx, cy in spec.centres], w, h * stretch)
+    if not r > 0:
+        raise ValueError(
+            "radius_in: auto has no distance to fill (every canopy point is a centre); give radius_in in inches"
+        )
+    return r
 
 
 def _raw(spec: Any, x: float, y: float, canopy: Mapping[str, Any]) -> float:
@@ -212,8 +282,44 @@ def bands(
     return [b for b in bins if b]
 
 
-def layout_words(spec: Any) -> str:
-    """How copy must describe this field's layout: the words module-level copy has to contain."""
+_COUNTS = {2: "two", 3: "three", 4: "four"}
+# Every phrase `layout_words` can return: copy for one layout may not use another layout's words.
+LAYOUT_PHRASES = (
+    "column by column",
+    "row by row",
+    "diagonally",
+    "from the centre out",
+    "from one corner",
+    "from one edge",
+    "from one spot",
+    *(f"from {n} points" for n in _COUNTS.values()),
+    "around the centre",
+    "around one corner",
+    "around one edge",
+    "around one spot",
+)
+
+
+def _place(point: Point, canopy: Mapping[str, Any]) -> str:
+    """Where a centre sits, as copy can say it: "the centre", or "one corner" / "one edge" (a point beyond the canopy
+    counts as the corner or edge it lies beyond) / "one spot" (anywhere else inside)."""
+    w, h = _size(canopy)
+    x, y = point
+    if abs(x - w / 2) <= PLACE_EPSILON and abs(y - h / 2) <= PLACE_EPSILON:
+        return "the centre"
+    on_x = x <= PLACE_EPSILON or x >= w - PLACE_EPSILON  # on or beyond the left or right edge
+    on_y = y <= PLACE_EPSILON or y >= h - PLACE_EPSILON
+    if on_x and on_y:
+        return "one corner"
+    if on_x or on_y:
+        return "one edge"
+    return "one spot"
+
+
+def layout_words(spec: Any, canopy: Mapping[str, Any]) -> str:
+    """How copy must describe this field's layout over this canopy: the words module-level copy has to contain (one
+    of `LAYOUT_PHRASES`). A radial or sweep design names where its centre is: only one centred on the canopy is
+    "from the centre out" / "around the centre"; several radial centres are "from {n} points"."""
     if isinstance(spec, LinearField):
         if spec.angle_deg in (0.0, 180.0):
             return "column by column"
@@ -221,9 +327,13 @@ def layout_words(spec: Any) -> str:
             return "row by row"
         return "diagonally"
     if isinstance(spec, RadialField):
-        return "from the centre out"
+        centres = list(dict.fromkeys(spec.centres))
+        if len(centres) > 1:
+            return f"from {_COUNTS[len(centres)]} points"
+        place = _place(centres[0], canopy)
+        return "from the centre out" if place == "the centre" else f"from {place}"
     if isinstance(spec, SweepField):
-        return "around the centre"
+        return f"around {_place(spec.centre_in, canopy)}"
     raise ValueError(
         f"unknown field kind {getattr(spec, 'kind', spec)!r}; use one of {', '.join(FIELD_KINDS)}"
     )
