@@ -19,6 +19,7 @@ import pytest
 from conftest import _env
 from fake_engine import RecordingEngine
 from fastapi.testclient import TestClient
+from partial_canopy import LIVE, partial_show, showing
 
 from conductor import logring, redact
 from conductor.engine_api import CanopyPhase, CanopyState, PlanError, Tier
@@ -193,6 +194,16 @@ def test_f3_safe_look_message_comes_from_what_was_sent(app_client_show):
     assert r.status_code == 200 and r.json()["ok"] is True
     message = r.json()["message"]
     assert "Lowcountry Calm" in message and "9 of 9 modules" in message
+
+
+def test_f3_safe_look_on_a_partial_canopy_counts_the_registered_modules(monkeypatch, tmp_path):
+    with partial_show(monkeypatch, tmp_path, LIVE) as client:
+        showing(client)
+        r = client.post("/api/canopy/safe-look", json={})
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    message = r.json()["message"]
+    assert "Lowcountry Calm" in message and "on 2 of 9 modules" in message and "9 of 9" not in message
+    assert "7 have no Hubspace device registered" in message and "/ops/accounts" in message
 
 
 def test_f3_commission_refused_or_with_problems_is_not_ok(app_client_show):

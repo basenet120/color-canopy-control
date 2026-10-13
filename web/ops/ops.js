@@ -157,8 +157,12 @@ function drawGrid() {
       const status = eng.status || m.status || "unknown";
       const reason = eng.reason || m.reason || "";
       const name = m.label || m.id;
-      if (status !== "ready" && reason) issues.push({ name, reason, device: m.device_id });
-      const href = m.device_id ? `/ops/module/?device=${encodeURIComponent(m.device_id)}` : null;
+      // A position with no Hubspace device registered (D62) has no module page to open: it links to /ops/accounts.
+      const unregistered = m.registered === false;
+      if (status !== "ready" && reason) issues.push({ name, reason, device: m.device_id, unregistered });
+      const href = unregistered
+        ? "/ops/accounts/"
+        : m.device_id ? `/ops/module/?device=${encodeURIComponent(m.device_id)}` : null;
       const mism = m.counts ? m.counts.mismatch : 0;
       return h(
         href ? "a" : "div",
@@ -166,7 +170,9 @@ function drawGrid() {
           class: `cell s-${status}`,
           href,
           style: `grid-row: ${m.row + 1}; grid-column: ${m.col + 1}`,
-          title: `${name}: ${reason || status} — open the module page`,
+          title: unregistered
+            ? `${name}: no Hubspace device registered — register one on /ops/accounts`
+            : `${name}: ${reason || status} — open the module page`,
           "data-module": m.id,
         },
         h("span", { class: "cell-head" }, h("span", { class: "cell-name" }, name), h("span", { class: "dot-status" })),
@@ -174,7 +180,9 @@ function drawGrid() {
         h(
           "span",
           { class: "cell-foot" },
-          m.lock_owner ? `Held: ${m.lock_owner}` : mism ? `${mism} heads differ` : statusWord(status),
+          unregistered
+            ? "No device registered"
+            : m.lock_owner ? `Held: ${m.lock_owner}` : mism ? `${mism} heads differ` : statusWord(status),
         ),
       );
     }),
@@ -186,14 +194,43 @@ function drawGrid() {
         "li",
         {},
         h("span", { class: "title" }, i.name), " — ", i.reason, " ",
-        i.device ? h("a", { href: `/ops/module/?device=${encodeURIComponent(i.device)}` }, "Open module page") : null,
+        i.unregistered
+          ? h("a", { href: "/ops/accounts/" }, "Register a device")
+          : i.device ? h("a", { href: `/ops/module/?device=${encodeURIComponent(i.device)}` }, "Open module page") : null,
       ),
     ),
   );
   const c = headsData.counts;
-  $("heads-note").textContent =
-    `${c.match} of ${c.heads} heads match their look · ${c.mismatch} differ · ${c.unknown} not read back yet. ` +
-    `Tap a module to open its page. ${headsData.readback_note}`;
+  const p = positions();
+  let counts = `${c.match} of ${c.heads} heads match their look · ${c.mismatch} differ · ${c.unknown} not read back yet. `;
+  if (p && p.registered < p.total) {
+    // D62: only the registered modules are read back; the other positions stay dark and are counted apart.
+    const dark = p.total - p.registered;
+    counts =
+      `${c.match} of ${c.heads - c.no_device} heads on the ${p.registered} registered module${plural(p.registered)} ` +
+      `match their look · ${c.mismatch} differ · ${c.unknown} not read back yet · ` +
+      `${c.no_device} heads on ${dark} position${plural(dark)} with no Hubspace device registered. `;
+  }
+  $("heads-note").textContent = counts + `Tap a module to open its page. ${headsData.readback_note}`;
+}
+
+function plural(n) {
+  return n === 1 ? "" : "s";
+}
+
+// How many canopy positions have a Hubspace device registered (D62), from the last heads read: {registered, total},
+// or null before the first read.
+function positions() {
+  const mc = headsData && headsData.counts && headsData.counts.modules;
+  return mc ? { registered: mc.registered, total: mc.total } : null;
+}
+
+// "all 9 modules" on the full canopy, "the 2 registered modules" on a partial one.
+function moduleScope() {
+  const p = positions();
+  if (!p) return "every registered module";
+  if (p.registered === p.total) return `all ${p.total} modules`;
+  return `the ${p.registered} registered module${plural(p.registered)}`;
 }
 
 function statusWord(status) {
@@ -257,8 +294,10 @@ function setupControls() {
   );
   const dialog = $("commission-dialog");
   $("commission-btn").addEventListener("click", () => {
+    const p = positions();
+    $("commission-scope").textContent = p ? `${p.registered} of ${p.total} now` : "as registered";
     if (typeof dialog.showModal === "function") dialog.showModal();
-    else if (window.confirm("Commission slots on all nine modules now?")) commission();
+    else if (window.confirm(`Commission slots on ${moduleScope()} now?`)) commission();
   });
   dialog.addEventListener("close", () => {
     if (dialog.returnValue === "go") commission();
@@ -308,11 +347,16 @@ async function runChecklist() {
 async function testModeChange() {
   const btn = $("test-mode-btn");
   btn.disabled = true;
-  btn.textContent = "Timing all nine modules…";
-  note($("test-result"), "Changing the mode once and waiting up to 10 s for every module to read back Ready…");
+  const p = positions();
+  btn.textContent = `Timing ${moduleScope()}…`;
+  note(
+    $("test-result"),
+    `Changing the mode once and waiting up to 10 s for every ${p && p.registered < p.total ? "registered " : ""}module to read back Ready…`,
+  );
   try {
     const r = await api("/api/ops/checklist/test-mode-change", { method: "POST", body: {} });
-    const late = r.modules.filter((m) => m.ready_after_s == null);
+    // Positions with no device registered aren't timed: the message names them ("Not timed: …"), never "Not ready".
+    const late = r.modules.filter((m) => m.registered !== false && m.ready_after_s == null);
     const extra = late.length ? ` Not ready: ${late.map((m) => `${m.label} (${m.reason || m.status})`).join("; ")}.` : "";
     const back = r.restored_to ? " Changed back afterwards." : "";
     note($("test-result"), r.message + extra + back + (r.simulated ? " (SIMULATED)" : ""), r.ok ? "ok" : "error");

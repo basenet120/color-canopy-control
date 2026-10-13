@@ -831,7 +831,8 @@ class ModuleSession:
                 if not self.target.simulated
                 else ""
             )
-            + " once all nine modules are recorded; the Conductor never rewrites it, and /ops alerts if it changes."
+            + " once every canopy module with a Hubspace device registered has it recorded (all nine on the full"
+            " canopy); the Conductor never rewrites it, and /ops alerts if it changes."
         )
         if self.target.simulated:
             message += " SIMULATED — the simulator's slot, not a real app painting."

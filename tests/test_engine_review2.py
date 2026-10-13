@@ -807,6 +807,10 @@ def test_f7_record_a_hand_painted_slot_on_the_module_page_and_t2_selects_it(app_
         body = r.json()
         assert body["slot"]["hash"] == painted[entry.id] and body["slot"]["origin"] == "app"
         assert "Hubspace app" in body["slot"]["message"] and "Nothing was sent" in body["slot"]["message"]
+        assert (
+            "once every canopy module with a Hubspace device registered has it recorded (all nine on the full "
+            in (body["slot"]["message"])
+        )
         client.post(f"/api/module/{entry.id}/close", json={"lease": lease})
     entry = services.registry.get("canopy-r2c2")
     assert entry.slot_hashes["custom-2"] == painted["canopy-r2c2"] and entry.slot_origin["custom-2"] == "app"
