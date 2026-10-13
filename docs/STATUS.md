@@ -1,16 +1,23 @@
 # Status
 
-_Last updated: 2026-10-13. **The show box is now the Mac mini** (D61, `claude/mac-show-box`, below); it is installed
-and running live with no account signed in yet. Before that (Oct 7): Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into `main` as
-canon (D54). One kit, Kingston, is commissioned for per-head frames. The follow-ups make the show engine read each
-kit's own map (D57) and let `/ops/bench` record a kit's map from its own bench evidence (D58, **Apply map**; simulator
-only so far)._
+_Last updated: 2026-10-13 (evening). **The show box is the Mac mini** (D61, PR #18, merged), running live.
+**Temporarily, canopy Modules 1–2 are VWBD's two test kits** (Kingston test, String light 1) on the bench account, for
+client demos from the iPad guest panel — **undo by Oct 19** (below). `claude/partial-canopy` (D62) makes a partial
+canopy's copy true. Before that (Oct 7): Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into
+`main` as canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; the show engine reads each kit's
+own map (D57) and `/ops/bench` can record a kit's map from its own bench evidence (D58)._
 
 ## PR stack (merge order — merge commits, not squash)
-0. **`claude/mac-show-box` → `main` (independent; based on `d21b4e5`)**: the show runs on the Mac mini under launchd
-   instead of the Ubuntu mini PC (D61). `deploy/mac/` (`canopy-mac` helper, `run-conductor.sh`, settings template),
-   `docs/runbooks/mac-show-box.md`, `tests/test_mac_box.py` (27). No Conductor code changes. Details under
-   "The Mac show box" below. (Items 1–5 below are merged; PR #17, `claude/cloud-dev-setup`, is separate docs work.)
+0. **`claude/partial-canopy` → `main` (based on `9c4c7aa`)**: D62. A canopy position with no Hubspace device
+   registered is left out of every look, the safe look included; a partial canopy's guest copy counts the strands that
+   are lit ("both Hubspace strands…", "The Color Canopy (2 of 9 strands)") and stops claiming the palette steps across
+   the whole canopy; with nothing registered the canopy rests instead of "showing" a look that lights nothing. A
+   registered module is never dropped: tier failures still move the whole canopy down the ladder, and /ops stays at
+   Needs attention. **Verified (sim, macOS, Oct 13):** 1200 passed (13 new tests, each guard mutation-checked by a
+   reviewer and by the fixer), `make lint` clean, JS 35/35, soak 9/9 PASS (`docs/reports/sim-acceptance.md` not
+   regenerated). Three adversarial reviews (contracts, copy truth, mutation) found 7 issues, all fixed. Deploying it
+   to the show box needs a restart (Alon, between demos).
+- **Merged:** PR #18, `claude/mac-show-box` (D61, the Mac show box), as `9c4c7aa` on Oct 13.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
      (`1eb8551`);
@@ -69,6 +76,32 @@ only so far)._
    reconciler keeps them. Choosing a mood, the safe look and an idle reset (`kiosk.idle_reset_s`, 300 s) clear them.
    It also adds `POST /api/canopy/guest-reset` and a "Clear guest brightness / off" button on `/ops`. No kiosk routes:
    the guest panel branch calls the engine methods.
+
+## Two test kits as canopy Modules 1–2 (temporary, live) — 2026-10-13
+Alon's call, for client demos: the iPad guest panel drives VWBD's two shop kits as the canopy's first two modules.
+Done on the Mac show box (Alon ran the commands; the auto-mode check kept Claude from changing the live box):
+- **What changed (ops overlay only, `~/Library/Application Support/ColorCanopy/data/overrides/registry.yaml`,
+  NOT_FOR_GIT):** `canopy-r0c0` and `canopy-r0c1` got `account: bench`; Kingston test was released from `bench-kit`
+  and registered as `canopy-r0c0` (Module 1); String light 1 moved from the spare entry `shop-string-1` to
+  `canopy-r0c1` (Module 2) through the register API's spare hand-off. Backup first
+  (`canopy-data-20261013-163538-manual.tar.gz`) and the pre-change overlay kept as
+  `overrides/history/registry-before-canopy-test.yaml`.
+- **True on hardware (Oct 13):** right after registering, the engine sent its look to both kits; a scene chosen on the
+  test iPad (Garden Gathering) was accepted and the panel reported it ready; Alon confirmed the basic demo works. Each
+  strand shows one colour (module level, T3): neither kit has bench flags or a controller map on this Mac, so
+  per-light painting is off. Not yet measured: readback timing, re-assert behaviour, brightness and power from the
+  iPad on these kits.
+- **Until D62 is deployed on the box:** the T3 feature line still says the palette steps "across the canopy column by
+  column" and the ops Safe look still says "all nine" — avoid the Safe look button in front of guests. Nobody may
+  drive these two kits from the Hubspace app, the Studio or another Conductor meanwhile: the reconciler puts the Mac's
+  look back within seconds.
+- **UNDO by Oct 19, before any real canopy kit is registered on Oct 20** (otherwise registering a real Module 1 or 2
+  from the canopy account fails with 409 "belongs to the bench account", and slot records or calibration taken on the
+  shop kits could follow the real modules): tell VWBD; `canopy-mac backup`; `canopy-mac stop --yes`; `cp -p
+  overrides/history/registry-before-canopy-test.yaml overrides/registry.yaml` (in the data folder, mode 0600); check
+  with `load_registry` that `canopy-r0c0`/`r0c1` are back on account canopy with no id; `canopy-mac start`. The kits
+  keep the Mac's last look. Never commit the /ops overlay diff while this is in place: it proposes `account: bench`
+  for `config/devices.yaml`.
 
 ## The Mac show box (D61) — 2026-10-13
 Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu mini PC. Runbook:
@@ -280,12 +313,13 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-0. **The Mac show box (D61), Alon:** merge `claude/mac-show-box`, then point `~/canopy-show` at `main` or the release
-   tag and run `canopy-mac install`. On the Mac: add the show accounts when they exist (`canopy-mac install --accounts
-   …` replaces the list, so include VWBD's if it should stay), turn on automatic login (FileVault is off), wire it to
-   the show router with a reserved address, then restart it and pull the plug once (`mac-show-box.md` §1–§2). Signing
-   in a show account (`canopy-mac login --account canopy`) waits for Home Depot's authorization (06 #20); VWBD's bench
-   account can be signed in now (`--account bench`).
+0. **The Mac show box, Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge
+   `claude/partial-canopy` (D62), then between demos point `~/canopy-show` at `main` (`git -C ~/canopy-show switch
+   main && git -C ~/canopy-show pull`) and run `canopy-mac install` (restarts the Conductor; the sign-in survives).
+   (c) Then a release tag for the freeze. (d) On the Mac: add the show accounts when they exist (`canopy-mac install
+   --accounts …` replaces the list, so include VWBD's if it should stay), turn on automatic login (FileVault is off),
+   wire it to the show router with a reserved address, restart it and pull the plug once (`mac-show-box.md` §1–§2).
+   Signing in a show account waits for Home Depot's authorization (06 #20).
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
    registry after the redeploy.
