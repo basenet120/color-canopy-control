@@ -1,8 +1,10 @@
 // The guest panel on the iPad stand (docs/design/guest-panel.md). ES module, no build step, vendored helpers only.
 //
-// Data: GET /api/kiosk/panel every 2 s (the scenes, capabilities and `state`), and POST /api/kiosk/scene|brightness|
-// power. A 200 on a write means "accepted"; the page shows the server's state (phase "changing" until the lights
-// read back) and reconciles its optimistic switch and slider to it.
+// Data: GET /api/kiosk/panel every 2 s (the scenes, capabilities, `canopy` and `state`), and POST /api/kiosk/scene|
+// brightness|power. A 200 on a write means "accepted"; the page shows the server's state (phase "changing" until the
+// lights read back) and reconciles its optimistic switch and slider to it.
+// Now showing draws the canopy's 270 lights from `state.lit` (canopy-preview.mjs; what each panel may truthfully
+// claim), and the 30-light serpentine only when there is no such picture (the workshop strands, or no look yet).
 // Honesty (CLAUDE.md, 07 §6): the feature sentence is always `state.feature` from the server and the subtitle prefers
 // `state.message`; this page only adds the spec's calm fallbacks (panel-model.mjs COPY). A refusal shows the server's
 // calm `detail`, never an HTTP code; anything else reads "Hang on, we're reconnecting."
@@ -45,6 +47,7 @@ import {
   stripGradient,
   switchView,
 } from "/kiosk/panel-model.mjs";
+import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -72,7 +75,18 @@ const ui = {
   restingDetail: "",
   stopped: false, // the iPad frame preview took over the page
   writeSeq: 0, // bumped when a write is sent and when its answer lands: a poll that spans either is stale
+  serverClock: null, // {serverNow, at}: the server's wall clock (s) as last read, and the local ms it was read at
 };
+
+/** The server's wall clock now, estimated: server_now + the local time since it was read (motion is phase-synced). */
+function serverNowEst() {
+  const c = ui.serverClock;
+  return c ? c.serverNow + (Date.now() - c.at) / 1000 : Date.now() / 1000;
+}
+
+function readServerClock(serverNow) {
+  if (Number.isFinite(serverNow)) ui.serverClock = { serverNow, at: Date.now() };
+}
 
 // ---- tiny DOM helpers -------------------------------------------------------------------------------------------
 function el(tag, attrs = {}, ...kids) {
@@ -193,6 +207,7 @@ function buildCards(scenes) {
     const check = svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" });
     check.append(svg("path", { d: "M5 12.5l4.5 4.5L19 7.5" }));
     const mark = el("span", { class: "mark", "aria-hidden": "true" }, check, el("span", { class: "spinner" }));
+    // the palette strip: the scene's colours in order (Now showing is the canopy's own picture)
     const strip = el("span", { class: "strip", "aria-hidden": "true" });
     strip.style.background = stripGradient(scene.frame);
     const swatches = el("span", { class: "swatches", "aria-hidden": "true" });
@@ -265,6 +280,78 @@ function paintSnake(frame) {
   snakeParts = snakeParts || buildSnake();
   snakeParts.tiles.forEach((r, i) => r.setAttribute("fill", rgb(frame[i] || [211, 210, 216])));
   for (const c of snakeParts.caps) c.node.setAttribute("fill", rgb(frame[c.light] || [211, 210, 216]));
+}
+
+/**
+ * The canopy's 270 lights on its nine panels (canopy-preview.mjs), drawn in canopy inches and turned to the view a
+ * guest at the stand sees overhead. Rebuilt only when the geometry or view changes; painted on every render, and
+ * every animation frame while `lit.motion` still has a frame to come.
+ */
+const canopyView = { key: "", dots: [], panels: [], motionKey: null, prevLit: null, shown: null, raf: 0, label: "" };
+function buildCanopy(canopy) {
+  const drawing = layout(canopy);
+  if (drawing.key === canopyView.key) return;
+  const root = $("canopy-preview");
+  root.setAttribute("viewBox", `0 0 ${drawing.width} ${drawing.height}`);
+  root.replaceChildren();
+  canopyView.panels = drawing.panels.map((p) => {
+    const rect = svg("rect", { class: "panel", x: p.x, y: p.y, width: p.w, height: p.h, rx: 1.5 });
+    root.append(rect);
+    return rect;
+  });
+  canopyView.dots = drawing.dots.map((d) => {
+    const node = svg("circle", { class: "dot", cx: d.cx, cy: d.cy, r: d.r });
+    root.append(node);
+    return { pos: d.pos, k: d.k, node, paint: "" };
+  });
+  canopyView.key = drawing.key;
+}
+
+function paintCanopy(canopy, lit) {
+  buildCanopy(canopy);
+  const now = serverNowEst();
+  const motion = lit.motion || null;
+  const motionKey = motion ? `${motion.kind}|${motion.t0}` : null;
+  if (motionKey !== canopyView.motionKey) {
+    // a new ripple or run starts from the picture on screen now
+    canopyView.prevLit = canopyView.shown ? { modules: canopyView.shown } : null;
+    canopyView.motionKey = motionKey;
+  }
+  const modules = motionColors(motion, canopyView.prevLit, lit, now);
+  canopyView.shown = modules;
+  const byPos = new Map(modules.map((m) => [m.pos, m]));
+  const reduced = reducedMotion();
+  const opacity = levelOpacity(lit.level, canopy.view && canopy.view.dim_floor);
+  for (const dot of canopyView.dots) {
+    const p = paintFor(byPos.get(dot.pos), dot.k, { reduced });
+    const lightOn = p.kind === "lit" || p.kind === "changing";
+    const paint = `${p.kind}|${p.fill}|${p.pulse}|${lightOn ? opacity : 1}`;
+    if (paint === dot.paint) continue; // untouched dots keep their transition and pulse running
+    dot.paint = paint;
+    dot.node.setAttribute("fill", p.fill || "none");
+    dot.node.setAttribute("fill-opacity", String(lightOn ? opacity : 1));
+    dot.node.setAttribute("class", `dot is-${p.kind}${p.pulse ? " changing" : ""}`);
+  }
+  const label = ariaSummary({ modules });
+  if (label !== canopyView.label) {
+    canopyView.label = label;
+    $("canopy-preview").setAttribute("aria-label", label);
+  }
+  if (motionActive(motion, now) && !canopyView.raf) canopyView.raf = requestAnimationFrame(tickCanopy);
+}
+
+/** One animation frame of a ripple or a stepped run; the loop stops once the motion has no frame to come. */
+function tickCanopy() {
+  canopyView.raf = 0;
+  const panel = ui.panel;
+  const lit = panel && panel.state && panel.state.lit;
+  if (!panel || !panel.canopy || !lit || ui.stopped) return;
+  paintCanopy(panel.canopy, lit);
+}
+
+function stopCanopy() {
+  if (canopyView.raf) cancelAnimationFrame(canopyView.raf);
+  canopyView.raf = 0;
 }
 
 // ---- rendering ----------------------------------------------------------------------------------------------------
@@ -347,10 +434,18 @@ function render() {
   chip.hidden = !(phase === "cooldown" && left > 0);
   if (!chip.hidden) chip.textContent = cooldownChip(left);
 
-  // now showing
+  // now showing: the canopy's picture when the server sends one, else the serpentine
   $("now-name").textContent = showing.name;
   $("now-desc").textContent = showing.description;
-  paintSnake(showing.frame);
+  const drawCanopy = Boolean(showing.lit && panel.canopy);
+  // (an svg has no `hidden` property: toggle the attribute, which kiosk.css's [hidden] rule hides)
+  $("canopy-preview").toggleAttribute("hidden", !drawCanopy);
+  $("snake").toggleAttribute("hidden", drawCanopy);
+  if (drawCanopy) paintCanopy(panel.canopy, showing.lit);
+  else {
+    stopCanopy();
+    paintSnake(showing.frame || nowShowing(scenes, { ...state, power, lit: null }).frame);
+  }
 
   // brightness
   const range = panel.brightness_range || [10, 100];
@@ -398,9 +493,10 @@ function settlePending(state) {
   if (phaseOf(state) !== "changing" || Date.now() - ui.pendingPosted > 30000) ui.pendingId = null;
 }
 
-function applyState(state) {
+function applyState(state, serverNow) {
   ui.writeSeq += 1;
   if (!ui.panel || !state) return;
+  readServerClock(serverNow);
   ui.panel.state = state;
   ui.readAt = Date.now();
   settlePending(state);
@@ -416,6 +512,7 @@ async function poll() {
     const panel = await api("/api/kiosk/panel");
     ui.latencyMs = Math.round(performance.now() - started);
     ui.lastPollAt = Date.now();
+    readServerClock(panel.server_now);
     const first = !ui.panel;
     // A write was sent or answered while this poll was in flight: its state may predate the write, so keep the
     // write's answer (otherwise a stale "ready" would clear the pending card and let a second scene through).
@@ -491,7 +588,7 @@ async function chooseScene(id) {
     const res = await post("/api/kiosk/scene", { scene: id });
     ui.pendingPosted = Date.now();
     ui.powerHold = null; // a scene turns the lights on; follow the server
-    applyState(res.state);
+    applyState(res.state, res.server_now);
   } catch (err) {
     ui.pendingId = null;
     render();
@@ -509,7 +606,7 @@ async function togglePower() {
   render();
   try {
     const res = await post("/api/kiosk/power", { on });
-    applyState(res.state);
+    applyState(res.state, res.server_now);
   } catch (err) {
     ui.powerHold = null;
     render();
@@ -522,7 +619,7 @@ async function sendBrightness(level) {
   try {
     const res = await post("/api/kiosk/brightness", { level });
     if (ui.brightHold && ui.brightHold.value === level) ui.brightHold.until = Date.now() + BRIGHTNESS_HOLD_MS;
-    applyState(res.state);
+    applyState(res.state, res.server_now);
   } catch (err) {
     ui.brightHold = null;
     pacer.reset();

@@ -171,7 +171,7 @@ export function sceneLabel(scene) {
 
 export const rgb = (c) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 
-/** A CSS hard-stop gradient of the 30 lights (the card's preview strip). */
+/** A CSS hard-stop gradient of the scene's 30 colours in order: the card's palette strip (not the canopy's picture). */
 export function stripGradient(frame) {
   if (!Array.isArray(frame) || !frame.length) return "none";
   const n = frame.length;
@@ -200,20 +200,26 @@ export const OFF_TILE = [211, 210, 216]; // #D3D2D8, an unlit puck
 export const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 
 /**
- * `{name, description, frame}` for the Now-showing card. The preview draws what is lit: every light of the scene, or,
- * when the server says the strands took the one-colour fallback (`state.look === "solid"`), the scene's solid colour
- * on every light. The kiosk copy must be true, and a picture is copy too.
+ * The Now-showing card: `{name, description, lit, scene}` when the server sends the canopy's picture (`state.lit`,
+ * conductor/canopy_view.py: per panel what may truthfully be claimed; canopy-preview.mjs draws it), else the 30-light
+ * serpentine fallback `{name, description, frame, scene}` (the workshop strands, or no look yet). The serpentine draws
+ * what is lit: every light of the scene, or, when the server says the strands took the one-colour fallback
+ * (`state.look === "solid"`), the scene's solid colour on every light. The kiosk copy must be true, and a picture is
+ * copy too.
  */
 export function nowShowing(scenes, state) {
   const scene = state && state.scene ? (scenes || []).find((s) => s.id === state.scene) : null;
+  const off = state && state.power === false;
+  const name = off ? COPY.lightsOff : scene ? scene.name : COPY.noScene;
+  const description = !off && scene ? scene.description : COPY.noSceneHelp;
+  const shown = scene || null;
+  const lit = state && state.lit && Array.isArray(state.lit.modules) ? state.lit : null;
+  if (lit) return { name, description, lit, scene: shown };
   const fill = (c) => Array.from({ length: 30 }, () => c);
-  if (state && state.power === false) {
-    return { name: COPY.lightsOff, description: COPY.noSceneHelp, frame: fill(OFF_TILE), scene };
-  }
-  if (!scene) return { name: COPY.noScene, description: COPY.noSceneHelp, frame: fill(OFF_TILE), scene: null };
+  if (off || !scene) return { name, description, frame: fill(OFF_TILE), scene: shown };
   const solid = state.look === "solid" && /^#[0-9a-f]{6}$/i.test(scene.solid || "");
   const frame = solid ? fill(hexToRgb(scene.solid)) : scene.frame;
-  return { name: scene.name, description: scene.description, frame, scene };
+  return { name, description, frame, scene };
 }
 
 // ---- idle ---------------------------------------------------------------------------------------------------------

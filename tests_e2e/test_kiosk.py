@@ -4,9 +4,11 @@ Two groups:
 - **Design, against a stubbed panel API** (always runs): /api/kiosk/panel and the scene/brightness/power writes are
   answered in the browser by a small stub (Playwright routing; nothing in the app changes), so the page's states can
   be driven and photographed: ready, changing, cooldown, a refusal, power off, paused, resting, a lost connection and
-  the solid-colour fallback. Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes.
+  the solid-colour fallback. The workshop stub draws the 30-light serpentine; the canopy stub (`canopy=True`) serves
+  the real canopy geometry and a `state.lit`, and the page draws its 270 lights (full and partial canopy, a tap's
+  pulse, power off, a turned view). Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes.
 - **Against the real engine** (skips until GET /api/kiosk/panel serves a non-resting canopy): tap a scene, the state
-  goes changing then steady, and the feature line shows the server's sentence.
+  goes changing then steady, the feature line shows the server's sentence and the 270 dots show the server's picture.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ import urllib.error
 
 import pytest
 
+from conductor.canopy_view import canopy_geometry, load_canopy
+from conductor.config import CONFIG_DIR, PreviewSettings
 from conductor.guest_panel import scene_json
 from conductor.scenes import load_scenes
 
@@ -24,6 +28,7 @@ LANDSCAPE = {"width": 1180, "height": 820}
 OLDER = {"width": 1024, "height": 768}
 PORTRAIT = {"width": 820, "height": 1180}
 COOLDOWN_S = 8.0
+RINGS = [["r1c1"], ["r0c1", "r1c0", "r1c2", "r2c1"], ["r0c0", "r0c2", "r2c0", "r2c2"]]  # centre out
 FEATURE = "Every light set individually as a Hubspace custom pattern on both strands."
 SOLID_FEATURE = "Each Hubspace strand set to one colour from the scene."
 
@@ -42,8 +47,22 @@ def _wait(predicate, timeout=20.0, interval=0.2):
 class StubPanel:
     """Answers /api/kiosk/panel and the three writes like the guest panel backend would, on wall time."""
 
-    def __init__(self, scene: str | None = "lowcountry-calm", settle_s: float = 1.2) -> None:
+    def __init__(
+        self,
+        scene: str | None = "lowcountry-calm",
+        settle_s: float = 1.2,
+        *,
+        canopy: bool = False,
+        driven: set[str] | None = None,
+        view: PreviewSettings | None = None,
+        ripple_s: float | None = None,
+    ) -> None:
         self.scenes = [scene_json(s) for s in load_scenes().scenes]
+        # the canopy target: the real geometry, and a picture per position (`driven`: a partial canopy)
+        self.canopy = canopy_geometry(load_canopy(str(CONFIG_DIR)), view) if canopy else None
+        self.driven = driven
+        self.ripple_s = ripple_s  # a scene lands ring by ring from the centre, this far apart (lit.motion)
+        self.ripple_t0: float | None = None
         self.scene = scene
         self.power: bool | None = True
         self.brightness = 70
@@ -77,17 +96,48 @@ class StubPanel:
             "message": "Changing the light…" if changing else self.message,
             "feature": feature,
             "cooldown_remaining_s": round(max(0.0, self.cooldown_until - now), 3),
+            "lit": self.lit(changing),
+        }
+
+    def lit(self, changing: bool) -> dict | None:
+        """The canopy's picture, as conductor/canopy_view.py serves it: each head the scene's palette colour across
+        the canopy's width (a stand-in design), a driven position lit or changing, the rest dark; all off when off."""
+        if self.canopy is None or self.scene is None:
+            return None
+        palette = next(s for s in self.scenes if s["id"] == self.scene)["palette"]
+        modules = []
+        for m in self.canopy["modules"]:
+            item = {"pos": m["pos"], "state": "off", "color": None, "colors": None}
+            if self.power is False:
+                pass
+            elif self.driven is not None and m["pos"] not in self.driven:
+                item["state"] = "dark"
+            else:
+                item["state"] = "changing" if changing else "lit"
+                item["colors"] = [
+                    palette[min(len(palette) - 1, int(x / self.canopy["width_in"] * len(palette)))]["hex"]
+                    for x, _y in m["heads"]
+                ]
+            modules.append(item)
+        motion = None
+        if self.ripple_t0 is not None and time.time() < self.ripple_t0 + 2 * self.ripple_s:
+            motion = {"kind": "ripple", "t0": self.ripple_t0, "stagger_s": self.ripple_s, "rings": RINGS}
+        return {
+            "level": None if self.power is False else self.brightness,
+            "modules": modules,
+            "motion": motion,
         }
 
     def panel(self) -> dict:
         return {
-            "target": "workshop",
-            "target_label": "Two shop strands (60 lights)",
+            "target": "canopy" if self.canopy else "workshop",
+            "target_label": "The Color Canopy" if self.canopy else "Two shop strands (60 lights)",
             "simulated": True,
             "viewer": "ops",
             "scenes": self.scenes,
             "capabilities": {"scene": True, "brightness": True, "power": True},
             "brightness_range": [10, 100],
+            "canopy": self.canopy,
             "state": self.state(),
             "server_now": time.time(),
         }
@@ -109,6 +159,8 @@ class StubPanel:
                 return 429, {"detail": "You can choose a new scene in a moment.", "retry_after_s": left}
             self.scene, self.power = body["scene"], True
             self.cooldown_until = now + COOLDOWN_S
+            if self.ripple_s:
+                self.ripple_t0 = now
         elif kind == "brightness":
             self.brightness = max(10, int(body["level"]))
         elif kind == "power":
@@ -274,6 +326,132 @@ def test_panel_sizes(design_context_factory, screenshots, viewport, name):
     assert errors == []
 
 
+# ---- the canopy's picture (web/kiosk/canopy-preview.mjs) ---------------------------------------------------------
+UNLIT = "#D3D2D8"
+
+
+def _dots(page) -> list[dict]:
+    return page.eval_on_selector_all(
+        "#canopy-preview circle.dot",
+        "els => els.map((e) => ({fill: e.getAttribute('fill'), cls: e.getAttribute('class'),"
+        " opacity: e.getAttribute('fill-opacity')}))",
+    )
+
+
+def _picture(stub: StubPanel) -> list[str]:
+    """The fill of every dot as the page should draw it, in the page's own order (geometry modules × heads)."""
+    lit = {m["pos"]: m for m in stub.state()["lit"]["modules"]}
+    fills = []
+    for m in stub.canopy["modules"]:
+        item = lit[m["pos"]]
+        for k in range(len(m["heads"])):
+            if item["state"] in ("off", "dark"):
+                fills.append(UNLIT)
+            else:
+                fills.append(item["colors"][k] if item["colors"] else item["color"])
+    return fills
+
+
+@pytest.mark.parametrize(
+    ("viewport", "name"),
+    [
+        (LANDSCAPE, "kiosk-canopy-1180x820.png"),
+        (OLDER, "kiosk-canopy-1024x768.png"),
+        (PORTRAIT, "kiosk-canopy-820x1180.png"),
+    ],
+)
+def test_panel_draws_the_canopy_of_270_lights(design_context_factory, screenshots, viewport, name):
+    stub = StubPanel(scene="golden-hour", canopy=True)
+    _ctx, page, errors = _open(design_context_factory, viewport, stub)
+    _ready(page)
+    assert page.is_visible("#canopy-preview") and not page.is_visible("#snake")
+    assert page.eval_on_selector_all("#canopy-preview rect.panel", "els => els.length") == 9
+    dots = _dots(page)
+    assert len(dots) == 270
+    assert [d["fill"] for d in dots] == _picture(stub)  # each head its own colour, as the server says
+    assert len({d["fill"] for d in dots}) > 1
+    assert {d["opacity"] for d in dots} == {"0.805"}  # level 70 over the 0.35 floor
+    assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: 9 of 9 panels lit"
+    _no_overflow(page, viewport)
+    page.screenshot(path=str(screenshots / name))
+    assert errors == []
+
+
+def test_panel_canopy_pulses_while_changing_then_settles(design_context_factory, screenshots):
+    stub = StubPanel(scene="lowcountry-calm", canopy=True, settle_s=2.5)
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    page.tap(".scene[data-scene='coastal-tides']")
+    page.wait_for_function("document.querySelectorAll('#canopy-preview circle.changing').length === 270")
+    assert page.text_content("#hdr-sub-text") == "Changing the light…"
+    page.screenshot(path=str(screenshots / "kiosk-canopy-changing.png"))
+    page.wait_for_function(
+        "document.querySelectorAll('#canopy-preview circle.changing').length === 0", timeout=10000
+    )
+    assert [d["fill"] for d in _dots(page)] == _picture(stub)
+    assert errors == []
+
+
+def test_panel_canopy_ripple_lands_ring_by_ring(design_context_factory):
+    """lit.motion "ripple": the page keeps each ring's old colours until t0 + ring × stagger (server time), then
+    switches it, and the animation stops once the last ring has landed."""
+    stub = StubPanel(scene="coastal-tides", canopy=True, settle_s=4.0, ripple_s=1.5)
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    before = _dots(page)
+    page.tap(".scene[data-scene='golden-hour']")
+    page.wait_for_function("document.querySelectorAll('#canopy-preview circle.changing').length > 0")
+    order = [m["pos"] for m in stub.canopy["modules"] for _ in m["heads"]]
+    after = _picture(stub)
+
+    def fills_of(pos: str, fills: list) -> list:
+        return [f for p, f in zip(order, fills, strict=True) if p == pos]
+
+    now = [d["fill"] for d in _dots(page)]
+    assert fills_of("r1c1", now) == fills_of("r1c1", after)  # the centre lands at once
+    old = [d["fill"] for d in before]
+    assert fills_of("r0c0", now) == fills_of("r0c0", old)  # a corner still shows the old look
+    page.wait_for_function(  # the corners land at t0 + 3 s
+        f"(() => {{ const d = [...document.querySelectorAll('#canopy-preview circle.dot')]; "
+        f"return d[0].getAttribute('fill') === {json.dumps(after[0])}; }})()",
+        timeout=6000,
+    )
+    assert [d["fill"] for d in _dots(page)] == after
+    assert errors == []
+
+
+def test_panel_canopy_partial_and_off(design_context_factory, screenshots):
+    stub = StubPanel(scene="golden-hour", canopy=True, driven={"r0c0", "r0c1"})
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    fills = [d["fill"] for d in _dots(page)]
+    assert fills == _picture(stub)
+    assert fills.count(UNLIT) == 7 * 30  # left out: unlit, never a colour
+    assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: 2 of 9 panels lit"
+    page.screenshot(path=str(screenshots / "kiosk-canopy-partial.png"))
+
+    page.tap("#power")
+    page.wait_for_function("document.querySelector('#now-name').textContent === 'Lights are off'")
+    page.wait_for_function(
+        f"[...document.querySelectorAll('#canopy-preview circle.dot')].every((e) => e.getAttribute('fill') === "
+        f"{json.dumps(UNLIT)})"
+    )
+    assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: the canopy is off"
+    assert errors == []
+
+
+@pytest.mark.parametrize("viewport", [LANDSCAPE, OLDER, PORTRAIT])
+def test_panel_canopy_turned_view_fits(design_context_factory, viewport):
+    """A quarter-turned view (kiosk.preview.rotate_deg 90, set at install) letterboxes into the card at every size."""
+    stub = StubPanel(scene="golden-hour", canopy=True, view=PreviewSettings(rotate_deg=90, mirror_x=True))
+    _ctx, page, errors = _open(design_context_factory, viewport, stub)
+    _ready(page)
+    assert page.get_attribute("#canopy-preview", "viewBox") == "0 0 120 225"
+    assert len(_dots(page)) == 270
+    _no_overflow(page, viewport)
+    assert errors == []
+
+
 def test_panel_paused_and_resting(design_context_factory, screenshots):
     stub = StubPanel(scene="goodnight-glow")
     stub.phase = "paused"
@@ -365,6 +543,21 @@ def test_panel_scene_reaches_the_simulator(context_factory, api, screenshots):
     assert after["scene"] == target and after["feature"]
     page.wait_for_function(
         f"document.querySelector('#feature-text').textContent === {json.dumps(after['feature'])}",
+        timeout=10000,
+    )
+    # the 270 dots are the server's picture of what the engine installed
+    body = api("/api/kiosk/panel")
+    lit = {m["pos"]: m for m in body["state"]["lit"]["modules"]}
+    unlit = {"off": UNLIT, "dark": UNLIT, "unknown": "none"}  # unknown: an outline, no colour claim
+    want = [
+        unlit.get(lit[m["pos"]]["state"])
+        or (lit[m["pos"]]["colors"] or [lit[m["pos"]]["color"]] * len(m["heads"]))[k]
+        for m in body["canopy"]["modules"]
+        for k in range(len(m["heads"]))
+    ]
+    page.wait_for_function(
+        f"JSON.stringify([...document.querySelectorAll('#canopy-preview circle.dot')].map((e) => "
+        f"e.getAttribute('fill'))) === {json.dumps(json.dumps(want, separators=(',', ':')))}",
         timeout=10000,
     )
     page.screenshot(path=str(screenshots / "kiosk-live-1180x820.png"))

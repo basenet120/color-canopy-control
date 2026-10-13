@@ -153,7 +153,7 @@ No emoji. No icon font. No Schedule or Settings icons: they would promise featur
 ### 2.5 Scene card (Hubspace card plus the custom-pattern preview)
 Six cards in fixed order from `config/scenes.yaml`.
 - `<button>`, white `--card`, radius 16, `--sh-card`, padding 16, `overflow: hidden`.
-- **Preview strip** at the top: full card width minus padding, 28px tall, radius 999. It is 30 equal segments from `scene.frame` (`rgb(r,g,b)`), with no gaps. The outer pill has `box-shadow: inset 0 0 0 1px rgba(0,0,0,.06)` so ivory scenes don't vanish on white. This mirrors the striped track of the custom-mode brightness slider in `hb10035_c3.jpg`.
+- **Palette strip** at the top: full card width minus padding, 28px tall, radius 999. It is 30 equal segments from `scene.frame` (`rgb(r,g,b)`), with no gaps. It shows the scene's colours in order, not a picture of the canopy: the canopy's own picture is Now showing (§2.6). The outer pill has `box-shadow: inset 0 0 0 1px rgba(0,0,0,.06)` so ivory scenes don't vanish on white. This mirrors the striped track of the custom-mode brightness slider in `hb10035_c3.jpg`.
 - 14px gap, then **name** (2 lines max, clamp), 4px gap, then **mood** (1 line, ellipsis).
 - 12px gap, then **palette swatches**: palette circles 22px, 6px apart, each with `box-shadow: inset 0 0 0 1px rgba(0,0,0,.08)`. They mirror the colour preset circles in `iphoneX-03-Controls.png`. They are not interactive and are `aria-hidden`; the card's label carries the names.
 - Card min-height: see §4. Content is top-aligned and swatches sit at the bottom (`margin-top: auto`).
@@ -167,9 +167,24 @@ Six cards in fixed order from `config/scenes.yaml`.
 - White card, radius 16, padding 24, `--sh-card`.
 - Section header "NOW SHOWING", with the list icon to its left at 20px, `--icon`.
 - Scene name (28/700), then description (17/24 `--text-2`, up to 3 lines).
-- **Serpentine preview** of the 30 lights, copied from `hb10035_c3.jpg` and `pcworld_app_scenes-2.png`: 3 rows of 10 square tiles. Tile size = (card inner width − 2×cap) / 10, max 30px, with 2px gaps. Rows run L→R, R→L, L→R. The ends connect through half-round U-turn caps of the same tile thickness: at the right between rows 1→2, at the left between rows 2→3. Head order: tile i of the snake = `frame[i]`. No numbers. The tile corner radius is 3; caps are full semicircles.
-- When power is off: every tile is `#D3D2D8` (the unattached-puck grey from `pcworld_app_scenes-2.png`), and the name line reads "Lights are off".
-- When the scene is unknown: tiles `#D3D2D8`, name "No scene yet", description "Choose a scene to light the canopy."
+- **The canopy of 270 lights** (`svg#canopy-preview`, `role="img"`; drawn by `web/kiosk/canopy-preview.mjs`): the 3 × 3 panels as nine faint outlines (`--hairline`), each with its 30 lights as dots where they really hang (rows of 8 and 7, staggered, 10 in apart). The drawing is in canopy inches (225 × 120) from `panel.canopy`, so it is the ceiling, never the cable: each panel's heads come in lattice order, whatever its wiring. It is rebuilt only when the geometry or view changes.
+- **What each panel shows** comes from `state.lit` (conductor/canopy_view.py), which says per panel what may truthfully be claimed. The page adds nothing of its own:
+
+  | `state.lit.modules[].state` | When | Dots |
+  |---|---|---|
+  | `lit` | the lights read back the look | the look's colours (`colors` per head, or one `color`) |
+  | `changing` | a change is on its way, or a retry | the target colours, with a soft 1.2 s opacity pulse (1 → .45 → 1) |
+  | `dark` | the panel is left out, or not registered | unlit `#D3D2D8` |
+  | `off` | the guest turned the canopy off | unlit `#D3D2D8` (the name reads "Lights are off") |
+  | `unknown` | a test page holds it, it is stuck, the canopy is resting, or its look isn't known | an outline only (`#A0A0A0`), no fill: no colour claim |
+
+  Colours are full strength; the level is drawn as opacity, `dim_floor + (1 − dim_floor) × level / 100` (floor 0.35, so 10% never reads as off). Dots fade to a new colour over 600 ms.
+- **Motion** (`state.lit.motion`, phase-synced to the server's clock: `server_now` plus the local time since it was read): a `ripple` switches ring j at `t0 + j × stagger_s` and shows each ring's previous colours until then (a page with no previous picture shows those panels as unknown); `steps` shows frame `floor((now − t0) / step_s)` (nine colours in grid order, null = dark) and after `ends_at` holds the frame showing then (the last one sent). Any other kind shows the still picture. The page animates only while a motion has a frame to come.
+- **Orientation**: the geometry is the reflected-ceiling view (looking up, origin at the canopy's top-left, as config/canopy.yaml lists it). `canopy.view` (`kiosk.preview` in config/conductor.yaml, set at install) turns it to match what a guest at the stand sees overhead: `mirror_x` flips left and right first, then `rotate_deg` turns it clockwise by quarter turns. The default is unmirrored and unturned; a quarter-turned view letterboxes into the card.
+- **Accessible name**: "Preview: 2 of 9 panels lit" (plus ", N changing" and ", N not shown" when they apply), or "Preview: the canopy is off".
+- **Fallback, the serpentine of 30 lights** (when `state.lit` is null: the workshop strands, an older server, or no look yet), copied from `hb10035_c3.jpg` and `pcworld_app_scenes-2.png`: 3 rows of 10 square tiles. Tile size = (card inner width − 2×cap) / 10, max 30px, with 2px gaps. Rows run L→R, R→L, L→R. The ends connect through half-round U-turn caps of the same tile thickness: at the right between rows 1→2, at the left between rows 2→3. Head order: tile i of the snake = `frame[i]`. No numbers. The tile corner radius is 3; caps are full semicircles.
+  - When power is off: every tile is `#D3D2D8` (the unattached-puck grey from `pcworld_app_scenes-2.png`), and the name line reads "Lights are off".
+  - When the scene is unknown: tiles `#D3D2D8`, name "No scene yet", description "Choose a scene to light the canopy."
 
 ### 2.7 Brightness control (Hubspace slider)
 - Label row: sun icon 24, 12px gap, "Brightness:" (label role), 10px gap, the value (e.g. "75", value role) followed by "%" (unit role). Copied from `iphoneX-05-Groups.png`.
@@ -242,7 +257,7 @@ If `/api/kiosk/panel` fails 3 polls in a row (poll every 2 s): show a toast that
 | `cooldown` | message or "Choose a scene below." | others disabled (.45); the selected card stays full opacity | enabled | enabled | chip "New scene in N s"; a tap on a disabled card gives the toast "You can choose a new scene in N s." |
 | `paused` | message | disabled | disabled | disabled | paused card (§2.11) |
 | `resting` | — | — | — | — | resting screen (§2.12) |
-| `power === false` | "Lights are off. Tap a scene or the switch to turn them on." | enabled; a scene turns the lights on | enabled | OFF | snake grey, header plain #323232 |
+| `power === false` | "Lights are off. Tap a scene or the switch to turn them on." | enabled; a scene turns the lights on | enabled | OFF | canopy dots (or snake) grey, header plain #323232 |
 | refusal 429/423/409/503 | — | — | — | — | toast with `detail` (+ countdown when `retry_after_s` is set) |
 | idle 90 s | — | — | — | — | attract (§2.13) |
 
@@ -276,7 +291,7 @@ All layouts use one `.app` grid filling `100dvh`, `overflow: hidden`, with no pa
 - Sheet padding: 28 top, 32 sides, 24 above the bottom bar.
 - Columns: `grid-template-columns: 1fr 360px; gap: 32px`. The left column is 724 wide.
 - Scene grid: `repeat(3, 1fr)`, gap 16, so cards are ≈230.7 wide. 2 rows; each row = (available height − 40 section header − 16 gap) / 2 ≈ 240.
-- Right column, stacked with a 24 gap: the Now-showing card (snake tiles (360−48−2·cap)/10, so tiles ≈ 27px), then the brightness block. The brightness block has no card and sits directly on the sheet like the app; the slider spans the full 360.
+- Right column, stacked with a 24 gap: the Now-showing card (the canopy picture 312 px wide, about 166 px tall; the serpentine fallback's tiles (360−48−2·cap)/10 ≈ 27px), then the brightness block. The brightness block has no card and sits directly on the sheet like the app; the slider spans the full 360.
 - Header switch centre at x = 1180 − 32 − 38.
 
 ### 4.2 Landscape 1024×768 (iPad 9th gen and older)
@@ -297,7 +312,7 @@ SHEET
   ☼ Brightness: 75%  · help text
   ═════════●══════  (full width 756)
   (24)
-  NOW SHOWING card — name + description on the left (flex 1), snake on the right (tiles 28px, width ≈ 340)
+  NOW SHOWING card — name + description on the left (flex 1), the canopy picture (or the serpentine fallback) on the right, width ≈ 340
 BOTTOM BAR 88 (+safe) — feature left, lockup right
 ```
 - Sides 32. Vertical budget: 28 + 40 + 456 + 24 + 150 + 24 + ≈190 = 912 ≤ 1180 − 112 − 88 − 20.
@@ -335,8 +350,8 @@ BOTTOM BAR 88 (+safe) — feature left, lockup right
 ## 6. Motion
 - Durations: press 90 ms, release 160 ms, switch 200 ms, toast 180 ms, state fades 240 ms, header palette crossfade 600 ms, attract crossfade 1.5 s.
 - Easing: `cubic-bezier(.3,.7,.4,1)` for movement, `ease-out` for fades.
-- Nothing bounces, nothing spins except the spinner, and nothing loops except the pending pulse, the attract and resting glow, and the attract prompt breathing.
-- `@media (prefers-reduced-motion: reduce)`: no transforms, scale or slide. Fades are capped at 120 ms. The pending pulse becomes a static `--brand` ring. The spinner becomes three static dots (`•••`). Attract and resting use no glow animation; scenes swap with a 300 ms crossfade every 8 s.
+- Nothing bounces, nothing spins except the spinner, and nothing loops except the pending pulse, a changing panel's pulse in Now showing, the attract and resting glow, and the attract prompt breathing.
+- `@media (prefers-reduced-motion: reduce)`: no transforms, scale or slide. Fades are capped at 120 ms. The pending pulse becomes a static `--brand` ring. A changing panel doesn't pulse, and a ripple or stepped run shows the current frame only, with no fades between frames. The spinner becomes three static dots (`•••`). Attract and resting use no glow animation; scenes swap with a 300 ms crossfade every 8 s.
 
 ## 7. Accessibility
 - Text contrast is ≥ 4.5:1 everywhere (checked):
@@ -350,7 +365,7 @@ BOTTOM BAR 88 (+safe) — feature left, lockup right
   - white on the toast > 12
 - Raw `#FA4616` is used only for non-text graphics (badge, check circle, ring). It is never used for text smaller than 18.66px bold.
 - Non-text contrast ≥ 3:1: switch-on `#FE9F2B` on `#323232` is 6.2. The slider knob is delimited by its shadow and the `#A0A0A0` remainder, and the value is always shown as text.
-- Semantics: cards are `<button aria-pressed>` with full names. The switch is `role=switch`, the slider `role=slider`. The feature line and toast are `aria-live=polite`. The header title is `<h1>`, section headers `<h2>`.
+- Semantics: cards are `<button aria-pressed>` with full names. The canopy picture is `role="img"` with a summary name (§2.6); the serpentine fallback is decorative. The switch is `role=switch`, the slider `role=slider`. The feature line and toast are `aria-live=polite`. The header title is `<h1>`, section headers `<h2>`.
 - Colour is never the only signal: the selected card has a ring plus a check, and power has the switch position plus the "On"/"Off" text.
 - Text uses rem with root 16px; layouts tolerate 120% text before the sheet scrolls.
 - `lang="en"`, US spelling ("Color"), Title Case labels, sentence-case help copy ending in periods (the app's tone).
@@ -449,7 +464,8 @@ Where the build differs from the spec above, and why:
 2. **Attract after 120 s idle** (spec §2.13 said 90 s): the build brief asked for about 2 minutes. `IDLE_MS` in `web/kiosk/panel-model.mjs`.
 3. **Quicksand is vendored as one variable file renamed "Canopy Rounded"**: `web/static/fonts/canopy-rounded/CanopyRounded-VF.woff2` (wght 400–700, about 52 KB) with `OFL.txt`. It was built with fontTools varLib from the unmodified Quicksand 3.006 Regular and Bold as its two masters (the official variable file wasn't available offline), so 500 and 600 render as real Medium and SemiBold; 400 and 700 are the original glyphs. Because Quicksand has the Reserved Font Name, the OFL requires a modified version to be renamed, hence "Canopy Rounded" in the font and in the CSS. Swapping in the official `Quicksand[wght].woff2` later (under its own name) is a drop-in change. Vendoring a web font departs from the "system font stacks" convention and needs Alon's OK (§11.2); deleting the `@font-face` rule falls back to SF Pro Rounded / system-ui.
 4. **Scene card preview** is a 30-segment hard-stop strip of fixed height (72 px; 60 px at 1024 landscape; radius 12) instead of a 28 px pill, so the colours read from arm's length on the 3 × 2 grid. Every card is the same: names take up to two lines, moods one line with an ellipsis, and the swatches sit on the card bottom (`margin-top: auto`), so swatch rows line up. The selected/pending badge sits on the top-right corner above the ring, with a sheet-coloured gap where it crosses it.
-5. **Now-showing preview follows `state.look`**: when the strands took the one-colour fallback, every tile shows the scene's `solid` colour (the kiosk copy must be true, and the picture is copy too). On the canopy engine target `look` is null and the preview shows the scene's design.
+5. **Now-showing preview follows `state.look`**: when the strands took the one-colour fallback, every tile shows the scene's `solid` colour (the kiosk copy must be true, and the picture is copy too). On the canopy engine target `look` is null and Now showing draws the server's `state.lit` instead (item 9).
 6. **Brand files** in `web/kiosk/brand/`: the "powered by HUBSPACE" SVG, the white 2025 lockup, a traced hub glyph and icons made from the app icon. Logo use at the event is assumed to be cleared by the activation (§11.9) and still needs confirming with Home Depot / Hearst brand.
 7. **Debug** (`?debug=1`, ops viewers only): drawer with target, live updates (polling every 2 s, latency), capabilities, raw state, the last 50 commands, internals and lease holders, and controls (show attract, simulate a toast, iPad frame preview at `?debug=1&frame=1`).
-8. **Landscape right column**: the Now-showing card takes the spare height (snake centred in it), so the brightness slider lines up with the bottom of the card grid. The header switch is centred on the title line. The 10% floor still shows a sliver of fill left of the knob. The SIMULATOR badge (sim only, `simulated: true`) sits in the top-left corner, clear of the title and the switch.
+8. **Landscape right column**: the Now-showing card takes the spare height (the picture centred in it), so the brightness slider lines up with the bottom of the card grid. The header switch is centred on the title line. The 10% floor still shows a sliver of fill left of the knob. The SIMULATOR badge (sim only, `simulated: true`) sits in the top-left corner, clear of the title and the switch.
+9. **Now showing draws the canopy's 270 lights** (§2.6) from the server's `state.lit` instead of the 30-light serpentine, which stays as the fallback (the workshop strands, or no look yet). The serpentine walked one strand's wire, which is not what hangs overhead: with nine strands in a 3 × 3 grid, a 2-D design, a partial canopy and per-panel tiers, only the server knows what each panel truthfully shows. The picture is capped at 210 px tall in landscape so a quarter-turned view letterboxes instead of making the sheet scroll. The scene cards' strips stay, as palette strips (§2.5).

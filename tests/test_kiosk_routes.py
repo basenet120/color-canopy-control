@@ -335,7 +335,7 @@ def test_a_tester_cant_use_the_kiosk_api(app_client_auth):
 
 
 # ---- the page (the Hubspace-style guest panel, docs/design/guest-panel.md) -------------------------------------
-PAGE_FILES = ("index.html", "kiosk.css", "kiosk.js", "panel-model.mjs")
+PAGE_FILES = ("index.html", "kiosk.css", "kiosk.js", "panel-model.mjs", "canopy-preview.mjs")
 FONT_FACE_URL = re.compile(r'url\("(/static/fonts/canopy-rounded/[\w.-]+\.woff2)"\)')
 
 
@@ -353,13 +353,34 @@ def test_kiosk_page_is_served_and_vendored(app_client):
     for url in urls:
         assert app_client.get(url).status_code == 200, url
     assert (ROOT / "web" / "static" / "fonts" / "canopy-rounded" / "OFL.txt").is_file()
-    for asset in ("/kiosk/kiosk.js", "/kiosk/panel-model.mjs", "/kiosk/brand/hubspace-logo.svg"):
+    for asset in (
+        "/kiosk/kiosk.js",
+        "/kiosk/panel-model.mjs",
+        "/kiosk/canopy-preview.mjs",
+        "/kiosk/brand/hubspace-logo.svg",
+    ):
         assert app_client.get(asset).status_code == 200, asset
     html = (KIOSK_DIR / "index.html").read_text()
     assert 'src="/kiosk/kiosk.js"' in html and 'href="/kiosk/kiosk.css"' in html
     assert "user-scalable=no" in html and "viewport-fit=cover" in html
     assert 'name="apple-mobile-web-app-capable" content="yes"' in html
     assert 'rel="apple-touch-icon"' in html
+
+
+def test_kiosk_page_serves_every_module_it_imports_and_draws_the_canopy(app_client):
+    """Now showing draws the canopy's 270 lights (canopy-preview.mjs) in an svg the screen reader can name, and every
+    module kiosk.js imports is a vendored file the app serves as JavaScript."""
+    js = (KIOSK_DIR / "kiosk.js").read_text()
+    imports = re.findall(r'from "(/[^"]+)"', js)
+    assert "/kiosk/canopy-preview.mjs" in imports and "/kiosk/panel-model.mjs" in imports
+    for path in imports:
+        r = app_client.get(path)
+        assert r.status_code == 200, path
+        assert "javascript" in r.headers["content-type"], (path, r.headers["content-type"])
+    html = (KIOSK_DIR / "index.html").read_text()
+    svg = re.search(r'<svg class="canopy-preview" id="canopy-preview"[^>]*>', html)
+    assert svg and 'role="img"' in svg.group(0) and "aria-label=" in svg.group(0)
+    assert 'id="snake"' in html  # the fallback when there is no picture (the workshop strands, no look yet)
 
 
 def test_kiosk_title_matches_the_signage_plan():
@@ -377,7 +398,7 @@ def test_kiosk_never_writes_its_own_hubspace_feature_copy():
                     assert technique[key] not in page
     js = (KIOSK_DIR / "kiosk.js").read_text()
     assert "state.feature" in js
-    for name in ("kiosk.js", "panel-model.mjs"):
+    for name in ("kiosk.js", "panel-model.mjs", "canopy-preview.mjs"):
         js = re.sub(r"(^|\s)//.*$", "", (KIOSK_DIR / name).read_text(), flags=re.MULTILINE)
         assert not re.search(r"['\"`][^'\"`\n]*Hubspace[^'\"`\n]*['\"`]", js), (
             f"{name} must not write Hubspace copy"

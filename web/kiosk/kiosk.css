@@ -417,6 +417,14 @@ body[data-view="loading"] .app { visibility: hidden; }
 }
 .snake { display: block; width: 100%; height: auto; margin-top: 18px; }
 .snake rect, .snake path { transition: fill 600ms ease-out; }
+/* the canopy's 270 lights on its nine panels (canopy-preview.mjs), drawn in canopy inches: dots fade to their colour
+   over 600 ms, a changing panel pulses softly, an unknown one is an outline with no colour claim */
+.canopy-preview { display: block; width: 100%; height: auto; max-height: 240px; margin-top: 18px; }
+.canopy-preview .panel { fill: none; stroke: var(--hairline); stroke-width: .6; }
+.canopy-preview .dot { transition: fill 600ms ease-out, fill-opacity 600ms ease-out; }
+.canopy-preview .dot.is-unknown { stroke: var(--slider-rest); stroke-width: .7; }
+.canopy-preview .dot.changing { animation: dot-pulse 1.2s ease-in-out infinite; }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 
 .bright { padding: 4px 0 0; }
 /* landscape: the Now-showing card takes the column's spare height (snake centred in it), so the slider sits level
@@ -424,7 +432,9 @@ body[data-view="loading"] .app { visibility: hidden; }
 @media (orientation: landscape) {
   .now { flex: 1 1 auto; display: flex; flex-direction: column; }
   .now-body { flex: 1; display: flex; flex-direction: column; }
-  .now .snake { margin: auto 0; padding-top: 18px; }
+  .now .snake, .now .canopy-preview { margin: auto 0; padding-top: 18px; }
+  /* a quarter-turned view (kiosk.preview.rotate_deg) is tall: it letterboxes into the card instead of growing it */
+  .now .canopy-preview { max-height: 210px; }
 }
 .bright-row { display: flex; align-items: center; }
 .bright-label { margin-left: 12px; font-size: 20px; line-height: 26px; font-weight: 500; }
@@ -698,14 +708,14 @@ body[data-lost="true"] .power { opacity: .45; }
   .side { display: flex; flex-direction: column-reverse; gap: 24px; }
   .now-body { display: flex; align-items: center; gap: 24px; }
   .now-copy { flex: 1; min-width: 0; }
-  .snake { width: 340px; flex: none; margin-top: 0; }
+  .snake, .canopy-preview { width: 340px; flex: none; margin-top: 0; }
 }
 
 @media (orientation: portrait) and (max-width: 700px) {
   :root { --side: 16px; --title-size: 30px; --title-lh: 36px; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .now-body { display: block; }
-  .snake { width: 100%; margin-top: 16px; }
+  .snake, .canopy-preview { width: 100%; margin-top: 16px; }
   .lockup { height: 32px; }
 }
 
@@ -715,6 +725,7 @@ body[data-lost="true"] .power { opacity: .45; }
   .scene, .power-knob, .slider-knob, .slider-fill, .toast { transition: opacity 120ms ease-out !important; }
   .scene.is-pressed, .slider.is-dragging .slider-knob { transform: none; }
   .hdr-tint, .attract-tint, .snake rect, .snake path { transition: opacity 120ms ease-out !important; }
+  .canopy-preview .dot { transition: opacity 120ms ease-out !important; animation: none !important; }
   .scene[data-state="pending"] { outline-color: var(--brand); }
   .spinner { animation: none; border: 0; width: auto; height: auto; }
   .spinner::before { content: "•••"; letter-spacing: .1em; }
