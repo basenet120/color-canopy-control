@@ -8,7 +8,8 @@
 #   canopy-mac login [--account canopy]                  sign a Hubspace account in (you type the password)
 #   canopy-mac password                                  show the ops login for /ops (on this Mac only)
 #   canopy-mac backup [--list]                           back up the data folder now (nightly at 04:30 anyway)
-#   canopy-mac uninstall                                 remove the LaunchAgents; keeps settings, data and backups
+#   canopy-mac restore FILE [--skip-tokens] [--yes]      put a backup back (--skip-tokens on a spare or another Mac)
+#   canopy-mac uninstall                                remove the LaunchAgents; keeps settings, data and backups
 #   canopy-mac watchdog                                  one health check (the watchdog agent runs it every 30 s)
 #
 # Settings: ~/Library/Application Support/ColorCanopy/conductor.env (0600). Data: …/ColorCanopy/data. Logs:
@@ -43,7 +44,7 @@ die() {
 	exit 1
 }
 
-usage() { sed -n '2,15p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,16p' "$SELF" | sed 's/^# \{0,1\}//'; }
 
 # env_value KEY → the value of the last KEY=... line in the settings file. Never echo secrets with it.
 env_value() {
@@ -317,6 +318,45 @@ cmd_backup() {
 	say "(The stored sign-ins in it are encrypted with CONDUCTOR_SECRET_KEY, which is not in the backup.)"
 }
 
+# restore FILE [--skip-tokens] [--yes]: hold the Conductor, keep what's there now, unpack, hand back.
+cmd_restore() {
+	local file="" skip_tokens=0 yes=0 listing aside
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--skip-tokens) skip_tokens=1 ;;
+		--yes) yes=1 ;;
+		-*) die "restore doesn't take $1" ;;
+		*) file=$1 ;;
+		esac
+		shift
+	done
+	[ -f "$file" ] || die "Give the backup file: canopy-mac restore <file>.tar.gz [--skip-tokens] (canopy-mac backup --list)"
+	if [ -f "$file.sha256" ]; then
+		(cd "$(dirname "$file")" && shasum -a 256 -c "$(basename "$file").sha256" >/dev/null) ||
+			die "$file doesn't match its checksum."
+	fi
+	listing=$(tar -tzf "$file") || die "$file isn't a readable backup."
+	printf '%s\n' "$listing" | grep -Eq '^data/(overrides|roles|tokens|telemetry)(/|$)' ||
+		die "$file doesn't look like a canopy data backup (no data/overrides, roles, tokens or telemetry)."
+	if [ $yes -eq 0 ]; then
+		say "This stops the Conductor, puts $(basename "$file") in place of the data folder (the current one is kept"
+		say "beside it) and starts the Conductor again.$([ $skip_tokens -eq 1 ] && printf ' Stored sign-ins are left out.')"
+		say "Run again with --yes to do it."
+		return 1
+	fi
+	cmd_stop --yes >/dev/null
+	aside="$CANOPY_MAC_HOME/data-before-restore-$(date +%Y%m%d-%H%M%S)"
+	[ -d "$DATA_DIR" ] && mv "$DATA_DIR" "$aside" && say "Kept the previous data folder: $aside"
+	umask 077
+	if [ $skip_tokens -eq 1 ]; then
+		tar -xzf "$file" -C "$CANOPY_MAC_HOME" --exclude 'data/tokens' --exclude 'data/tokens/*'
+	else
+		tar -xzf "$file" -C "$CANOPY_MAC_HOME"
+	fi
+	say "Restored $(basename "$file")."
+	cmd_start
+}
+
 # ---- status, logs, sign-in ----------------------------------------------------------------------------------------
 agent_state() {
 	local out
@@ -325,6 +365,13 @@ agent_state() {
 		return
 	fi
 	printf '%s' "$(printf '%s\n' "$out" | awk -F' = ' '/^\tstate = /{s=$2} /^\tpid = /{p=$2} END{printf "%s%s", s, (p ? " (pid " p ")" : "")}')"
+}
+
+# For the timed agents "not running" between runs is normal: say "loaded" instead.
+timed_agent_state() {
+	local state
+	state=$(agent_state "$1")
+	case $state in "not running") printf 'loaded, %s' "$2" ;; *) printf '%s' "$state" ;; esac
 }
 
 cmd_status() {
@@ -337,8 +384,8 @@ cmd_status() {
 	else
 		say "  Conductor        $(agent_state "$LABEL")"
 	fi
-	say "  Watchdog         $(agent_state "$WATCHDOG_LABEL")"
-	say "  Nightly backup   $(agent_state "$BACKUP_LABEL"); newest: $(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null || echo none)"
+	say "  Watchdog         $(timed_agent_state "$WATCHDOG_LABEL" 'checks every 30 s')"
+	say "  Nightly backup   $(timed_agent_state "$BACKUP_LABEL" 'runs at 04:30'); newest: $(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null || echo none)"
 	if healthy; then
 		say "  /healthz         OK"
 		if version=$(api /api/version); then
@@ -422,6 +469,7 @@ logs) shift; cmd_logs "$@" ;;
 login) shift; cmd_login "$@" ;;
 password) cmd_password ;;
 backup) shift; cmd_backup "$@" ;;
+restore) shift; cmd_restore "$@" ;;
 watchdog) cmd_watchdog ;;
 uninstall) cmd_uninstall ;;
 -h | --help | help) usage ;;

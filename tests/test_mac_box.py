@@ -321,3 +321,35 @@ def test_backup_keeps_the_data_and_a_checksum(box):
     listing = subprocess.run(["tar", "-tzf", str(backups[0])], capture_output=True, text=True, check=True)
     assert "data/overrides/registry.yaml" in listing.stdout
     assert "conductor.env" not in listing.stdout  # the key never goes into a backup
+
+
+def test_restore_without_tokens_keeps_the_old_folder_and_hands_back(stubs, box):
+    data = box["home"] / "data"
+    (data / "overrides").mkdir(parents=True)
+    (data / "overrides" / "registry.yaml").write_text("devices: {restored: true}\n")
+    (data / "tokens").mkdir()
+    (data / "tokens" / "venue-canopy.token").write_text("ciphertext")
+    assert run([HELPER, "backup"], stubs["env"]).returncode == 0
+    backup = next((box["home"] / "backups").glob("*.tar.gz"))
+    (data / "overrides" / "registry.yaml").write_text("devices: {changed: true}\n")
+
+    asked = run([HELPER, "restore", backup, "--skip-tokens"], stubs["env"])
+    assert asked.returncode != 0 and "--yes" in asked.stdout
+    assert "changed" in (data / "overrides" / "registry.yaml").read_text()
+
+    result = run([HELPER, "restore", backup, "--skip-tokens", "--yes"], stubs["env"])
+    assert result.returncode == 0, result.stderr
+    assert "restored" in (data / "overrides" / "registry.yaml").read_text()
+    assert not (data / "tokens" / "venue-canopy.token").exists()
+    kept = list(box["home"].glob("data-before-restore-*"))
+    assert len(kept) == 1 and "changed" in (kept[0] / "overrides" / "registry.yaml").read_text()
+    assert not (stubs["state"] / "hold").exists()  # handed back
+
+
+def test_restore_refuses_a_backup_that_fails_its_checksum(stubs, box):
+    (box["home"] / "data" / "overrides").mkdir(parents=True)
+    assert run([HELPER, "backup"], stubs["env"]).returncode == 0
+    backup = next((box["home"] / "backups").glob("*.tar.gz"))
+    Path(str(backup) + ".sha256").write_text("0" * 64 + f"  {backup.name}\n")
+    result = run([HELPER, "restore", backup, "--yes"], stubs["env"])
+    assert result.returncode != 0 and "checksum" in result.stderr

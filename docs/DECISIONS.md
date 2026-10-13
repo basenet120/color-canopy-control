@@ -502,3 +502,27 @@ Unverified on hardware:
   benched, guest copy shouldn't promise that painted moods dim.
 - Turning the canopy back on sends power, the selector and the brightness in one PUT that starts from power-off.
   That case is unbenched (04, bench item 6).
+
+## 2026-10-13 — the show box is a Mac mini
+
+**D61 — The show runs on a Mac mini under launchd, not on the Ubuntu mini PC.** Alon's call on Oct 13: the Mac
+mini that ran the workshop work becomes the main machine (07 §10's "Ubuntu 24.04 mini PC" and `venue-box.md` are
+superseded for this show; `deploy/venue/` stays for a Linux box or spare). Runbook: `docs/runbooks/mac-show-box.md`.
+- **Same runtime, same gates.** `CONDUCTOR_MODE=live`, `HUBSPACE_LIVE=1`, `HUBSPACE_DEVICE_ALLOWLIST=registry`,
+  `HUBSPACE_LIVE_UNTIL=2026-11-02`, `CONDUCTOR_ENV=venue`, one uvicorn process, no `--workers`. The settings
+  template (`deploy/mac/conductor.env.example`) matches the venue one where they overlap (a test pins that).
+- **No Docker.** The Conductor runs from a dedicated clone at the release tag (`~/canopy-show`) with its own
+  `uv sync --frozen --no-dev --extra live` environment. The development checkout is never the show.
+- **launchd replaces systemd.** Three LaunchAgents: the Conductor (`RunAtLoad`, `KeepAlive`, 30 s `ExitTimeOut` so
+  the rotated sign-in is saved), a 30 s `/healthz` watchdog (three failures after a 2 min start-up grace →
+  `kickstart -k`), and a 04:30 backup (14 days). `canopy-mac stop --yes` is the break-glass hold: `launchctl
+  disable` + bootout + a hold flag the watchdog respects, so it survives a restart.
+- **Secrets are generated, not typed.** `canopy-mac install` generates the ops login and the Fernet key into a 0600
+  file under `~/Library/Application Support/ColorCanopy/` (outside any checkout). `run-conductor.sh` reads it line by
+  line (never `source`), pins `CONDUCTOR_DATA_DIR`, and drops local-only overrides (`CONDUCTOR_AUTH=off` etc.)
+  inherited from the parent. `canopy-mac password` shows the ops login only on a terminal.
+- **A LaunchAgent needs a logged-in user.** Unattended recovery after a power cut needs automatic login, which needs
+  FileVault off; with FileVault on, someone types the password at the Mac first. That trade-off is Alon's (runbook §1).
+- **Not carried over:** the Chromium kiosk on the box (the guest panel is the iPad), the `/run/systemd/timesync`
+  flag (the 7 am checklist's *Clock synced* item warns "can't see" on macOS; `canopy-mac status` shows the sntp
+  offset), and the USB backup copy.
