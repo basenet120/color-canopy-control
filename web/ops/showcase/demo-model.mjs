@@ -40,6 +40,28 @@ export function sceneColorAt(id,position,brightness=100){
 export function sceneFrame(id,count,brightness=60){
   return Array.from({length:count},(_,i)=>sceneColorAt(id,i/Math.max(1,count-1),brightness));
 }
+// The show's own design for the canopy illustration (GET /api/canopy/design): 'heads' paints each head the design's
+// colour at its canopy point (keyed at half-inch resolution, as the server's lattice), 'modules' paints every head
+// of a panel its module-level (T3) colour. sceneColorAt/sceneFrame stay the 30-light wire rule of the paired shop
+// gradient. Null when the design can't paint every one of `heads` at that level (the caller says so and falls back).
+export function designLevels(design){return ['heads','modules'].filter(level=>Array.isArray(design?.[level])&&design[level].length);}
+export function defaultDesignLevel(design){
+  const levels=designLevels(design);
+  return design?.ladder?.[0]==='modules'&&levels.includes('modules')?'modules':levels[0]||null;
+}
+export function designPaint(design,level,heads=CANOPY.heads,width=CANOPY.width){
+  if(!designLevels(design).includes(level))return null;
+  const key=h=>level==='modules'?h.module:Math.round(2*h.x)+','+Math.round(2*h.y),rgb=a=>({r:a[0],g:a[1],b:a[2]});
+  const known=new Map(level==='modules'?design.modules.map(m=>[m.module,m.rgb]):design.heads.map(h=>[key(h),h.rgb]));
+  const colors=heads.map(h=>known.get(key(h)));
+  if(colors.some(c=>!Array.isArray(c)||c.length!==3))return null;
+  // the floor glow under each third of the canopy: the mean of the heads above it
+  const spill=p=>{
+    const near=colors.filter((_,i)=>Math.abs(heads[i].x/width-p)<=1/6),pool=near.length?near:colors;
+    return rgb([0,1,2].map(k=>Math.round(pool.reduce((s,c)=>s+c[k],0)/pool.length)));
+  };
+  return {head:h=>rgb(known.get(key(h))||[0,0,0]),spill};
+}
 export const EFFECT_PARAMS=Object.freeze({slot:'custom-3',field:'motionEffect',code:1,speed:30,duration_s:20,pattern:'blocks'});
 export const MODULES={'bench-kit':'Kingston test','shop-string-1':'String light 1'};
 export const PAIR_IDS=Object.freeze(['bench-kit','shop-string-1']);
