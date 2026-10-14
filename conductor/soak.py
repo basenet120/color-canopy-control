@@ -33,11 +33,14 @@ redefine and the show runs one burst until then), the time until the last ring i
 + 5 s), the PUTs each module got for the change (exactly one, none before its ring is due) and tier downgrades (0 at
 5% throttling); those three are part of the verdict.
 
-**The stepped scenario (D65 draft).** `config/modes.yaml` has no stepped rung and `motion.stepped.live_enabled` stays
-false, so a third, separate run (`stepped:` in `config/sim/soak.yaml`, same pinned conditions) gives the candidate
-moods a SIMULATED stepped rung first in their ladder in the soak's config copy (their own module-level design, so the
-still look they hold is that rung) and makes seeded kiosk runs of them, some cut short by a still mood, then leaves the
-canopy alone until the idle return. Correctness is program-aware (`_wanted`): while a run shows a step, a module is
+**The stepped scenario (D65).** Coastal Tides and Golden Hour have a stepped rung in `config/modes.yaml` (the
+simulator steps them; `motion.stepped.live_enabled` stays false, so live hardware doesn't). The main run steps Coastal
+Tides whenever it is chosen (its rung is first); Golden Hour's rung comes after its painted canvas, which the simulator
+commissions, so it never steps there. So a third, separate run (`stepped:` in `config/sim/soak.yaml`, same pinned
+conditions) moves the stepped rung first in the candidate moods' ladders in the soak's config copy: the mode's own
+stepped technique (design, cadence and copy as the show has them), or for a candidate without one a SIMULATED rung
+made from its module-level design (so the still look it holds is that rung). It makes seeded kiosk runs of them, some
+cut short by a still mood, then leaves the canopy alone until the idle return. Correctness is program-aware (`_wanted`): while a run shows a step, a module is
 right when its lights show that step. Measured per step from the lights (every program command, grouped by step):
 each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's) and
 send → last module; steps superseded (a module sent the next step before it showed this one), failed, skipped by a
@@ -56,7 +59,7 @@ on the virtual clock with a temporary `CONDUCTOR_DATA_DIR` and `conductor.show.S
 lifespan builds it: capabilities read from each module's (simulated) profile in the background, the looks compiler,
 the commissioning gate on T1, slot records (hash, origin, effect fields) in the registry overlay, the same ladder and
 tier rules. Only the simulator's conditions (pinned) and one soak-only setting differ: `config/sim/soak.yaml` enables a
-SIMULATED on-device motion code for one painted mode (Golden Hour; every show scene is static, D59), so the
+SIMULATED on-device motion code for one painted mode (Golden Hour; no show scene has an on-device effect), so the
 all-or-none motion re-trigger (07 §6) is measured too. On real hardware code 1 has only bounded bench runs on Kingston
 (one physically observed, Oct 2) and `effects.enabled` stays empty; the report says so.
 
@@ -110,6 +113,7 @@ SHOW_DESCRIPTION = (
 POLL_S = 0.1  # how often a measurement looks at the lights
 WATCH_LIMIT_S = 120.0  # a measurement gives up (and fails) after this long
 
+# The tiers the built-in compiler can compile ("stepped" isn't one: it has no program to step, BuiltinCompiler).
 _TIER_NAMES = {"canvas": Tier.T1, "slot": Tier.T2, "modules": Tier.T3, "strand": Tier.STRAND}
 
 
@@ -117,7 +121,8 @@ _TIER_NAMES = {"canvas": Tier.T1, "slot": Tier.T2, "modules": Tier.T3, "strand":
 class BuiltinCompiler:
     """Compiles `config/modes.yaml` without the looks composer: strand looks as written, module-level looks per
     canopy position, and canvas (T1) as one colour per module with a brightness ramp along the wire. T2 is left
-    out (nothing is hand-painted in the simulator)."""
+    out (nothing is hand-painted in the simulator), and so is a stepped rung (D65): this compiler has no program to step,
+    so a stepped mode shows its still module-level rung (the look a stepped run holds)."""
 
     description = "built-in soak compiler (strand + module-level + one-colour-per-module canvas frames)"
     CCT_FLOOR = 2700  # the simulator profile's range is 2700–6500 K
@@ -359,7 +364,7 @@ def _soak_config_dir(
             **(canvas.get("motion_effect") or {}),
             "motionEffect": int(motion["motionEffect"]),
         }
-        # Every show scene is static (D59), so the show's modes carry no motion copy: the soak adds its own.
+        # No show scene has an on-device effect (D59), so the show's modes carry no motion copy: the soak adds its own.
         canvas.setdefault(
             "motion_feature", str(motion.get("feature") or "SIMULATED on-device motion (soak only)")
         )
@@ -418,10 +423,11 @@ def load_soak_stepped(path: Path = SOAK_SETTINGS) -> dict:
 
 
 def _apply_stepped(config: Path, stepped: dict) -> None:
-    """Give each of `stepped["modes"]` a SIMULATED stepped rung first in its ladder, in the config copy: its own
-    module-level design (the `modules` sample's canvas and brightness, so the hold is that rung exactly) with the
-    scenario's `technique` fields, and moving copy that names the design's flow (`motion_words`) and says SIMULATED.
-    The show's modes.yaml has no stepped rung (D65 draft: dormant until Alon adds one)."""
+    """Move the stepped rung first in each of `stepped["modes"]`' ladders, in the config copy. A mode with its own
+    stepped technique (config/modes.yaml, D65) keeps it as the show has it: its design, cadence and copy. A mode
+    without one gets a SIMULATED rung: its own module-level design (the `modules` sample's canvas and brightness, so
+    the hold is that rung exactly) with the scenario's `technique` fields, and moving copy that names the design's flow
+    (`motion_words`) and says SIMULATED."""
     from pydantic import TypeAdapter
 
     from conductor.geometry import load_canopy_config
@@ -434,22 +440,27 @@ def _apply_stepped(config: Path, stepped: dict) -> None:
     technique = dict(stepped["technique"])
     for mode_id in stepped["modes"]:
         mode = modes["modes"][mode_id]
-        sample = mode["techniques"]["modules"]["sample"]
-        canvas = copy.deepcopy(sample["canvas"])
-        words = motion_words(
-            TypeAdapter(FieldCanvas).validate_python(canvas), canopy, technique.get("direction", "forward")
-        )
-        if words is None:  # pragma: no cover - a stepped design always has a field canvas over a canopy here
-            raise ValueError(f"{mode_id}: its design has no layout words to name the stepped flow")
-        mode["techniques"]["stepped"] = {
-            "canvas": canvas,
-            "brightness": sample.get("brightness", 100),
-            **technique,
-            "moving_feature": (
-                "SIMULATED stepped look (soak only; never shown to guests): each Hubspace strand is sent its next "
-                f"colour every few seconds, so the palette moves {words}."
-            ),
-        }
+        if mode["techniques"].get("stepped") is None:
+            sample = mode["techniques"]["modules"]["sample"]
+            canvas = copy.deepcopy(sample["canvas"])
+            words = motion_words(
+                TypeAdapter(FieldCanvas).validate_python(canvas),
+                canopy,
+                technique.get("direction", "forward"),
+            )
+            if (
+                words is None
+            ):  # pragma: no cover - a stepped design always has a field canvas over a canopy here
+                raise ValueError(f"{mode_id}: its design has no layout words to name the stepped flow")
+            mode["techniques"]["stepped"] = {
+                "canvas": canvas,
+                "brightness": sample.get("brightness", 100),
+                **technique,
+                "moving_feature": (
+                    "SIMULATED stepped look (soak only; never shown to guests): each Hubspace strand is sent its "
+                    f"next colour every few seconds, so the palette moves {words}."
+                ),
+            }
         mode["ladder"] = ["stepped", *(t for t in mode["ladder"] if t != "stepped")]
     modes_path.write_text(yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
@@ -979,8 +990,9 @@ async def _ripple_soak(cfg: SoakConfig) -> dict:
 
 
 async def _stepped_soak(cfg: SoakConfig) -> dict:
-    """The stepped scenario (D65 draft): the show's own wiring with a SIMULATED stepped rung on `stepped["modes"]`,
-    kiosk runs of them under the pinned conditions, each step measured from the lights (see the module docstring)."""
+    """The stepped scenario (D65): the show's own wiring with the stepped rung first on `stepped["modes"]` (their own,
+    or a SIMULATED one for a mode without), kiosk runs of them under the pinned conditions, each step measured from the
+    lights (see the module docstring)."""
     st = cfg.stepped
     world = await _build_show(cfg, stepped=st)
     engine, clock, sim = world.engine, world.clock, world.sim
@@ -992,8 +1004,21 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
     rng = random.Random(f"{cfg.seed}:stepped")
     stepped_modes = list(st["modes"])
     still = [m for m in world.wiring.mode_ids() if m not in stepped_modes and m != settings.kiosk.idle_mode]
+    from conductor.looks import load_modes
+
+    show_modes = load_modes(CONFIG_DIR)  # the show's own modes.yaml: which candidates bring their own rung
     out: dict[str, Any] = {
         "modes": stepped_modes,
+        "techniques": {  # what each candidate steps with in this run
+            m: {
+                "own": show_modes.modes[m].techniques.stepped is not None,
+                **{
+                    k: getattr(world.wiring.modes_file.mode(m).techniques.stepped, k)
+                    for k in ("steps_per_cycle", "step_s", "run_s")
+                },
+            }
+            for m in stepped_modes
+        },
         "settings": {k: st[k] for k in STEPPED_DEFAULTS},
         "cap": stepped_settings.account_writes_per_min,
         "requests": 0,
@@ -1321,7 +1346,7 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
 
 
 def _stepped_rows(stepped: dict) -> list[dict]:
-    """The stepped scenario's verdict rows (D65 draft). Each step's landing spread is reported, not gating (05's
+    """The stepped scenario's verdict rows (D65). Each step's landing spread is reported, not gating (05's
     spread target, which D65 asks Alon to sign off per step); the rest gate: every step lands before the next one
     (none superseded, none failed), exactly one PUT per changed module per step, the account inside the cap, no
     governor trip and no downgrade at 5% throttling, every run's still look shown, the idle return on time."""
@@ -1600,17 +1625,19 @@ def _ripple_line(ripple: dict) -> str:
 
 
 def _stepped_line(stepped: dict) -> str:
-    s = stepped["settings"]
-    t = s["technique"]
     tiers = ", ".join(f"{k} {n}" for k, n in sorted(stepped["tiers"].items())) or "none"
     ended = "; ".join(f"{why} {n}" for why, n in sorted(stepped["ended"].items())) or "none"
     steps = sorted(set(stepped["step_s"]))
+    used = "; ".join(
+        f"{m}: {'its own (config/modes.yaml)' if t['own'] else 'a SIMULATED one'}, {t['steps_per_cycle']} steps a "
+        f"cycle, {t['step_s']:g} s steps designed, {t['run_s']:g} s runs"
+        for m, t in stepped["techniques"].items()
+    )
     return (
-        f"- Stepped scenario (D65 draft, SIMULATED): a separate run of the show's own wiring with a stepped rung "
-        f"first on {', '.join(stepped['modes'])} in the soak's config copy (`config/modes.yaml` has none; "
-        f"`motion.stepped.live_enabled` stays false), {t['steps_per_cycle']} steps a cycle, {t['step_s']:g} s steps "
-        f"designed, {t['run_s']:g} s runs, under the same pinned conditions. {stepped['requests']} kiosk choices, "
-        f"{stepped['refused']} refused; by tier: {tiers}; {stepped['runs']} runs at "
+        f"- Stepped scenario (D65, SIMULATED): a separate run of the show's own wiring with the stepped rung moved "
+        f"first on {', '.join(stepped['modes'])} in the soak's config copy ({used}; `motion.stepped.live_enabled` "
+        f"stays false, so live hardware never steps), under the same pinned conditions. {stepped['requests']} kiosk "
+        f"choices, {stepped['refused']} refused; by tier: {tiers}; {stepped['runs']} runs at "
         f"{', '.join(f'{x:g}' for x in steps) or '—'} s a step ({stepped['not_stepping']} held still instead), "
         f"{stepped['interrupted']} cut short by a still mood chosen mid-run; how runs ended: {ended}. Steps: "
         f"{stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "

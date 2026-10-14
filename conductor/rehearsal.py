@@ -1,4 +1,4 @@
-"""The stepped rehearsal (Gate R, D65 draft): one operator-started, bounded stepped run that measures the write rate.
+"""The stepped rehearsal (Gate R, D65): one operator-started, bounded stepped run that measures the write rate.
 
     /ops "Rehearse…" ──confirm sentence (modules, minutes)──▶ POST /api/canopy/stepped-rehearsal
         ──▶ CanopyEngine.rehearse(mode, minutes, source="ops") ──▶ one stepped run of that mode, run_s = minutes·60

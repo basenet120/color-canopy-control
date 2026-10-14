@@ -313,8 +313,18 @@ def _record_writes(services) -> list[str]:
 def test_d62_a_partial_canopy_compiles_every_mode_at_module_level_on_the_registered_modules_only():
     ctx = _partial_ctx()
     for mode_id, mode in MODES.modes.items():
-        plan = compile_first(mode_id, ctx)
+        # live hardware refuses the stepped rung in the show's tier_allowed until Gate R (D65; the compiler doesn't
+        # gate it, tests/test_d65_modes.py), so the ladder lands on module level
+        plan = compile_first(mode_id, ctx, skip=[Tier.STEPPED])
         assert plan.tier is Tier.T3, (mode_id, plan.notes)
+        if (
+            "stepped" in mode.ladder
+        ):  # where it runs (sim, or after Gate R) it holds the same partial sentence
+            stepped = compile_mode(mode_id, Tier.STEPPED, ctx)
+            assert stepped.feature == PARTIAL_T3 and sorted(stepped.modules) == list(LIVE)
+            assert stepped.program.moving_feature.startswith(
+                "Colour and dimming through the Hubspace cloud: both Hubspace strands"
+            )
         assert sorted(plan.modules) == list(LIVE)
         assert sorted(plan.skipped) == OTHERS
         assert all("no Hubspace device registered" in why for why in plan.skipped.values())

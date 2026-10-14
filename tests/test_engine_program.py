@@ -1,4 +1,4 @@
-"""Stepped looks in motion (Tier.STEPPED, D65 draft; conductor/sequence.py): the program runner on the real engine,
+"""Stepped looks in motion (Tier.STEPPED, D65; conductor/sequence.py): the program runner on the real engine,
 reconciler, executor and SimDriver (virtual time, the pinned acceptance latencies), with the real looks compiler over
 tests/fixtures_modes_stepped.yaml plus a still idle mode. Sim-first: the stepped tier is off on live hardware."""
 

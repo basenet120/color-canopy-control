@@ -822,7 +822,7 @@ def test_sent_line_during_an_outage_names_the_registered_modules(monkeypatch):
     assert full.endswith("so it goes to every module as soon as Hubspace answers again.")
 
 
-# ---- the stepped card (Tier.STEPPED, D65 draft; web/ops/stepped-model.mjs words it) --------------------------------
+# ---- the stepped card (Tier.STEPPED, D65; web/ops/stepped-model.mjs words it) --------------------------------
 def _runner(services, **kw):
     """Just enough ProgramRunner for the gauge: a run of all the canopy modules, at step 2 of 15, 6 s steps."""
     modules = dict.fromkeys(e.id for e in services.registry.canopy_modules())

@@ -1,4 +1,4 @@
-"""The program runner: a stepped look (Tier.STEPPED, D65 draft) sent a step at a time (sim-first; live off until Gate R).
+"""The program runner: a stepped look (Tier.STEPPED, D65) sent a step at a time (sim-first; live off until Gate R).
 
     compile_mode(.., stepped) ──▶ ModePlan{modules: the hold (step 0), program.steps}
                                         │ installed by the CanopyEngine

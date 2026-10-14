@@ -1,5 +1,5 @@
-# TEST FIXTURE — not show config. Stepped looks (Tier.STEPPED, D65 draft) over the 3×3 grid; config/modes.yaml has
-# none (P8 is dormant). tests/test_compile_stepped.py loads it.
+# TEST FIXTURE — not show config. Stepped looks (Tier.STEPPED, D65) over the 3×3 grid (config/modes.yaml steps
+# Coastal Tides and Golden Hour: tests/test_d65_modes.py). tests/test_compile_stepped.py loads it.
 #
 # Each mode's stepped design is its modules sample's canvas (one YAML anchor), so the first step is the static look
 # the ladder's later `modules` rung holds. The fields are chosen so the module centres sit a whole number of steps

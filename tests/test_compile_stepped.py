@@ -1,7 +1,7 @@
-"""A stepped look (Tier.STEPPED, D65 draft) compiled from tests/fixtures_modes_stepped.yaml: the hold is the static
+"""A stepped look (Tier.STEPPED, D65) compiled from tests/fixtures_modes_stepped.yaml: the hold is the static
 module-level look, each step is one full state vector per driven module, the design walks across the 3×3 grid in
-the direction its copy names, and the moving copy is true of the strands actually driven. Dormant: config/modes.yaml
-has no stepped rung, so the show is unchanged."""
+the direction its copy names, and the moving copy is true of the strands actually driven. The show's own stepped rungs
+(Coastal Tides, Golden Hour) are tested in tests/test_d65_modes.py."""
 
 from __future__ import annotations
 
@@ -214,11 +214,14 @@ def test_a_first_step_that_isnt_the_static_look_is_refused():
         compile_mode("radial-outward", Tier.STEPPED, _ctx(modes=modes))
 
 
-def test_a_mode_without_a_stepped_rung_cant_compile_stepped_and_the_show_has_none():
+def test_a_mode_without_a_stepped_rung_cant_compile_stepped_and_the_show_steps_only_two():
     shipped = load_modes()
     with pytest.raises(PlanError, match="has no stepped technique"):
-        compile_mode("golden-hour", Tier.STEPPED, _ctx(modes=shipped))
-    assert all("stepped" not in m.ladder and m.techniques.stepped is None for m in shipped.modes.values())
+        compile_mode("lowcountry-calm", Tier.STEPPED, _ctx(modes=shipped))  # the idle look never steps
+    # D65: only Coastal Tides and Golden Hour have a stepped rung (tests/test_d65_modes.py)
+    stepping = [m for m, mode in shipped.modes.items() if mode.techniques.stepped is not None]
+    assert stepping == [m for m, mode in shipped.modes.items() if "stepped" in mode.ladder]
+    assert stepping == ["coastal-tides", "golden-hour"]
 
 
 def test_ops_and_alerts_have_words_for_every_tier():

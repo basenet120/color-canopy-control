@@ -1,4 +1,4 @@
-// The /ops stepped card's pure wording (Tier.STEPPED, D65 draft; conductor/sequence.py) and the stepped rehearsal's
+// The /ops stepped card's pure wording (Tier.STEPPED, D65; conductor/sequence.py) and the stepped rehearsal's
 // line (Gate R; conductor/rehearsal.py). No DOM; run with `node --test tests/*.test.mjs` (tests/ops-stepped.test.mjs).
 //
 // Inputs: `program`, the engine's CanopyState.program ({t0, step_s, step, ends_at, frames}; live over the "canopy"

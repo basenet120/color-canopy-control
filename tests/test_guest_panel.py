@@ -840,7 +840,8 @@ def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_
     engine = showing(c)
     _lit_settled(c)
     _services(c).settings.kiosk.ripple_stagger_s = 1.2
-    scene = next(s for s in ("coastal-tides", "garden-gathering") if s != engine.current_plan().mode_id)
+    # (Coastal Tides steps in sim since D65: its picture carries steps, not a ripple)
+    scene = next(s for s in ("garden-gathering", "goodnight-glow") if s != engine.current_plan().mode_id)
     r = c.post("/api/kiosk/scene", json={"scene": scene})
     assert r.status_code == 200, r.text
     body = _panel(c)
@@ -856,7 +857,7 @@ def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_
 
 
 def test_a_stepped_runs_frames_are_the_picture_until_its_still_look_is_sent(app_client_show, monkeypatch):
-    """Tier.STEPPED (D65 draft) through the real app: the engine's `program` reaches the picture as `steps` frames
+    """Tier.STEPPED (D65) through the real app: the engine's `program` reaches the picture as `steps` frames
     in grid order, judged at the server's own time, so once the still look is sent (`ends_at`) the picture is still
     even if the engine's state hasn't caught up."""
     import dataclasses

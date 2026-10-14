@@ -24,7 +24,7 @@ class Tier(StrEnum):
     T2 = "slot"  # slots hand-painted in the Hubspace app; selected by API
     T3 = "modules"  # whole-strand looks composed at module level (each module = one coarse pixel)
     STRAND = "strand"  # the mode's primary technique is a whole-strand look (Calm, Holiday, Goodnight)
-    # Module level, stepped (D65 draft): the T3 design re-sent a step at a time, each module one colour per step, at
+    # Module level, stepped (D65): the T3 design re-sent a step at a time, each module one colour per step, at
     # a few seconds a step through the cloud. Sim-first; the plan's `modules` are the hold (step 0, the static T3
     # look), the steps are `ModePlan.program`.
     STEPPED = "stepped"

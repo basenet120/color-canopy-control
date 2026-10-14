@@ -46,7 +46,7 @@ module_page:
   sweep_step_s: 2.0              # index sweep: one frame write per step, never faster than the rate budget
 
 motion:
-  # Stepped looks (D65 draft, conductor/sequence.py): the Conductor sends a module-level design a step at a time, one
+  # Stepped looks (D65, conductor/sequence.py): the Conductor sends a module-level design a step at a time, one
   # full-state PUT per module whose colour changes, for a bounded run, then holds the still design. Sim-first.
   stepped:
     live_enabled: false          # off on live hardware until the stepped rehearsal (Gate R) passes; Alon flips it

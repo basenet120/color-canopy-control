@@ -16,7 +16,7 @@ Rules implemented:
   never promise movement. Only `motion_feature` — used when a bench-enabled motion code is actually running — may
   say "moving" or "animated", and a stepped look's `moving_feature` — shown only while a run is going — may say
   "moves" (never "effect", "animation", "controller", "each/every light" or "270": it is one colour per strand).
-- **A stepped look (D65 draft)** re-sends the mode's sampled design a step at a time. It holds on the static design
+- **A stepped look (D65)** re-sends the mode's sampled design a step at a time. It holds on the static design
   between runs, so the ladder needs a later `modules` rung whose sample is the same canvas at the module centres at
   the same brightness (its first step is that look exactly). Its `moving_feature` names the flow
   (`motion_words`: the layout words forward, "toward …" in reverse) and no other layout's or flow's words.
@@ -263,7 +263,7 @@ class ModulesTechnique(_Strict):
 
 
 class SteppedTechnique(_Strict):
-    """Module level, stepped (D65 draft): the mode's sampled design (`canvas`, the same canvas as its `modules`
+    """Module level, stepped (D65): the mode's sampled design (`canvas`, the same canvas as its `modules`
     sample) shifted a step at a time, `steps_per_cycle` steps per repeat, each step one colour per module sent
     through the cloud, `step_s` apart, for `run_s` seconds; then the static design (the `modules` rung) holds.
     `forward` flows the way the design's layout words read ("from the centre out" moves outwards); `reverse` flows
@@ -276,7 +276,7 @@ class SteppedTechnique(_Strict):
     canvas: FieldCanvas
     direction: Literal["forward", "reverse"] = "forward"
     steps_per_cycle: int = Field(6, ge=3, le=12)
-    step_s: float = Field(6.0, ge=4.0, le=12.0)  # 4 s: a step's verification takes about 2.6 s (D65 draft)
+    step_s: float = Field(6.0, ge=4.0, le=12.0)  # 4 s: a step's verification takes about 2.6 s (D65)
     run_s: float = Field(90.0, gt=0, le=180.0)
     brightness: int = Field(100, ge=1, le=100)
     moving_feature: str = Field(min_length=10)

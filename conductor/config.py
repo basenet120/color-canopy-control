@@ -157,7 +157,7 @@ class EffectSettings(_Strict):
 
 
 class SteppedMotionSettings(_Strict):
-    """Stepped looks (D65 draft, conductor/sequence.py): the Conductor re-sends a module-level design a step at a time.
+    """Stepped looks (D65, conductor/sequence.py): the Conductor re-sends a module-level design a step at a time.
 
     Sim-first: `live_enabled` stays false until the stepped rehearsal (Gate R) passes on real kits; only Alon flips it.
     `account_writes_per_min` is the account's cap on writes of any kind in any 60 s. The runner plans its steps at

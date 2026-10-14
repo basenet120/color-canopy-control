@@ -14,7 +14,21 @@ from conductor.geometry import load_canopy_config
 from conductor.looks import load_modes, parse_modes
 from conductor.looks.schema import MOTION_WORDS, FieldCanvas
 
-RAW = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
+SHIPPED = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
+
+
+def _still_tides(raw: dict) -> dict:
+    """The shipped file with Coastal Tides still (no stepped rung, as before D65): the module-level checks below
+    mutate its sampled design, which its stepped rung would otherwise have to follow (the hold rule). The stepped
+    tests add their own rung; the shipped stepped rungs are tested in tests/test_d65_modes.py."""
+    out = copy.deepcopy(raw)
+    tides = out["modes"]["coastal-tides"]
+    tides["ladder"] = [t for t in tides["ladder"] if t != "stepped"]
+    tides["techniques"].pop("stepped", None)
+    return out
+
+
+RAW = _still_tides(SHIPPED)
 RECIPES = load_recipes()
 CANOPY = load_canopy_config()
 
@@ -48,7 +62,8 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
     assert isinstance(sunset.techniques.canvas.canvas, FieldCanvas)  # a 2-D design since D63
     assert [s.color for s in sunset.techniques.canvas.canvas.stops] == ["pastel-coral", "blush-pink", "lilac"]
     assert sunset.techniques.modules.sample.canvas == sunset.techniques.canvas.canvas  # one design, two tiers
-    # every scene is static (D59): no mode carries motion, and no copy claims movement
+    # no scene has on-device motion (D59), and no still copy claims movement; only the two stepped rungs' moving
+    # copy may (D65: Coastal Tides and Golden Hour)
     for mode in modes.modes.values():
         assert mode.motion is False
         if mode.techniques.canvas is not None:
@@ -56,7 +71,12 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
                 mode.techniques.canvas.motion_effect is None and mode.techniques.canvas.motion_feature is None
             )
         for name in mode.ladder:
-            assert not MOTION_WORDS.search(getattr(mode.techniques, name).feature)
+            if name != "stepped":
+                assert not MOTION_WORDS.search(getattr(mode.techniques, name).feature)
+    assert [m for m, mode in modes.modes.items() if "stepped" in mode.ladder] == [
+        "coastal-tides",
+        "golden-hour",
+    ]
 
 
 def test_load_modes_reads_a_config_dir(tmp_path):
@@ -404,7 +424,7 @@ def test_without_a_canopy_only_the_layouts_that_dont_need_one_are_checked():
         parse(_sampled({"kind": "linear", "angle_deg": 30}))
 
 
-# ---- stepped (D65 draft; config/modes.yaml has none, P8 is dormant) ------------------------------------------------
+# ---- stepped (D65; these build Coastal Tides' rung from RAW, the shipped one is in tests/test_d65_modes.py) ---------
 TIDES_MOVING = (
     "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent "
     "its next colour every few seconds, so the palette moves diagonally like a tide."

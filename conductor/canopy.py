@@ -79,7 +79,7 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   rings with it. The safe look, start-up (the first look, however it is requested: `start()`, or the show's wiring
   asking for the idle mode once its capability reads are back), re-picks of the look now showing (a tier change,
   recovery, new slot records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
-- **Stepped looks (Tier.STEPPED, D65 draft).** Installing a plan with a `program` starts a `ProgramRunner`
+- **Stepped looks (Tier.STEPPED, D65).** Installing a plan with a `program` starts a `ProgramRunner`
   (conductor/sequence.py) on the injected clock; a newer look, or `stop()`, cancels it. While it runs, the desired
   state of each driven module is the current step's full state vector (`desired_rows` / `_desired_expect` ask the
   runner), so every re-send — a re-assert, a lock release, recovery, a guest change — sends the current step. The

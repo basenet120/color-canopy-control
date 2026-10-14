@@ -1,6 +1,6 @@
 # The stepped rehearsal (Gate R)
 
-Stepped looks (D65 draft) send each canopy module its next colour every few seconds through the Hubspace cloud. They
+Stepped looks (D65) send each canopy module its next colour every few seconds through the Hubspace cloud. They
 stay **off on real lights** (`motion.stepped.live_enabled: false`) until this rehearsal has measured, from the venue
 IP, that Hubspace takes that write rate without throttling us or the vignettes. The rehearsal is one bounded stepped
 run that only someone at `/ops` can start. The code is `conductor/rehearsal.py`, `CanopyEngine.rehearse`, and
@@ -33,9 +33,10 @@ presses **Rehearse** in the confirm dialog on `/ops`.
 ## Run it
 
 1. `/ops` → **Controls** → **Stepped rehearsal (Gate R)**.
-2. Choose the look: **Golden Hour** or **Coastal Tides** (the D65 candidates). Any look except Lowcountry Calm (the
-   idle look never steps) can be rehearsed. If a look has no stepped design of its own in `config/modes.yaml`,
-   its module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward. On the nine show
+2. Choose the look: **Golden Hour** or **Coastal Tides** (the two scenes that step, D65): each rehearses its own
+   stepped rung in `config/modes.yaml`, with the copy guests would see. Any look except Lowcountry Calm (the idle look
+   never steps) can be rehearsed. If a look has no stepped design of its own in `config/modes.yaml`, its module-level
+   design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward. On the nine show
    kits the runner stretches the step to 7.5 s: it paces all nine modules on one account at 72 writes a minute,
    the account's cap of 90 less a 20% reserve for 429 retries and re-sends (`motion.stepped.budget_reserve`).
 3. Minutes: **10** for Gate R (1–10 are allowed; use 2 to try the page out).
@@ -103,8 +104,8 @@ A report with `"simulated": true` (made on a laptop or staging) **never counts f
 ## After
 
 - **Pass on the show kits:** tell Alon, with the report file and the observer's notes. **Only Alon** sets
-  `motion.stepped.live_enabled: true`, and only after D65 has been decided and a stepped rung added to
-  `config/modes.yaml`, in a PR. Nobody else flips it, whatever the report says.
+  `motion.stepped.live_enabled: true`, in a PR (D65 put the stepped rungs of Coastal Tides and Golden Hour in
+  `config/modes.yaml`; that setting is all that keeps them off the real lights). Nobody else flips it, whatever the report says.
 - **Fail:** stepped motion stays off. Nothing else changes for the show. Send Alon the report. If the failure was a 403,
   check `/ops/accounts` and every vignette before anything else. Don't run it again the same day without Alon.
 - In both cases the canopy is back on the look's still design at its usual tier (T3 on hardware before Gate C).

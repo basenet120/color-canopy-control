@@ -458,7 +458,7 @@ def test_an_offline_module_needs_attention_but_never_downgrades():
     assert back is not None
 
 
-# ---- stepped looks (D65 draft): the reconciler stands down for what each step already verifies ----------------------
+# ---- stepped looks (D65): the reconciler stands down for what each step already verifies ----------------------
 def test_a_moving_stepped_look_has_no_true_up_reads_but_its_slots_are_still_checked_every_minute():
     from test_engine_program import quiet_start, stepped_world
 

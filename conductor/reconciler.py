@@ -28,7 +28,7 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).
 - **The ripple (D64).** A module still waiting for its ring (`engine.wave_pending`) is left alone: never re-asserted,
   never re-sent after a true-up read, never sent on a lock release — its ring sends it.
-- **Stepped looks (D65 draft, conductor/sequence.py).** While a stepped run moves (`engine.stepping`), every step is
+- **Stepped looks (D65, conductor/sequence.py).** While a stepped run moves (`engine.stepping`), every step is
   a verified write, so the rolling true-up reads stand down (each would race the next step's write); the slot
   patterns are checked from the steps' verification readbacks instead, at most once per `SLOT_CHECK_INTERVAL_S` per
   module (`note_verification`). A module that differs is left to the next step (`runner.defer`) — unless its last

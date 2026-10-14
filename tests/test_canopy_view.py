@@ -372,7 +372,7 @@ def test_the_preview_view_defaults_and_validation(tmp_path):
     assert "kiosk → preview → rotate_deg" in str(e.value) and "0, 90, 180 or 270" in str(e.value)
 
 
-# ---- a stepped run (Tier.STEPPED, D65 draft) ------------------------------------------------------------------------
+# ---- a stepped run (Tier.STEPPED, D65) ------------------------------------------------------------------------
 # The kiosk draws `motion.frames[floor((now − t0) / step_s)]` (web/kiosk/canopy-preview.mjs `motionColors`, time
 # clamped to just before `ends_at`); these tests hold the server to that contract.
 STEPPED_CTX = _ctx(modes=STEPPED_MODES)

@@ -146,9 +146,12 @@ def test_three_modes_are_painted_one_per_slot_and_the_rest_start_at_module_level
         "garden-gathering": "custom-2",
         "golden-hour": "custom-3",
     }
+    # D65: Golden Hour steps where its canvas isn't available, Coastal Tides starts stepped (module level either way)
+    stepped = {"golden-hour": ["canvas", "slot", "stepped", "modules", "strand"]}
+    stepped["coastal-tides"] = ["stepped", "modules", "strand"]
     for mode_id, mode in MODES.modes.items():
         expected = ["canvas", "slot", "modules", "strand"] if mode_id in painted else ["modules", "strand"]
-        assert mode.ladder == expected
+        assert mode.ladder == stepped.get(mode_id, expected)
 
 
 @pytest.mark.parametrize("mode_id", IDS)

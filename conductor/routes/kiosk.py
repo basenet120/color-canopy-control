@@ -6,8 +6,9 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
 - `GET  /api/kiosk/modes`   the six modes: `[{id, label, blurb, preview, pattern, feature, tier, module_colours}]`.
                             `preview` is the mode's colour swatch (config/modes.yaml); `pattern` says how the kiosk's
                             illustrated canopy spreads those colours *at the tier the engine would use now* ("modules"
-                            at T3, and for a one-colour whole-strand look: one flat colour per module, from
-                            `module_colours`; a modules-first mode lists its design sampled at each module, as the
+                            at T3 and stepped — a stepped plan's colours are its still design, the hold — and for a
+                            one-colour whole-strand look: one flat colour per module, from `module_colours`; a
+                            modules-first or stepped-first mode lists its design sampled at each module, as the
                             compiler samples it, until a plan says otherwise; a 2-D `field` canvas is "design");
                             `feature` is the "Hubspace feature" sentence for the tier actually in use — known only for
                             the mode now showing (from the engine), else null.
@@ -102,6 +103,10 @@ def _json_same_site(request: Request) -> None:
 router = APIRouter(dependencies=[Depends(require_kiosk), Depends(_json_same_site)])
 
 
+# Module-level tiers: each module one flat colour. A stepped look's plan is its still design (step 0, the hold).
+MODULE_TIERS = (str(Tier.T3), str(Tier.STEPPED))
+
+
 class SelectBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: str = Field(min_length=1, max_length=64)
@@ -118,18 +123,19 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     design     — a 2-D design over the canopy (a `field` canvas: radial, corner to corner, … — the scenes, D63)
     pathway    — a winding bright path over a darker base
     bands      — one soft band per module
-    modules    — one flat colour per module (`module_colours`): module level (T3), and a whole-strand look that
-                 isn't a preset (every module shows one colour)
+    modules    — one flat colour per module (`module_colours`): module level (T3), a stepped look (its still
+                 design, the hold — module level too: the panel's motion shows the steps), and a whole-strand look
+                 that isn't a preset (every module shows one colour)
     A hand-painted slot (T2) copies the canvas picture, so it draws like the canvas technique.
     """
     ladder = spec.get("ladder") or ["strand"]
     techniques = spec.get("techniques") or {}
-    if tier == str(Tier.T3):
+    if tier in MODULE_TIERS:
         return "modules"
     if tier == str(Tier.STRAND):
         look = (techniques.get("strand") or {}).get("look") or {}
         return "scatter" if look.get("kind") == "preset" else "modules"
-    if ladder[0] == "modules":
+    if ladder[0] in MODULE_TIERS:
         return "modules"
     technique = techniques.get(ladder[0]) or {}
     if ladder[0] == "strand":
@@ -176,10 +182,11 @@ def _sampled_colours(mode: Any) -> list[str] | None:
 
 
 def _static_module_colours(spec: Mapping[str, Any], mode: Any = None) -> list[str] | None:
-    """Nine "#RRGGBB" (r0c0…r2c2) for a modules-first mode, so its picture shows what module level puts on the
-    ceiling even before the engine can compile a plan for it: its design (`sample`, from the validated `mode`)
-    sampled at each module, or its literal `columns`; else None."""
-    if (spec.get("ladder") or ["strand"])[0] != "modules":
+    """Nine "#RRGGBB" (r0c0…r2c2) for a modules-first mode (a stepped-first one too: its still design is the
+    modules rung, D65), so its picture shows what module level puts on the ceiling even before the engine can compile
+    a plan for it: its design (`sample`, from the validated `mode`) sampled at each module, or its literal `columns`;
+    else None."""
+    if (spec.get("ladder") or ["strand"])[0] not in MODULE_TIERS:
         return None
     modules = (spec.get("techniques") or {}).get("modules") or {}
     if modules.get("sample") is not None:
@@ -298,9 +305,10 @@ def _hex(preview: list[dict]) -> str | None:
 
 
 def module_colours(services: Any, plan: ModePlan | None) -> list[str | None] | None:
-    """Nine colours (r0c0…r2c2) when `plan` shows one flat colour per module — module level (T3), or a whole-strand
-    look whose every module previews as one colour — which is what the ceiling shows; else None."""
-    if plan is None or str(plan.tier) not in (str(Tier.T3), str(Tier.STRAND)):
+    """Nine colours (r0c0…r2c2) when `plan` shows one flat colour per module — module level (T3), a stepped look
+    (its still design, the hold it ends on: the panel's `motion` carries the steps), or a whole-strand look whose
+    every module previews as one colour — which is what the ceiling shows; else None."""
+    if plan is None or str(plan.tier) not in (*MODULE_TIERS, str(Tier.STRAND)):
         return None
     if str(plan.tier) == str(Tier.STRAND) and not all(_flat(t.preview) for t in plan.modules.values()):
         return None  # e.g. a preset: its heads differ, so the kiosk keeps the mode's own picture
@@ -484,7 +492,7 @@ def modes(request: Request) -> JSONResponse:
             mode["pattern"] = (
                 _pattern(specs.get(mode["id"]) or {}, mode["tier"]) if specs else mode["pattern"]
             )
-            static = mode["module_colours"] if mode["tier"] == str(Tier.T3) else None
+            static = mode["module_colours"] if mode["tier"] in MODULE_TIERS else None
             mode["module_colours"] = module_colours(services, plan) or static
     return JSONResponse(listing, headers=NO_STORE)
 

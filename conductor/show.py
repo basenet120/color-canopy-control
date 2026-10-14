@@ -20,7 +20,7 @@
   slot has a hash recorded by commissioning (origin "api"), so the kiosk never selects a slot that was never
   written — and a slot recorded as hand-painted never counts as commissioned. Commissioning itself only needs the
   capability and bench-flag checks.
-- **Stepped looks (D65 draft)** are sim-first: on a non-simulated driver the stepped tier is refused unless
+- **Stepped looks (D65)** are sim-first: on a non-simulated driver the stepped tier is refused unless
   `motion.stepped.live_enabled` is set (Alon flips it after the stepped rehearsal, Gate R) or that rehearsal is
   running for that very mode (`engine.rehearsal_mode`), so the ladder lands on the mode's still module-level rung.
   Loading checks that no stepped run outlasts `kiosk.idle_return_s` and that the idle mode never steps

@@ -119,6 +119,13 @@ async def show(*, live: bool = False, sim: SimSettings | None = None, monkeypatc
     return w
 
 
+def engine_moving(mode_id: str) -> str:
+    """The shipped mode's own stepped moving copy (config/modes.yaml, D65)."""
+    from conductor.looks import load_modes
+
+    return load_modes(CONFIG_DIR).mode(mode_id).techniques.stepped.moving_feature
+
+
 # ---- the acceptance: a 2-minute rehearsal in sim -------------------------------------------------------------------
 def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_still_look():
     async def main():
@@ -147,7 +154,9 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     # run_s = minutes · 60, at 7.5 s steps: the design's 6 s stretched to 9 modules at 72 writes a minute (the
     # account's cap of 90 less the 20 % reserve)
     assert step_s == 7.5 and count == int(120 / step_s) == 16
-    assert state.feature == REHEARSAL_FEATURE.format(words="from one edge")  # the copy says staff are testing
+    # D65: Golden Hour has its own stepped rung, so the rehearsal runs it with its own moving copy (a mode without
+    # one says staff are testing: test_the_rehearsal_design_is_the_modes_module_level_design_stepped_...)
+    assert state.feature == engine_moving("golden-hour")
     assert mid.program is not None and mid.program["step"] == 8  # moving, half way
     # the report: every field, a pass in sim (no faults), labelled SIMULATED
     assert set(report) == REPORT_FIELDS
@@ -210,12 +219,15 @@ def test_the_tier_gate_opens_for_the_rehearsals_mode_only_and_only_while_it_runs
         return out
 
     before, during, after, settle, report = run_virtual(main)
-    assert before[0] == (False, STEPPED_LIVE_OFF) and Tier.STEPPED not in before[1]
+    # the shipped ladders have a stepped rung (D65) that the live gate refuses outside a rehearsal of that mode
+    golden = [Tier.T1, Tier.T2, Tier.STEPPED, Tier.T3, Tier.STRAND]
+    assert before == ((False, STEPPED_LIVE_OFF), golden)
     allowed, other, ladder, other_ladder, tier = during
     assert allowed == (True, "") and other == (False, STEPPED_LIVE_OFF)
-    assert ladder[0] is Tier.STEPPED and Tier.STEPPED not in other_ladder and tier is Tier.STEPPED
+    assert ladder[0] is Tier.STEPPED and ladder.count(Tier.STEPPED) == 1 and tier is Tier.STEPPED
+    assert other_ladder == [Tier.STEPPED, Tier.T3, Tier.STRAND]  # Coastal Tides' own, still refused live
     gate, ladder, plan = after
-    assert gate == (False, STEPPED_LIVE_OFF) and Tier.STEPPED not in ladder
+    assert gate == (False, STEPPED_LIVE_OFF) and ladder == golden
     # live runs T3 before Gate C: the still look is the hold itself, so settling sends nothing more
     assert plan.tier is Tier.T3 and plan.program is None and settle == []
     assert report["completed"] and not report["simulated"] and report["note"] is None
@@ -224,14 +236,17 @@ def test_the_tier_gate_opens_for_the_rehearsals_mode_only_and_only_while_it_runs
 def test_the_rehearsal_design_is_the_modes_module_level_design_stepped_and_modes_yaml_is_untouched():
     async def main():
         w = await show()
-        modes = w.wiring.rehearsal_modes("coastal-tides")
-        plan = w.wiring.rehearsal_plan("coastal-tides")
-        shipped = w.wiring.modes_file.modes["coastal-tides"]
-        out = (modes.modes["coastal-tides"], shipped, plan, w.wiring.ladder("coastal-tides"))
+        # Rainbow Row Sunset has no stepped rung (D65 steps only Coastal Tides and Golden Hour)
+        modes = w.wiring.rehearsal_modes("rainbow-row-sunset")
+        plan = w.wiring.rehearsal_plan("rainbow-row-sunset")
+        shipped = w.wiring.modes_file.modes["rainbow-row-sunset"]
+        out = (modes.modes["rainbow-row-sunset"], shipped, plan, w.wiring.ladder("rainbow-row-sunset"))
+        tides = w.wiring.rehearsal_modes("coastal-tides").modes["coastal-tides"]
+        out += (tides, w.wiring.modes_file.modes["coastal-tides"])
         await w.close()
         return out
 
-    mode, shipped, plan, ladder = run_virtual(main)
+    mode, shipped, plan, ladder, tides, shipped_tides = run_virtual(main)
     stepped = mode.techniques.stepped
     assert mode.ladder == ["stepped", *shipped.ladder] and shipped.techniques.stepped is None
     assert stepped.canvas == shipped.techniques.modules.sample.canvas
@@ -240,6 +255,9 @@ def test_the_rehearsal_design_is_the_modes_module_level_design_stepped_and_modes
     assert stepped.moving_feature == REHEARSAL_FEATURE.format(words="diagonally")
     assert plan.tier is Tier.STEPPED and len(plan.program.steps) == 6 and len(plan.modules) == 9
     assert Tier.STEPPED not in ladder  # outside a rehearsal the show's ladder is modes.yaml's
+    # a mode with its own stepped rung (D65) rehearses exactly that: its design, cadence and copy
+    assert tides.techniques.stepped == shipped_tides.techniques.stepped
+    assert tides.ladder == shipped_tides.ladder == ["stepped", "modules", "strand"]
 
 
 # ---- it stops ------------------------------------------------------------------------------------------------------
@@ -359,16 +377,16 @@ def test_ops_choosing_another_look_ends_it_with_what_it_measured():
         w = await show()
         await w.engine.rehearse("golden-hour", 3, source="ops")
         await w.run_for(16)  # the hold and steps 1 and 2 (7.5 s apart)
-        await w.engine.request_mode("coastal-tides", source="ops")
+        await w.engine.request_mode("goodnight-glow", source="ops")  # a still mood (D65)
         await w.ended()
         out = (w.report(), w.engine.current_plan(), w.engine.rehearsal_mode)
         await w.close()
         return out
 
     report, plan, mode = run_virtual(main)
-    assert report["ended"] == "ops chose coastal-tides" and not report["completed"]
+    assert report["ended"] == "ops chose goodnight-glow" and not report["completed"]
     assert report["verdict"] == "fail" and report["attempts"] >= 9 * 3
-    assert plan.mode_id == "coastal-tides" and plan.program is None and mode is None
+    assert plan.mode_id == "goodnight-glow" and plan.program is None and mode is None
 
 
 def test_ops_can_stop_it_and_a_pause_stops_it():
@@ -500,8 +518,9 @@ def test_stopping_the_engine_ends_it_and_still_writes_the_report():
         ("golden-hour", 2, "commissioning", "Commissioning is writing"),
         ("golden-hour", 2, "flat", "has no stepped design to rehearse"),
         ("golden-hour", 2, "gate", "would show canvas, not a stepped look"),
-        ("golden-hour", 2, "no-sample", "no module-level design sampled at the module centres"),
-        ("golden-hour", 2, "mean", "no module-level design sampled at the module centres"),
+        # (a mode without its own stepped rung: D65 gives Golden Hour and Coastal Tides one)
+        ("garden-gathering", 2, "no-sample", "no module-level design sampled at the module centres"),
+        ("garden-gathering", 2, "mean", "no module-level design sampled at the module centres"),
     ],
 )
 def test_it_refuses_plainly_and_sends_nothing(mode, minutes, setup, says):
@@ -526,7 +545,7 @@ def test_it_refuses_plainly_and_sends_nothing(mode, minutes, setup, says):
             w.engine.deps.tier_allowed = lambda mode_id, tier: (tier is not Tier.STEPPED, "shut (test)")
         elif setup in ("no-sample", "mean"):
             raw = w.wiring.modes_file.model_dump(mode="json", exclude_unset=True)
-            gh = raw["modes"]["golden-hour"]
+            gh = raw["modes"][mode]
             if setup == "mean":
                 gh["techniques"]["modules"]["sample"]["at"] = "mean"
             else:

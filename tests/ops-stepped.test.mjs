@@ -1,4 +1,4 @@
-// The /ops stepped card's wording (web/ops/stepped-model.mjs, Tier.STEPPED D65 draft): step, pace against the cap,
+// The /ops stepped card's wording (web/ops/stepped-model.mjs, Tier.STEPPED D65): step, pace against the cap,
 // when it holds, the governor's cool-off. Run with `node --test tests/*.test.mjs`.
 import test from "node:test";
 import assert from "node:assert/strict";

@@ -49,7 +49,7 @@ Rules implemented:
   a new colour still arrives in the design's order. The order is the design's geometry before `cycles`, `mirror` and
   `invert`: a ripple starts where the layout words say the design starts ("from the centre out" stays centre first
   when the palette runs inwards). A mode with no design, or a module with no canopy position, gets None (one burst).
-- **A stepped look (Tier.STEPPED, D65 draft).** The plan's `modules` are the hold: the mode's static module-level
+- **A stepped look (Tier.STEPPED, D65).** The plan's `modules` are the hold: the mode's static module-level
   look (`_modules`), which the schema makes the stepped design's own canvas at the module centres. `program.steps[n]`
   is that design with its field shifted by n / `steps_per_cycle` of one repeat (`field.value` phase; `forward` flows
   the way the layout words read, `reverse` back), one full state vector per driven module (power, colour mode, RGB,
