@@ -1,5 +1,5 @@
-// The /ops stepped card's pure wording (Tier.STEPPED, D65 draft; conductor/sequence.py). No DOM; run with
-// `node --test tests/*.test.mjs` (tests/ops-stepped.test.mjs).
+// The /ops stepped card's pure wording (Tier.STEPPED, D65 draft; conductor/sequence.py) and the stepped rehearsal's
+// line (Gate R; conductor/rehearsal.py). No DOM; run with `node --test tests/*.test.mjs` (tests/ops-stepped.test.mjs).
 //
 // Inputs: `program`, the engine's CanopyState.program ({t0, step_s, step, ends_at, frames}; live over the "canopy"
 // topic, null unless the run is moving), and `gauge`, /api/canopy/state's `stepped` (conductor/routes/ops.py
@@ -51,4 +51,29 @@ export function steppedLines(program, gauge, clock) {
     );
   }
   return lines;
+}
+
+/**
+ * The stepped rehearsal's line under its controls (Gate R; conductor/rehearsal.py). `status` is
+ * /api/canopy/state's `rehearsal` ({running, last, max_minutes}); "" when there's nothing to say.
+ * - running: "Rehearsing Golden Hour for 10 min on 9 modules · ends at 2:42:10 · guests wait meanwhile"
+ * - else the last one: "Last rehearsal: Golden Hour, 10 min — pass (SIMULATED: never counts for Gate R) · report
+ *   rehearsal-….json"
+ */
+export function rehearsalText(status, clock) {
+  if (!status) return "";
+  const run = status.running;
+  if (run) {
+    const parts = [`Rehearsing ${run.label} for ${run.minutes} min on ${run.modules} modules`];
+    if (run.ends_at != null) parts.push(`ends at ${clock(run.ends_at)}`);
+    parts.push("guests wait meanwhile");
+    if (run.simulated) parts.push("SIMULATED");
+    return parts.join(" · ");
+  }
+  const last = status.last;
+  if (!last) return "";
+  const verdict = last.verdict ? `${last.verdict}` : "report pending";
+  const sim = last.simulated ? " (SIMULATED: never counts for Gate R)" : "";
+  const file = last.file ? ` · report ${String(last.file).split("/").pop()}` : "";
+  return `Last rehearsal: ${last.label}, ${last.minutes} min — ${verdict}${sim}${file}. ${last.summary || ""}`.trim();
 }

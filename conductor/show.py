@@ -22,8 +22,14 @@
   capability and bench-flag checks.
 - **Stepped looks (D65 draft)** are sim-first: on a non-simulated driver the stepped tier is refused unless
   `motion.stepped.live_enabled` is set (Alon flips it after the stepped rehearsal, Gate R) or that rehearsal is
-  running (`engine.rehearsal_active`), so the ladder lands on the mode's still module-level rung. Loading checks that
-  no stepped run outlasts `kiosk.idle_return_s` and that the idle mode never steps (`_check_stepped`).
+  running for that very mode (`engine.rehearsal_mode`), so the ladder lands on the mode's still module-level rung.
+  Loading checks that no stepped run outlasts `kiosk.idle_return_s` and that the idle mode never steps
+  (`_check_stepped`).
+- **The stepped rehearsal's design** (`rehearsal_modes`, conductor/rehearsal.py): the mode's own stepped technique
+  when modes.yaml has one, else its module-level design (the `modules` sample: same canvas, `at: centre`, same
+  brightness) stepped at the D65 defaults, with moving copy that says staff are testing and names the flow
+  (`motion_words`). It is checked by the same schema and copy rules as modes.yaml, and only used while the
+  rehearsal of that mode runs: then the mode's ladder has the stepped rung first (`ladder`, `compile`).
 - In sim, the slots are commissioned automatically once every module's capabilities are read, so demos run T1
   exactly as the show would after install-day commissioning. On hardware commissioning is an explicit ops action.
 """
@@ -62,6 +68,10 @@ def _check_idle_scene(scene: str | None, modes: list[str]) -> None:
 
 
 STEPPED_LIVE_OFF = "stepped looks are off on live hardware until the stepped rehearsal (Gate R) passes"
+REHEARSAL_FEATURE = (
+    "Staff are testing the canopy: each Hubspace strand is sent its next colour every few seconds, so the palette "
+    "moves {words}."
+)
 
 
 def _check_stepped(settings: Any, modes_file: Any) -> None:
@@ -131,6 +141,8 @@ class ShowWiring:
             str, str
         ] = {}  # device id → the head-count problem flagged from its profile
         self._cleanup: list[Any] = []
+        # mode id → the modes file a stepped rehearsal of it compiles against
+        self._rehearsal_modes: dict[str, Any] = {}
 
     # ---- capabilities --------------------------------------------------------------------------------------------
     def _registered(self, entry: Any) -> bool:
@@ -334,7 +346,7 @@ class ShowWiring:
         self.request_refresh()
 
     # ---- compiling -----------------------------------------------------------------------------------------------
-    def context(self) -> Any:
+    def context(self, modes: Any = None) -> Any:
         from conductor.looks import CompileContext
 
         services = self.services
@@ -354,7 +366,7 @@ class ShowWiring:
             settings=services.settings,
             slot_readback=self.slot_readback,
             flags=flags,
-            modes=self.modes_file,
+            modes=modes if modes is not None else self.modes_file,
             config_dir=services.config_dir,
             addresses=addresses,
         )
@@ -364,19 +376,75 @@ class ShowWiring:
 
         # A module without capabilities is left out of the plan (the safe look assumes conservative ones); only
         # when no module has been read does compile_mode refuse (PlanError).
+        if tier is Tier.STEPPED and self._rehearsing(mode_id):
+            return self.rehearsal_plan(mode_id)
         return compile_mode(mode_id, tier, self.context())
 
     def ladder(self, mode_id: str) -> list[Tier]:
         from conductor.looks import ladder
 
+        if self._rehearsing(mode_id):
+            return ladder(mode_id, self.rehearsal_modes(mode_id))
         return ladder(mode_id, self.modes_file)
+
+    # ---- the stepped rehearsal's design (Gate R) -----------------------------------------------------------------
+    def _rehearsing(self, mode_id: str) -> bool:
+        return self.engine is not None and getattr(self.engine, "rehearsal_mode", None) == mode_id
+
+    def rehearsal_plan(self, mode_id: str) -> Any:
+        """The stepped plan a rehearsal of `mode_id` runs (PlanError when the mode has nothing to step)."""
+        from conductor.looks import compile_mode
+
+        return compile_mode(mode_id, Tier.STEPPED, self.context(self.rehearsal_modes(mode_id)))
+
+    def rehearsal_modes(self, mode_id: str) -> Any:
+        """The modes file with `mode_id` given a stepped rung first in its ladder: its own stepped technique, or
+        its module-level design stepped at the D65 defaults (SteppedTechnique's), checked like modes.yaml."""
+        cached = self._rehearsal_modes.get(mode_id)
+        if cached is not None:
+            return cached
+        from conductor.config import ConfigError
+        from conductor.engine_api import PlanError
+        from conductor.looks import parse_modes
+        from conductor.looks.schema import motion_words
+
+        try:
+            mode = self.modes_file.mode(mode_id)
+        except KeyError as e:
+            raise PlanError(str(e.args[0])) from None
+        raw = self.modes_file.model_dump(mode="json", exclude_unset=True)
+        entry = raw["modes"][mode_id]
+        if mode.techniques.stepped is None:
+            sample = mode.techniques.modules.sample if mode.techniques.modules is not None else None
+            if sample is None or sample.at != "centre":
+                raise PlanError(
+                    f"{mode.label} has no module-level design sampled at the module centres to step (a modules rung "
+                    "with sample: {canvas, at: centre})"
+                )
+            # (a design the stepped technique can't take, e.g. a gradient, is refused by the schema check below)
+            words = motion_words(sample.canvas, self.context().canopy, "forward")
+            entry["techniques"]["stepped"] = {
+                "canvas": entry["techniques"]["modules"]["sample"]["canvas"],
+                "brightness": sample.brightness,
+                "moving_feature": REHEARSAL_FEATURE.format(words=words),
+            }
+        entry["ladder"] = ["stepped", *(t for t in entry["ladder"] if t != "stepped")]
+        ctx = self.context()
+        try:
+            modes = parse_modes(
+                raw, recipes=ctx.recipes, canopy=ctx.canopy, path="the stepped rehearsal's design"
+            )
+        except ConfigError as e:
+            raise PlanError(str(e)) from None
+        self._rehearsal_modes[mode_id] = modes
+        return modes
 
     def mode_ids(self) -> list[str]:
         return list(self.modes_file.modes)
 
     def tier_allowed(self, mode_id: str, tier: Tier) -> tuple[bool, str]:
         if tier is Tier.STEPPED:
-            return self._stepped_allowed()
+            return self._stepped_allowed(mode_id)
         if tier is not Tier.T1 or self.commissioning:
             return True, ""
         slot = getattr(self.modes_file.modes[mode_id], "slot", None)
@@ -396,13 +464,13 @@ class ShowWiring:
             return False, f"{slot} hasn't been commissioned on {len(missing)} module(s) yet"
         return True, ""
 
-    def _stepped_allowed(self) -> tuple[bool, str]:
+    def _stepped_allowed(self, mode_id: str) -> tuple[bool, str]:
         """Sim-first: stepped looks run on the simulator; on live hardware only with motion.stepped.live_enabled
-        (Alon, after Gate R) or while the stepped rehearsal runs."""
+        (Alon, after Gate R) or for the mode the stepped rehearsal is running, while it runs."""
         services = self.services
         if services.engine_driver.simulated or services.settings.motion.stepped.live_enabled:
             return True, ""
-        if self.engine is not None and getattr(self.engine, "rehearsal_active", False):
+        if self._rehearsing(mode_id):
             return True, ""
         return False, STEPPED_LIVE_OFF
 
@@ -426,6 +494,7 @@ class ShowWiring:
             ladder=self.ladder,
             modes=self.mode_ids,
             tier_allowed=self.tier_allowed,
+            rehearsal_compile=self.rehearsal_plan,
         )
         original = engine.commission
 

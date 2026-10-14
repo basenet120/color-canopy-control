@@ -770,7 +770,7 @@ def _wiring(*, simulated: bool, live_enabled: bool = False, rehearsal: bool = Fa
         engine_driver=SimpleNamespace(simulated=simulated),
         settings=settings_with(motion={"stepped": {"live_enabled": live_enabled}}),
     )
-    wiring.engine = SimpleNamespace(rehearsal_active=rehearsal)
+    wiring.engine = SimpleNamespace(rehearsal_mode="radial-outward" if rehearsal else None)
     wiring.commissioning = False
     return wiring
 

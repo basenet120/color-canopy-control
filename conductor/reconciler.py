@@ -37,8 +37,8 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
   stops verifying (`ProgramRunner.status`). Commands that still ended throttled downgrade a stepped look to its still
   module-level rung like any other. A run that ended while nothing could be sent (commissioning) gets its still look
   from the next re-assert (`engine.program_unsent`).
-- **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused), request
-  `kiosk.idle_mode` with source "idle".
+- **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused, no stepped
+  rehearsal running), request `kiosk.idle_mode` with source "idle".
 - **Guest settings (D60).** "Differs" means readback differs from `engine.desired_rows` — the look with the guest's
   brightness / power applied — so a re-assert restores the guest's choice and never undoes it. **Idle reset:** while
   a guest setting is in force, after `kiosk.idle_reset_s` with no guest input (and guest input not paused, no outage,
@@ -547,6 +547,8 @@ class Reconciler:
         engine = self.engine
         kiosk = engine.deps.settings.kiosk
         if engine.paused or engine.outage is not None or engine.commissioning or engine.stopped:
+            return
+        if engine.rehearsal_active:  # the stepped rehearsal (Gate R) runs its full minutes
             return
         plan = engine.current_plan()
         if plan is not None and plan.mode_id == kiosk.idle_mode:

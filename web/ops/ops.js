@@ -3,7 +3,7 @@
 import { api, connectLive, copyJSON, simBadge } from "/static/app.js";
 import { fill, fmtAge, h, pill, show, simTag, statusPill } from "/ops/dom.js";
 import { commissionScope, headsCounts, moduleScope, positions, testWaitNote } from "/ops/counts-model.mjs";
-import { steppedLines } from "/ops/stepped-model.mjs";
+import { rehearsalText, steppedLines } from "/ops/stepped-model.mjs";
 
 const POLL_MS = 10000;
 const LOG_POLL_MS = 5000;
@@ -16,6 +16,8 @@ let devices = [];
 let testerChoicesDrawn = false;
 let canopyState = null;
 let steppedGauge = null; // /api/canopy/state's `stepped` (the live "canopy" topic doesn't carry it)
+let rehearsal = null; // /api/canopy/state's `rehearsal`: the stepped rehearsal running now and the last one's verdict
+let rehearsalPending = null; // {mode, minutes, confirm}: the preview the confirm dialog is showing
 let headsData = null;
 let modesDrawn = "";
 let logSeq = null;
@@ -91,6 +93,10 @@ function renderState(st) {
   fill(feature, st.feature ? [h("span", { class: "kicker" }, "Hubspace feature"), st.feature] : []);
   show($("canopy-message"), st.message || "");
   if ("stepped" in st) steppedGauge = st.stepped;
+  if ("rehearsal" in st) {
+    rehearsal = st.rehearsal;
+    drawRehearsal();
+  }
   const stepped = steppedLines(st.program, steppedGauge, clock);
   fill($("canopy-stepped"), stepped.map((line) => h("div", {}, line)));
   $("canopy-stepped").hidden = !stepped.length;
@@ -118,9 +124,74 @@ function engineMissing(message) {
 }
 
 function setControlsEnabled(on) {
-  for (const id of ["pause-btn", "reassert-btn", "safe-btn", "guest-reset-btn", "commission-btn", "mode-btn", "mode-select", "test-mode-btn"]) {
+  for (const id of ["pause-btn", "reassert-btn", "safe-btn", "guest-reset-btn", "commission-btn", "mode-btn", "mode-select", "test-mode-btn", "rehearsal-btn", "rehearsal-stop"]) {
     $(id).disabled = !on;
   }
+}
+
+// ---- the stepped rehearsal (Gate R; conductor/rehearsal.py) --------------------------------------------------------
+// Operator-started only: "Rehearse…" asks the server for the sentence naming the modules and minutes, shows it, and
+// only "Rehearse" in that dialog starts it (the POST carries the sentence back; a stale one is refused).
+function drawRehearsal() {
+  const running = Boolean(rehearsal && rehearsal.running);
+  $("rehearsal-stop").hidden = !running;
+  $("rehearsal-btn").hidden = running;
+  const text = rehearsalText(rehearsal, clock);
+  show($("rehearsal-status"), text);
+}
+
+async function loadRehearsalModes() {
+  try {
+    const body = await api("/api/canopy/stepped-rehearsal");
+    const select = $("rehearsal-mode");
+    fill(select, body.modes.map((m) => h("option", { value: m.id }, m.label)));
+    if (body.modes.some((m) => m.id === "golden-hour")) select.value = "golden-hour";
+    $("rehearsal-minutes").max = String(body.max_minutes);
+    rehearsal = body.status;
+    drawRehearsal();
+  } catch (err) {
+    if (err.status !== 503) note($("control-result"), err.message, "error");
+  }
+}
+
+async function previewRehearsal(button) {
+  const mode = $("rehearsal-mode").value;
+  const minutes = Number($("rehearsal-minutes").value);
+  button.disabled = true;
+  try {
+    const q = new URLSearchParams({ mode, minutes: String(minutes) });
+    const body = await api(`/api/canopy/stepped-rehearsal?${q}`);
+    rehearsalPending = { mode, minutes, confirm: body.preview.confirm };
+    $("rehearsal-confirm").textContent = body.preview.confirm;
+    const dialog = $("rehearsal-dialog");
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else if (window.confirm(body.preview.confirm)) startRehearsal();
+  } catch (err) {
+    note($("control-result"), err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function startRehearsal() {
+  const pending = rehearsalPending;
+  rehearsalPending = null;
+  if (!pending) return;
+  await control($("rehearsal-btn"), "/api/canopy/stepped-rehearsal", pending, "Starting…");
+  loadState();
+}
+
+function setupRehearsal() {
+  $("rehearsal-btn").addEventListener("click", (e) => previewRehearsal(e.currentTarget));
+  $("rehearsal-stop").addEventListener("click", (e) =>
+    control(e.currentTarget, "/api/canopy/stepped-rehearsal/stop", {}, "Stopping…").then(() => loadState()),
+  );
+  const dialog = $("rehearsal-dialog");
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "go") startRehearsal();
+    else rehearsalPending = null;
+  });
+  loadRehearsalModes();
 }
 
 function drawModes(modes, current) {
@@ -803,6 +874,7 @@ document.querySelectorAll('#enroll-role input[name="role"]').forEach((i) => i.ad
 $("checklist-run").addEventListener("click", runChecklist);
 $("test-mode-btn").addEventListener("click", testModeChange);
 setupControls();
+setupRehearsal();
 syncEnrollRole();
 refresh();
 loadSessions();

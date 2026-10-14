@@ -52,3 +52,29 @@ test("the governor's cool-off is its own line, with or without a run", () => {
   const both = steppedLines(PROGRAM, { ...GAUGE, cooloff: cooling.cooloff, governor_trips: 1 }, clock);
   assert.equal(both.length, 2);
 });
+
+test("the rehearsal line says what runs and until when, else the last verdict and its report", async () => {
+  const { rehearsalText } = await import("../web/ops/stepped-model.mjs");
+  assert.equal(rehearsalText(null, clock), "");
+  assert.equal(rehearsalText({ running: null, last: null }, clock), "");
+  const running = { label: "Golden Hour", minutes: 10, modules: 9, ends_at: 1600, simulated: false };
+  assert.equal(
+    rehearsalText({ running, last: null }, clock),
+    "Rehearsing Golden Hour for 10 min on 9 modules · ends at @1600 · guests wait meanwhile",
+  );
+  assert.match(rehearsalText({ running: { ...running, simulated: true } }, clock), / · SIMULATED$/);
+  const last = {
+    label: "Golden Hour",
+    minutes: 2,
+    verdict: "pass",
+    simulated: true,
+    file: "/data/bench/rehearsals/rehearsal-20261023T100110Z-golden-hour.json",
+    summary: "Golden Hour, 2 min on 9 modules: pass.",
+  };
+  assert.equal(
+    rehearsalText({ running: null, last }, clock),
+    "Last rehearsal: Golden Hour, 2 min — pass (SIMULATED: never counts for Gate R) · report " +
+      "rehearsal-20261023T100110Z-golden-hour.json. Golden Hour, 2 min on 9 modules: pass.",
+  );
+  assert.match(rehearsalText({ last: { ...last, verdict: null, simulated: false, file: null } }, clock), /— report pending\./);
+});
