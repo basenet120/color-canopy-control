@@ -585,12 +585,18 @@ review in the PR. Palettes, names, moods, brightness, ladders, slots and the str
   - Rainbow Row Sunset (custom-1): linear at 45°, corner to corner.
   - Garden Gathering (custom-2): radial from the middle of one long edge (112.5, 120), inverted (ivory there).
   - Coastal Tides: a tilted shoreline, linear at 78°.
-  - Golden Hour (custom-3): a radial sun at the middle of the left edge (0, 60).
+  - Golden Hour (custom-3): a radial sun at the middle of the left edge (0, 60), measured in the canopy's
+    proportions (`metric: canopy`, a ring is an ellipse that fills the canopy). In true inches the rows sit only
+    40 in apart against an auto radius of 233 in, so T3 read as D59's three columns; in canopy proportions the
+    middle-left module is the goldest and the left column's corners are visibly pinker (ΔE76 about 21), so the
+    sun's arc shows on the grid as well as at T1.
   - The Goodnight Glow: a radial moon over r0c2 (187.5, 20), inverted (moonlight blue there).
-  Radii are `auto` (the farthest corner from the centre) and every design is static (`cycles: 1`).
+  Radii are `auto` (the farthest canopy point from the centre, in the design's metric) and every design is static
+  (`cycles: 1`).
 - **T1** paints the design at each of the 270 heads (the palette at `field.value`, head for head). **T3** sets each
   module to the design at its centre (`sample: {at: centre}`, the scene's brightness): 4 to 9 distinct module
-  colours per scene, never three columns. **T2** is still "a custom pattern painted light by light in the Hubspace
+  colours per scene, never three columns (in every scene some column changes from top to bottom by at least a
+  third of the largest change along a row, in ΔE76; `tests/test_modes_match_scenes.py`). **T2** is still "a custom pattern painted light by light in the Hubspace
   app"; matching a hand-painted slot to the new design needs a per-module painting guide (P12's illustration).
 - **Copy.** T1, T2 and strand sentences are unchanged. Each T3 sentence names its layout in the words
   `field.layout_words` requires ("from the centre out", "diagonally", "from one edge", "from one spot") and no other

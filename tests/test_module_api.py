@@ -391,10 +391,10 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     assert golden["result"]["tier"] == "modules" and golden["result"]["status"] == "applied"
     assert any("Gate C" in n for n in golden["result"]["notes"])
     assert golden["state"]["heads"][4]["reported"] == {
-        "r": 209,
-        "g": 122,
-        "b": 178,
-    }  # the design's colour at r1c2, the far side from the sun (220, 128, 187), at Golden Hour's 95 %
+        "r": 219,
+        "g": 116,
+        "b": 167,
+    }  # the design's colour at r1c2, the far side from the sun (231, 122, 176: rose), at Golden Hour's 95 %
 
     bad = _post(
         app_client,

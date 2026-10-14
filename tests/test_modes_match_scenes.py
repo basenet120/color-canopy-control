@@ -10,6 +10,8 @@ motion. The layouts are D63's drafts (Paris reviews them); palettes, names, brig
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from conductor.capabilities import detect
@@ -48,7 +50,8 @@ LAYOUTS = {
     "rainbow-row-sunset": {"kind": "linear", "angle_deg": 45},  # corner to corner
     "garden-gathering": {"kind": "radial", "centre_in": (112.5, 120), "invert": True},  # from one long edge
     "coastal-tides": {"kind": "linear", "angle_deg": 78},  # a tilted shoreline
-    "golden-hour": {"kind": "radial", "centre_in": (0, 60)},  # a sun at the middle of the left edge
+    # a sun at the middle of the left edge, measured in the canopy's proportions so its arc shows at module level
+    "golden-hour": {"kind": "radial", "centre_in": (0, 60), "metric": "canopy"},
     "goodnight-glow": {"kind": "radial", "centre_in": (187.5, 20), "invert": True},  # a moon over r0c2
 }
 
@@ -75,6 +78,27 @@ def _t3(mode_id: str) -> dict[str, tuple[int, int, int]]:
         (rgb,) = [r.value for r in plan.modules[m.id].rows if r.function_class == "color-rgb"]
         out[m.module] = (rgb["color-rgb"]["r"], rgb["color-rgb"]["g"], rgb["color-rgb"]["b"])
     return out
+
+
+def _lab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+    """sRGB (D65) → CIELAB, for ΔE76: how far apart two module colours look."""
+
+    def lin(c: int) -> float:
+        v = c / 255
+        return ((v + 0.055) / 1.055) ** 2.4 if v > 0.04045 else v / 12.92
+
+    r, g, b = (lin(c) for c in rgb)
+    xyz = (
+        (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047,
+        0.2126 * r + 0.7152 * g + 0.0722 * b,
+        (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883,
+    )
+    fx, fy, fz = (v ** (1 / 3) if v > 0.008856 else 7.787 * v + 16 / 116 for v in xyz)
+    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
+
+
+def _delta_e(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    return math.dist(_lab(a), _lab(b))
 
 
 def test_the_modes_are_the_scenes_ids_labels_blurbs_and_previews_in_order():
@@ -180,6 +204,34 @@ def test_the_module_level_copy_names_the_designs_layout(mode_id):
     assert ("column by column" in feature) == uniform_columns
     assert ("row by row" in feature) == uniform_rows
     assert not uniform_columns and not uniform_rows  # D63: every scene is 2-D on the grid
+
+
+@pytest.mark.parametrize("mode_id", IDS)
+def test_no_scene_reads_as_three_columns_at_module_level(mode_id):
+    """D63 retires D59's column-only T3: in every scene some column changes visibly from top to bottom — at least a
+    third as much as the colours change along a row — so the 3x3 grid shows a 2-D design, not three stripes."""
+    colours = _t3(mode_id)
+
+    def spread(cells: list[str]) -> float:
+        return max(_delta_e(colours[a], colours[b]) for a in cells for b in cells)
+
+    down = max(spread([f"r{r}c{c}" for r in range(3)]) for c in range(3))
+    across = max(spread([f"r{r}c{c}" for c in range(3)]) for r in range(3))
+    assert down >= across / 3, (round(down, 1), round(across, 1))
+
+
+def test_golden_hours_sun_shows_at_module_level():
+    """The sun sits at the middle of the left edge: on the grid the middle-left module is the goldest, and the sun's
+    arc shows — the left column's corners are visibly pinker than its middle, and so is the middle column's."""
+    t = {
+        p: F.value(_design("golden-hour").field, x, y, CANOPY)
+        for p, (x, y) in F.module_centres(CANOPY, POSITIONS).items()
+    }
+    assert min(t, key=t.get) == "r1c0"
+    colours = _t3("golden-hour")
+    for c, at_least in ((0, 15), (1, 6)):
+        for r in (0, 2):
+            assert _delta_e(colours[f"r{r}c{c}"], colours[f"r1c{c}"]) >= at_least, (r, c)
 
 
 def test_the_d63_layouts_name_where_each_design_sits():

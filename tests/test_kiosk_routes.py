@@ -197,6 +197,26 @@ def test_a_design_tile_needs_the_validated_mode_and_says_nothing_it_cant_work_ou
     assert len(_static_module_colours(spec, load_modes().mode(CALM))) == 9
 
 
+def test_a_modules_first_mode_with_literal_columns_pictures_them_column_by_column():
+    """The schema still takes literal `columns` (no show mode uses them since D63): a modules-first mode lists its
+    three column colours in r0c0…r2c2 order — the left column's colour on c0 of every row — with no plan and no
+    validated mode; anything but three RGB columns says nothing rather than guess."""
+    from conductor.routes.kiosk import _static_module_colours
+
+    modules = yaml.safe_load(TECHNIQUES.read_text())["modes"]["golden-hour"]["techniques"]["modules"]
+    spec = {"ladder": ["modules", "strand"], "techniques": {"modules": modules}}
+    hexes = ["#FF5A00", "#FF7E00", "#FFAA3C"]  # the fixture's amber columns, left to right
+    assert [c["rgb"] for c in modules["columns"]] == [[255, 90, 0], [255, 126, 0], [255, 170, 60]]
+    assert _static_module_colours(spec) == hexes * 3
+    assert _static_module_colours({**spec, "ladder": ["canvas", "modules"]}) is None  # not modules-first
+    two = {"ladder": ["modules"], "techniques": {"modules": {"columns": modules["columns"][:2]}}}
+    assert _static_module_colours(two) is None
+    white = [*modules["columns"][:2], {"kind": "white", "cct": 2700, "brightness": 50}]
+    assert (
+        _static_module_colours({"ladder": ["modules"], "techniques": {"modules": {"columns": white}}}) is None
+    )
+
+
 def test_each_tier_draws_what_the_ceiling_shows():
     specs = yaml.safe_load(TECHNIQUES.read_text())["modes"]  # the pre-D59 recipes: every technique kind
     assert {m: _pattern(spec) for m, spec in specs.items()} == {

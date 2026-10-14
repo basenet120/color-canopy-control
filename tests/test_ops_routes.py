@@ -176,7 +176,8 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     assert body["engine"] is True and body["mode"] == "golden-hour" and body["tier"] == "modules"
     assert body["feature"] == (  # the T3 sentence names the design's layout (D63: a sun at one edge)
         "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: "
-        "gold and peach at the middle of one short side, through sunset pink, to rose and lavender at the far side."
+        "gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the "
+        "far side."
     )
     assert len(body["heads"]) == 270 and body["counts"]["match"] == 270
     plan = engine.current_plan()

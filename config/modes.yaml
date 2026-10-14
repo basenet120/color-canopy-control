@@ -19,9 +19,10 @@
 #   strand  — the scene's solid colour (its `default_solid`) on every strand.
 # The layouts (D63 drafts, for Paris to review): Lowcountry Calm a radial from the canopy's centre (sea glass in the
 # middle); Rainbow Row Sunset corner to corner; Garden Gathering a radial from the middle of one long edge (ivory
-# there); Coastal Tides a tilted shoreline (linear at 78°); Golden Hour a sun at the middle of the left edge; The
-# Goodnight Glow a moon over r0c2 (moonlight blue there). Changing a design changes the T1 frames, so every recorded
-# slot hash of a painted scene goes stale: freeze the designs before commissioning at install (D63).
+# there); Coastal Tides a tilted shoreline (linear at 78°); Golden Hour a sun at the middle of the left edge, measured
+# in the canopy's proportions so it arcs at module level too; The Goodnight Glow a moon over r0c2 (moonlight blue
+# there). Changing a design changes the T1 frames, so every recorded slot hash of a painted scene goes stale: freeze
+# the designs before commissioning at install (D63).
 # Brightness is the scene's `brightness_draft` at every tier (a device setting; colours stay full strength). Every
 # scene is static: no mode has a motion effect (the soak may enable a SIMULATED one, config/sim/soak.yaml).
 #
@@ -159,7 +160,10 @@ modes:
       canvas:
         canvas: &golden-design   # a sun at the middle of the left edge: soft gold there, lavender toward the far corners
           kind: field
-          field: {kind: radial, centre_in: [0, 60]}
+          # metric: canopy measures in the canopy's proportions (a ring is an ellipse that fills it), so the sun's arc
+          # shows at module level: in true inches the 40 in between rows barely changes the distance from (0, 60)
+          # and T3 read as D59's three columns.
+          field: {kind: radial, centre_in: [0, 60], metric: canopy}
           stops:
             - {at: 0.0, color: soft-gold}
             - {at: 0.25, color: golden-hour-peach}
@@ -174,7 +178,7 @@ modes:
         feature: "A custom pattern painted light by light in the Hubspace app, saved on each strand."
       modules:
         sample: {canvas: *golden-design, at: centre, brightness: 95}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: gold and peach at the middle of one short side, through sunset pink, to rose and lavender at the far side."
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the far side."
       strand:
         look: {kind: rgb, rgb: [255, 155, 196], brightness: 95}   # sunset pink
         feature: "Colour and dimming: all nine Hubspace strands set to sunset pink."
