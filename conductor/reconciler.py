@@ -28,6 +28,15 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).
 - **The ripple (D64).** A module still waiting for its ring (`engine.wave_pending`) is left alone: never re-asserted,
   never re-sent after a true-up read, never sent on a lock release — its ring sends it.
+- **Stepped looks (D65 draft, conductor/sequence.py).** While a stepped run moves (`engine.stepping`), every step is
+  a verified write, so the rolling true-up reads stand down (each would race the next step's write); the slot
+  patterns are checked from the steps' verification readbacks instead, at most once per `SLOT_CHECK_INTERVAL_S` per
+  module (`note_verification`). A module that differs is left to the next step (`runner.defer`) — unless its last
+  command FAILED or MISMATCHed and the next step is more than `STEP_DEFER_S` away, then it is re-sent now. Each step
+  resets the hysteresis timers of the modules it sends (a new desired state); the stepped phase judges a module that
+  stops verifying (`ProgramRunner.status`). Commands that still ended throttled downgrade a stepped look to its still
+  module-level rung like any other. A run that ended while nothing could be sent (commissioning) gets its still look
+  from the next re-assert (`engine.program_unsent`).
 - **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused), request
   `kiosk.idle_mode` with source "idle".
 - **Guest settings (D60).** "Differs" means readback differs from `engine.desired_rows` — the look with the guest's
@@ -76,6 +85,8 @@ READ_RETRY_S = 1.0  # a failed rolling true-up read is tried again this soon, on
 # A rolling read checks a module's slot patterns when any of them changed since the last check, and at least this
 # often otherwise (the stale check follows calibration/design edits; hashing three framebuffers every 5 s is waste).
 SLOT_CHECK_INTERVAL_S = 60.0
+# A stepped look's module that differs waits for the next step unless its write failed and that step is further off.
+STEP_DEFER_S = 2.0
 
 
 class Reconciler:
@@ -110,6 +121,7 @@ class Reconciler:
             "probes": 0,
             "slot_rewrites": 0,
             "drift": 0,
+            "slot_checks": 0,  # modules whose slot patterns were compared with their records
         }
 
     @property
@@ -188,6 +200,23 @@ class Reconciler:
         else:
             self._next_true_up = now
 
+    def on_step(self, addresses: list[str]) -> None:
+        """A stepped look's step was sent to these modules: a new desired state, so their wrong-timers start over."""
+        for address in addresses:
+            self._wrong_since.pop(address, None)
+            self._attention_since.pop(address, None)
+
+    def note_verification(self, device_id: str, target: Any, rows: list[StateRow]) -> None:
+        """A moving stepped look's verification readback: check the module's slot patterns, at most once per
+        `SLOT_CHECK_INTERVAL_S` (the rolling reads that usually do it stand down while it moves)."""
+        now = self.clock.monotonic()
+        seen = self._slots_seen.get(device_id)
+        if seen is not None and now - seen[0] < SLOT_CHECK_INTERVAL_S:
+            return
+        slots = {r.function_instance: r.value for r in rows if r.function_class == R.FRAME_CLASS}
+        self._slots_seen[device_id] = (now, slots)
+        self.check_slots(device_id, target, rows)
+
     def wrong_too_long(self, address: str) -> bool:
         """Has this module needed attention (for any reason: wrong, offline, signed out) longer than the window?"""
         since = self._attention_since.get(address)
@@ -229,6 +258,7 @@ class Reconciler:
         if plan is None or engine.outage is not None or engine.commissioning:
             return []
         needs, busy, active = [], [], engine.active_modules()
+        runner = engine.runner if engine.stepping else None
         for device_id, target in active:
             if target.executor.in_flight(target.address):
                 busy.append(device_id)
@@ -236,6 +266,9 @@ class Reconciler:
             if engine.wave_pending(target.address):
                 continue  # its ring of the ripple sends it
             if self._differs(device_id, target):
+                if runner is not None and not self._resend_before_step(target.address, runner):
+                    runner.defer(device_id)  # the next step sends it (one write, not two)
+                    continue
                 needs.append(device_id)
         if not needs:
             return []
@@ -247,6 +280,13 @@ class Reconciler:
         sent = engine.send(needs, source=source, label=f"re-assert: {plan.mode_id}")
         self.stats["reasserts"] += len(sent)
         return sent
+
+    def _resend_before_step(self, address: str, runner: Any) -> bool:
+        """A stepped look's module that differs: re-send it now only when its write failed outright and the next step
+        is more than STEP_DEFER_S away; otherwise that step carries it."""
+        wait = runner.next_step_in()
+        failed = self.engine.last_status.get(address) in (CommandStatus.FAILED, CommandStatus.MISMATCH)
+        return failed and (wait is None or wait > STEP_DEFER_S)
 
     def _readback_differs(self, device_id: str, target: Any) -> bool:
         """Does the latest readback differ from the look in a row a re-send can fix (not a slot object: drift)?"""
@@ -264,11 +304,18 @@ class Reconciler:
             snap = engine.tracker.snapshot(address)
             reported = [StateRow.from_wire(r) for r in snap["reported"] or []]
             return _rows_differ(engine.desired_rows(device_id), reported)
+        if engine.program_unsent(device_id):
+            return True  # a stepped run ended (its still look desired) while nothing could be sent
         return engine.last_status.get(address) in (CommandStatus.FAILED, CommandStatus.MISMATCH)
 
     # ---- true-up ----------------------------------------------------------------------------------------------
     def _rolling_reads(self, now: float) -> None:
         """Start the true-up reads that are due: each module once per `true_up_interval_s`, staggered."""
+        if self.engine.stepping:
+            # each step's write is verified: a read now would only race the next step. After the run the reads
+            # start over, staggered.
+            self._read_due.clear()
+            return
         interval = self.settings.true_up_interval_s
         active = self.engine.active_modules()
         ids = [device_id for device_id, _ in active]
@@ -546,6 +593,7 @@ class Reconciler:
         recalibration, a design edit, an effect code enabled or disabled) — at most once per
         `slot_rewrite_min_interval_s`; a hand-painted (T2) slot is only alerted."""
         engine = self.engine
+        self.stats["slot_checks"] += 1
         got_rows = {r.key: r.value for r in rows}
         for slot, expected, tier, _mode in engine.slot_expectations(device_id):
             key = (device_id, slot)

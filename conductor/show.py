@@ -20,6 +20,10 @@
   slot has a hash recorded by commissioning (origin "api"), so the kiosk never selects a slot that was never
   written — and a slot recorded as hand-painted never counts as commissioned. Commissioning itself only needs the
   capability and bench-flag checks.
+- **Stepped looks (D65 draft)** are sim-first: on a non-simulated driver the stepped tier is refused unless
+  `motion.stepped.live_enabled` is set (Alon flips it after the stepped rehearsal, Gate R) or that rehearsal is
+  running (`engine.rehearsal_active`), so the ladder lands on the mode's still module-level rung. Loading checks that
+  no stepped run outlasts `kiosk.idle_return_s` and that the idle mode never steps (`_check_stepped`).
 - In sim, the slots are commissioned automatically once every module's capabilities are read, so demos run T1
   exactly as the show would after install-day commissioning. On hardware commissioning is an explicit ops action.
 """
@@ -57,6 +61,32 @@ def _check_idle_scene(scene: str | None, modes: list[str]) -> None:
         )
 
 
+STEPPED_LIVE_OFF = "stepped looks are off on live hardware until the stepped rehearsal (Gate R) passes"
+
+
+def _check_stepped(settings: Any, modes_file: Any) -> None:
+    """Stepped looks against the kiosk settings: a run must end before the idle hold returns to the idle mode, and the
+    idle mode (the canopy's resting look) never steps."""
+    from conductor.config import ConfigError
+
+    kiosk = settings.kiosk
+    idle = modes_file.modes.get(kiosk.idle_mode)
+    if idle is not None and "stepped" in idle.ladder:
+        raise ConfigError(
+            f"config/modes.yaml → {kiosk.idle_mode} → ladder: the idle mode (config/conductor.yaml → kiosk → "
+            "idle_mode) can't have a stepped rung; the canopy's resting look stays still. Remove `stepped` from its "
+            "ladder or pick another idle mode."
+        )
+    for mode_id, mode in modes_file.modes.items():
+        stepped = mode.techniques.stepped
+        if stepped is not None and "stepped" in mode.ladder and stepped.run_s > kiosk.idle_return_s:
+            raise ConfigError(
+                f"config/modes.yaml → {mode_id} → techniques → stepped → run_s: {stepped.run_s:g} s is longer than "
+                f"kiosk.idle_return_s ({kiosk.idle_return_s:g} s), so the idle hold would cut every run short. Make "
+                "the run shorter."
+            )
+
+
 def _is_registered(services: Any, entry: Any) -> bool:
     return bool(services.registry.address(entry.id, services.engine_driver.name))
 
@@ -83,6 +113,7 @@ class ShowWiring:
         self.services = services
         self.modes_file = load_modes(services.config_dir)
         _check_idle_scene(services.settings.kiosk.idle_scene, list(self.modes_file.modes))
+        _check_stepped(services.settings, self.modes_file)
         self.caps: dict[str, Capabilities] = {}
         self.caps_errors: dict[str, str] = {}  # device id → why its profile couldn't be read (last attempt)
         self.slot_readback: dict[str, dict[str, Any]] = {}
@@ -344,6 +375,8 @@ class ShowWiring:
         return list(self.modes_file.modes)
 
     def tier_allowed(self, mode_id: str, tier: Tier) -> tuple[bool, str]:
+        if tier is Tier.STEPPED:
+            return self._stepped_allowed()
         if tier is not Tier.T1 or self.commissioning:
             return True, ""
         slot = getattr(self.modes_file.modes[mode_id], "slot", None)
@@ -362,6 +395,16 @@ class ShowWiring:
         if missing:
             return False, f"{slot} hasn't been commissioned on {len(missing)} module(s) yet"
         return True, ""
+
+    def _stepped_allowed(self) -> tuple[bool, str]:
+        """Sim-first: stepped looks run on the simulator; on live hardware only with motion.stepped.live_enabled
+        (Alon, after Gate R) or while the stepped rehearsal runs."""
+        services = self.services
+        if services.engine_driver.simulated or services.settings.motion.stepped.live_enabled:
+            return True, ""
+        if self.engine is not None and getattr(self.engine, "rehearsal_active", False):
+            return True, ""
+        return False, STEPPED_LIVE_OFF
 
     def _record(self, entry: Any, slot: str | None) -> dict | None:
         if not slot:

@@ -79,6 +79,16 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   rings with it. The safe look, start-up (the first look, however it is requested: `start()`, or the show's wiring
   asking for the idle mode once its capability reads are back), re-picks of the look now showing (a tier change,
   recovery, new slot records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
+- **Stepped looks (Tier.STEPPED, D65 draft).** Installing a plan with a `program` starts a `ProgramRunner`
+  (conductor/sequence.py) on the injected clock; a newer look, or `stop()`, cancels it. While it runs, the desired
+  state of each driven module is the current step's full state vector (`desired_rows` / `_desired_expect` ask the
+  runner), so every re-send — a re-assert, a lock release, recovery, a guest change — sends the current step. The
+  runner's own steps go through `send(…, source="program")`, only to the modules whose rows changed. While the run
+  moves, `feature` is the program's moving sentence and `CanopyState.program` says what each step shows; the phase
+  judges each module by whether the writes sent to it verify (`ProgramRunner.status`), not by the step in flight.
+  A guest brightness change just before a step goes out with that step. After the run, the plan's own sentence and
+  the still design (the hold) are back. `rehearsal_active` is the stepped rehearsal's switch (Gate R, P11): the
+  show's tier rule opens the stepped tier on live hardware only while it is set or `motion.stepped.live_enabled` is.
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -107,6 +117,7 @@ from conductor.executor_api import Command, CommandResult, CommandStatus, Device
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
+from conductor.sequence import ProgramRunner
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
 from conductor.tokens import atomic_write
@@ -222,6 +233,8 @@ class CanopyEngine:
         self._started = False
         self._last_kiosk_mono: float | None = None
         self.last_change_mono: float = self.clock.monotonic()  # any accepted change (idle hold)
+        # the last look chosen (not a re-pick, not a guest setting): a stepped look's run counts from it
+        self._chosen_mono: float = self.last_change_mono
         # Guest overrides (D60): a brightness for every module (None = designed) and on/off. Desired state, not saved.
         self._guest_brightness: int | None = None
         self._guest_power = True
@@ -256,6 +269,14 @@ class CanopyEngine:
         # ring each module still waiting for its turn is in. Both empty when no ring is left to send.
         self._ripple: dict[str, Any] | None = None
         self._pending: dict[str, int] = {}
+        # Stepped looks: the runner of the plan showing (None for any other tier); device id → the rows last sent to
+        # it (a step re-sends only the modules whose rows changed); account → monotonic time the throttle governor's
+        # cool-off ends; and the stepped rehearsal's switch (P11 sets it for one bounded run).
+        self._runner: ProgramRunner | None = None
+        self.sent_rows: dict[str, list[StateRow]] = {}
+        self.stepped_cooloff: dict[str, float] = {}
+        self.rehearsal_active = False
+        self.stats["governor_trips"] = 0
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
         self._restore_pause()
 
@@ -341,6 +362,8 @@ class CanopyEngine:
     async def stop(self) -> None:
         """Stop the reconciler and wait for the engine's own background tasks. Call before closing executors."""
         self._stopped = True
+        if self._runner is not None:
+            self._runner.cancel()
         await self.reconciler.stop()
         for task in list(self._tasks):
             task.cancel()
@@ -389,6 +412,27 @@ class CanopyEngine:
     def stopped(self) -> bool:
         return self._stopped
 
+    @property
+    def guest_power(self) -> bool:
+        return self._guest_power
+
+    @property
+    def runner(self) -> ProgramRunner | None:
+        """The stepped look's runner (None unless the plan showing is a stepped one)."""
+        return self._runner
+
+    @property
+    def stepping(self) -> bool:
+        """Is a stepped look moving now (its run going, its writes not held, the canopy on)?"""
+        return self._runner is not None and self._runner.moving
+
+    def program_unsent(self, device_id: str) -> bool:
+        """A stepped plan whose desired rows for this module weren't sent (its run ended while nothing could be)."""
+        return self._runner is not None and self.desired_rows(device_id) != self.sent_rows.get(device_id)
+
+    def device_of(self, address: str) -> str | None:
+        return self._by_address.get(address)
+
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
         """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state. A mood
         chosen (any source but a re-pick, `RECOMPILE_SOURCES`) lands as a ripple when one is configured (D64); the
@@ -408,6 +452,7 @@ class CanopyEngine:
             self.last_guest_input_mono = now
         if source not in ("reconciler", "recovery"):
             self.last_change_mono = now
+            self._chosen_mono = now  # a stepped look's run counts from here (guest dimming doesn't move it)
         if source not in RECOMPILE_SOURCES:  # a mood was chosen: its designed brightness, and on (D60)
             self._guest_brightness, self._guest_power = None, True
         # The first look (start-up: `start()`, or the show's wiring once its capability reads are back) has no
@@ -508,8 +553,13 @@ class CanopyEngine:
             source=source,
         )
         if plan is not None and self._outage is None:
-            self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
-            self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")
+            # A stepped look whose next step is due within moments carries a new level itself, one PUT per module.
+            # (Back on: the runner kept its step current while the canopy was off, so this sends that step.)
+            runner = self._runner
+            folded = runner is not None and action == "brightness" and runner.fold_guest()
+            if not folded:
+                self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
+                self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")
         self._publish_soon()
 
     def desired_rows(self, device_id: str) -> list[StateRow]:
@@ -519,7 +569,8 @@ class CanopyEngine:
         if plan is None:
             return []
         mt = plan.modules[device_id]
-        return self._guest_rows(list(mt.rows), mt)
+        step = self._runner.rows_for(device_id) if self._runner is not None else None
+        return self._guest_rows(list(step if step is not None else mt.rows), mt)
 
     def _guest_rows(self, rows: list[StateRow], mt: ModuleTarget) -> list[StateRow]:
         if not self._guest_power:
@@ -533,6 +584,9 @@ class CanopyEngine:
         return [level if r.key == BRIGHTNESS_KEY else r for r in rows]
 
     def _desired_expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
+        step = self._runner.rows_for(device_id) if self._runner is not None and plan is self._plan else None
+        if step is not None:  # a stepped look's step: a full state vector, read back as sent
+            return self._guest_rows(list(step), mt)
         return self._guest_rows(self._expect(device_id, mt, plan), mt)
 
     def _desired_label(self, plan: ModePlan) -> str:
@@ -589,7 +643,7 @@ class CanopyEngine:
             plan, why = self.compile_best(SAFE_MODE)
             if plan is None:
                 return self._refused(f"The safe look can't be compiled: {e}; {why}", None)
-        self.last_change_mono = self.clock.monotonic()
+        self.last_change_mono = self._chosen_mono = self.clock.monotonic()
         self._guest_brightness, self._guest_power = None, True
         self._show(plan, source)
         return self.state()
@@ -699,6 +753,7 @@ class CanopyEngine:
         unresolved = []
         locked_count = 0
         skipped = plan.skipped if plan is not None else {}
+        runner = self._runner if self.stepping else None
         for device_id in self._module_ids():
             entry = self._entry(device_id)
             record: dict[str, Any] = {
@@ -737,6 +792,15 @@ class CanopyEngine:
                 # its ring hasn't been sent yet (D64): the look is still on its way to it
                 record.update(status=str(DeviceStatus.UPDATING), reason="Waiting for its turn in the ripple.")
                 active_statuses.append((device_id, DeviceStatus.UPDATING))
+            elif runner is not None and plan is not None and device_id in plan.modules:
+                # a stepped look in motion: judged by whether the writes sent to it verify, not by the step in flight
+                status = runner.status(device_id)
+                record.update(
+                    status=str(status),
+                    reason=runner.status_reason(device_id, status),
+                    stuck=self._stuck(device_id, status),
+                )
+                active_statuses.append((device_id, status))
             else:
                 status = self.tracker.status(target.address)
                 reason = (
@@ -758,7 +822,8 @@ class CanopyEngine:
             mode=plan.mode_id if plan else None,
             label=plan.label if plan else None,
             tier=str(plan.tier) if plan else None,
-            feature=plan.feature if plan else None,
+            # while a stepped look moves, the sentence that says so; the still design's before and after
+            feature=(runner.program.moving_feature if runner is not None else plan.feature) if plan else None,
             phase=phase,
             guest_input=not self._paused,
             paused_since=self._paused_since if self._paused else None,
@@ -773,6 +838,7 @@ class CanopyEngine:
             brightness=self._brightness_now(plan),
             guest_brightness_min=self.deps.settings.kiosk.guest_brightness_min,
             ripple=self._ripple_json(),
+            program=runner.to_state() if runner is not None else None,
         )
 
     def _ripple_json(self) -> dict | None:
@@ -826,7 +892,10 @@ class CanopyEngine:
         return CanopyPhase.READY, "Ready" + suffix
 
     def _stuck(self, device_id: str, status: DeviceStatus) -> bool:
-        """A driven module that has needed attention longer than `reconciler.downgrade_after_wrong_s`."""
+        """A driven module that has needed attention longer than `reconciler.downgrade_after_wrong_s` — or, while a
+        stepped look moves, one whose write has gone unverified for max(2 steps, 10 s) (`ProgramRunner.status`)."""
+        if self.stepping:
+            return status is DeviceStatus.NEEDS_ATTENTION
         return status is DeviceStatus.NEEDS_ATTENTION and self.reconciler.wrong_too_long(
             self._targets[device_id].address
         )
@@ -942,6 +1011,15 @@ class CanopyEngine:
         self.last_status.clear()
         for device_id in plan.modules:
             self._resolve(device_id)
+        if self._runner is not None:
+            self._runner.cancel()  # the old look's steps stop here
+            self._runner = None
+        if plan.program is not None:
+            # t0 = when the look was last chosen: a mood just chosen starts a run; a re-pick of the look now showing
+            # (a tier change, new capabilities) keeps the run's phase, or only holds once the run is over. A guest's
+            # brightness or on/off (which does count as a change for the idle hold) never restarts a run.
+            self._runner = ProgramRunner(self, plan, t0=self._chosen_mono)
+            self._runner.start()
         self.reconciler.on_new_plan()
         self.telemetry.record("mode", mode=plan.mode_id, tier=str(plan.tier), source=source)
 
@@ -967,6 +1045,7 @@ class CanopyEngine:
                 continue
             mt = plan.modules[device_id]
             expect = self._desired_expect(device_id, mt, plan)
+            rows = self.desired_rows(device_id)
             self.tracker.set_desired(
                 target.address,
                 expect,
@@ -976,7 +1055,7 @@ class CanopyEngine:
             )
             cmd = Command(
                 target.address,
-                self.desired_rows(device_id),
+                rows,
                 Purpose.ENGINE,
                 label=label,
                 verify=True,
@@ -988,7 +1067,10 @@ class CanopyEngine:
             self.dirty.add(target.address)
             self.last_status.pop(target.address, None)
             groups.setdefault(id(target.executor), (target.executor, []))[1].append(cmd)
+            self.sent_rows[device_id] = rows
             sent.append(device_id)
+        if self._runner is not None and sent:
+            self._runner.note_sent(sent)
         for executor, cmds in groups.values():
             self._spawn(self._burst(executor, cmds), name=f"canopy:{label}")
         if sent:
@@ -1100,6 +1182,18 @@ class CanopyEngine:
             elif result.status in _RESEND_STATUSES:
                 self.reconciler.schedule_reassert()
             target = self._targets.get(record.device_id)
+            runner = self._runner
+            if runner is not None and result.status is CommandStatus.APPLIED:
+                runner.note_verified(record.device_id)
+                # A moving stepped look skips the rolling true-up reads (each step is verified): its slot patterns
+                # are checked from these verification readbacks instead, at most once a minute per module.
+                if (
+                    runner.moving
+                    and target is not None
+                    and result.readback is not None
+                    and result.readback.ok
+                ):
+                    self.reconciler.note_verification(record.device_id, target, result.readback.rows)
             if result.status is CommandStatus.MISMATCH and target is not None:
                 # If a slot's pattern is what differs, that's drift, not something a re-send fixes: check now.
                 if result.readback is not None and result.readback.ok:
@@ -1198,6 +1292,8 @@ class CanopyEngine:
             f"{self._plan.label if self._plan else 'nothing'} to every driven module.",
         )
         self.reconciler.on_recovery()
+        if self._runner is not None:
+            self._runner.sync()  # a stepped look comes back at the step its run is at now
         if self._plan is not None:
             self.send(None, source="recovery", label=f"recovery: {self._plan.mode_id}")
         for listener in list(self.recovery_listeners):

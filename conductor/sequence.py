@@ -1,0 +1,398 @@
+"""The program runner: a stepped look (Tier.STEPPED, D65 draft) sent a step at a time (sim-first; live off until Gate R).
+
+    compile_mode(.., stepped) ──▶ ModePlan{modules: the hold (step 0), program.steps}
+                                        │ installed by the CanopyEngine
+                                        ▼
+    ProgramRunner (one Clock task per installed stepped plan) ──step n──▶ engine.send(changed modules, "program")
+
+Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
+- **Schedule.** Step 0 is the hold, sent by the mode change itself. Step n is due at `t0 + n × step` on the injected
+  clock, t0 = when the look was last chosen (`engine.last_change_mono` as a mood choice set it; a guest's
+  brightness or on/off doesn't move it) — so a re-pick of the look now showing (a tier
+  change, new capabilities) keeps the run's phase, and a re-pick after the run is over only holds. The schedule is
+  absolute: a step that comes due late is skipped (never queued) and the next one is the schedule's.
+- **Step length.** step = max(the design's step_s, `min_step_s`, modules on one account × 60 / `account_writes_per_min`,
+  the ripple's span + `min_step_s`). Longer than `max_step_s`: the look holds still and an alert says why.
+- **A step** clears the engine's early re-assert counts and sends each driven module whose rows changed (its colour,
+  or a guest brightness folded into the step), plus the modules the reconciler deferred to it: one full-state PUT per
+  module, never a slot object, through `engine.send(…, source="program")`. Nothing else: the runner never touches
+  `last_change_mono` or `last_guest_input_mono`, so the idle hold and the idle reset count as they always do.
+- **Held.** During an outage, commissioning, a stop or a guest-input pause the step index keeps advancing but
+  nothing is sent; a guest who turned the canopy off gets no step writes either (the desired state is "off", so no
+  step's rows differ from those sent, while the step itself stays current). On recovery, and when a guest turns the
+  canopy back on, the current step is what goes out.
+- **Folding.** A guest brightness change within `fold_guest_within_s` of the next step isn't sent on its own: the
+  desired rows of every module now differ from those sent (the brightness row), so that step sends each one with
+  the new level (one PUT each, no extra burst).
+- **The end.** At the last step boundary within the design's run_s the hold is sent once (to the modules not
+  already showing it) and the runner stops. The plan's `feature` (the still design's sentence) is the copy again.
+- **Governor.** Every write attempt to the run's modules (from the executor's `attempt` events, superseded commands
+  included — latest-wins would otherwise hide them) is counted per account over `governor_window_s`. At
+  ≥ `governor_min_throttled` attempts answered 429/403 that are ≥ `governor_throttled_share` of the attempts, the run
+  stops, the still look is sent, a warn alert is recorded and stepped runs on that account wait `governor_cooloff_s`
+  (they hold still). It never rotates accounts or IPs. 503/504 are an outage (the engine rests), not throttling.
+- **Phase.** While the run is moving a module reads UPDATING until its first verified write, READY while the writes
+  sent to it verify, and NEEDS_ATTENTION when a write sent to it has gone unverified for max(2 steps, 10 s) — so
+  each step's write doesn't flicker the look back to "changing".
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import math
+from collections import Counter, deque
+from typing import TYPE_CHECKING, Any
+
+from conductor.drivers.base import Outcome
+from conductor.engine_api import ModePlan, Program
+from conductor.executor_api import DeviceStatus
+
+if TYPE_CHECKING:
+    from conductor.canopy import CanopyEngine
+
+log = logging.getLogger(__name__)
+
+GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]  # the order of CanopyState.program frames
+THROTTLE_STATUSES = frozenset({429, 403})
+NEEDS_ATTENTION_MIN_S = 10.0  # a write unverified this long (or 2 steps, if longer) needs attention
+_EPS = 1e-6
+
+RUNNING, DONE = "running", "done"
+
+
+class ProgramRunner:
+    """Steps one installed stepped plan (see the module docstring). Built and cancelled by the CanopyEngine."""
+
+    def __init__(self, engine: CanopyEngine, plan: ModePlan, *, t0: float) -> None:
+        assert plan.program is not None
+        self.engine = engine
+        self.plan = plan
+        self.program: Program = plan.program
+        self.settings = engine.deps.settings.motion.stepped
+        self.clock = engine.clock
+        self.t0 = t0  # monotonic: when step 0 (the hold) was sent
+        self.t0_wall = self.clock.now() - (self.clock.monotonic() - t0)
+        self.cycle = len(self.program.steps)
+        self.state = RUNNING
+        self.ended: str | None = None  # why the run stopped (or never ran)
+        self.shown: int | None = 0  # the step number whose rows are the desired state; None = the hold
+        self.index = 0  # the step number the schedule is at
+        self.deferred: set[str] = set()  # modules the reconciler left to the next step
+        self.steps_sent = 0
+        self.skipped = 0
+        # the governor's window: (when, account, throttled) per write attempt to the run's modules
+        self.attempts: deque[tuple[float, str, bool]] = deque()
+        self._pending: dict[str, float] = {}  # device id → when the oldest write not yet verified was sent
+        self._verified: set[str] = set()  # modules with a verified write since the plan was installed
+        self._task: asyncio.Task | None = None
+        self._tripped = False
+        self._unsubscribe: Any = None
+        self._sleep = self.clock.sleep  # tests make a step late by wrapping it
+        self.step_s, why = self._effective_step()
+        self.count = self.count_for(self.step_s)  # the step number the hold goes out at
+        if why is not None:
+            self._never(why)
+            return
+        self.index = self._schedule_index()
+        if self.index >= self.count:
+            self.state, self.shown, self.ended = DONE, None, "the run was over before this look was installed"
+            return
+        self.shown = self.index
+
+    # ---- set-up -----------------------------------------------------------------------------------------------
+    def _accounts(self) -> Counter[str]:
+        engine = self.engine
+        counts: Counter[str] = Counter()
+        for device_id in self.plan.modules:
+            target = engine.target_of(device_id)
+            if target is not None:
+                counts[engine._account_of(target.address)] += 1
+        return counts
+
+    def _effective_step(self) -> tuple[float, str | None]:
+        """The runner's step and, when the look can't step, why (it then holds still)."""
+        s = self.settings
+        accounts = self._accounts()
+        busiest = max(accounts.values(), default=len(self.plan.modules))
+        rings = self.engine._rings(self.plan)  # the ripple a mood choice would land with (D64)
+        span = (len(rings) - 1) * self.engine.deps.settings.kiosk.ripple_stagger_s if rings else 0.0
+        # the ripple's span is 0 without a ripple, so the last term is also the min_step_s floor
+        step = max(self.program.step_s, busiest * 60.0 / s.account_writes_per_min, span + s.min_step_s)
+        step = math.ceil(step * 1000 - _EPS) / 1000  # whole milliseconds: 6.0, not 6.000000000001
+        if step > s.max_step_s + _EPS:
+            return step, (
+                f"stepping {busiest} modules on one account within {s.account_writes_per_min:g} writes a minute "
+                f"needs {step:g} s steps, longer than motion.stepped.max_step_s ({s.max_step_s:g} s)"
+            )
+        cooling = {a: until for a, until in self.engine.stepped_cooloff.items() if a in accounts}
+        until = max(cooling.values(), default=None)
+        if until is not None and until > self.clock.monotonic():
+            left = until - self.clock.monotonic()
+            return step, (
+                f"the throttle governor stopped a stepped run on account {', '.join(sorted(cooling))}; stepped looks "
+                f"there hold still for another {math.ceil(left)} s"
+            )
+        if self.count_for(step) < 1:
+            return step, f"its run ({self.program.run_s:g} s) is shorter than one {step:g} s step"
+        return step, None
+
+    def count_for(self, step: float) -> int:
+        return int(self.program.run_s / step + _EPS)
+
+    def _never(self, why: str) -> None:
+        self.state, self.shown, self.ended = DONE, None, why
+        self.engine.telemetry.record(
+            "alert",
+            level="warn" if "governor" not in why else "info",
+            message=f"{self.plan.label} holds its still design instead of stepping: {why}.",
+            source="program",
+        )
+
+    def _schedule_index(self) -> int:
+        return max(0, math.floor((self.clock.monotonic() - self.t0) / self.step_s + _EPS))
+
+    def start(self) -> None:
+        """Start the step task (a running look only; one that never ran or is over just holds)."""
+        if self.state is not RUNNING or self._task is not None:
+            return
+        self._unsubscribe = self.engine.telemetry.subscribe(self._on_event)
+        self.engine.telemetry.record(
+            "program",
+            action="start",
+            mode=self.plan.mode_id,
+            step_s=self.step_s,
+            design_step_s=self.program.step_s,
+            steps=self.count,
+            run_s=round(self.count * self.step_s, 3),
+            at_step=self.index,
+        )
+        self._task = asyncio.get_running_loop().create_task(
+            self._run(), name=f"canopy:program:{self.plan.mode_id}"
+        )
+
+    def cancel(self) -> None:
+        """Stop without sending anything (a newer look replaced this one, or the engine stops)."""
+        if self.state is RUNNING:
+            self.state, self.ended = DONE, self.ended or "replaced"
+        self._stop_listening()
+        task, self._task = self._task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    def _stop_listening(self) -> None:
+        if self._unsubscribe is not None:
+            with contextlib.suppress(Exception):
+                self._unsubscribe()
+            self._unsubscribe = None
+
+    # ---- the loop ---------------------------------------------------------------------------------------------
+    async def _run(self) -> None:
+        try:
+            n = self.index
+            while True:
+                n += 1
+                if n >= self.count:
+                    break
+                await self._sleep_until(self.t0 + n * self.step_s)
+                due = self._schedule_index()
+                if due > n:  # late: the steps that fell due meanwhile are skipped, never queued
+                    self.skipped += due - n
+                    n = due
+                    if n >= self.count:
+                        break
+                self.index = n
+                self._step(n)
+            await self._sleep_until(self.t0 + self.count * self.step_s)
+            self.index = self.count
+            self.finish("the run is over")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("stepped program failed")
+            self.finish("the program runner failed (see the logs)")
+
+    async def _sleep_until(self, at: float) -> None:
+        delay = at - self.clock.monotonic()
+        if delay > 0:
+            await self._sleep(delay)
+
+    def _writes_held(self) -> bool:
+        """No step writes now (the index still advances)."""
+        engine = self.engine
+        return engine.outage is not None or engine.commissioning or engine.stopped or engine.paused
+
+    def _step(self, n: int) -> None:
+        if self.state is not RUNNING or self._writes_held():
+            return
+        self.shown = n
+        self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})")
+
+    def _send(self, what: str) -> list[str]:
+        engine = self.engine
+        engine._early_counts.clear()  # this step's silent drops get their early re-sends too
+        deferred = set(self.deferred)
+        self.deferred.clear()
+        wanted = [
+            d for d in self.plan.modules if d in deferred or engine.desired_rows(d) != engine.sent_rows.get(d)
+        ]
+        sent = engine.send(wanted, source="program", label=f"{what}: {self.plan.mode_id}") if wanted else []
+        if sent:
+            self.steps_sent += 1
+            engine.reconciler.on_step([engine.target_of(d).address for d in sent if engine.target_of(d)])
+        return sent
+
+    def finish(self, why: str, *, alert: str | None = None) -> None:
+        """End the run: the still look is the desired state again, sent once to the modules not showing it."""
+        if self.state is not RUNNING:
+            return
+        self.state, self.shown, self.ended = DONE, None, why
+        self._stop_listening()
+        engine = self.engine
+        if engine.outage is None and not engine.commissioning and not engine.stopped:
+            self._send("hold")
+        else:
+            engine.reconciler.schedule_reassert()  # it goes out once the engine can send again
+        engine.telemetry.record(
+            "program",
+            action="end",
+            mode=self.plan.mode_id,
+            reason=why,
+            steps_sent=self.steps_sent,
+            skipped=self.skipped,
+        )
+        if alert:
+            engine.telemetry.record("alert", level="warn", message=alert, source="program")
+        engine._publish_soon()
+
+    # ---- what the engine asks ---------------------------------------------------------------------------------
+    @property
+    def running(self) -> bool:
+        return self.state is RUNNING
+
+    @property
+    def moving(self) -> bool:
+        """Is the canopy stepping now (running, its writes not held, the canopy on)?"""
+        return self.running and not self._writes_held() and self.engine.guest_power
+
+    def rows_for(self, device_id: str) -> list | None:
+        """The rows the current step sends this module (None = the plan's own rows: the hold)."""
+        if self.shown is None:
+            return None
+        return self.program.steps[self.shown % self.cycle].rows.get(device_id)
+
+    def sync(self) -> None:
+        """Recovery: the step the schedule is at becomes the desired state (the outage held it back)."""
+        if self.running:
+            self.shown = self.index
+
+    def next_step_in(self) -> float | None:
+        """Seconds until the next step (or the hold) is sent; None once the run is over."""
+        if not self.running:
+            return None
+        n = min(self.index + 1, self.count)
+        return max(0.0, self.t0 + n * self.step_s - self.clock.monotonic())
+
+    def fold_guest(self) -> bool:
+        """A guest brightness change: True when the next step is close enough to carry it (sent with it)."""
+        # The step's rows then differ from those sent (the brightness row), so every module goes with it.
+        wait = self.next_step_in()
+        return wait is not None and self.moving and wait <= self.settings.fold_guest_within_s
+
+    def defer(self, device_id: str) -> None:
+        self.deferred.add(device_id)
+
+    def note_sent(self, device_ids: list[str]) -> None:
+        now = self.clock.monotonic()
+        for device_id in device_ids:
+            self._pending.setdefault(device_id, now)
+
+    def note_verified(self, device_id: str) -> None:
+        self._pending.pop(device_id, None)
+        self._verified.add(device_id)
+
+    def status(self, device_id: str) -> DeviceStatus:
+        """The module's status while the run moves (see Phase in the module docstring)."""
+        since = self._pending.get(device_id)
+        if since is not None and self.clock.monotonic() - since > max(2 * self.step_s, NEEDS_ATTENTION_MIN_S):
+            return DeviceStatus.NEEDS_ATTENTION
+        if device_id not in self._verified:
+            return DeviceStatus.UPDATING
+        return DeviceStatus.READY
+
+    def status_reason(self, device_id: str, status: DeviceStatus) -> str:
+        if status is DeviceStatus.READY:
+            return "Stepping: each step's write is verified."
+        if status is DeviceStatus.UPDATING:
+            return "Stepping: waiting for the first verified write."
+        since = self._pending.get(device_id)
+        age = self.clock.monotonic() - since if since is not None else 0.0
+        return f"Stepping: a write sent {age:.0f} s ago hasn't been verified."
+
+    def to_state(self) -> dict:
+        """CanopyState.program: {t0, step_s, step, ends_at, frames} (see engine_api.CanopyState)."""
+        positions = self._positions()
+        frames = []
+        for n in range(self.count + 1):
+            colours = self.program.steps[0 if n == self.count else n % self.cycle].colours
+            frames.append([colours.get(pos) if pos in positions else None for pos in GRID])
+        return {
+            "t0": self.t0_wall,
+            "step_s": self.step_s,
+            "step": self.index,
+            "ends_at": self.t0_wall + self.count * self.step_s,
+            "frames": frames,
+        }
+
+    def _positions(self) -> set[str]:
+        """The canopy positions this plan drives."""
+        out = set()
+        for device_id in self.plan.modules:
+            entry = self.engine._entry(device_id)
+            if entry is not None and entry.module:
+                out.add(str(entry.module))
+        return out
+
+    # ---- the governor -----------------------------------------------------------------------------------------
+    def _on_event(self, event: dict) -> None:
+        if event.get("kind") != "attempt" or self.state is not RUNNING or self._tripped:
+            return
+        engine = self.engine
+        device_id = engine.device_of(str(event.get("device_id")))
+        if device_id is None or device_id not in self.plan.modules:
+            return
+        now = self.clock.monotonic()
+        account = engine._account_of(str(event.get("device_id")))
+        throttled = (
+            event.get("outcome") == str(Outcome.THROTTLED) and event.get("http_status") in THROTTLE_STATUSES
+        )
+        self.attempts.append((now, account, throttled))
+        window = self.settings.governor_window_s
+        while self.attempts and now - self.attempts[0][0] > window:
+            self.attempts.popleft()
+        if not throttled:
+            return
+        mine = [t for _, a, t in self.attempts if a == account]
+        bad = sum(mine)
+        if (
+            bad < self.settings.governor_min_throttled
+            or bad / len(mine) < self.settings.governor_throttled_share
+        ):
+            return
+        engine.stepped_cooloff[account] = now + self.settings.governor_cooloff_s
+        engine.stats["governor_trips"] = engine.stats.get("governor_trips", 0) + 1
+        message = (
+            f"{self.plan.label}: the stepped look stopped and holds still — {bad} of {len(mine)} write attempts on "
+            f"account {account} in the last {window:g} s were throttled (429/403). Stepped looks there wait "
+            f"{self.settings.governor_cooloff_s / 60:g} min."
+        )
+        engine.telemetry.record(
+            "governor", account=account, mode=self.plan.mode_id, throttled=bad, attempts=len(mine)
+        )
+
+        def stop() -> None:  # not from inside the executor's attempt bookkeeping
+            self.finish("the throttle governor stopped it", alert=message)
+
+        self._tripped = True
+        asyncio.get_running_loop().call_soon(stop)

@@ -497,6 +497,37 @@ async def _canopy_commission(env: Env, address: str) -> str:
     return str(report["modes"]["sunset"]["modules"][device_id]["status"])
 
 
+async def _program_runner(env: Env, address: str) -> str:
+    """A stepped look's runner (conductor/sequence.py): step 1, four seconds after the mode change, one ENGINE command
+    per module through engine.send (source "program")."""
+    from conductor.engine_api import ModePlan, ModuleTarget, Program, ProgramStep, Tier
+
+    engine, device_id = _canopy_engine(env, address)
+
+    def look(rgb):
+        return R.full_state_vector(R.Look("rgb", rgb=rgb, brightness=80))
+
+    def compile(mode_id, tier):
+        steps = [
+            ProgramStep(index=i, rows={device_id: look(rgb)}, colours={"r0c0": "#000000"})
+            for i, rgb in enumerate([(250, 120, 40), (40, 120, 250)])
+        ]
+        program = Program("stepped", {}, "forward", 4.0, 8.0, steps, "Colour through the cloud (test).")
+        target = ModuleTarget(device_id, look((250, 120, 40)), look((250, 120, 40)))
+        return ModePlan(mode_id, "Stepped", Tier.STEPPED, "test", False, {device_id: target}, program=program)
+
+    engine.deps.compile, engine.deps.ladder = compile, lambda _mode: [Tier.STEPPED]
+    await engine.request_mode("stepped-test", source="ops")
+    await engine.wait_idle()
+    before = engine.last_status.get(address)
+    await env.world.clock.sleep(4.5)  # step 1
+    await engine.wait_idle()
+    commands = [c for c in env.executor.telemetry.recent(kind="command") if c["source"] == "program"]
+    await engine.stop()
+    assert before is not None and commands, "the runner didn't try to send its step"
+    return str(commands[-1]["status"])
+
+
 async def _vignette_action(env: Env, address: str) -> str:
     """/vignette/<room>: a staff tablet's action → one ENGINE command per device through the executor. (The fake
     devices are 20-segment strings, so the room's device under test is the Glow Garden string.)"""
@@ -550,6 +581,7 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "reconciler (re-assert)": _canopy_reassert,
     "idle hold": _canopy_idle_hold,
     "slot manager (commission)": _canopy_commission,
+    "program runner (stepped look)": _program_runner,
     "vignette action": _vignette_action,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
@@ -559,6 +591,7 @@ COVERED_MODULES = {
     "conductor/module/session.py": "module page (paint)",
     "conductor/canopy.py": "canopy engine (mode change)",
     "conductor/reconciler.py": "reconciler (re-assert)",
+    "conductor/sequence.py": "program runner (stepped look)",  # sends through CanopyEngine.send
     "conductor/vignettes.py": "vignette action",
 }
 ALLOWED = {"denied", "lock_refused", "locked"}

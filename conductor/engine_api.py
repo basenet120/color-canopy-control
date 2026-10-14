@@ -207,6 +207,12 @@ class CanopyState:
     # A ripple in progress (D64): {t0: wall time ring 0 was sent, stagger_s, rings: [[position]]} — ring j goes out
     # at t0 + j × stagger_s. None when no ring is left to send (or the look went out as one burst).
     ripple: dict[str, Any] | None = None
+    # A stepped run in progress (Tier.STEPPED, conductor/sequence.py): {t0: wall time step 0 was sent, step_s (the
+    # runner's step, which may be longer than the design's), step: the step number showing now, ends_at: wall time
+    # the still look is sent again, frames: [[hex | None] × 9 in grid order r0c0…r2c2] — frame n is step n's colours
+    # at full strength, the last frame the still look; None where no module is driven}. None while nothing steps
+    # (no run, the run is over, or its writes are held: paused, resting, set-up, the guest turned the canopy off).
+    program: dict[str, Any] | None = None
 
     def to_json(self) -> dict:
         return {
@@ -230,6 +236,7 @@ class CanopyState:
             "brightness": self.brightness,
             "guest_brightness_min": self.guest_brightness_min,
             "ripple": self.ripple,
+            "program": self.program,
         }
 
 
