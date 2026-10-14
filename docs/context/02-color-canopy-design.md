@@ -36,8 +36,15 @@ With **A / B / A across X** (deck page 14), every canopy row alternates correctl
 ### ⚠ Open design point — orientation scheme
 The deck contradicts itself: page 14 says **A / B / A across X, same orientation repeated down Y**; the appendix plan on page 18 says **A A A / B B B / A A A** (orientation varies down Y instead). Only the page-14 scheme preserves the 10″ pitch across vertical seams with the lattice above. The software must therefore take **per-module orientation from config**, and VWBD must confirm which scheme is being fabricated.
 
+### Which way is "left" (the designs and the guest picture)
+`config/canopy.yaml` is the reflected-ceiling view: you are looking up, and the origin is the canopy's top-left. The
+scene designs (D63) use the same frame. So "the left edge" (Golden Hour's sun) and "r0c2" (the Goodnight moon) are
+RCP positions, and which physical side of the room they fall on depends on how the canopy is hung. The guest panel
+draws the same frame. `kiosk.preview` (`mirror_x`, `rotate_deg`, default unmirrored at 0°) turns the picture so
+that it matches what a guest at the stand sees overhead. Set it at install (`06` #26).
+
 ### Head index order (cable path) — must come from the real build
-Per-head color control is addressed by index along the strand (head 0 nearest the controller, presumably). How VWBD routes the 50 ft cable behind each panel (serpentine by row? which corner is head 0? how rotation flips it for B modules?) determines the index → position map. On-device animations run in wire order, so for Golden Hour we're asking VWBD to route every module **column-wise from its canvas-left edge, B modules included**, so the index rises with canvas X everywhere. The software must support:
+Per-head color control is addressed by index along the strand (head 0 nearest the controller, presumably). How VWBD routes the 50 ft cable behind each panel (serpentine by row? which corner is head 0? how rotation flips it for B modules?) determines the index → position map. On-device animations run in wire order, so for Golden Hour we're asking VWBD to route every module **column-wise from its canvas-left edge, B modules included**, so the index rises with canvas X everywhere. (No scene uses on-device animation now: Golden Hour's motion is D65's module-level steps, which don't depend on the wiring. The ask still holds for any later on-device motion.) The software must support:
 1. a config-declared default path (serpentine, start corner, per orientation), and
 2. a **calibration mode**: blink head *i* on module *m*, tech taps its position on the canopy visualizer, mapping saved to config.
 
@@ -55,8 +62,28 @@ Per-head color control is addressed by index along the strand (head 0 nearest th
 
 *Superseded (Oct 11, D59):* the table above is the original brief. The owner approved Paris's six scenes
 (`config/scenes.yaml`): Lowcountry Calm, Rainbow Row Sunset, Garden Gathering, **Coastal Tides** (replacing Holiday at
-Home), Golden Hour and The Goodnight Glow, each a named static palette with a mood. `config/modes.yaml` renders exactly
-those palettes; no scene moves, Golden Hour included. See `04` "Canopy control model" for how each one runs.
+Home), Golden Hour and The Goodnight Glow, each a named palette with a mood. `config/modes.yaml` renders exactly those
+palettes, at the scene's brightness, at every tier.
+
+*Superseded again (Oct 13–14, D63, D64, D65 in `docs/DECISIONS.md`):*
+- **D63: each scene is one 2-D design over the canopy**, not D59's left-to-right gradient (x / 225). The design is a
+  `field` in canopy inches in the reflected-ceiling view (x from the left edge, y from the top edge; see Geometry),
+  with the palette as evenly spaced stops. Calm: radial from the centre (sea glass in the middle). Rainbow Row
+  Sunset: corner to corner. Garden Gathering: radial from the middle of one long edge (ivory there). Coastal Tides: a
+  tilted shoreline. Golden Hour: a sun at the middle of the left edge. Goodnight Glow: a moon over r0c2. T1 paints
+  the design at all 270 heads; module level (T3) sets each module to the design at its centre, so a scene shows 4–9
+  module colours, not three columns. The layouts are drafts for Paris's review. Freeze them before commissioning,
+  because changing a design makes every recorded slot hash of a painted scene stale.
+- **D64: a new mood can land ring by ring** in its design's order (from the centre out, from one edge, corner to
+  corner), with no extra writes. This is built but **off** (`kiosk.ripple_stagger_s: 0`) until Alon flips it.
+- **D65: two scenes move.** Coastal Tides (the tide rolls diagonally across the panels) and Golden Hour (where its
+  per-head sun isn't available, sun rays move out from the left edge). The Conductor re-sends each strand its next
+  module-level colour every few seconds, in 90 s runs, and then holds the still design. This replaces D59's "no scene
+  moves" for these two scenes only. Lowcountry Calm (the idle look) and The Goodnight Glow stay still. It runs in the
+  simulator only. On real lights it stays **off until the stepped rehearsal (Gate R)** passes and Alon sets
+  `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still.
+
+See `04` "Canopy control model" for how each scene runs at each tier.
 
 ## Hubspace control strategy (client direction, verbatim intent)
 - Client prioritizes a visible **"bulb" lighting effect** over LED strip lighting.
