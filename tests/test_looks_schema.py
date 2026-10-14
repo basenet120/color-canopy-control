@@ -402,3 +402,151 @@ def test_without_a_canopy_only_the_layouts_that_dont_need_one_are_checked():
     assert parse(_sampled({"kind": "radial", "centre_in": [0, 60]})).mode("coastal-tides") is not None
     with pytest.raises(ConfigError, match="laid out 'diagonally'"):
         parse(_sampled({"kind": "linear", "angle_deg": 30}))
+
+
+# ---- stepped (D65 draft; config/modes.yaml has none, P8 is dormant) ------------------------------------------------
+TIDES_MOVING = (
+    "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent "
+    "its next colour every few seconds, so the palette moves diagonally like a tide."
+)
+
+
+def _stepped(ladder=("stepped", "modules", "strand"), **over):
+    """modes.yaml with Coastal Tides stepping its own sampled design (valid by default), `over` merged in."""
+
+    def mutate(d):
+        tides = d["modes"]["coastal-tides"]
+        tides["ladder"] = list(ladder)
+        tides["techniques"]["stepped"] = {
+            "canvas": copy.deepcopy(tides["techniques"]["modules"]["sample"]["canvas"]),
+            "brightness": tides["techniques"]["modules"]["sample"]["brightness"],
+            "moving_feature": TIDES_MOVING,
+            **over,
+        }
+
+    return mutate
+
+
+def _stepped_ok(mutate):
+    data = copy.deepcopy(RAW)
+    mutate(data)
+    return _parse(data).mode("coastal-tides").techniques.stepped
+
+
+def test_a_stepped_technique_loads_with_its_defaults():
+    stepped = _stepped_ok(_stepped())
+    assert (stepped.direction, stepped.steps_per_cycle, stepped.step_s, stepped.run_s) == (
+        "forward",
+        6,
+        6.0,
+        90.0,
+    )
+    assert stepped.canvas == _parse(copy.deepcopy(RAW)).mode("coastal-tides").techniques.modules.sample.canvas
+
+
+@pytest.mark.parametrize(
+    ("over", "where", "message"),
+    [
+        ({"step_s": 3}, "stepped → step_s", "greater than or equal to 4"),
+        ({"step_s": 13}, "stepped → step_s", "less than or equal to 12"),
+        ({"run_s": 181}, "stepped → run_s", "less than or equal to 180"),
+        ({"steps_per_cycle": 2}, "stepped → steps_per_cycle", "greater than or equal to 3"),
+        ({"steps_per_cycle": 13}, "stepped → steps_per_cycle", "less than or equal to 12"),
+        ({"direction": "inwards"}, "stepped → direction", "'forward' or 'reverse'"),
+        ({"wavelength": 2}, "stepped → wavelength", "Extra inputs are not permitted"),
+    ],
+)
+def test_stepped_ranges_name_the_mode_and_field(over, where, message):
+    msg = _bad(_stepped(**over))
+    assert f"mode 'coastal-tides' → techniques → {where}:" in msg and message in msg
+
+
+def test_a_run_shorter_than_one_step_is_refused():
+    msg = _bad(_stepped(step_s=8, run_s=5))
+    assert "run_s (5 s) is shorter than one step (8 s)" in msg
+    assert _stepped_ok(_stepped(step_s=8, run_s=8)).run_s == 8
+
+
+@pytest.mark.parametrize(
+    "claim", ["animation", "Animated", "effect", "controller", "each light", "every light", "270"]
+)
+def test_moving_copy_that_claims_an_effect_or_per_light_animation_is_refused(claim):
+    msg = _bad(_stepped(moving_feature=f"{TIDES_MOVING} An {claim} you can see."))
+    assert "mode 'coastal-tides' → techniques → stepped:" in msg
+    assert "moving_feature says" in msg and "one colour at a time through the Hubspace cloud" in msg
+
+
+def test_moving_copy_may_say_moves_but_static_copy_still_may_not():
+    assert "moves" in _stepped_ok(_stepped()).moving_feature
+
+    def static_moves(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["feature"] = (
+            "Each strand one colour, so the palette moves diagonally."
+        )
+
+    assert "techniques → modules → feature mentions movement ('moves')" in _bad(static_moves)
+
+
+def test_a_stepped_rung_needs_a_later_modules_rung_with_the_same_design():
+    for ladder in (("stepped", "strand"), ("modules", "stepped", "strand")):
+        msg = _bad(_stepped(ladder=ladder))
+        assert "mode 'coastal-tides'" in msg and "needs a later 'modules' rung" in msg
+
+    def other_canvas(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["field"]["angle_deg"] = 80
+
+    assert "stepped → canvas must be the modules sample's canvas" in _bad(other_canvas)
+    assert "brightness (50) must be the modules sample's (85)" in _bad(_stepped(brightness=50))
+
+    def mean(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["at"] = "mean"
+
+    assert "needs at: centre" in _bad(mean)
+
+    def literal(d):
+        _stepped()(d)
+        modules = d["modes"]["coastal-tides"]["techniques"]["modules"]
+        level = modules.pop("sample")["brightness"]
+        modules["columns"] = [{"kind": "rgb", "rgb": [121, 206, 212], "brightness": level}] * 3
+
+    assert "needs a later 'modules' rung" in _bad(literal)
+
+
+def test_moving_copy_names_the_flow_and_no_other():
+    silent = _bad(_stepped(moving_feature="Each strand is sent its next colour every few seconds."))
+    assert (
+        "stepped → moving_feature: the design flows 'diagonally' (forward), so the copy must say 'diagonally'"
+        in silent
+    )
+    other = _bad(_stepped(moving_feature=f"{TIDES_MOVING} It moves column by column."))
+    assert "but the copy also says 'column by column'" in other
+
+    def radial(direction, words):
+        def mutate(d):
+            _sampled(RADIAL)(d)
+            _stepped(
+                direction=direction, moving_feature=f"Each strand's colour moves {words} every few seconds."
+            )(d)
+
+        return mutate
+
+    assert _stepped_ok(radial("forward", "from the centre out")).direction == "forward"
+    assert _stepped_ok(radial("reverse", "toward the centre")).direction == "reverse"
+    backwards = _bad(radial("reverse", "from the centre out"))
+    assert (
+        "the design flows 'toward the centre' (reverse), so the copy must say 'toward the centre'"
+        in backwards
+    )
+    assert "also says 'from the centre out'" in backwards
+
+
+def test_a_stepped_canvas_names_known_colours():
+    def unknown(d):
+        _stepped(ladder=("modules", "strand"))(d)  # not on the ladder: only the colour check can catch it
+        d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["stops"][0]["color"] = "salmon"
+
+    msg = _bad(unknown)
+    assert "techniques → stepped → canvas → stops → [0] → color: unknown colour 'salmon'" in msg

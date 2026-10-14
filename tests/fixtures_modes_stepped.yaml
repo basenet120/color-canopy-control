@@ -1,0 +1,87 @@
+# TEST FIXTURE — not show config. Stepped looks (Tier.STEPPED, D65 draft) over the 3×3 grid; config/modes.yaml has
+# none (P8 is dormant). tests/test_compile_stepped.py loads it.
+#
+# Each mode's stepped design is its modules sample's canvas (one YAML anchor), so the first step is the static look
+# the ladder's later `modules` rung holds. The fields are chosen so the module centres sit a whole number of steps
+# apart (6 steps per cycle):
+# - `radial-outward`: from the canopy's centre in the canopy's proportions with radius 150 in: r1c1 at t = 0, the
+#   four edge-middle modules at t = ½ (3 steps behind it), the corners further out.
+# - `linear-columns` (angle 0) and `linear-rows` (angle 90): the module columns / rows at t = 1/6, 1/2, 5/6, each
+#   2 steps behind the one before it.
+kiosk:
+  title: The Color Canopy
+  prompt: "Choose a mood. Watch the light change."
+  tagline: "Make it your mood."
+  resting: "The canopy is resting. It will be back shortly."
+  updating: "Changing the light…"
+  ready: "Ready"
+
+modes:
+  radial-outward:
+    label: Radial Outward
+    blurb: A test design from the centre
+    preview: ["#FF9E96", "#FFD2E0", "#C4B3EC"]
+    ladder: [stepped, modules]
+    techniques:
+      stepped:
+        canvas: &radial-design
+          kind: field
+          field: {kind: radial, centre_in: [112.5, 60], metric: canopy, radius_in: 150}
+          stops:
+            - {at: 0.0, color: pastel-coral}
+            - {at: 0.5, color: blush-pink}
+            - {at: 1.0, color: lilac}
+          recipe: rgb_only
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent its next colour every few seconds, so the palette moves from the centre out across the canopy."
+      modules:
+        sample: {canvas: *radial-design, at: centre, brightness: 85}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from the centre out."
+
+  linear-columns:
+    label: Linear Columns
+    blurb: A test design across the canopy
+    preview: ["#659BD5", "#79CED4", "#B2E8D2", "#E9F3E7"]
+    ladder: [stepped, modules]
+    techniques:
+      stepped:
+        canvas: &columns-design
+          kind: field
+          field: {kind: linear, angle_deg: 0}
+          stops:
+            - {at: 0.0, color: ocean-blue}
+            - {at: 0.3333333333333333, color: aqua}
+            - {at: 0.6666666666666666, color: seafoam}
+            - {at: 1.0, color: foam-white}
+          recipe: rgb_only
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent its next colour every few seconds, so the palette moves column by column."
+      modules:
+        sample: {canvas: *columns-design, at: centre, brightness: 85}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out column by column."
+
+  linear-rows:
+    label: Linear Rows
+    blurb: A test design down the canopy
+    preview: ["#FFDB9B", "#FFB69D", "#FF9BC4", "#E779B0", "#B59AE2"]
+    ladder: [stepped, modules]
+    techniques:
+      stepped:
+        canvas: &rows-design
+          kind: field
+          field: {kind: linear, angle_deg: 90}
+          stops:
+            - {at: 0.0, color: soft-gold}
+            - {at: 0.25, color: golden-hour-peach}
+            - {at: 0.5, color: sunset-pink}
+            - {at: 0.75, color: rose}
+            - {at: 1.0, color: lavender}
+          recipe: rgb_only
+        brightness: 95
+        steps_per_cycle: 6
+        step_s: 6
+        run_s: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent its next colour every few seconds, so the palette moves row by row."
+      modules:
+        sample: {canvas: *rows-design, at: centre, brightness: 95}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out row by row."

@@ -270,6 +270,7 @@ async def _engine_call(what: str, call: Callable[[], Any]) -> Any:
 
 
 TIER_WORDS = {
+    "stepped": "T3 stepped, one colour per module a step at a time",
     "canvas": "T1, every head painted",
     "slot": "T2, a slot painted in the app",
     "modules": "T3, one colour per module",

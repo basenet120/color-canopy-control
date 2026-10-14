@@ -24,6 +24,10 @@ class Tier(StrEnum):
     T2 = "slot"  # slots hand-painted in the Hubspace app; selected by API
     T3 = "modules"  # whole-strand looks composed at module level (each module = one coarse pixel)
     STRAND = "strand"  # the mode's primary technique is a whole-strand look (Calm, Holiday, Goodnight)
+    # Module level, stepped (D65 draft): the T3 design re-sent a step at a time, each module one colour per step, at
+    # a few seconds a step through the cloud. Sim-first; the plan's `modules` are the hold (step 0, the static T3
+    # look), the steps are `ModePlan.program`.
+    STEPPED = "stepped"
 
 
 @dataclass
@@ -50,6 +54,51 @@ class ModuleTarget:
 
 
 @dataclass
+class ProgramStep:
+    """One step of a stepped program: one full state vector per driven module (one PUT each, never a slot object)."""
+
+    index: int
+    rows: dict[str, list[StateRow]]  # logical device id → the full state vector this step sends
+    # canopy position ("r0c0") → "#RRGGBB" at full strength (the level is shown on its own)
+    colours: dict[str, str]
+
+    def to_json(self) -> dict:
+        return {
+            "index": self.index,
+            "rows": {d: [r.to_json() for r in rows] for d, rows in self.rows.items()},
+            "colours": self.colours,
+        }
+
+
+@dataclass
+class Program:
+    """A look the Conductor moves itself, a step at a time (`kind` "stepped"): step n is the mode's design field
+    shifted by n / len(steps) of one repeat, sampled at each module's centre. The Conductor holds the phase, so a
+    single-module re-send of the current step is correct (07 §6's one-burst rule is for on-device motion):
+    `ModePlan.motion` stays False. `moving_feature` is the copy shown only while a run is going; the plan's
+    `feature` is the hold's (the static design), true before and after a run."""
+
+    kind: str
+    field: dict[str, Any]  # the design field spec (conductor/looks/field.py) as data
+    direction: str  # "forward": the palette flows the way the layout words read (from the centre out, …)
+    step_s: float  # the designed seconds per step (the runner may stretch it, never shorten it)
+    run_s: float  # how long one run lasts before the hold is sent again
+    steps: list[ProgramStep]
+    moving_feature: str
+
+    def to_json(self) -> dict:
+        return {
+            "kind": self.kind,
+            "field": self.field,
+            "direction": self.direction,
+            "step_s": self.step_s,
+            "run_s": self.run_s,
+            "moving_feature": self.moving_feature,
+            "steps": [s.to_json() for s in self.steps],
+        }
+
+
+@dataclass
 class ModePlan:
     mode_id: str
     label: str
@@ -66,6 +115,8 @@ class ModePlan:
     # kiosk/ops/idle mood ring by ring, `kiosk.ripple_stagger_s` apart; still one PUT per module. None = one burst
     # (a motion plan, a mode with no design, or modules with no canopy position).
     waves: list[list[str]] | None = None
+    # A stepped look's steps (Tier.STEPPED); None for every other tier. `modules` is then step 0, the hold.
+    program: Program | None = None
 
     def to_json(self) -> dict:
         return {
@@ -77,6 +128,7 @@ class ModePlan:
             "notes": self.notes,
             "skipped": self.skipped,
             "waves": self.waves,
+            "program": self.program.to_json() if self.program is not None else None,
             "modules": {
                 d: {"slot": t.slot, "slot_hash": t.slot_hash, "rows": [r.to_json() for r in t.rows]}
                 for d, t in self.modules.items()
