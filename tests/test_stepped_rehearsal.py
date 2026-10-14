@@ -750,3 +750,19 @@ def test_a_report_that_cant_be_saved_says_so():
     last, alerts, events = run_virtual(main)
     assert last["file"] is None and events[-1]["file"] is None
     assert any("report couldn't be saved" in a["message"] for a in alerts)
+
+
+def test_the_runbook_says_which_feature_line_the_kiosk_shows_during_a_rehearsal():
+    """Step 5 of docs/runbooks/stepped-rehearsal.md tells the observer what the kiosk reads: a scene with its own
+    stepped rung (D65) rehearses with its guest-facing moving copy; only a look without one gets REHEARSAL_FEATURE."""
+    from conductor.looks import load_modes
+
+    text = (Path(__file__).resolve().parent.parent / "docs" / "runbooks" / "stepped-rehearsal.md").read_text()
+    step5 = " ".join(text.split("\n5. ", 1)[1].split("\n\n", 1)[0].split())
+    stepping = {i: m for i, m in load_modes(CONFIG_DIR).modes.items() if m.techniques.stepped is not None}
+    assert stepping  # Golden Hour and Coastal Tides
+    for mode in stepping.values():
+        assert mode.label in step5
+        assert mode.techniques.stepped.moving_feature.split(", so ")[0] in step5
+    staff = REHEARSAL_FEATURE.split(", so ")[0]
+    assert f'without a stepped rung of its own shows "{staff}' in step5

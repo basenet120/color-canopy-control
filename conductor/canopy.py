@@ -1645,7 +1645,11 @@ class CanopyEngine:
 
     # ---- hysteresis (called by the reconciler) -----------------------------------------------------------------
     def downgrade(self, reason: str) -> bool:
-        """Move the current mode one allowed, compilable rung down its ladder. False when there's none."""
+        """Move the current mode one allowed, compilable rung down its ladder. False when there's none.
+
+        A stepped rung is never a step down: it writes far more often than any still rung (one PUT per module per
+        step), so easing off from a better rung (e.g. Golden Hour's per-head sun) passes over it to the next still
+        rung (D65)."""
         plan = self._plan
         if plan is None:
             return False
@@ -1657,7 +1661,7 @@ class CanopyEngine:
             return False
         for index in range(ladder.index(plan.tier) + 1, len(ladder)):
             tier = ladder[index]
-            if not self.deps.tier_allowed(plan.mode_id, tier)[0]:
+            if tier is Tier.STEPPED or not self.deps.tier_allowed(plan.mode_id, tier)[0]:
                 continue
             try:
                 lower = self.deps.compile(plan.mode_id, tier)
@@ -1679,8 +1683,12 @@ class CanopyEngine:
             except (KeyError, LookupError, PlanError, ValueError):
                 ladder = []
             # A rung that isn't allowed or doesn't compile right now can't be shown, so lifting the floor onto it
-            # would change nothing and cost another clean interval (F8): lift past it to the next usable rung.
-            while 0 < floor < len(ladder) and not self._usable(mode_id, ladder[floor]):
+            # would change nothing and cost another clean interval (F8): lift past it to the next usable rung. A
+            # stepped rung between the floor and the top is passed over too, as downgrade() does (D65): easing back
+            # up after throttling never lands on the rung that writes most.
+            while 0 < floor < len(ladder) and (
+                ladder[floor] is Tier.STEPPED or not self._usable(mode_id, ladder[floor])
+            ):
                 floor -= 1
             if floor <= 0:
                 del self.floors[mode_id]

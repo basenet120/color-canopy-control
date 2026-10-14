@@ -44,7 +44,11 @@ presses **Rehearse** in the confirm dialog on `/ops`.
    rate (paced at up to 72 a minute; a step that would take the account past 90 in a minute is held back). Read it.
    If a module is missing, cancel and fix that first. Press **Rehearse**.
 5. The canopy card shows "Stepped look: step n of N · every 7.5 s · writes/min on account … (cap 90)". The line
-   under the controls says when it ends. The kiosk's feature line reads "Staff are testing the canopy: …".
+   under the controls says when it ends. The kiosk's feature line says what the canopy is doing. For Golden Hour or
+   Coastal Tides it is that scene's own moving copy, the one guests would see: "Colour and dimming through the
+   Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so …".
+   Only a look without a stepped rung of its own shows "Staff are testing the canopy: each Hubspace strand is sent
+   its next colour every few seconds, so …".
 
 It ends by itself after the minutes and the still look holds. It also stops early:
 - at the **first 403** from Hubspace on any account. Nothing more is sent for it: no still-look burst. The canopy

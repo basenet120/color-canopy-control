@@ -22,7 +22,9 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
   retries** within `downgrade_throttle_window_s` on one account. Individual 429s that a retry cleared never count —
   that is what keeps 5% random throttling from ever downgrading. Floors lift one rung after `upgrade_after_clean_s`
   with no wrong module and no throttled command — straight to the next rung that is allowed and compiles (a rung that
-  can't be shown is skipped, so T3 → T1 takes one clean interval when T2 isn't available).
+  can't be shown is skipped, so T3 → T1 takes one clean interval when T2 isn't available). A stepped rung below the
+  current one is never a downgrade target, and a floor never lifts onto one (D65): a downgrade from Golden Hour's
+  per-head sun lands on a still rung, not on the rung that writes most.
 - **Outage.** While the engine rests, only the probe runs: one module's readback every `outage_probe_interval_s`
   (rotating through the modules); the first good one ends the outage and the engine re-applies the look.
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).

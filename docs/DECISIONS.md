@@ -679,4 +679,7 @@ defaults, in `config/modes.yaml` (Alon can change them there):
   whether a strand cuts or fades between colours (bench item 6), and start skew across kits.
 - **What would change it.** A Gate R fail (it stays off), or Paris or Alon preferring other scenes to move. In a show
   run, throttling stops it on its own: the governor ends a run at 8 or more 429/403 answers that are a quarter of its
-  writes in 60 s, and stepped looks on that account hold still for 5 minutes.
+  writes in 60 s, and stepped looks on that account hold still for 5 minutes. A hysteresis downgrade never lands
+  on a stepped rung: from Golden Hour's per-head sun (or its slot) it passes over the stepped rung to the still
+  modules rung, and the floor lifts back past it, so easing off never starts a run (`CanopyEngine.downgrade` /
+  `upgrade`).

@@ -20,6 +20,7 @@ from conductor.config import CONFIG_DIR, load_recipes, load_registry
 from conductor.engine_api import Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, load_modes
+from conductor.looks.compile import EngineCompiler
 from conductor.looks.schema import MOTION_WORDS, STEPPED_PACE
 from conductor.routes import kiosk
 from conductor.show import STEPPED_LIVE_OFF, ShowWiring
@@ -180,6 +181,40 @@ def test_the_simulator_steps_both_where_their_better_rungs_arent_available():
     shown = _shown(simulated=True)  # uncommissioned: Golden Hour's canvas isn't available, so its rays move
     for mode_id in STEPPING:
         assert shown[mode_id] == (Tier.STEPPED, True, True, (True, "")), mode_id
+
+
+def test_a_throttle_downgrade_from_golden_hours_sun_eases_off_to_a_still_rung_never_the_stepped_one():
+    """Golden Hour's ladder puts the stepped rung below its per-head sun, but a downgrade (throttling, a module that
+    stays wrong) must ease off: it passes over the stepped rung, which writes most, to the still modules rung, and
+    the floor lifts back past it to the sun without a stepped run in between."""
+
+    async def main():
+        w = make_world()
+        looks = EngineCompiler(w.registry)  # the shipped modes at the simulator's profile: the sun compiles
+        w.engine.deps.compile = looks.compile
+        w.engine.deps.ladder = looks.ladder
+        w.engine.deps.modes = looks.modes
+        await w.engine.request_mode("golden-hour", source="ops")
+        first = w.engine.current_plan().tier
+        down = w.engine.downgrade("3 commands ended throttled on account canopy")
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        after_down = (plan.tier, plan.program is not None, runner is not None and runner.running)
+        floors_down = dict(w.engine.floors)
+        await w.engine.request_mode("golden-hour", source="ops")  # chosen again while the floor holds: still
+        again = w.engine.current_plan().tier
+        lifted = w.engine.upgrade("clean interval")
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        after_up = (plan.tier, runner is not None and runner.running, dict(w.engine.floors))
+        await w.close()
+        return first, down, after_down, floors_down, again, lifted, after_up
+
+    first, down, after_down, floors_down, again, lifted, after_up = run_virtual(main)
+    assert first is Tier.T1 and down
+    assert after_down == (Tier.T3, False, False)  # the still module-level look: no program, no runner
+    assert floors_down == {"golden-hour": 3}  # the modules rung, not the stepped one (2)
+    assert again is Tier.T3
+    # one clean interval lifts past the stepped rung (and the uncommissioned slot) straight back to the sun
+    assert lifted == ["golden-hour"] and after_up == (Tier.T1, False, {})
 
 
 # ---- surfaces ------------------------------------------------------------------------------------------------------
