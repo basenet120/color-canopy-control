@@ -47,7 +47,9 @@ export function sceneFrame(id,count,brightness=60){
 export function designLevels(design){return ['heads','modules'].filter(level=>Array.isArray(design?.[level])&&design[level].length);}
 export function defaultDesignLevel(design){
   const levels=designLevels(design);
-  return design?.ladder?.[0]==='modules'&&levels.includes('modules')?'modules':levels[0]||null;
+  // a stepped rung (D65) moves the module-level design and holds it still between runs, so it opens at module level too
+  const first=design?.ladder?.[0];
+  return (first==='modules'||first==='stepped')&&levels.includes('modules')?'modules':levels[0]||null;
 }
 export function designPaint(design,level,heads=CANOPY.heads,width=CANOPY.width){
   if(!designLevels(design).includes(level))return null;
