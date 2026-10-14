@@ -30,7 +30,9 @@ The canopy picture (`conductor/canopy_view.py`; the engine target only — the w
                               | {kind: "steps", t0, step_s, frames: [[hex | null × 9]], ends_at}}
 
 Colours are full strength (the level is drawn separately); `color` is set when every head is the same, else `colors`;
-`off`, `dark` and `unknown` carry no colour. Neither part carries a device id, label, reason or the vendor's name.
+`off`, `dark` and `unknown` carry no colour. `off` is claimed only once a panel reads back off; a locked or stuck panel,
+or one whose power-off hasn't read back yet, is `unknown` even while the guest has the canopy off. Neither part carries
+a device id, label, reason or the vendor's name.
 - `POST /api/kiosk/scene`       `{"scene": "<scene id>"}` → `{ok, state, server_now}`
 - `POST /api/kiosk/brightness`  `{"level": 1–100}` (raised to the guest floor, 10; coalesced — the last level wins)
                                 → `{ok, level, state, server_now}`

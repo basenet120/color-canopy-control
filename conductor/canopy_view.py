@@ -10,12 +10,15 @@ Pure: no network, no engine calls, nothing written. Two parts, both served with 
 - **Lit state** (`lit_state`): per canopy position, from the current plan and the engine's own state, the first rule
   that matches:
 
-  | the guest turned the canopy off                                  | `off`      | no colour            |
+  | a planned position locked by a test page, stuck past the window, | `unknown`  | no colour claim      |
+  |   or the canopy resting (outage, stopped, starting, being set    |            |                      |
+  |   up), whether the guest turned the canopy off or not            |            |                      |
+  | the guest turned the canopy off: read back off, or not planned   | `off`      | no colour            |
+  |   (a power-off still on its way reads `unknown` until then)      |            |                      |
   | the position isn't in the plan (left out, nothing registered)    | `dark`     | no colour            |
-  | locked by a test page, stuck past the window, the canopy resting | `unknown`  | no colour claim      |
-  |   (outage, stopped, starting, being set up), no known colours    |            |                      |
-  |   (a T2 slot whose content isn't known), or a look the strand    |            |                      |
-  |   runs on its own (a preset or program: its preview is a guess)  |            |                      |
+  | no known colours (a T2 slot whose content isn't known), or a     | `unknown`  | no colour claim      |
+  |   look the strand runs on its own (a preset or program: its      |            |                      |
+  |   preview is a guess)                                            |            |                      |
   | readback matches the look                                        | `lit`      | the target colours   |
   | anything else (a change in flight, a retry)                      | `changing` | the target colours   |
 
@@ -201,17 +204,17 @@ def lit_state(cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, stat
         target = plan.modules.get(entry.id) if entry is not None else None
         record = (records.get(entry.id) or {}) if entry is not None else {}
         item: dict[str, Any] = {"pos": pos, "state": OFF, "color": None, "colors": None}
-        if not on:
-            pass
+        if target is not None and (record.get("locked") or record.get("stuck") or resting):
+            # the engine skips a locked module, a stuck one didn't take the last write, and a resting canopy sends
+            # nothing: whatever the guest asked for, on or off, isn't known to be there
+            item["state"] = UNKNOWN
+        elif not on:
+            # off only once the readback says so; until then the power-off is on its way and makes no claim
+            if target is not None and record.get("status") != "ready":
+                item["state"] = UNKNOWN
         elif target is None:
             item["state"] = DARK
-        elif (
-            record.get("locked")
-            or record.get("stuck")
-            or resting
-            or not target.colors
-            or _runs_its_own(target)
-        ):
+        elif not target.colors or _runs_its_own(target):
             item["state"] = UNKNOWN
         else:
             item["state"] = LIT if record.get("status") == "ready" else CHANGING

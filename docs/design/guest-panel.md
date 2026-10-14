@@ -175,8 +175,8 @@ Six cards in fixed order from `config/scenes.yaml`.
   | `lit` | the lights read back the look | the look's colours (`colors` per head, or one `color`) |
   | `changing` | a change is on its way, or a retry | the target colours, with a soft 1.2 s opacity pulse (1 → .45 → 1) |
   | `dark` | the panel is left out, or not registered | unlit `#D3D2D8` |
-  | `off` | the guest turned the canopy off | unlit `#D3D2D8` (the name reads "Lights are off") |
-  | `unknown` | a test page holds it, it is stuck, the canopy is resting, or its look isn't known | an outline only (`#A0A0A0`), no fill: no colour claim |
+  | `off` | the guest turned the canopy off and the panel reads back off (or it isn't in the look) | unlit `#D3D2D8` (the name reads "Lights are off") |
+  | `unknown` | a test page holds it, it is stuck, the canopy is resting (on or off), a power-off hasn't read back yet, or its look isn't known | an outline only (`#A0A0A0`), no fill: no colour claim |
 
   Colours are full strength; the level is drawn as opacity, `dim_floor + (1 − dim_floor) × level / 100` (floor 0.35, so 10% never reads as off). Dots fade to a new colour over 600 ms.
 - **Motion** (`state.lit.motion`, phase-synced to the server's clock: `server_now` plus the local time since it was read): a `ripple` switches ring j at `t0 + j × stagger_s` and shows each ring's previous colours until then (a page with no previous picture shows those panels as unknown); `steps` shows frame `floor((now − t0) / step_s)` (nine colours in grid order, null = dark) and after `ends_at` holds the frame showing then (the last one sent). Any other kind shows the still picture. The page animates only while a motion has a frame to come.

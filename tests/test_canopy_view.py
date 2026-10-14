@@ -232,6 +232,29 @@ def test_a_locked_or_stuck_module_makes_no_colour_claim(record):
     assert all(m["state"] == "lit" for p, m in lit.items() if p != "r1c1")
 
 
+def test_off_is_claimed_only_where_it_reads_back_off_never_on_a_locked_or_stuck_module():
+    """The engine skips a locked module and a stuck one didn't take the last write, so turning the canopy off from the
+    guest panel leaves them as they were: they make no claim, and only a position that reads back off says off."""
+    plan = compile_mode("coastal-tides", Tier.T3, CTX)
+    state = _state(plan, guest_power=False)
+    state = _with(state, "canopy-r1c1", locked=True, status="locked")
+    state = _with(state, "canopy-r0c2", stuck=True, status="needs_attention")
+    state = _with(state, "canopy-r2c0", status="updating")  # the power-off is on its way
+    lit = _by_pos(lit_state(CFG, REGISTRY, plan, state))
+    no_claim = {"state": "unknown", "color": None, "colors": None}
+    for pos in ("r1c1", "r0c2", "r2c0"):
+        assert lit[pos] == {"pos": pos, **no_claim}, pos
+    assert all(m["state"] == "off" for p, m in lit.items() if p not in ("r1c1", "r0c2", "r2c0"))
+    # resting (an outage, say) while off: nothing is sent, so nothing is known either
+    resting = lit_state(CFG, REGISTRY, plan, _state(plan, guest_power=False, phase=CanopyPhase.RESTING))
+    assert {m["state"] for m in resting["modules"]} == {"unknown"}
+    # a partial canopy turned off: the positions out of the look are unlit too
+    live = [BY_POSITION["r0c0"], BY_POSITION["r0c1"]]
+    partial = compile_mode("golden-hour", Tier.T3, _ctx(addresses={m.id: f"addr-{m.id}" for m in live}))
+    off = lit_state(CFG, REGISTRY, partial, _state(partial, guest_power=False))
+    assert {m["state"] for m in off["modules"]} == {"off"}
+
+
 def test_a_module_not_yet_confirmed_is_changing_with_its_target_colour():
     plan = compile_mode("coastal-tides", Tier.T3, CTX)
     ready = _by_pos(lit_state(CFG, REGISTRY, plan, _state(plan)))

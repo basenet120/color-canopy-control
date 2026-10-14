@@ -672,3 +672,46 @@ def test_ripple_stagger_setting_is_validated(tmp_path):
     with pytest.raises(ConfigError) as e:
         load_settings(tmp_path)
     assert "kiosk → ripple_stagger_s" in str(e.value) and "ripple_stagger_s ≤ 1.2" in str(e.value)
+
+
+def test_the_shows_own_start_up_sends_its_first_look_as_one_burst_with_a_stagger_set():
+    """The venue box, staging and the sim server don't call `engine.start()` with the idle look: the show's wiring
+    (build_services + ShowWiring) starts the engine bare and sends the first look once the capability reads are back.
+    That first look has no previous picture to ripple from, so it is one burst too, whatever the stagger."""
+    from conductor import soak
+
+    async def main():
+        world = await soak._build_show(soak.SoakConfig(report_path=None), ripple_stagger_s=STAGGER)
+        try:
+            # every ring a ripple would have sent, read back (commissioning starts later)
+            await world.clock.sleep(7.0)
+            idle = world.services.settings.kiosk.idle_mode
+            first = [
+                e
+                for e in world.telemetry.recent(kind="command", limit=5000)
+                if str(e["label"]).startswith(f"mode: {idle}")
+            ]
+            return idle, first, world.engine.state()
+        finally:
+            await world.wiring.close()
+            await world.services.close()
+            world.cleanup()
+
+    idle, first, state = run_virtual(main)
+    assert _has_rings(idle), "the idle look must have rings, or this test proves nothing"
+    assert len(first) == 9 and len({e["device_id"] for e in first}) == 9
+    assert {e["label"] for e in first} == {f"mode: {idle}"}  # no "(ring k of n)"
+    queued = [e["timings"]["queued_at"] for e in first]
+    assert max(queued) - min(queued) < EPS
+    assert state.ripple is None
+
+
+def _has_rings(mode_id: str) -> bool:
+    """`mode_id`'s T3 plan, in the simulator's world, has more than one ring (so a ripple would be visible)."""
+    from conductor.config import load_registry
+
+    registry = load_registry()
+    caps = detect(*profile_parts("sqhdk03-sim"))
+    ctx = CompileContext(registry=registry, capabilities={m.id: caps for m in registry.canopy_modules()})
+    plan = compile_mode(mode_id, Tier.T3, ctx)
+    return len([w for w in (plan.waves or []) if w]) > 1

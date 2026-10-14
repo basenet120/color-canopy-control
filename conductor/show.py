@@ -279,7 +279,7 @@ class ShowWiring:
             return
         self._reapply = False
         plan = engine.current_plan()
-        if plan is None:
+        if plan is None:  # the first look: one burst, never a ripple (the engine sends a first look that way)
             await engine.request_mode(self.services.settings.kiosk.idle_mode, source="idle")
         elif not first:
             await engine.request_mode(plan.mode_id, source="reconciler")

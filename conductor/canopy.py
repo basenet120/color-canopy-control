@@ -76,8 +76,9 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   updating ("Waiting for its turn in the ripple"), so the look reads UPDATING until the last ring is out, and
   `CanopyState.ripple` says when each ring goes (the guest panel draws it ring by ring). Anything that sends every
   module at once (`send(None)`: a re-assert of all, a guest brightness or power change, recovery) sends the waiting
-  rings with it. The safe look, start-up, re-picks of the look now showing (a tier change, recovery, new slot
-  records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
+  rings with it. The safe look, start-up (the first look, however it is requested: `start()`, or the show's wiring
+  asking for the idle mode once its capability reads are back), re-picks of the look now showing (a tier change,
+  recovery, new slot records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -390,7 +391,8 @@ class CanopyEngine:
 
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
         """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state. A mood
-        chosen (any source but a re-pick, `RECOMPILE_SOURCES`) lands as a ripple when one is configured (D64)."""
+        chosen (any source but a re-pick, `RECOMPILE_SOURCES`) lands as a ripple when one is configured (D64); the
+        first look, with nothing showing yet, is one burst."""
         return await self._request(mode_id, source=source, ripple=source not in RECOMPILE_SOURCES)
 
     async def _request(self, mode_id: str, *, source: str, ripple: bool) -> CanopyState:
@@ -408,7 +410,9 @@ class CanopyEngine:
             self.last_change_mono = now
         if source not in RECOMPILE_SOURCES:  # a mood was chosen: its designed brightness, and on (D60)
             self._guest_brightness, self._guest_power = None, True
-        self._show(plan, source, ripple=ripple)
+        # The first look (start-up: `start()`, or the show's wiring once its capability reads are back) has no
+        # picture to ripple from, so it is one burst whatever its source.
+        self._show(plan, source, ripple=ripple and self._plan is not None)
         return self.state()
 
     def _refusal(self, source: str, now: float) -> CanopyState | None:
