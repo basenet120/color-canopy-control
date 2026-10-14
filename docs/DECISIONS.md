@@ -616,3 +616,27 @@ review in the PR. Palettes, names, moods, brightness, ladders, slots and the str
   gradient (P12), and the guest panel's preview is P5's. D59's columns stay pinned in `tests/test_compile_field.py`
   as the regression anchor (an x-linear field at the module centres reproduces them byte for byte), so reverting
   this one change restores D59 exactly.
+
+## 2026-10-13 — the ripple arrival
+
+**D64 — A new mood can land ring by ring in its design's own order, with no extra writes (built; off by default).**
+Alon asked for looks that move across the 3×3 grid. The cheapest motion the binding rules allow is the arrival itself:
+- **What it does.** A mood chosen by a guest, by ops or by the idle hold goes out in up to three rings
+  (`RIPPLE_MAX_WAVES`), ordered by the scene's 2-D design (D63) over the driven modules (`field.bands`): the canopy fills
+  from the centre out, from one edge, or corner to corner. Each module still gets exactly one full-state PUT for the
+  change; nothing is split (07 §6), so the ripple costs no writes. The ring order follows the design's geometry, not
+  `invert`/`mirror`/`cycles`, so an inverted radial still lands from its centre.
+- **One burst, as before:** the safe look, re-assert, recovery, downgrade/upgrade, guest brightness and power, lock
+  release, and any look sent while nothing is showing (start-up).
+- **Safety.** A newer mood cancels the rings not yet sent; the reconciler never re-sends a module still waiting for its
+  ring; an outage holds the waiting rings. A waiting module reads `updating` ("Waiting for its turn in the ripple.").
+  The kiosk preview animates the same rings from `state.lit.motion` (P5).
+- **Off by default: `kiosk.ripple_stagger_s: 0`** (today's single burst, byte for byte). Allowed 0–1.5 s with
+  (rings − 1) × stagger ≤ 2.4 s, so 1.2 s at most. It stays off because 05's acceptance target ("first to last module
+  within 2 s at p95; settled within 5 s") fails by design under a ripple, and `config/sim/acceptance.yaml` is pinned
+  (07 §7). The soak runs a separate ripple scenario at 1.2 s: settled p95 5.77 s against (3 − 1) × 1.2 + 5 = 7.4 s,
+  one PUT per module per change, no early sends, no downgrades; each ring's own landing spread is p95 2.29 s against
+  2 s (reported, not gating).
+- **To turn it on:** Alon sets `kiosk.ripple_stagger_s: 1.2` and signs off the per-ring redefinition of 05's spread
+  target. Needs real hardware before it is trusted: start skew across kits well under the stagger (bench gate 12), and
+  whether a whole-strand colour change cuts or fades (bench item 6).
