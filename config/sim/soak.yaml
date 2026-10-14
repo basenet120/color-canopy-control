@@ -9,3 +9,16 @@ motion:
   motionEffect: 1
   note: "SIMULATED scroll (soak only; nothing benched)"
   feature: "SIMULATED on-device motion in a saved Hubspace custom pattern (soak only; never shown to guests)."
+
+# The ripple scenario (D64), also soak-only and SIMULATED: a separate, shorter run of the show's own wiring with
+# kiosk.ripple_stagger_s set to `stagger_s` (the show's own setting stays 0 = one burst until Alon flips it), `changes`
+# kiosk mood changes `spacing_s` (+ up to 2 s, seeded) apart under the pinned acceptance conditions. Targets: every
+# module correct within (rings − 1) × stagger + `settle_extra_s` at p95; exactly one PUT per module per change, none
+# before its ring; no downgrades. Each ring's landing spread (05's spread target, per ring: p95 ≤
+# `ring_spread_p95_s`) is reported for D64, not gating, while the show runs one burst.
+ripple:
+  stagger_s: 1.2
+  changes: 60
+  spacing_s: 12
+  ring_spread_p95_s: 2.0
+  settle_extra_s: 5.0

@@ -24,6 +24,13 @@ Pure: no network, no engine calls, nothing written. Two parts, both served with 
   one to one onto the lattice shows one flat mean colour instead, and the server logs why. `color` is set when every
   head is the same; otherwise `colors` lists the module's heads in lattice order.
 
+- **Motion** (`motion`): while a new mood is landing ring by ring (D64, the engine's `CanopyState.ripple`), `{kind:
+  "ripple", t0, stagger_s, rings: [[pos]]}` — ring j is sent at t0 + j × stagger_s (wall seconds, the panel's
+  `server_now` clock), so the kiosk switches each ring's positions from the previous picture when its turn comes. Only
+  positions that are `lit` or `changing` are in a ring (an off, dark or unknown one is drawn as it is); a ring left
+  empty keeps its place so the times stay right. None once the last ring is sent, when no ring has such a position
+  (off, resting), or when the look went out as one burst.
+
 Nothing in either part names a device, a label, a reason or the vendor: positions only ("r0c0" … "r2c2").
 """
 
@@ -217,5 +224,17 @@ def lit_state(cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, stat
     return {
         "level": getattr(state, "brightness", None) if on else None,
         "modules": modules,
-        "motion": None,  # a ripple or stepped run (filled by later work)
+        # off or resting: nothing is lit or changing, so no ring has a position and there is no motion
+        "motion": _ripple_motion(getattr(state, "ripple", None), modules),
     }
+
+
+def _ripple_motion(ripple: Any, modules: Sequence[Mapping[str, Any]]) -> dict | None:
+    """The engine's ripple in progress as the panel's motion, over the positions it really changes (lit/changing)."""
+    if not isinstance(ripple, Mapping) or not isinstance(ripple.get("rings"), list):
+        return None
+    moving = {m["pos"] for m in modules if m["state"] in (LIT, CHANGING)}
+    rings = [[pos for pos in ring if pos in moving] for ring in ripple["rings"]]
+    if not any(rings):
+        return None
+    return {"kind": "ripple", "t0": ripple["t0"], "stagger_s": ripple["stagger_s"], "rings": rings}

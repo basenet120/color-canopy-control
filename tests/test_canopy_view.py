@@ -279,6 +279,48 @@ def test_the_picture_names_no_device_label_reason_or_vendor():
         assert word not in text, word
 
 
+# ---- the ripple (D64) -----------------------------------------------------------------------------------------------
+RINGS = [["r1c1"], ["r0c1", "r1c0", "r1c2", "r2c1"], ["r0c0", "r0c2", "r2c0", "r2c2"]]
+RIPPLE = {"t0": 1000.0, "stagger_s": 1.2, "rings": RINGS}
+
+
+def test_a_ripple_in_progress_is_the_panels_motion_ring_by_ring():
+    plan = compile_mode("coastal-tides", Tier.T3, CTX)
+    lit = lit_state(CFG, REGISTRY, plan, _state(plan, status="updating", ripple=RIPPLE))
+    assert lit["motion"] == {"kind": "ripple", "t0": 1000.0, "stagger_s": 1.2, "rings": RINGS}
+    assert {m["state"] for m in lit["modules"]} == {"changing"}  # every ring shows its target colour
+    # no ring left to send (or one burst): a still picture
+    assert lit_state(CFG, REGISTRY, plan, _state(plan))["motion"] is None
+
+
+def test_a_ripple_only_moves_the_positions_it_really_changes():
+    plan = compile_mode("coastal-tides", Tier.T3, CTX)
+    state = _with(_state(plan, ripple=RIPPLE), "canopy-r1c1", locked=True, status="locked")
+    motion = lit_state(CFG, REGISTRY, plan, state)["motion"]
+    # the locked centre makes no claim, so it isn't in a ring — and the empty ring keeps its place (the times hold)
+    assert motion["rings"] == [[], RINGS[1], RINGS[2]]
+    # a partial canopy: the dark positions are drawn as they are
+    live = [BY_POSITION["r0c0"], BY_POSITION["r0c1"]]
+    partial = compile_mode("golden-hour", Tier.T3, _ctx(addresses={m.id: f"addr-{m.id}" for m in live}))
+    motion = lit_state(CFG, REGISTRY, partial, _state(partial, ripple=RIPPLE))["motion"]
+    assert motion["rings"] == [[], ["r0c1"], ["r0c0"]]
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [{"guest_power": False}, {"phase": CanopyPhase.RESTING}],
+    ids=["off", "resting"],
+)
+def test_no_ripple_is_drawn_while_off_or_resting(kw):
+    plan = compile_mode("coastal-tides", Tier.T3, CTX)
+    assert lit_state(CFG, REGISTRY, plan, _state(plan, ripple=RIPPLE, **kw))["motion"] is None
+    # nor when no position in it is lit or changing
+    every = _state(plan, ripple=RIPPLE)
+    for m in MODULES:
+        every = _with(every, m.id, locked=True, status="locked")
+    assert lit_state(CFG, REGISTRY, plan, every)["motion"] is None
+
+
 # ---- full-strength colours in the plan -------------------------------------------------------------------------------
 def test_the_plan_keeps_preview_at_the_look_and_colors_at_full_strength():
     plan = compile_mode("coastal-tides", Tier.T3, CTX)

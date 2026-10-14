@@ -833,6 +833,28 @@ def test_the_engine_panel_serves_the_canopy_and_the_lit_state_of_the_installed_p
     assert all(m["color"] is None and m["colors"] is None for m in body["state"]["lit"]["modules"])
 
 
+def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_is_sent(app_client_show):
+    """D64 through the real app: with a stagger set, a scene from the panel goes out ring by ring and the picture
+    carries the ripple (positions and times only) until the last ring is sent, then a still picture."""
+    c = app_client_show
+    engine = showing(c)
+    _lit_settled(c)
+    _services(c).settings.kiosk.ripple_stagger_s = 1.2
+    scene = next(s for s in ("coastal-tides", "garden-gathering") if s != engine.current_plan().mode_id)
+    r = c.post("/api/kiosk/scene", json={"scene": scene})
+    assert r.status_code == 200, r.text
+    body = _panel(c)
+    motion = body["state"]["lit"]["motion"]
+    plan = engine.current_plan()
+    by_id = {e.id: e.module for e in _services(c).registry.canopy_modules()}
+    assert motion["kind"] == "ripple" and motion["stagger_s"] == 1.2
+    assert motion["rings"] == [[by_id[d] for d in ring] for ring in plan.waves] and len(motion["rings"]) == 3
+    assert abs(motion["t0"] - body["server_now"]) < 1.0 and body["state"]["phase"] == "changing"
+    _no_device_names(body)
+    time.sleep(2 * 1.2 + 0.3)
+    assert _panel(c)["state"]["lit"]["motion"] is None
+
+
 def test_a_partial_canopy_picture_is_two_lit_and_seven_dark(monkeypatch, tmp_path):
     with partial_show(monkeypatch, tmp_path, LIVE) as c:
         engine = showing(c)

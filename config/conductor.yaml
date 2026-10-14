@@ -35,6 +35,11 @@ kiosk:
     mirror_x: false              # flip left to right
     rotate_deg: 0                # 0 | 90 | 180 | 270 (a quarter turn of the ceiling view)
     dim_floor: 0.35              # the dimmest guest level is drawn at this opacity (full brightness at 1)
+  # The ripple (D64): a mood chosen on the kiosk, by ops or by the idle return lands ring by ring in its design's
+  # order (at most 3 rings; still one PUT per module), this many seconds apart. 0 = one burst. Validated 0–1.5 with
+  # (rings − 1) × stagger ≤ 2.4 s. Off until Alon flips it to 1.2: 05's spread target and the pinned acceptance
+  # file assume one burst; `make soak` measures a 1.2 s ripple separately.
+  ripple_stagger_s: 0
 
 module_page:
   lock_idle_timeout_s: 600

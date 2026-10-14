@@ -26,6 +26,8 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
 - **Outage.** While the engine rests, only the probe runs: one module's readback every `outage_probe_interval_s`
   (rotating through the modules); the first good one ends the outage and the engine re-applies the look.
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).
+- **The ripple (D64).** A module still waiting for its ring (`engine.wave_pending`) is left alone: never re-asserted,
+  never re-sent after a true-up read, never sent on a lock release — its ring sends it.
 - **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused), request
   `kiosk.idle_mode` with source "idle".
 - **Guest settings (D60).** "Differs" means readback differs from `engine.desired_rows` — the look with the guest's
@@ -231,6 +233,8 @@ class Reconciler:
             if target.executor.in_flight(target.address):
                 busy.append(device_id)
                 continue
+            if engine.wave_pending(target.address):
+                continue  # its ring of the ripple sends it
             if self._differs(device_id, target):
                 needs.append(device_id)
         if not needs:
@@ -320,6 +324,7 @@ class Reconciler:
                 or engine.stopped
                 or engine.locks.holder(target.address) is not None
                 or target.executor.in_flight(target.address)
+                or engine.wave_pending(target.address)  # its ring of the ripple sends it
             ):
                 return
             if not self._readback_differs(device_id, target):
@@ -406,7 +411,8 @@ class Reconciler:
                 engine._locked.add(target.address)
             elif target.address in engine._locked:
                 engine._locked.discard(target.address)
-                released.append(device_id)
+                if not engine.wave_pending(target.address):  # else its ring of the ripple sends it
+                    released.append(device_id)
         if not released:
             return
         if plan.motion:

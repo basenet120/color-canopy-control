@@ -42,6 +42,13 @@ Rules implemented:
   is the scene's literal columns (D59). When the design is finer than the module grid (it repeats with
   centre sampling, or a whole canopy samples to one colour) a note says so; when the whole canopy samples to one
   colour the feature says that instead of the design's layout (kiosk copy is true).
+- **The ripple order (D64).** Every plan that isn't a motion plan carries `waves`: its driven modules (the ones left
+  out excluded) grouped into at most `RIPPLE_MAX_WAVES` rings by the mode's design field at their centres
+  (`field.bands`), lowest t first. The design is the compiled technique's own (a canvas tier's canvas, module level's
+  sample or its literal columns / rows), else the mode's other one; a whole-strand tier uses the mode's design too, so
+  a new colour still arrives in the design's order. The order is the design's geometry before `cycles`, `mirror` and
+  `invert`: a ripple starts where the layout words say the design starts ("from the centre out" stays centre first
+  when the palette runs inwards). A mode with no design, or a module with no canopy position, gets None (one burst).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
   kit's map when it has one); `ModuleTarget.colors` is the same render with the brightness row at 100 (full-strength
   colours for the guest panel, which shows the level on its own).
@@ -60,13 +67,28 @@ from typing import Any
 from conductor import framemap, render
 from conductor import rows as R
 from conductor.capabilities import Capabilities
-from conductor.config import CONFIG_DIR, DeviceEntry, DeviceFlags, RecipesFile, load_recipes
+from conductor.config import (
+    CONFIG_DIR,
+    RIPPLE_MAX_WAVES,
+    DeviceEntry,
+    DeviceFlags,
+    RecipesFile,
+    load_recipes,
+)
 from conductor.drivers.base import StateRow
 from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Tier
 from conductor.geometry import load_canopy_config, panel_lattice
 from conductor.looks import field as F
 from conductor.looks.composer import compose_canvas, evaluate, head_positions, parse_position, placement_for
-from conductor.looks.schema import FieldCanvas, LookSpec, Mode, ModesFile, ModuleSample, load_modes
+from conductor.looks.schema import (
+    FieldCanvas,
+    GradientCanvas,
+    LookSpec,
+    Mode,
+    ModesFile,
+    ModuleSample,
+    load_modes,
+)
 
 NUMBER_WORDS = {
     1: "one",
@@ -294,6 +316,7 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
         plan = _slot(mode_id, mode, ctx, ready)
     else:
         plan = _modules(mode_id, mode, ctx, ready)
+    plan.waves = _waves(mode, tier, plan, ctx)
     if assumed:
         plan.notes.append(
             "Profile not read yet, so the safe look assumes the sibling string's white range (2700–6500 K): "
@@ -388,6 +411,59 @@ def available_tiers(mode_id: str, ctx: CompileContext) -> list[Tier]:
             continue
         out.append(tier)
     return out
+
+
+# ---- the ripple order (D64) ---------------------------------------------------------------------------------------
+def _canvas_field(canvas: Any) -> Any | None:
+    if isinstance(canvas, FieldCanvas):
+        return canvas.field
+    if isinstance(canvas, GradientCanvas):  # x / width or y / height: the linear field at 0° or 90°
+        return F.LinearField(kind="linear", angle_deg=0.0 if canvas.axis == "x" else 90.0)
+    return None  # a pathway or one band per module has no direction across the canopy
+
+
+def _modules_field(tech: Any) -> Any | None:
+    if tech.sample is not None:
+        return _canvas_field(tech.sample.canvas)
+    if tech.columns is not None:
+        return F.LinearField(kind="linear", angle_deg=0.0)
+    if tech.rows is not None:
+        return F.LinearField(kind="linear", angle_deg=90.0)
+    return None  # a middle row against the others has no direction
+
+
+def design_field(mode: Mode, tier: Tier | str) -> Any | None:
+    """The mode's design as a field spec, for the order a ripple lands in: the technique compiled at `tier` first
+    (canvas tiers: the canvas; module level: its sample, columns or rows), else the mode's other one. Only the
+    geometry counts: `cycles`, `mirror` and `invert` are dropped, so the order starts where the layout words say the
+    design starts. None when the mode has no design with a direction."""
+    tech = mode.techniques
+    order = ("canvas", "modules") if Tier(tier) in (Tier.T1, Tier.T2) else ("modules", "canvas")
+    for name in order:
+        technique = getattr(tech, name)
+        if technique is None:
+            continue
+        spec = _canvas_field(technique.canvas) if name == "canvas" else _modules_field(technique)
+        if spec is not None:
+            return spec.model_copy(update={"cycles": 1, "transform": "linear", "invert": False})
+    return None
+
+
+def _waves(mode: Mode, tier: Tier, plan: ModePlan, ctx: CompileContext) -> list[list[str]] | None:
+    """The plan's driven modules in ripple rings (device ids, the ring the design starts from first), or None."""
+    if plan.motion or not plan.modules or ctx.canopy is None:
+        return None  # a motion plan re-triggers every module as one burst (07 §6)
+    spec = design_field(mode, tier)
+    if spec is None:
+        return None
+    by_position = {str(d.module): d.id for d in ctx.devices if d.id in plan.modules}
+    if len(by_position) != len(plan.modules):
+        return None  # a driven module with no canopy position (or two at one): no order to land in
+    try:
+        rings = F.bands(spec, ctx.canopy, list(by_position), RIPPLE_MAX_WAVES)
+    except (ValueError, KeyError):
+        return None
+    return [[by_position[pos] for pos in ring] for ring in rings]
 
 
 # ---- helpers -----------------------------------------------------------------------------------------------------
