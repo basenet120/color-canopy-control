@@ -916,8 +916,10 @@ def test_f11_the_soak_runs_the_shows_wiring_and_a_motion_plan(tmp_path):
 
     cfg = soak.SoakConfig(hours=1 / 3, changes=8, seed=5, report_path=tmp_path / "r.md")
     results, verdicts, meta = soak.run_soak(cfg)
-    failed = [v["name"] for v in verdicts if not v["pass"]]
+    # rows the soak reports without gating on (the ripple's and stepped looks' spread, D64/D65) never fail it
+    failed = [v["name"] for v in verdicts if not v["pass"] and v.get("gating", True)]
     assert not failed, failed
+    assert soak.passed(verdicts)
     assert "ShowWiring" in meta["compiler"]
     assert results["wiring"]["show_wiring"] is True
     assert results["wiring"]["motion_plans"] >= 1  # Golden Hour ran as a motion plan (SIMULATED code)

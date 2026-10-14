@@ -34,6 +34,16 @@ Pure: no network, no engine calls, nothing written. Two parts, both served with 
   empty keeps its place so the times stay right. None once the last ring is sent, when no ring has such a position
   (off, resting), or when the look went out as one burst.
 
+  While a stepped look moves (Tier.STEPPED, the engine's `CanopyState.program`), `{kind: "steps", t0, step_s,
+  frames: [[hex | null] × 9 in grid order r0c0…r2c2], ends_at}` (wall seconds): frame n is what step n sent, from
+  t0 + n × step_s, and the last frame is the still look the run ends on, sent at the program's `ends_at`. Exactly
+  the frames the engine sends, nothing in between (the kiosk switches, it doesn't blend). A position not `lit` or
+  `changing` (left out, locked, stuck, unknown) is null in every frame, so the picture never moves a panel nobody
+  can vouch for. The motion's `ends_at` is one step after the still look is sent, so a page that hasn't heard the
+  run is over draws that last frame (the kiosk clamps its time to just before `ends_at`) and not the step before it.
+  None once the still look is sent (the plan's own colours are then the picture), while the run's writes are held
+  (the engine reports no program then: paused, resting, off), or when no position is lit or changing.
+
 Nothing in either part names a device, a label, a reason or the vendor: positions only ("r0c0" … "r2c2").
 """
 
@@ -55,6 +65,9 @@ from conductor.render import sequence_preview
 log = logging.getLogger(__name__)
 
 OFF, DARK, UNKNOWN, LIT, CHANGING = "off", "dark", "unknown", "lit", "changing"
+GRID = [
+    f"r{r}c{c}" for r in range(3) for c in range(3)
+]  # the order of a stepped run's frames (sequence.GRID)
 # (module, why) already logged: a flat fallback is logged once, not on every request
 _warned: set[tuple[str, str]] = set()
 
@@ -188,9 +201,12 @@ def _runs_its_own(target: ModuleTarget) -> bool:
     return sequence_preview(target.rows) is not None
 
 
-def lit_state(cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, state: Any) -> dict | None:
+def lit_state(
+    cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, state: Any, now: float | None = None
+) -> dict | None:
     """`{level, modules: [{pos, state, color, colors} × 9], motion}` for the guest panel (see the module docstring),
-    or None before the first look. `state` is the engine's CanopyState as the kiosk reads it (`kiosk_view`)."""
+    or None before the first look. `state` is the engine's CanopyState as the kiosk reads it (`kiosk_view`); `now`
+    is the server's wall clock (a stepped run's motion ends once its still look is sent; None: never judged)."""
     if plan is None:
         return None
     on = getattr(state, "guest_power", True) is not False
@@ -228,7 +244,8 @@ def lit_state(cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, stat
         "level": getattr(state, "brightness", None) if on else None,
         "modules": modules,
         # off or resting: nothing is lit or changing, so no ring has a position and there is no motion
-        "motion": _ripple_motion(getattr(state, "ripple", None), modules),
+        "motion": _ripple_motion(getattr(state, "ripple", None), modules)
+        or _steps_motion(getattr(state, "program", None), modules, now),
     }
 
 
@@ -241,3 +258,31 @@ def _ripple_motion(ripple: Any, modules: Sequence[Mapping[str, Any]]) -> dict | 
     if not any(rings):
         return None
     return {"kind": "ripple", "t0": ripple["t0"], "stagger_s": ripple["stagger_s"], "rings": rings}
+
+
+def _steps_motion(program: Any, modules: Sequence[Mapping[str, Any]], now: float | None) -> dict | None:
+    """The engine's stepped run as the panel's motion: its frames over the positions really lit or changing."""
+    if (
+        not isinstance(program, Mapping)
+        or not isinstance(program.get("frames"), list)
+        or not program["frames"]
+    ):
+        return None
+    step_s, ends_at = float(program["step_s"]), float(program["ends_at"])
+    if now is not None and now >= ends_at:
+        return None  # the still look is sent: the plan's own colours are the picture
+    moving = {m["pos"] for m in modules if m["state"] in (LIT, CHANGING)}
+    if not moving:
+        return None
+    frames = [
+        [hex_ if pos in moving else None for pos, hex_ in zip(GRID, frame, strict=False)]
+        for frame in program["frames"]
+    ]
+    return {
+        "kind": "steps",
+        "t0": program["t0"],
+        "step_s": step_s,
+        "frames": frames,
+        # one step past the still look's send time, so the page ends on that frame (see the module docstring)
+        "ends_at": ends_at + step_s,
+    }

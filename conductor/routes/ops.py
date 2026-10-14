@@ -10,7 +10,8 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `POST /api/canopy/guest-reset`     clear the guest panel's brightness / off (D60): on, at the look's designed brightness
 - `POST /api/canopy/commission`      write T1 slot contents and record readback hashes (the engine rate-limits)
 - `POST /api/canopy/mode`            `{mode}` an ops mode change (no guest cooldown)
-- `GET  /api/canopy/state`           CanopyState + the mode list for the picker
+- `GET  /api/canopy/state`           CanopyState + the mode list for the picker + `stepped`, the stepped card's gauge
+                                     (`stepped_gauge`; None unless a stepped run goes or the governor is cooling off)
 - `GET  /api/canopy/heads`           all 270 heads: position (per-device calibration), desired and reported colour
 - `GET  /api/ops/calibration`        the nine modules' wire-order calibration (the /ops/calibrate/ hub)
 - `GET  /api/ops/checklist[?client_ms=]`  the 7 am checklist, each item pass / warn / fail with a plain fix
@@ -488,7 +489,63 @@ async def canopy_state(request: Request, _ops: Ops) -> JSONResponse:
     services = services_of(request)
     engine = engine_of(services)
     state = await _engine_call("report its state", engine.state)
-    return JSONResponse({**state.to_json(), "modes": mode_list(services)}, headers=NO_STORE)
+    return JSONResponse(
+        {**state.to_json(), "modes": mode_list(services), "stepped": stepped_gauge(services, engine)},
+        headers=NO_STORE,
+    )
+
+
+def stepped_gauge(services: Any, engine: Any) -> dict | None:
+    """The /ops stepped card (Tier.STEPPED, conductor/sequence.py): the run's step, its pace against the account cap,
+    when it holds, and the throttle governor's cool-offs. None while no stepped run is going and no account is
+    cooling off. `writes_60s` is the executor's own count of writes sent on the run's busiest account in the last
+    60 s (every write there — steps, re-asserts, retries, other devices on that account), against
+    `motion.stepped.account_writes_per_min`. Wall times (`holds_at`, `until`) are the server's clock."""
+    settings = services.settings.motion.stepped
+    clock = getattr(engine, "clock", None) or services.clock
+    mono, now = clock.monotonic(), clock.now()
+    cooloff = [
+        {"account": account, "until": now + (until - mono)}
+        for account, until in sorted((getattr(engine, "stepped_cooloff", None) or {}).items())
+        if until > mono
+    ]
+    runner = getattr(engine, "runner", None)
+    running = bool(getattr(runner, "running", False))
+    if not running and not cooloff:
+        return None
+    gauge: dict[str, Any] = {
+        "running": running,
+        "cap": settings.account_writes_per_min,
+        "live_enabled": settings.live_enabled,
+        "cooloff": cooloff,
+        "governor_trips": int((getattr(engine, "stats", None) or {}).get("governor_trips", 0)),
+    }
+    if not running:
+        return gauge
+    writes: dict[str, int] = {}
+    budgets: dict[int, dict] = {}  # executor → its budget, read once
+    for device_id in runner.plan.modules:
+        try:
+            target = services.target(device_id, Purpose.ENGINE)
+            account = target.driver.account_of(target.address)
+        except LookupError:
+            continue
+        budget = budgets.setdefault(id(target.executor), target.executor.budget())
+        writes[account] = int(((budget.get("accounts") or {}).get(account) or {}).get("writes_60s", 0))
+    busiest = max(sorted(writes), key=lambda a: writes[a], default=None)
+    gauge.update(
+        mode=runner.plan.mode_id,
+        # moving: steps go out now; held: the run's clock goes on but nothing is sent (paused, resting, set-up, off)
+        moving=bool(getattr(engine, "stepping", False)),
+        step=runner.index,
+        steps=runner.count,
+        step_s=runner.step_s,
+        design_step_s=runner.program.step_s,
+        holds_at=runner.t0_wall + runner.count * runner.step_s,
+        account=busiest,
+        writes_60s=writes.get(busiest, 0) if busiest is not None else None,
+    )
+    return gauge
 
 
 # ---- heads: desired vs reported ------------------------------------------------------------------------------

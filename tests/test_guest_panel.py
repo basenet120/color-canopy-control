@@ -855,6 +855,30 @@ def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_
     assert _panel(c)["state"]["lit"]["motion"] is None
 
 
+def test_a_stepped_runs_frames_are_the_picture_until_its_still_look_is_sent(app_client_show, monkeypatch):
+    """Tier.STEPPED (D65 draft) through the real app: the engine's `program` reaches the picture as `steps` frames
+    in grid order, judged at the server's own time, so once the still look is sent (`ends_at`) the picture is still
+    even if the engine's state hasn't caught up."""
+    import dataclasses
+
+    c = app_client_show
+    engine = showing(c)
+    lit = _lit_settled(c)["state"]["lit"]
+    colours = [m["color"] for m in lit["modules"]]
+    real_state = engine.state
+    now = _services(c).clock.now()
+    program = {"t0": now - 10.0, "step_s": 6.0, "step": 1, "ends_at": now + 80.0, "frames": [colours] * 16}
+    monkeypatch.setattr(engine, "state", lambda: dataclasses.replace(real_state(), program=program))
+    body = _panel(c)
+    motion = body["state"]["lit"]["motion"]
+    assert motion["kind"] == "steps" and motion["frames"] == [colours] * 16
+    assert motion["ends_at"] == now + 86.0  # one step past the still look's send
+    assert abs(motion["t0"] - (body["server_now"] - 10.0)) < 1.0
+    _no_device_names(body)
+    program["ends_at"] = _services(c).clock.now() - 0.5  # the still look went out half a second ago
+    assert _panel(c)["state"]["lit"]["motion"] is None
+
+
 def test_a_partial_canopy_picture_is_two_lit_and_seven_dark(monkeypatch, tmp_path):
     with partial_show(monkeypatch, tmp_path, LIVE) as c:
         engine = showing(c)

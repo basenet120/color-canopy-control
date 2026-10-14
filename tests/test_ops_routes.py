@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+from types import SimpleNamespace
 
 import pytest
 from fake_engine import FakeEngine, RecordingEngine
@@ -17,6 +18,7 @@ from partial_canopy import LIVE, partial_show, showing
 
 from conductor import logring, redact
 from conductor.engine_api import PlanError
+from conductor.gate import Purpose
 from conductor.geometry import build_layout, load_canopy_config, panel_order
 from conductor.routes import ops as ops_routes
 
@@ -812,3 +814,84 @@ def test_sent_line_during_an_outage_names_the_registered_modules(monkeypatch):
     )
     full = _sent(monkeypatch, registered=nine, unregistered=[], driven=nine, outage=1.0)
     assert full.endswith("so it goes to every module as soon as Hubspace answers again.")
+
+
+# ---- the stepped card (Tier.STEPPED, D65 draft; web/ops/stepped-model.mjs words it) --------------------------------
+def _runner(services, **kw):
+    """Just enough ProgramRunner for the gauge: a run of all the canopy modules, at step 2 of 15, 6 s steps."""
+    modules = dict.fromkeys(e.id for e in services.registry.canopy_modules())
+    return SimpleNamespace(
+        running=True,
+        plan=SimpleNamespace(mode_id="golden-hour", modules=modules),
+        index=2,
+        count=15,
+        step_s=6.0,
+        program=SimpleNamespace(step_s=6.0),
+        t0_wall=1000.0,
+        **kw,
+    )
+
+
+def test_the_stepped_card_shows_the_accounts_writes_a_minute_and_the_cap(app_client):
+    services = _services(app_client)
+    engine = _install(app_client)
+    app_client.post("/api/canopy/mode", json={"mode": "garden-gathering"})
+    _wait_ready(app_client, "garden-gathering")
+    assert (
+        app_client.get("/api/canopy/state").json()["stepped"] is None
+    )  # no stepped run, no cool-off: no card
+    engine.runner, engine.stepping, engine.stats = _runner(services), True, {"governor_trips": 0}
+    gauge = app_client.get("/api/canopy/state").json()["stepped"]
+    entry = services.registry.canopy_modules()[0]
+    target = services.target(entry.id, Purpose.ENGINE)
+    account = target.driver.account_of(target.address)
+    written = target.executor.budget()["accounts"][account]["writes_60s"]
+    assert written >= 9  # the mode change: one write per module, on the canopy's account
+    assert gauge == {
+        "running": True,
+        "moving": True,
+        "cap": 90.0,
+        "live_enabled": False,
+        "cooloff": [],
+        "governor_trips": 0,
+        "mode": "golden-hour",
+        "step": 2,
+        "steps": 15,
+        "step_s": 6.0,
+        "design_step_s": 6.0,
+        "holds_at": 1090.0,
+        "account": account,
+        "writes_60s": written,
+    }
+    # held (paused, resting, off): the run's clock goes on, nothing is sent
+    engine.stepping = False
+    assert app_client.get("/api/canopy/state").json()["stepped"]["moving"] is False
+
+
+def test_the_stepped_card_shows_the_governors_cool_off_without_a_run(app_client):
+    services = _services(app_client)
+    engine = _install(app_client, RecordingEngine)
+    engine.runner, engine.stats = None, {"governor_trips": 1}
+    now, mono = services.clock.now(), services.clock.monotonic()
+    engine.stepped_cooloff = {"canopy": mono + 120.0, "old": mono - 1.0}  # an expired cool-off isn't shown
+    gauge = app_client.get("/api/canopy/state").json()["stepped"]
+    assert gauge["running"] is False and gauge["governor_trips"] == 1 and "writes_60s" not in gauge
+    (cooling,) = gauge["cooloff"]
+    assert cooling["account"] == "canopy" and cooling["until"] == pytest.approx(now + 120.0, abs=2.0)
+    engine.stepped_cooloff = {}
+    assert app_client.get("/api/canopy/state").json()["stepped"] is None
+
+
+def test_the_ops_page_draws_the_stepped_card_from_the_served_model(app_client):
+    page = app_client.get("/ops/").text
+    assert 'id="canopy-stepped"' in page
+    script = app_client.get("/ops/ops.js").text
+    assert (
+        'from "/ops/stepped-model.mjs"' in script
+        and "steppedLines(st.program, steppedGauge, clock)" in script
+    )
+    assert 'stepped: "T3 stepped' in script  # the tier chip knows the stepped tier
+    model = app_client.get("/ops/stepped-model.mjs")
+    assert model.status_code == 200 and "javascript" in model.headers["content-type"]
+    assert "export function steppedLines" in model.text
+    assert "http://" not in model.text and "https://" not in model.text

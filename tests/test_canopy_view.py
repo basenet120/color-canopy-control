@@ -15,10 +15,13 @@ from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
+from test_engine_program import MODES as STEPPED_MODES  # the P8 fixture modes (stepped), on the same canopy
+from test_engine_program import quiet_start, stepped_world
 
 from conductor import render
 from conductor import rows as R
 from conductor.canopy_view import (
+    GRID,
     canopy_geometry,
     lattice_slots,
     lit_state,
@@ -26,11 +29,13 @@ from conductor.canopy_view import (
     module_colours,
 )
 from conductor.capabilities import detect
+from conductor.clock import run_virtual
 from conductor.config import CONFIG_DIR, ConductorSettings, ConfigError, PreviewSettings, load_settings
 from conductor.engine_api import CanopyPhase, CanopyState, ModePlan, ModuleTarget, Tier
 from conductor.looks import CompileContext, compile_mode, module_look
 from conductor.looks.composer import evaluate
 from conductor.scenes import load_scenes
+from conductor.sequence import GRID as RUNNER_GRID
 from conductor.sim.profiles import profile_parts
 
 CFG = load_canopy(str(CONFIG_DIR))
@@ -365,3 +370,125 @@ def test_the_preview_view_defaults_and_validation(tmp_path):
     with pytest.raises(ConfigError) as e:
         load_settings(tmp_path)
     assert "kiosk → preview → rotate_deg" in str(e.value) and "0, 90, 180 or 270" in str(e.value)
+
+
+# ---- a stepped run (Tier.STEPPED, D65 draft) ------------------------------------------------------------------------
+# The kiosk draws `motion.frames[floor((now − t0) / step_s)]` (web/kiosk/canopy-preview.mjs `motionColors`, time
+# clamped to just before `ends_at`); these tests hold the server to that contract.
+STEPPED_CTX = _ctx(modes=STEPPED_MODES)
+
+
+def _program(plan: ModePlan, *, t0: float = 1000.0, step_s: float = 6.0, count: int = 15) -> dict:
+    """CanopyState.program as the runner reports it (`ProgramRunner.to_state`) over every position."""
+    steps = plan.program.steps
+    frames = [
+        [steps[0 if n == count else n % len(steps)].colours.get(pos) for pos in GRID]
+        for n in range(count + 1)
+    ]
+    return {"t0": t0, "step_s": step_s, "step": 0, "ends_at": t0 + count * step_s, "frames": frames}
+
+
+def _client_frame(motion: dict, now: float) -> list:
+    """The frame canopy-preview.mjs `motionColors` draws at `now`."""
+    t = min(now, motion["ends_at"] - 1e-6)
+    index = int((t - motion["t0"]) // motion["step_s"])
+    return motion["frames"][min(len(motion["frames"]) - 1, max(0, index))]
+
+
+def test_a_stepped_run_is_the_panels_motion_frame_by_frame_in_grid_order():
+    plan = compile_mode("radial-outward", Tier.STEPPED, STEPPED_CTX)
+    program = _program(plan)
+    lit = lit_state(CFG, REGISTRY, plan, _state(plan, program=program), now=1010.0)
+    motion = lit["motion"]
+    assert GRID == RUNNER_GRID == [m["pos"] for m in lit["modules"]]  # one order on both sides
+    assert motion["kind"] == "steps" and (motion["t0"], motion["step_s"]) == (1000.0, 6.0)
+    assert motion["frames"] == program["frames"] and all(len(f) == 9 for f in motion["frames"])
+    assert all(isinstance(c, str) and c.startswith("#") for f in motion["frames"] for c in f)
+    assert len({tuple(f) for f in motion["frames"][:6]}) == 6  # every step of the cycle is its own frame
+    # the last frame is the still look the run ends on, and the motion lasts one step past its send, so a page
+    # that hasn't heard the run is over draws that frame (not the step before it)
+    assert motion["frames"][-1] == motion["frames"][0] == [m["color"] for m in lit["modules"]]
+    assert motion["ends_at"] == program["ends_at"] + 6.0
+    assert _client_frame(motion, program["ends_at"] + 0.5) == motion["frames"][-1]
+    assert _client_frame(motion, 1013.0) == motion["frames"][2]
+    # positions only: nothing names a device, a label or the vendor
+    text = json.dumps(motion)
+    for word in ("canopy-r", "sim-", "Hubspace", "label", "device"):
+        assert word not in text, word
+
+
+def test_stepped_frames_are_null_where_a_panel_isnt_lit_or_changing():
+    live = [BY_POSITION["r0c0"], BY_POSITION["r1c1"]]
+    partial = compile_mode(
+        "radial-outward", Tier.STEPPED, _ctx(modes=STEPPED_MODES, addresses={m.id: f"a-{m.id}" for m in live})
+    )
+    assert set(partial.skipped) and len(partial.modules) == 2
+    # even given colours everywhere, a left-out (dark) position is null in every frame
+    motion = lit_state(CFG, REGISTRY, partial, _state(partial, program=_program(partial)), now=1001.0)[
+        "motion"
+    ]
+    assert all(f[GRID.index(p)] is not None for f in motion["frames"] for p in ("r0c0", "r1c1"))
+    assert all(
+        f[i] is None for f in motion["frames"] for i, p in enumerate(GRID) if p not in ("r0c0", "r1c1")
+    )
+    # a locked panel makes no colour claim, so it doesn't move either
+    plan = compile_mode("radial-outward", Tier.STEPPED, STEPPED_CTX)
+    state = _with(_state(plan, program=_program(plan)), "canopy-r1c1", locked=True, status="locked")
+    motion = lit_state(CFG, REGISTRY, plan, state, now=1001.0)["motion"]
+    assert all(f[GRID.index("r1c1")] is None for f in motion["frames"])
+    assert all(f[GRID.index("r0c0")] is not None for f in motion["frames"])
+
+
+def test_stepped_motion_ends_once_the_still_look_is_sent():
+    plan = compile_mode("linear-columns", Tier.STEPPED, STEPPED_CTX)
+    program = _program(plan)
+    state = _state(plan, program=program)
+    assert lit_state(CFG, REGISTRY, plan, state, now=program["ends_at"] - 0.1)["motion"]["kind"] == "steps"
+    assert lit_state(CFG, REGISTRY, plan, state, now=None)["motion"]["kind"] == "steps"  # not judged
+    after = lit_state(CFG, REGISTRY, plan, state, now=program["ends_at"])
+    assert after["motion"] is None  # the plan's own colours (the still look) are the picture
+    assert [m["color"] for m in after["modules"]] == program["frames"][-1]
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [{"guest_power": False}, {"phase": CanopyPhase.RESTING}, {"program": None}],
+    ids=["off", "resting", "no-run"],
+)
+def test_no_steps_are_drawn_while_off_resting_or_without_a_run(kw):
+    plan = compile_mode("linear-columns", Tier.STEPPED, STEPPED_CTX)
+    state = _state(plan, program=_program(plan))
+    assert lit_state(CFG, REGISTRY, plan, replace(state, **kw), now=1001.0)["motion"] is None
+
+
+def test_the_panel_animates_exactly_the_steps_the_engine_sent():
+    """End to end on the real engine, runner, executor and simulator: at every moment of a 90 s run, the frame the
+    kiosk would draw at the server's time is the colour last sent to each module."""
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        start = w.clock.monotonic()
+        await w.engine.request_mode("linear-columns", source="ops")
+        plan = w.engine.current_plan()
+        samples = []
+        for _ in range(17):
+            await w.run_for(3.5 if not samples else 6.0)  # mid-step: every write of the step has been sent
+            sent = {}
+            for _t, device_id, rows in (x for x in w.writes if x[0] >= start):
+                sent[device_id] = next(r.value["color-rgb"] for r in rows if r.key[0] == "color-rgb")
+            now = w.clock.now()
+            samples.append((now, lit_state(CFG, w.registry, plan, w.engine.state(), now=now), dict(sent)))
+        position = {e.id: e.module for e in w.registry.canopy_modules()}
+        await w.close()
+        return plan, samples, position
+
+    plan, samples, position = run_virtual(main)
+    moving = [(now, lit, sent) for now, lit, sent in samples if lit["motion"] is not None]
+    assert len(moving) == 15 and samples[-1][1]["motion"] is None  # 15 steps (0–14), then the still look
+    for now, lit, sent in samples:
+        frame = _client_frame(lit["motion"], now) if lit["motion"] else [m["color"] for m in lit["modules"]]
+        want = {position[d]: _hex((c["r"], c["g"], c["b"])) for d, c in sent.items()}
+        assert dict(zip(GRID, frame, strict=True)) == want, now
+    frames = {tuple(_client_frame(lit["motion"], now)) for now, lit, _ in moving}
+    assert len(frames) == len(plan.program.steps)  # it really moved: every step of the cycle was drawn

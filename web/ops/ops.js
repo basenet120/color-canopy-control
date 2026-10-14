@@ -3,6 +3,7 @@
 import { api, connectLive, copyJSON, simBadge } from "/static/app.js";
 import { fill, fmtAge, h, pill, show, simTag, statusPill } from "/ops/dom.js";
 import { commissionScope, headsCounts, moduleScope, positions, testWaitNote } from "/ops/counts-model.mjs";
+import { steppedLines } from "/ops/stepped-model.mjs";
 
 const POLL_MS = 10000;
 const LOG_POLL_MS = 5000;
@@ -14,6 +15,7 @@ const $ = (id) => document.getElementById(id);
 let devices = [];
 let testerChoicesDrawn = false;
 let canopyState = null;
+let steppedGauge = null; // /api/canopy/state's `stepped` (the live "canopy" topic doesn't carry it)
 let headsData = null;
 let modesDrawn = "";
 let logSeq = null;
@@ -41,6 +43,7 @@ function modeText(v) {
 }
 
 const TIER_TEXT = {
+  stepped: "T3 stepped · one colour per module, a step at a time",
   canvas: "T1 · every head painted",
   slot: "T2 · app-painted slots",
   modules: "T3 · one colour per module",
@@ -87,6 +90,10 @@ function renderState(st) {
   feature.hidden = !st.feature;
   fill(feature, st.feature ? [h("span", { class: "kicker" }, "Hubspace feature"), st.feature] : []);
   show($("canopy-message"), st.message || "");
+  if ("stepped" in st) steppedGauge = st.stepped;
+  const stepped = steppedLines(st.program, steppedGauge, clock);
+  fill($("canopy-stepped"), stepped.map((line) => h("div", {}, line)));
+  $("canopy-stepped").hidden = !stepped.length;
   const pause = $("pause-btn");
   pause.textContent = st.guest_input ? "Pause guest input" : "Resume guest input";
   pause.classList.toggle("resume", !st.guest_input);
@@ -103,6 +110,8 @@ function engineMissing(message) {
   $("canopy-tier").hidden = true;
   $("canopy-guest").hidden = true;
   $("canopy-feature").hidden = true;
+  $("canopy-stepped").hidden = true;
+  steppedGauge = null;
   show($("canopy-message"), "");
   setControlsEnabled(false);
   drawGrid();
@@ -770,7 +779,9 @@ function setupLive() {
     topics: ["canopy", "ops"],
     onEvent: (topic, data) => {
       if (topic === "canopy" && data && data.phase) {
+        const wasStepping = Boolean(canopyState && canopyState.program);
         renderState({ ...data, modes: undefined });
+        if (wasStepping !== Boolean(data.program)) loadState(); // a run started or stopped: re-read its gauge
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(loadHeads, 400);
       } else {
