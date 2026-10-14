@@ -213,8 +213,23 @@ def test_the_show_modes_get_rings_and_a_motion_plan_gets_none():
             plan = compile_mode(mode_id, tier, ctx)
             assert plan.waves is not None and len(plan.waves) <= 3, (mode_id, tier)
             assert sorted(d for ring in plan.waves for d in ring) == sorted(plan.modules)
+    # D63 × D64: each scene's rings start where its 2-D design starts and spread from there
+    first = {
+        "lowcountry-calm": "canopy-r1c1",  # radial: the centre (with the middle column) first …
+        "rainbow-row-sunset": "canopy-r0c0",  # corner to corner: the top-left corner
+        "garden-gathering": "canopy-r2c1",  # from the middle of the bottom edge
+        "golden-hour": "canopy-r1c0",  # the sun at the middle of the left edge
+        "goodnight-glow": "canopy-r0c2",  # the moon's corner
+    }
+    for mode_id, origin in first.items():
+        assert origin in compile_mode(mode_id, Tier.T3, ctx).waves[0], mode_id
     calm = compile_mode("lowcountry-calm", Tier.T3, ctx)
-    assert [sorted(ring) for ring in calm.waves] == [sorted(c) for c in COLUMNS]  # its columns: left to right
+    corners = {"canopy-r0c0", "canopy-r0c2", "canopy-r2c0", "canopy-r2c2"}
+    assert set(calm.waves[-1]) == corners  # … and the corners last
+    coastal = compile_mode("coastal-tides", Tier.T3, ctx)  # the shoreline lands row by row from the top
+    assert [sorted(ring) for ring in coastal.waves] == [
+        sorted(f"canopy-r{r}c{c}" for c in range(3)) for r in range(3)
+    ]
     # the soak's SIMULATED motion code on Golden Hour's painted slot (config/sim/soak.yaml) makes a motion plan
     from conductor import soak
 
