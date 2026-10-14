@@ -437,9 +437,13 @@ def test_in_sim_the_studio_design_matches_the_visualizer_and_the_kiosk_head_for_
         assert str(plan.tier) == first, (mode_id, plan.tier)  # the simulator runs the first rung
         by_point = {_point(h["x"], h["y"]): h["rgb"] for h in design["heads"]}
         by_module = {m["module"]: m["rgb"] for m in design["modules"]}
+        # a stepped rung (D65) moves the module-level design; the Studio opens it at module level (its still look)
+        module_first = first in ("modules", "stepped")
 
-        def studio(module: str, x: float, y: float, first=first, by_point=by_point, by_module=by_module):
-            return by_module[module] if first == "modules" else by_point[_point(x, y)]
+        def studio(
+            module: str, x: float, y: float, module_first=module_first, by_point=by_point, by_module=by_module
+        ):
+            return by_module[module] if module_first else by_point[_point(x, y)]
 
         heads = c.get("/api/canopy/heads").json()
         assert len(heads["heads"]) == 270
@@ -447,6 +451,14 @@ def test_in_sim_the_studio_design_matches_the_visualizer_and_the_kiosk_head_for_
             assert h["desired"] is not None
             full = plan.modules[h["device_id"]].colors[h["index"]]
             assert [full["r"], full["g"], full["b"]] == studio(h["module"], h["x"], h["y"]), (mode_id, h)
+        if first == "stepped":
+            # the picture moves: the kiosk gets the run's frames, and frame 0 (the hold) is the Studio's picture
+            motion = lit["motion"]
+            assert motion and motion["kind"] == "steps", (mode_id, motion)
+            grid = [f"r{r}c{c}" for r in range(3) for c in range(3)]
+            hold = [[int(hexa[i : i + 2], 16) for i in (1, 3, 5)] for hexa in motion["frames"][0]]
+            assert hold == [by_module[pos] for pos in grid], mode_id
+            continue
         geometry = {m["pos"]: m["heads"] for m in panel["canopy"]["modules"]}
         for m in lit["modules"]:
             colours = m["colors"] or [m["color"]] * len(geometry[m["pos"]])
