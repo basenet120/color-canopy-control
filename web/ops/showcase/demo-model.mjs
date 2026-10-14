@@ -62,6 +62,24 @@ export function designPaint(design,level,heads=CANOPY.heads,width=CANOPY.width){
   };
   return {head:h=>rgb(known.get(key(h))||[0,0,0]),spill};
 }
+// What the Studio's scene illustration paints, from the design as loaded (undefined while loading, {error} when it
+// couldn't be had) and the level someone chose (null until they pick one): that level when the design has it, else
+// the level the show tries first for the scene. state: loading | error | none (no design over the canopy) |
+// mismatch (the design doesn't cover the saved geometry) | design (paint is the design at `level`).
+export function sceneDesignView(design,chosen){
+  if(!design)return {state:'loading',level:null,paint:null};
+  if(design.error)return {state:'error',level:null,paint:null,error:design.error};
+  const level=designLevels(design).includes(chosen)?chosen:defaultDesignLevel(design),paint=level?designPaint(design,level):null;
+  return {state:paint?'design':level?'mismatch':'none',level,paint,design};
+}
+// The "Module level" toggle: from the level shown now to the other one.
+export function nextDesignLevel(view){return view?.level==='modules'?'heads':'modules';}
+// The painters for the scene illustration: the show's design head for head (or module by module) when the view has
+// it; only when it can't be had, the scene's palette left to right across the canopy.
+export function scenePainters(view,id,width=CANOPY.width){
+  if(view?.paint)return {source:'design',head:view.paint.head,spill:view.paint.spill};
+  return {source:'palette',head:h=>sceneColorAt(id,h.x/width),spill:p=>sceneColorAt(id,p)};
+}
 export const EFFECT_PARAMS=Object.freeze({slot:'custom-3',field:'motionEffect',code:1,speed:30,duration_s:20,pattern:'blocks'});
 export const MODULES={'bench-kit':'Kingston test','shop-string-1':'String light 1'};
 export const PAIR_IDS=Object.freeze(['bench-kit','shop-string-1']);

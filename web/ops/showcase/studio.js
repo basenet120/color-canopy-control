@@ -1,7 +1,7 @@
 import {api} from '/static/app.js';
-import {matchingStaticFrames} from './demo-model.mjs?v=show-design-1';
+import {matchingStaticFrames} from './demo-model.mjs?v=show-design-2';
 import {previewFrame,previewKey} from '/ops/module/preset-preview.js?v=preview-motion-2';
-import {LOOKS,EFFECT_PARAMS,buildLook,validateKingston,motionReady,currentLookId,progressForRun,MODULES,validateTarget,customColor,whiteLook,effectLook,gradientColors,rgbFromHex,PAIR_IDS,matchingWholeSettings,sharedCapabilities,SCENES,sceneLook,sceneFrame,sceneColorAt,buildCanopy,paintCanopy,designPaint,designLevels,defaultDesignLevel} from './demo-model.mjs?v=show-design-1';
+import {LOOKS,EFFECT_PARAMS,buildLook,validateKingston,motionReady,currentLookId,progressForRun,MODULES,validateTarget,customColor,whiteLook,effectLook,gradientColors,rgbFromHex,PAIR_IDS,matchingWholeSettings,sharedCapabilities,SCENES,sceneLook,sceneFrame,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-2';
 
 
 const $=id=>document.getElementById(id);
@@ -219,13 +219,7 @@ async function refresh(){
 function selectedScene(){return SCENES.find(x=>x.id===S.scene);}
 // What the scene illustration paints: the show's design at the chosen level (S.level, once someone picks one; until
 // then the level the show tries first for the scene), or why it falls back to the palette left to right.
-function sceneView(){
-  const design=designs.get(S.scene);
-  if(!design)return {state:'loading',level:null,paint:null};
-  if(design.error)return {state:'error',level:null,paint:null,error:design.error};
-  const level=designLevels(design).includes(S.level)?S.level:defaultDesignLevel(design),paint=level?designPaint(design,level):null;
-  return {state:paint?'design':level?'mismatch':'none',level,paint,design};
-}
+function sceneView(){return sceneDesignView(designs.get(S.scene),S.level);}
 const designLoads=new Set();
 async function loadDesign(id){
   if((designs.has(id)&&!designs.get(id).error)||designLoads.has(id))return;
@@ -260,8 +254,8 @@ function renderCanopy(colors,elapsed){
     const brightness=Number($('brightness').value),view=sceneView(),paintKey=[S.scene,brightness,view.level,view.state].join(':');
     if(lastScenePaint!==paintKey&&view.state!=='loading'){
       // the show's design head for head (or module by module); only if it can't be had, the palette left to right
-      if(view.paint)paintCanopy(canopyView,view.paint.head,view.paint.spill,brightness);
-      else paintCanopy(canopyView,h=>sceneColorAt(S.scene,h.x/canopyView.layout.width),p=>sceneColorAt(S.scene,p),brightness);
+      const painters=scenePainters(view,S.scene,canopyView.layout.width);
+      paintCanopy(canopyView,painters.head,painters.spill,brightness);
       lastScenePaint=paintKey;
       canopyView.svg.setAttribute('aria-label',selectedScene().name+' · full canopy, nine panels, 270 lights'+(view.level==='modules'?' · module level, one colour per panel':''));
     }
@@ -312,7 +306,7 @@ function buildScenes(){
   $('scene-tour').addEventListener('click',()=>{if(S.tour){stopTour();return;}S.scenePreview=true;updateScenePresentation();$('scene-tour').textContent='Pause scene tour';$('scene-tour').setAttribute('aria-pressed','true');S.tour=setInterval(()=>{if(!document.hidden&&!S.busy)selectScene(SCENES[(SCENES.findIndex(s=>s.id===S.scene)+1)%SCENES.length].id,true);},6000);notify('Screen-only scene tour · lights are unchanged.');});
   $('view-angle').addEventListener('click',()=>{S.angle=S.angle==='perspective'?'plan':'perspective';$('view-angle').textContent=S.angle==='plan'?'Perspective':'Ceiling plan';$('view-angle').setAttribute('aria-pressed',String(S.angle==='plan'));});
   $('show-scene-preview').addEventListener('click',()=>{S.scenePreview=true;updateScenePresentation();});
-  $('design-level').addEventListener('click',()=>{S.level=sceneView().level==='modules'?'heads':'modules';lastScenePaint=null;updateScenePresentation();});
+  $('design-level').addEventListener('click',()=>{S.level=nextDesignLevel(sceneView());lastScenePaint=null;updateScenePresentation();});
   $('show-light-readback').addEventListener('click',()=>{stopTour();S.scenePreview=false;updateScenePresentation();});
   $('scene-apply').addEventListener('click',async()=>{
     if(S.busy||!active())return;stopTour();
