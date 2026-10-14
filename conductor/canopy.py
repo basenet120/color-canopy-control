@@ -96,8 +96,10 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   (`REHEARSAL_MESSAGE`) and the idle hold waits. It ends when the run does, at the first 403, when the governor
   trips, when ops stops it or pauses guest input, when another look replaces it (ops, a downgrade) and on stop();
   after a run that ended on its own (or was stopped) the mode's still look stays at its usual tier (`_settle`, sent
-  only where the rows differ, after the report), and the idle hold counts from the end. Its report goes to
-  telemetry ("rehearsal") and `<data>/bench/rehearsals/*.json`.
+  only where the rows differ, after the report), and the idle hold counts from the end. A 403 (`_rehearsal_403`)
+  sends nothing more: no hold burst, the step the canopy was sent installed as a still T3 plan, no stepped look or
+  re-run on that account for `governor_cooloff_s`, then `_settle`. Its report goes to telemetry ("rehearsal") and
+  `<data>/bench/rehearsals/*.json`.
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -127,7 +129,7 @@ from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
 from conductor.rehearsal import MAX_MINUTES, REHEARSAL_DIR, Rehearsal, RehearsalRefused, confirm_sentence
-from conductor.sequence import ProgramRunner
+from conductor.sequence import ProgramRunner, planned_writes_per_min
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
 from conductor.tokens import atomic_write
@@ -292,6 +294,9 @@ class CanopyEngine:
         self._runner: ProgramRunner | None = None
         self.sent_rows: dict[str, list[StateRow]] = {}
         self.stepped_cooloff: dict[str, float] = {}
+        self._settle_task: asyncio.Task | None = (
+            None  # a still look due after a 403's cool-off (`_settle_later`)
+        )
         self._rehearsal: Rehearsal | None = None
         self._rehearsals: list[Rehearsal] = []  # ended, report still being written (stop() waits for them)
         self.last_rehearsal: dict | None = None
@@ -385,6 +390,11 @@ class CanopyEngine:
             self._end_rehearsal("the canopy engine stopped", rehearsal=self._rehearsal, settle=False)
         if self._runner is not None:
             self._runner.cancel()
+        if self._settle_task is not None:
+            self._settle_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._settle_task
+            self._settle_task = None
         await self.reconciler.stop()
         for task in list(self._tasks):
             task.cancel()
@@ -1017,11 +1027,11 @@ class CanopyEngine:
         if cooling:
             left = max(self.stepped_cooloff[a] for a in cooling) - mono
             raise RehearsalRefused(
-                f"The throttle governor stopped a stepped run on account {', '.join(cooling)}; stepped looks there "
+                f"Hubspace throttled (429/403) a stepped run on account {', '.join(cooling)}; stepped looks there "
                 f"hold still for another {math.ceil(left)} s. Rehearse after that."
             )
         simulated = self._simulated()
-        cap = self.deps.settings.motion.stepped.account_writes_per_min
+        stepped = self.deps.settings.motion.stepped
         return {
             "mode": mode_id,
             "label": plan.label,
@@ -1036,7 +1046,8 @@ class CanopyEngine:
                 modules=list(modules.values()),
                 accounts=accounts_sorted,
                 simulated=simulated,
-                cap=cap,
+                cap=stepped.account_writes_per_min,
+                planned=planned_writes_per_min(stepped),
             ),
         }
 
@@ -1114,14 +1125,47 @@ class CanopyEngine:
             self._end_rehearsal(why, rehearsal=rehearsal)
 
     def _rehearsal_403(self, rehearsal: Rehearsal, account: str) -> None:
-        """The first 403 anywhere: the venue IP may be blocked, so the rehearsal stops (never retried around)."""
+        """The first 403 anywhere: Hubspace's throttling signature (the venue IP may be blocked), so the rehearsal
+        stops and nothing more goes out for it: no hold burst (the canopy keeps the step it was sent, a still look
+        of one colour per module, installed as the current plan so the kiosk draws what is there), no re-run and no
+        stepped look on that account for `governor_cooloff_s`, and the mode's still look only after that cool-off
+        (`_settle`, sent where the rows differ). Never retried around."""
         if self._rehearsal is not rehearsal:
             return
-        self._stop_rehearsal(
-            f"Hubspace answered 403 on account {account}",
-            alert=f"Stepped rehearsal stopped: Hubspace answered 403 (forbidden) on account {account}. Stepped motion "
-            "stays off; check the accounts on /ops/accounts and the vignettes before anything else.",
+        cooloff = self.deps.settings.motion.stepped.governor_cooloff_s
+        now = self.clock.monotonic()
+        self.stepped_cooloff[account] = max(self.stepped_cooloff.get(account, now), now + cooloff)
+        why = f"Hubspace answered 403 on account {account}"
+        alert = (
+            f"Stepped rehearsal stopped: Hubspace answered 403 (forbidden) on account {account}. Nothing more was "
+            f"sent for it: the canopy holds the step it was on, and the look's still design goes out after "
+            f"{cooloff / 60:g} min. Stepped motion stays off; check the accounts on /ops/accounts and the vignettes "
+            "before anything else."
         )
+        runner = self._runner
+        if runner is not None and runner.running and runner is rehearsal.runner:
+            runner.finish(why, alert=alert, send=False)
+        else:
+            self.telemetry.record("alert", level="warn", message=alert, source="rehearsal")
+        self._end_rehearsal(why, rehearsal=rehearsal, settle=False)
+        held = runner.held_plan() if runner is not None and runner is self._runner else None
+        if held is not None:
+            self._install(held, "reconciler")
+        self._settle_later(rehearsal.mode, self._plan, cooloff)
+        self._publish_soon()
+
+    def _settle_later(self, mode_id: str, plan: ModePlan | None, delay: float) -> None:
+        """`_settle` after `delay` (a 403's cool-off), while `plan` is still the one showing. Not one of the engine's
+        burst tasks (`wait_idle` doesn't wait for it); `stop()` cancels it."""
+        if self._settle_task is not None:
+            self._settle_task.cancel()
+
+        async def later() -> None:
+            await self.clock.sleep(delay)
+            self._settle_task = None
+            self._settle(mode_id, plan)
+
+        self._settle_task = asyncio.get_running_loop().create_task(later(), name=f"canopy:settle:{mode_id}")
 
     def _end_rehearsal(self, why: str, *, rehearsal: Rehearsal, settle: bool = True) -> None:
         """The rehearsal is over: the gate closes, guests are back, the report is written once the writes in flight

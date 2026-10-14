@@ -11,10 +11,11 @@ import pytest
 import yaml
 from fake_compiler import make_world, settings_with
 
+from conductor import canopy_view
 from conductor import rows as R
 from conductor.capabilities import detect
 from conductor.clock import run_virtual
-from conductor.config import ConductorSettings, ConfigError, load_recipes, load_settings
+from conductor.config import CONFIG_DIR, ConductorSettings, ConfigError, load_recipes, load_settings
 from conductor.engine_api import CanopyPhase, Tier
 from conductor.executor_api import CommandStatus
 from conductor.geometry import load_canopy_config
@@ -46,6 +47,7 @@ def stepped_modes():
 
 
 MODES = stepped_modes()
+CANOPY_CFG = canopy_view.load_canopy(str(CONFIG_DIR))
 CAPS = detect(*profile_parts("sqhdk03-sim"))
 ROW_KEYS = [
     ("power", None),
@@ -65,7 +67,17 @@ def pinned(**faults) -> SimSettings:
     )
 
 
-def stepped_world(*, sim=None, tier_allowed=None, seed: int = 0, **sections):
+# The mechanics tests step at 6 s: an account cap of 120 less a 25 % reserve plans 90 writes a minute, so 9 modules
+# step every 6 s and their timings read in whole steps. The budget tests pass `shipped=True`: the shipped
+# motion.stepped (a cap of 90 less 20 % plans 72 a minute → 7.5 s steps).
+SIX_S = {"account_writes_per_min": 120, "budget_reserve": 0.25}
+
+
+def stepped_world(*, sim=None, tier_allowed=None, seed: int = 0, shipped: bool = False, **sections):
+    if not shipped:
+        motion = dict(sections.get("motion", {}))
+        motion["stepped"] = {**SIX_S, **motion.get("stepped", {})}
+        sections["motion"] = motion
     settings = settings_with(**sections) if sections else ConductorSettings()
     w = make_world(sim_settings=sim or pinned(), settings=settings, tier_allowed=tier_allowed, seed=seed)
     ctx = CompileContext(
@@ -109,20 +121,32 @@ def labelled(w, prefix: str, since: float = 0.0) -> list[dict]:
 
 # ---- the step and the budget ---------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    ("cap", "step", "extra"),
+    ("cap", "reserve", "step", "extra"),
     [
-        (90, 6.0, {}),
-        (67.5, 8.0, {}),
-        (120, 6.0, {}),
-        (45, 12.0, {}),
-        (90, 8.0, {"motion": {"min_step_s": 8.0}}),  # never faster than min_step_s
-        (90, 6.4, {"kiosk": {"ripple_stagger_s": 1.2}}),  # 3 rings 1.2 s apart: span 2.4 s + min_step_s 4 s
+        (90, 0.2, 7.5, {}),  # the shipped budget: 9 × 60 / 72
+        (90, 0.25, 8.0, {}),  # 67.5 planned
+        (120, 0.15, 6.0, {}),  # 102 planned: the design's 6 s
+        (60, 0.25, 12.0, {}),  # 45 planned: max_step_s exactly
+        (120, 0.15, 8.0, {"motion": {"min_step_s": 8.0}}),  # never faster than min_step_s
+        (
+            120,
+            0.15,
+            6.4,
+            {"kiosk": {"ripple_stagger_s": 1.2}},
+        ),  # 3 rings 1.2 s apart: span 2.4 s + min_step_s 4 s
     ],
 )
-def test_the_step_is_the_designs_unless_the_budget_or_the_ripple_needs_longer(cap, step, extra):
+def test_the_step_is_the_designs_unless_the_budget_or_the_ripple_needs_longer(cap, reserve, step, extra):
     async def main():
         w = stepped_world(
-            motion={"stepped": {"account_writes_per_min": cap, **extra.get("motion", {})}},
+            shipped=True,
+            motion={
+                "stepped": {
+                    "account_writes_per_min": cap,
+                    "budget_reserve": reserve,
+                    **extra.get("motion", {}),
+                }
+            },
             kiosk=extra.get("kiosk", {}),
         )
         await w.engine.request_mode("linear-columns", source="ops")
@@ -133,12 +157,13 @@ def test_the_step_is_the_designs_unless_the_budget_or_the_ripple_needs_longer(ca
 
     got, running, count = run_virtual(main)
     assert got == step and running
-    assert count == int(90 / step)  # the hold goes out at the last step boundary within the 90 s run
+    assert count == int(90 / step + 1e-6)  # the hold goes out at the last step boundary within the 90 s run
 
 
 def test_a_step_longer_than_max_step_s_holds_the_still_design_and_says_why():
     async def main():
-        w = stepped_world(motion={"stepped": {"account_writes_per_min": 40}})  # 9 × 60 / 40 = 13.5 s > 12 s
+        # 9 × 60 / (40 less 20 %) = 16.875 s > 12 s
+        w = stepped_world(shipped=True, motion={"stepped": {"account_writes_per_min": 40}})
         await quiet_start(w)
         start = w.clock.monotonic()
         state = await w.engine.request_mode("linear-columns", source="ops")
@@ -157,15 +182,17 @@ def test_a_step_longer_than_max_step_s_holds_the_still_design_and_says_why():
 
     out = run_virtual(main)
     assert out["runner"].running is False and "max_step_s" in out["runner"].ended
-    assert any("holds its still design" in a and "13.5 s" in a for a in out["alerts"])
+    assert any(
+        "holds its still design" in a and "16.875 s" in a and "20% reserve" in a for a in out["alerts"]
+    )
     assert out["state"].feature == out["plan"].feature and out["state"].program is None  # no moving claim
     assert len(out["writes"]) == 9 and out["correct"]  # the hold, once, and nothing after
     assert out["later"].tier == "stepped" and out["later"].phase is CanopyPhase.READY
 
 
-def test_a_90_s_run_steps_every_6_s_within_the_budget_and_ends_on_the_hold():
+def test_a_90_s_run_steps_below_the_cap_and_ends_on_the_hold():
     async def main():
-        w = stepped_world()
+        w = stepped_world(shipped=True)  # 9 modules at 90 a minute less 20 %: 7.5 s steps
         await quiet_start(w)
         t0 = w.clock.monotonic()
         await w.engine.request_mode("radial-outward", source="ops")
@@ -197,26 +224,29 @@ def test_a_90_s_run_steps_every_6_s_within_the_budget_and_ends_on_the_hold():
 
     out = run_virtual(main)
     plan, runner, writes = out["plan"], out["runner"], out["writes"]
-    assert runner.step_s == 6.0 and runner.count == 15 and runner.state == "done" and runner.skipped == 0
-    # the budget: ≤ 10 writes a minute per device, ≤ 90 on the canopy account, one command per device at a time
-    assert max(s["accounts"]["canopy"]["writes_60s"] for s in out["samples"]) <= 90
-    assert max(d["writes_60s"] for s in out["samples"] for d in s["devices"].values()) <= 10
+    step = 7.5
+    assert runner.step_s == step and runner.count == 12 and runner.state == "done" and runner.skipped == 0
+    assert runner.budget_holds == 0  # planned below the cap, so the cap never had to hold a step back
+    # the budget: ≤ 9 writes a minute per device, ≤ 81 on the canopy account (8 steps in any 60 s and part of a
+    # ninth: the cap of 90 less the reserve), one command per device at a time
+    assert max(s["accounts"]["canopy"]["writes_60s"] for s in out["samples"]) <= 81
+    assert max(d["writes_60s"] for s in out["samples"] for d in s["devices"].values()) <= 9
     assert out["depth"] <= 1
-    # the mode change (the hold, step 0) then ≤ 15 steps × 9 PUTs: 14 steps and the hold at 90 s
+    # the mode change (the hold, step 0) then 12 × 9 PUTs: 11 steps and the hold at 90 s
     after_mode = [x for x in writes if x[0] > 1.0]
-    assert len(writes) - len(after_mode) == 9 and len(after_mode) <= 15 * 9
-    assert len(after_mode) == 15 * 9  # every module's colour changes at every step of this design
+    assert len(writes) - len(after_mode) == 9
+    assert len(after_mode) == 12 * 9  # every module's colour changes at every step of this design
     # each step: exactly one command per changed driven module, one whole state vector each (never split)
     labels: dict[str, list[str]] = {}
     for c in out["commands"]:
         labels.setdefault(c["label"], []).append(c["device_id"])
-    assert len(labels) == 15
+    assert len(labels) == 12
     assert all(sorted(ids) == sorted(f"sim-{d}" for d in plan.modules) for ids in labels.values())
     assert all([r.key for r in rows] == ROW_KEYS for _, _, rows in writes)
     assert all(c["status"] == str(CommandStatus.APPLIED) for c in out["commands"])
-    # on the absolute schedule: step n's writes go out at t0 + 6n (within the executor's own scheduling)
-    for n in range(1, 16):
-        times = [t for t, _, _ in after_mode if n * 6.0 - 1e-6 <= t < n * 6.0 + 1.0]
+    # on the absolute schedule: step n's writes go out at t0 + n × step (within the executor's own scheduling)
+    for n in range(1, 13):
+        times = [t for t, _, _ in after_mode if n * step - 1e-6 <= t < n * step + 1.0]
         assert len(times) == 9, n
     # the run ends on the hold rows with the hold's sentence and no motion
     assert out["correct"] and shows_rows_equal(plan)
@@ -224,7 +254,7 @@ def test_a_90_s_run_steps_every_6_s_within_the_budget_and_ends_on_the_hold():
     assert final.feature == plan.feature and final.program is None and final.phase is CanopyPhase.READY
     assert final.feature != plan.program.moving_feature
     # phase: UPDATING on arrival, then READY for the rest of the run (no flicker each step)
-    run = [(t, s) for t, s in out["phases"] if t < 90.0]
+    run = [(t, s) for t, s in out["phases"] if t < 12 * step]
     first_ready = next(i for i, (_, s) in enumerate(run) if s.look_phase is CanopyPhase.READY)
     assert all(s.look_phase is CanopyPhase.UPDATING for _, s in run[:first_ready])
     assert run[first_ready][0] <= 4.0
@@ -233,7 +263,78 @@ def test_a_90_s_run_steps_every_6_s_within_the_budget_and_ends_on_the_hold():
     # while it moves: the moving sentence and what each step shows
     moving = run[first_ready][1]
     assert moving.feature == plan.program.moving_feature
-    assert moving.program is not None and moving.program["step_s"] == 6.0
+    assert moving.program is not None and moving.program["step_s"] == step
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_under_the_pinned_faults_a_run_never_takes_the_account_past_the_cap(seed):
+    """The pinned acceptance conditions (07 §7: 5 % 429s, 1 % silent drops) on top of the shipped budget: the 429
+    retries and the silent-drop re-sends fit in the reserve, so no 60 s on the account passes the cap of 90 — by the
+    executor's own count and by send time."""
+
+    async def main():
+        w = stepped_world(sim=SimSettings.from_acceptance(), seed=seed, shipped=True)
+        await quiet_start(w)
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("radial-outward", source="ops")
+        runner, most = w.engine.runner, 0
+        while w.clock.monotonic() < t0 + 100:
+            await w.run_for(0.5)
+            most = max(most, w.executor.budget()["accounts"]["canopy"]["writes_60s"])
+        sends = sorted(t for t, _, _ in w.writes if t >= t0)
+        window = max(sum(1 for t in sends if a <= t < a + 60) for a in sends)
+        throttled = sum(1 for e in w.events("attempt") if e.get("http_status") == 429)
+        await w.close()
+        return most, window, runner, throttled
+
+    most, window, runner, throttled = run_virtual(main)
+    assert most <= 90 and window <= 90, (most, window)
+    assert throttled > 0  # the faults really were on
+    assert runner.count == 12 and runner.ended == "the run is over"
+
+
+def test_a_step_that_would_take_the_account_past_the_cap_is_held_back():
+    """Writes from elsewhere on the account (a vignette, a mood chosen mid-run) leave too little room: the step is
+    held back — nothing is sent and the step shown stays the last one sent — and the next step goes out once there
+    is room again."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner = w.engine.runner
+        await w.run_for(runner.next_step_in() + 0.5)  # step 1 is out
+        sent_before = len(w.writes)
+        budget = w.executor.budget
+        crowd = {"extra": 75}  # 75 writes by others on the account in the last 60 s: 9 + 9 + 75 > 90
+
+        def crowded(address=None):
+            out = budget(address)
+            if address is not None:
+                out = {**out, "account_writes_60s": out["account_writes_60s"] + crowd["extra"]}
+            return out
+
+        w.executor.budget = crowded
+        shown = runner.shown
+        await w.run_for(runner.next_step_in() + 0.5)  # step 2 comes due
+        held = (len(w.writes) - sent_before, runner.index, runner.shown, runner.budget_holds)
+        state = w.engine.state()
+        crowd["extra"] = 0
+        await w.run_for(runner.next_step_in() + 0.5)  # step 3: room again
+        after = (runner.shown, runner.budget_holds, len(w.writes) - sent_before)
+        holds = [e for e in w.events("program") if e.get("action") == "budget_hold"]
+        await w.close()
+        return shown, held, state, after, holds, t0
+
+    shown, held, state, after, holds, _ = run_virtual(main)
+    assert shown == 1
+    assert held == (0, 2, 1, 1)  # nothing sent; the index advanced, the step shown is still step 1
+    assert state.program is not None and state.program["step"] == 2
+    assert after[:2] == (3, 1) and after[2] == 9  # step 3 went out to every module
+    [hold] = holds
+    assert hold["account"] == "canopy" and hold["step"] == 2 and hold["cap"] == 90
+    assert hold["writes_60s"] + hold["step_writes"] > 90
 
 
 def shows_rows_equal(plan) -> bool:
@@ -269,7 +370,7 @@ def test_a_run_shorter_than_the_step_the_budget_needs_holds_still():
     modes = parse_modes(raw, recipes=load_recipes(), canopy=load_canopy_config(), path=PATH)
 
     async def main():
-        w = stepped_world(motion={"stepped": {"account_writes_per_min": 67.5}})  # 8 s steps
+        w = stepped_world(motion={"stepped": {"account_writes_per_min": 90}})  # 90 less 25 % → 8 s steps
         ctx = CompileContext(
             registry=w.registry,
             capabilities={e.id: CAPS for e in w.registry.canopy_modules()},
@@ -752,15 +853,26 @@ def test_a_re_pick_of_the_look_now_showing_keeps_the_runs_phase():
         await w.run_for(15)
         await w.engine.set_guest_brightness(50, source="ops")  # a guest setting is not a new run
         await w.run_for(5)
+        before = view(w)
         await w.engine.request_mode("linear-rows", source="reconciler")  # e.g. new capabilities
         second = w.engine.runner
+        after = view(w)
         out = (first, second, first.t0, second.t0, second.index, second.shown, first.running, second.running)
         await w.close()
-        return out
+        return out, before, after
 
-    first, second, t0a, t0b, index, shown, first_running, second_running = run_virtual(main)
+    def view(w):
+        """What the kiosk is told: the run's wall times (CanopyState.program) and the guest panel's motion."""
+        state = w.engine.state()
+        lit = canopy_view.lit_state(CANOPY_CFG, w.registry, w.engine.current_plan(), state, now=w.clock.now())
+        return state.program["t0"], state.program["ends_at"], state.program["step"], lit["motion"]["t0"]
+
+    out, before, after = run_virtual(main)
+    first, second, t0a, t0b, index, shown, first_running, second_running = out
     assert first is not second and not first_running and second_running
     assert t0a == t0b and index == 3 and shown == 3
+    # the kiosk draws the frames the canopy is sent: the run's wall start and end don't move with the re-pick
+    assert before == after and before[2] == 3
 
 
 # ---- gates and config ---------------------------------------------------------------------------------------------

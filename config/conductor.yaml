@@ -52,7 +52,8 @@ motion:
     live_enabled: false          # off on live hardware until the stepped rehearsal (Gate R) passes; Alon flips it
     min_step_s: 4.0              # never step faster than this
     max_step_s: 12.0             # a step the budget would stretch past this holds the still look instead
-    account_writes_per_min: 90   # step ≥ modules on the account × 60 / this (9 modules → 6 s)
+    account_writes_per_min: 90   # the account's cap: writes of any kind in any 60 s (Gate R fails above it)
+    budget_reserve: 0.2          # steps are planned at the cap less this share (retries, re-sends): 9 modules → 7.5 s
     governor_window_s: 60        # the throttle governor counts a run's write attempts over this window, per account
     governor_min_throttled: 8    # ... and stops the run at ≥ this many 429/403 attempts
     governor_throttled_share: 0.25  # ... that are ≥ this share of the attempts

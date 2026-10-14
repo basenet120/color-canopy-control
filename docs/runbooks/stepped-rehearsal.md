@@ -35,15 +35,21 @@ presses **Rehearse** in the confirm dialog on `/ops`.
 1. `/ops` → **Controls** → **Stepped rehearsal (Gate R)**.
 2. Choose the look: **Golden Hour** or **Coastal Tides** (the D65 candidates). Any look except Lowcountry Calm (the
    idle look never steps) can be rehearsed. If a look has no stepped design of its own in `config/modes.yaml`,
-   its module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward.
+   its module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward. On the nine show
+   kits the runner stretches the step to 7.5 s: it paces all nine modules on one account at 72 writes a minute,
+   the account's cap of 90 less a 20% reserve for 429 retries and re-sends (`motion.stepped.budget_reserve`).
 3. Minutes: **10** for Gate R (1–10 are allowed; use 2 to try the page out).
-4. Press **Rehearse…**. The dialog names every module it will write to, the account, and the minutes. Read it. If a
-   module is missing, cancel and fix that first. Press **Rehearse**.
-5. The canopy card shows "Stepped look: step n of N · every 6.0 s · writes/min on account … (cap 90)". The line
+4. Press **Rehearse…**. The dialog names every module it will write to, the account, the minutes and the write
+   rate (paced at up to 72 a minute; a step that would take the account past 90 in a minute is held back). Read it.
+   If a module is missing, cancel and fix that first. Press **Rehearse**.
+5. The canopy card shows "Stepped look: step n of N · every 7.5 s · writes/min on account … (cap 90)". The line
    under the controls says when it ends. The kiosk's feature line reads "Staff are testing the canopy: …".
 
 It ends by itself after the minutes and the still look holds. It also stops early:
-- at the **first 403** from Hubspace on any account;
+- at the **first 403** from Hubspace on any account. Nothing more is sent for it: no still-look burst. The canopy
+  keeps the step it was on (the kiosk draws that), ops can't rehearse again and no stepped look runs on that account
+  for `governor_cooloff_s` (5 min), and only then does the look's still design go out (to the modules that differ),
+  unless a guest or the idle return chose a look first;
 - when the **throttle governor** trips;
 - when someone presses **Stop rehearsal**, pauses guest input, chooses another look or presses Safe look;
 - when the reconciler moves the look down its ladder;
@@ -77,12 +83,15 @@ volume. A copy of the counts is in the telemetry as a `rehearsal` event.
 | 0 commands failed throttled after retries | `failed_throttled` |
 | Throttled attempts (429 + 403) under 5% of the rehearsal's attempts | `throttled_share` |
 | No 403 on any account | `forbidden_403`, criterion `no_403` |
+| At most 90 writes on the rehearsal's account in any 60 s, by send time (steps, retries, re-sends, everything) | `max_writes_60s` against `cap_writes_per_min`, criterion `max_writes_60s` |
 | Vignette accounts clean: no 429/403, failed commands, sign-in problems or warn/error alerts | `vignette` |
 
 Also look at these. They don't decide pass or fail on their own:
-- `max_writes_60s`: the most writes on each account within any 60 s, by send time, against `cap_writes_per_min` (90).
-  The runner plans its steps at the cap, so retries, re-sends and the first burst push it a little over. In the
-  simulator that was 93 with no faults and up to about 110 with the pinned 429s and drops. Note the number for Alon.
+- `max_writes_60s` (also a pass criterion above): note the number for Alon. The runner plans its steps at 72 a
+  minute, leaving 18 for retries and re-sends. In the simulator that was 72–81 with no faults and at most 82 with
+  the pinned 429s and drops (12 seeds).
+- `steps.budget_holds`: steps held back because they would have taken the account past 90. Should be 0; anything
+  else means something else was writing on the canopy account during the rehearsal.
 - `verification_s`: p50 and p95 from send to verified readback. The step can't usefully be shorter than p95 plus
   about a second.
 - `superseded` and `skipped_steps`: step writes replaced before they finished, and steps skipped because they came

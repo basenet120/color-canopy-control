@@ -15,7 +15,9 @@ Rules (binding text: docs/runbooks/stepped-rehearsal.md; 07 §1, §6, §8, §9):
   The design is the mode's own stepped technique, or else its module-level design (the `modules` sample) stepped at
   the D65 defaults (`ShowWiring.rehearsal_modes`). Writes go only through the engine to the canopy modules the plan
   drives, so the live gate's allowlist (07 §1) applies to every one of them.
-- **It stops** at the first HTTP 403 on any account (the venue IP may be blocked), when the throttle governor trips
+- **It stops** at the first HTTP 403 on any account (the venue IP may be blocked: nothing more is sent for it, and
+  no re-run or stepped look on that account for `governor_cooloff_s`; `CanopyEngine._rehearsal_403`), when the
+  throttle governor trips
   (conductor/sequence.py), when ops stops it, pauses guest input or chooses another look, when the reconciler moves
   the look down its ladder, and when the engine stops. Kiosk requests are refused while it runs (a plain sentence),
   and the idle hold waits for it.
@@ -24,7 +26,8 @@ Rules (binding text: docs/runbooks/stepped-rehearsal.md; 07 §1, §6, §8, §9):
   - `attempts` / `puts`: write attempts to the rehearsal's modules (retries included) / those that left the process;
   - `throttled_429`, `forbidden_403`, `throttled_share` (429 + 403 of the attempts);
   - `max_writes_60s`: per account, the most write attempts that left the process within any 60 s (every device on
-    the account, not just the rehearsal's), by when each was sent (its answer's time less its `elapsed_s`);
+    the account, not just the rehearsal's), by when each was sent (its answer's time less its `elapsed_s`), against
+    `cap_writes_per_min` (`motion.stepped.account_writes_per_min`; the runner plans its steps below it);
   - `commands` by final status; `failed_throttled`: commands that still ended 429/403 after the executor's retries;
     `superseded`: step writes replaced by a newer one before they finished; `skipped_steps`: steps the runner skipped
     because they came due late;
@@ -32,7 +35,8 @@ Rules (binding text: docs/runbooks/stepped-rehearsal.md; 07 §1, §6, §8, §9):
   - `governor_trips`, `outages`;
   - `vignette`: the vignette accounts' attempts, 429/403s, failed commands, token problems and warn/error alerts.
 - **Verdict** (Gate R's pass criteria): the run went its full length, no command failed throttled after retries,
-  throttled attempts < `MAX_THROTTLED_SHARE`, no 403, vignette accounts clean. In the simulator the verdict is
+  throttled attempts < `MAX_THROTTLED_SHARE`, no 403, the rehearsal's accounts within the cap in every 60 s
+  (`max_writes_60s` ≤ `cap_writes_per_min`), vignette accounts clean. In the simulator the verdict is
   labelled SIMULATED and never counts for Gate R. Only Alon flips `motion.stepped.live_enabled`.
 - The report file is written atomically under `<data>/bench/rehearsals/` (07 §8), beside the bench results but not
   among them (the bench page lists only `<data>/bench/*.json`).
@@ -86,17 +90,28 @@ def _names(labels: list[str]) -> str:
 
 
 def confirm_sentence(
-    *, label: str, minutes: int, modules: list[str], accounts: list[str], simulated: bool, cap: float
+    *,
+    label: str,
+    minutes: int,
+    modules: list[str],
+    accounts: list[str],
+    simulated: bool,
+    cap: float,
+    planned: float,
 ) -> str:
-    """What ops confirms before a rehearsal starts: the look, the minutes and every module it writes to."""
+    """What ops confirms before a rehearsal starts: the look, the minutes and every module it writes to, and the
+    write rate as the runner enforces it (steps paced at `planned` a minute; a step that would take the account past
+    `cap` in 60 s is held back; Gate R fails when retries and re-sends take it past `cap` anyway)."""
     n = len(modules)
     where = f"account {accounts[0]}" if len(accounts) == 1 else f"accounts {_names(accounts)}"
     sim = " (simulator: no real lights)" if simulated else ""
     return (
         f"Rehearse {label} stepped for {minutes} {'minute' if minutes == 1 else 'minutes'} on "
         f"{_names(modules)} ({n} {'module' if n == 1 else 'modules'} on {where}){sim}? Each step writes every "
-        f"module whose colour changes, up to {cap:g} writes a minute on the account; the run stops at the first 403 "
-        "or if the throttle governor trips, then the still look holds. Guests can't change the canopy meanwhile."
+        f"module whose colour changes, paced at up to {planned:g} writes a minute; a step that would take the "
+        f"account past {cap:g} writes in a minute is held back, and the report fails if retries take it past "
+        f"{cap:g}. The run stops at the first 403 or if the throttle governor trips, then the still look holds. "
+        "Guests can't change the canopy meanwhile."
     )
 
 
@@ -353,6 +368,9 @@ class Rehearsal:
             or self.vignette_tokens
             or self.vignette_alerts
         )
+        cap = self.engine.deps.settings.motion.stepped.account_writes_per_min
+        most = self.max_writes()
+        over = {a: n for a, n in most.items() if a in self.accounts and n > cap}
         criteria = [
             {
                 "id": "completed",
@@ -381,6 +399,15 @@ class Rehearsal:
                 ),
             },
             {
+                "id": "max_writes_60s",
+                "title": f"At most {cap:g} writes on the account in any 60 s",
+                "ok": not over,
+                "detail": ", ".join(
+                    f"{a}: {most.get(a, 0)}{' (over)' if a in over else ''}" for a in self.accounts
+                )
+                or "no writes",
+            },
+            {
                 "id": "vignettes_clean",
                 "title": "Vignette accounts clean",
                 "ok": vignette_clean,
@@ -403,6 +430,7 @@ class Rehearsal:
                 "reached": min(runner.index, runner.count),
                 "sent": runner.steps_sent,
                 "skipped": runner.skipped,
+                "budget_holds": runner.budget_holds,
             }
         return {
             "kind": "stepped_rehearsal",
@@ -420,14 +448,14 @@ class Rehearsal:
             "completed": self.completed,
             "modules": [self.modules[d] for d in self.modules],
             "accounts": self.accounts,
-            "cap_writes_per_min": self.engine.deps.settings.motion.stepped.account_writes_per_min,
+            "cap_writes_per_min": cap,
             "steps": steps,
             "attempts": self.attempts,
             "puts": self.puts,
             "throttled_429": self.throttled_429,
             "forbidden_403": self.forbidden_403,
             "throttled_share": round(share, 4),
-            "max_writes_60s": self.max_writes(),
+            "max_writes_60s": most,
             "commands": dict(sorted(self.commands.items())),
             "failed_throttled": self.failed_throttled,
             "superseded": self.commands.get(str(CommandStatus.SUPERSEDED), 0),

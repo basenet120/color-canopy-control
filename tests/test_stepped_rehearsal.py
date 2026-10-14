@@ -58,7 +58,7 @@ REPORT_FIELDS = {
     "verdict",
     "summary",
 }
-CRITERIA = ["completed", "failed_throttled", "throttled_share", "no_403", "vignettes_clean"]
+CRITERIA = ["completed", "failed_throttled", "throttled_share", "no_403", "max_writes_60s", "vignettes_clean"]
 QUIET_S = (
     70.0  # start-up (capability reads, simulator commissioning, the idle look) is over and out of the window
 )
@@ -144,9 +144,11 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert result["ok"] and result["rehearsal"]["minutes"] == 2
     state, count, step_s, mode = during
     assert state.tier == "stepped" and mode == "golden-hour"
-    assert count == int(120 / step_s) == 20  # run_s = minutes · 60, at the design's 6 s steps
+    # run_s = minutes · 60, at 7.5 s steps: the design's 6 s stretched to 9 modules at 72 writes a minute (the
+    # account's cap of 90 less the 20 % reserve)
+    assert step_s == 7.5 and count == int(120 / step_s) == 16
     assert state.feature == REHEARSAL_FEATURE.format(words="from one edge")  # the copy says staff are testing
-    assert mid.program is not None and mid.program["step"] == 10  # moving, half way
+    assert mid.program is not None and mid.program["step"] == 8  # moving, half way
     # the report: every field, a pass in sim (no faults), labelled SIMULATED
     assert set(report) == REPORT_FIELDS
     assert [c["id"] for c in report["criteria"]] == CRITERIA and all(c["ok"] for c in report["criteria"])
@@ -154,14 +156,18 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert report["simulated"] and "SIMULATED" in report["note"]
     assert report["modules"] == preview["modules"] and len(report["modules"]) == 9
     assert report["accounts"] == ["canopy"] and report["minutes"] == 2 and report["run_s"] == 120.0
-    assert report["steps"] == {"step_s": 6.0, "design_step_s": 6.0, "planned": 20, "reached": 20, "sent": 20,
-                               "skipped": 0}  # fmt: skip
-    # the hold, 19 steps and the hold again: one PUT per module each, all verified, nothing throttled
-    assert report["attempts"] == report["puts"] == 9 * 21
-    assert report["commands"] == {"applied": 189} and report["failed_throttled"] == report["superseded"] == 0
+    assert report["steps"] == {"step_s": 7.5, "design_step_s": 6.0, "planned": 16, "reached": 16, "sent": 16,
+                               "skipped": 0, "budget_holds": 0}  # fmt: skip
+    # the hold, 15 steps and the hold again: one PUT per module each, all verified, nothing throttled
+    assert report["attempts"] == report["puts"] == 9 * 17
+    assert report["commands"] == {"applied": 153} and report["failed_throttled"] == report["superseded"] == 0
     assert report["throttled_429"] == report["forbidden_403"] == 0 and report["throttled_share"] == 0.0
-    assert report["verification_s"]["count"] == 189 and 0 < report["verification_s"]["p50"] <= 3.0
-    assert set(report["max_writes_60s"]) == {"canopy"} and report["max_writes_60s"]["canopy"] >= 90
+    assert report["verification_s"]["count"] == 153 and 0 < report["verification_s"]["p50"] <= 3.0
+    # what ops confirmed is what happened: paced at 72 a minute, never past the cap of 90 in any 60 s
+    assert "paced at up to 72 writes a minute" in preview["confirm"]
+    assert "past 90 writes in a minute is held back" in preview["confirm"]
+    assert report["cap_writes_per_min"] == 90
+    assert set(report["max_writes_60s"]) == {"canopy"} and 72 <= report["max_writes_60s"]["canopy"] <= 81
     assert report["governor_trips"] == 0 and report["outages"] == 0
     assert report["vignette"]["clean"] and report["vignette"]["accounts"] == [
         "bedroom",
@@ -241,7 +247,7 @@ def test_it_stops_at_the_first_403_and_fails():
     async def main():
         w = await show()
         await w.engine.rehearse("golden-hour", 5, source="ops")
-        await w.run_for(20)
+        await w.run_for(40)
         # a 403 from Hubspace (the simulator doesn't make them): the attempt the executor would record
         for address in ("sim-canopy-r1c1", "sim-canopy-r1c2"):  # two at once: it stops once
             w.services.telemetry.record(
@@ -260,6 +266,7 @@ def test_it_stops_at_the_first_403_and_fails():
         "failed_throttled": True,
         "throttled_share": True,
         "no_403": False,
+        "max_writes_60s": True,
         "vignettes_clean": True,
     }
     assert report["steps"]["reached"] < report["steps"]["planned"]
@@ -267,6 +274,66 @@ def test_it_stops_at_the_first_403_and_fails():
     verdict = [a for a in alerts if a["message"].startswith("Stepped rehearsal: SIMULATED")]
     assert len(verdict) == 1 and verdict[0]["level"] == "warn"
     assert state.program is None and (runner is None or not runner.running)
+
+
+def test_after_a_403_nothing_more_is_sent_and_ops_cant_rehearse_again_until_the_cool_off_ends(monkeypatch):
+    """403 is Hubspace's throttling signature (the venue IP may be blocked): no hold burst after it, the canopy keeps
+    the step it was sent (installed as a still T3 plan, so the kiosk draws what is there), no re-run and no stepped
+    look on that account for governor_cooloff_s, then the still look — only where it differs."""
+
+    async def main():
+        w = await show(live=True, monkeypatch=monkeypatch)  # the venue box's rules: T3 is the still look
+        w.services.settings.motion.stepped.governor_cooloff_s = 90  # shorter than the idle return (180 s)
+        await w.engine.rehearse("golden-hour", 5, source="ops")
+        await w.run_for(20)  # steps 1 and 2 are out and verified
+        runner = w.engine.runner
+        step, hold = runner.program.steps[runner.shown % runner.cycle], runner.program.steps[0]
+        t403 = w.clock.now()
+        w.services.telemetry.record(
+            "attempt", device_id="sim-canopy-r1c1", n=1, outcome="throttled", http_status=403, elapsed_s=0.4
+        )
+        await w.ended()
+        await w.run_for(30)
+        quiet = [e for e in w.events("attempt") if e["t"] > t403]
+        plan, cooloff, mono = w.engine.current_plan(), dict(w.engine.stepped_cooloff), w.clock.monotonic()
+        try:
+            again = w.engine.rehearsal_preview("golden-hour", 5)["confirm"]
+        except RehearsalRefused as e:
+            again = f"refused: {e}"
+        await w.run_for(
+            65
+        )  # the cool-off is over: the still look goes out (the idle return is still to come)
+        settle = [c for c in w.events("command") if c["label"].startswith("after the stepped rehearsal")]
+        out = (step, hold, quiet, plan, cooloff, mono, again, settle, w.engine.current_plan(), w.report())
+        await w.close()
+        return out
+
+    step, hold, quiet, plan, cooloff, mono, again, settle, final, report = run_virtual(main)
+    assert report["ended"] == "Hubspace answered 403 on account canopy" and report["verdict"] == "fail"
+    assert quiet == []  # not one write in the 30 s after the 403: no hold burst, no re-assert
+    assert plan.tier is Tier.T3 and plan.program is None and plan.mode_id == "golden-hour"
+    assert {d: t.rows for d, t in plan.modules.items()} == step.rows  # the step the canopy shows
+    assert step.rows != hold.rows  # (a step that isn't the still look, or this proves nothing)
+    for (
+        device_id,
+        target,
+    ) in plan.modules.items():  # one colour per module: that step's, for the kiosk preview
+        assert target.colors and {json.dumps(c, sort_keys=True) for c in target.colors} == {
+            json.dumps(
+                {k: int(step.colours[pos][1 + 2 * i : 3 + 2 * i], 16) for i, k in enumerate("rgb")},
+                sort_keys=True,
+            )
+            for pos in [device_id.removeprefix("canopy-")]
+        }
+    assert 90 - 31 <= cooloff["canopy"] - mono <= 90 - 29  # governor_cooloff_s from the 403
+    assert again.startswith("refused: Hubspace throttled (429/403) a stepped run on account canopy")
+    # after the cool-off: the still design, sent only to the modules whose step differs from it
+    assert (
+        final.tier is Tier.T3
+        and final.program is None
+        and {d: t.rows for d, t in final.modules.items()} == hold.rows
+    )
+    assert 0 < len(settle) == sum(step.rows[d] != hold.rows[d] for d in hold.rows)
 
 
 def test_a_governor_trip_ends_it_and_the_report_says_so():
@@ -291,7 +358,7 @@ def test_ops_choosing_another_look_ends_it_with_what_it_measured():
     async def main():
         w = await show()
         await w.engine.rehearse("golden-hour", 3, source="ops")
-        await w.run_for(15)
+        await w.run_for(16)  # the hold and steps 1 and 2 (7.5 s apart)
         await w.engine.request_mode("coastal-tides", source="ops")
         await w.ended()
         out = (w.report(), w.engine.current_plan(), w.engine.rehearsal_mode)
@@ -308,7 +375,7 @@ def test_ops_can_stop_it_and_a_pause_stops_it():
     async def main():
         w = await show()
         await w.engine.rehearse("golden-hour", 3, source="ops")
-        await w.run_for(13)
+        await w.run_for(16)  # steps 1 and 2 (7.5 s apart) are out
         w.engine.floors["golden-hour"] = 1  # set during it (its ladder's index): it doesn't outlive it
         stopped = w.engine.stop_rehearsal(source="ops")
         at_once = (w.engine.rehearsal_mode, w.engine.runner.running, dict(w.engine.floors))  # gate closed
@@ -364,7 +431,7 @@ def test_guests_wait_the_idle_hold_waits_and_the_run_lasts_its_minutes():
     assert kiosk.refused and kiosk.message == REHEARSAL_MESSAGE and 230 < kiosk.retry_after_s <= 240
     assert dim.refused and dim.message == REHEARSAL_MESSAGE
     assert held == ("golden-hour", "golden-hour", True)
-    assert report["completed"] and report["steps"]["planned"] == 40 and report["run_s"] == 240.0
+    assert report["completed"] and report["steps"]["planned"] == 32 and report["run_s"] == 240.0
 
 
 def test_problems_on_a_vignette_account_fail_it():
@@ -397,7 +464,7 @@ def test_problems_on_a_vignette_account_fail_it():
     assert vignette["alerts"] == ["Bedroom account signed out.", "Wash left is offline."]
     assert vignette["token_problems"] == ["entry: auth"]
     # the vignette's attempt isn't the rehearsal's; a denied one never left the process (not a PUT)
-    assert report["attempts"] == 9 * 11 + 1 and report["puts"] == 9 * 11
+    assert report["attempts"] == 9 * 9 + 1 and report["puts"] == 9 * 9  # the hold, 7 steps, the hold
     assert report["completed"] and report["verdict"] == "fail"
     assert [c["id"] for c in report["criteria"] if not c["ok"]] == ["vignettes_clean"]
 
@@ -427,7 +494,7 @@ def test_stopping_the_engine_ends_it_and_still_writes_the_report():
         ("golden-hour", 2, "paused", "Resume guest input first"),
         ("golden-hour", 2, "running", "already running"),
         ("golden-hour", 2, "outage", "Hubspace isn't answering"),
-        ("golden-hour", 2, "cooloff", "throttle governor stopped a stepped run on account canopy"),
+        ("golden-hour", 2, "cooloff", "Hubspace throttled (429/403) a stepped run on account canopy"),
         ("no-such-mode", 2, None, "can't be rehearsed stepped"),
         ("golden-hour", 2, "stopped", "engine is stopped"),
         ("golden-hour", 2, "commissioning", "Commissioning is writing"),

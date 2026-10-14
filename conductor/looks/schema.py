@@ -42,10 +42,17 @@ MOTION_WORDS = re.compile(
     r"\b(mov(e|es|ing)|animat\w*|motion|scroll\w*|chas(e|es|ing)|wave\w*)\b", re.IGNORECASE
 )
 # What stepped copy may never claim: stepped motion is one colour per strand re-sent through the cloud every few
-# seconds, never an on-device effect, a controller animation or a light-by-light pattern.
+# seconds, never an on-device effect, a controller animation, a light-by-light (head-by-head, bulb-by-bulb) pattern
+# or smooth, continuous movement (whether a strand cuts or fades between steps is bench item 6, not yet settled).
 STEPPED_FALSE_CLAIMS = re.compile(
-    r"\b(effects?|animat\w*|controllers?|each light|every light|270)\b", re.IGNORECASE
+    r"\b(effects?|animat\w*|controllers?|270"
+    r"|(?:each|every|all(?: the| \w+)?) (?:heads?|bulbs?|lights?|pixels?|LEDs?)"
+    r"|individual\w*|continuous\w*|smooth\w*|seamless\w*|fluid\w*|fad(?:e|es|ed|ing)|glid(?:e|es|ed|ing)"
+    r"|shimmer\w*|twinkl\w*|sparkl\w*|chas(?:e|es|ing))\b",
+    re.IGNORECASE,
 )
+# ... and what it must say: the pace, as the generated partial and one-colour copy and the rehearsal copy say it.
+STEPPED_PACE = "every few seconds"
 _MODE_ID = r"^[a-z0-9][a-z0-9-]{1,40}$"
 
 
@@ -284,7 +291,13 @@ class SteppedTechnique(_Strict):
         if m := STEPPED_FALSE_CLAIMS.search(self.moving_feature):
             raise ValueError(
                 f"moving_feature says {m.group(0)!r}, which stepped motion isn't: each strand is sent one colour "
-                "at a time through the Hubspace cloud (no on-device effect, no light-by-light animation)"
+                "at a time through the Hubspace cloud every few seconds (no on-device effect, no light-by-light or "
+                "smooth animation)"
+            )
+        if STEPPED_PACE not in self.moving_feature.lower():
+            raise ValueError(
+                f"moving_feature must say the strands change {STEPPED_PACE!r} (one colour per strand, sent through "
+                "the Hubspace cloud), so no guest reads it as continuous motion"
             )
         return self
 

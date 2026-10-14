@@ -72,6 +72,7 @@ COOLDOWN = "The light is still changing. Choose again in a moment."
 UNKNOWN = "That mood isn't one of the canopy's choices."
 UNAVAILABLE = "That mood isn't available right now. Choose another."
 BEING_SET_UP = "The canopy is being set up. It will be back shortly."
+TESTING = "The canopy is being tested. It will be back shortly."
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]  # the kiosk illustration's module order
 MAX_RETRY_AFTER_S = 60.0  # a guest never waits longer than this, whatever a bad clock says
 
@@ -276,7 +277,8 @@ def _engine_state(engine: Any) -> CanopyState:
 
 
 def _flag(engine: Any, name: str) -> Any:
-    """An optional engine attribute (conductor/canopy.py has `commissioning`, `paused`, `outage`, `stopped`)."""
+    """An optional engine attribute (conductor/canopy.py has `commissioning`, `paused`, `outage`, `stopped`,
+    `rehearsal_active`)."""
     try:
         return getattr(engine, name, None)
     except Exception:  # noqa: BLE001 - a property that fails is just "unknown"
@@ -401,6 +403,8 @@ def refusal_for_state(engine: Any, st: CanopyState, now: float) -> Refusal:
         return 503, RESTING, _retry(st.retry_after_s)
     if _flag(engine, "paused") is True or not st.guest_input:
         return 423, PAUSED, {}
+    if _flag(engine, "rehearsal_active") is True:  # staff are running the stepped rehearsal: every mood waits
+        return 503, TESTING, _retry(st.retry_after_s)
     wait = _remaining(st.cooldown_until, now)
     if wait > 0:
         return cooldown_refusal(wait)

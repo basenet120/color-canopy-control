@@ -160,8 +160,11 @@ class SteppedMotionSettings(_Strict):
     """Stepped looks (D65 draft, conductor/sequence.py): the Conductor re-sends a module-level design a step at a time.
 
     Sim-first: `live_enabled` stays false until the stepped rehearsal (Gate R) passes on real kits; only Alon flips it.
-    The runner's step is never shorter than `min_step_s`, nor than the account's share of `account_writes_per_min`
-    (9 modules at 90/min → 6 s); above `max_step_s` the look holds still. The governor stops a run when, within
+    `account_writes_per_min` is the account's cap on writes of any kind in any 60 s. The runner plans its steps at
+    the cap less `budget_reserve` (the room left for 429 retries, silent-drop re-sends and a mood chosen mid-run), so
+    its step is never shorter than `min_step_s`, nor than the account's share of that planned rate (9 modules at
+    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would take the
+    account past the cap (`sequence.ProgramRunner._step`); above `max_step_s` the look holds still. The governor stops a run when, within
     `governor_window_s`, at least `governor_min_throttled` of the run's write attempts on one account came back 429/403
     and they are at least `governor_throttled_share` of its attempts; stepped runs on that account then wait
     `governor_cooloff_s`. A guest brightness change within `fold_guest_within_s` of the next step goes out with it."""
@@ -170,6 +173,7 @@ class SteppedMotionSettings(_Strict):
     min_step_s: float = Field(4.0, ge=4.0)
     max_step_s: float = Field(12.0, ge=4.0, le=60.0)
     account_writes_per_min: float = Field(90.0, gt=0, le=600)
+    budget_reserve: float = Field(0.2, ge=0.05, le=0.5)
     governor_window_s: float = Field(60.0, ge=10)
     governor_min_throttled: int = Field(8, ge=1)
     governor_throttled_share: float = Field(0.25, gt=0, le=1)

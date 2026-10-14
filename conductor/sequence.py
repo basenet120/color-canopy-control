@@ -11,8 +11,13 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   brightness or on/off doesn't move it) — so a re-pick of the look now showing (a tier
   change, new capabilities) keeps the run's phase, and a re-pick after the run is over only holds. The schedule is
   absolute: a step that comes due late is skipped (never queued) and the next one is the schedule's.
-- **Step length.** step = max(the design's step_s, `min_step_s`, modules on one account × 60 / `account_writes_per_min`,
-  the ripple's span + `min_step_s`). Longer than `max_step_s`: the look holds still and an alert says why.
+- **Step length.** step = max(the design's step_s, `min_step_s`, modules on one account × 60 / the planned rate,
+  the ripple's span + `min_step_s`), the planned rate being `account_writes_per_min` (the account's cap on writes of
+  any kind in any 60 s) less `budget_reserve` — the room 429 retries, silent-drop re-sends and a mood chosen mid-run
+  need (`planned_writes_per_min`). Longer than `max_step_s`: the look holds still and an alert says why.
+- **The cap.** A step that would take an account past `account_writes_per_min` writes in the last 60 s (the
+  executor's own count, every write on the account) plus the step's own is held back: nothing is sent, the step
+  shown stays the last one sent, and the next step tries again (`budget_holds`).
 - **A step** clears the engine's early re-assert counts and sends each driven module whose rows changed (its colour,
   or a guest brightness folded into the step), plus the modules the reconciler deferred to it: one full-state PUT per
   module, never a slot object, through `engine.send(…, source="program")`. Nothing else: the runner never touches
@@ -26,6 +31,7 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   the new level (one PUT each, no extra burst).
 - **The end.** At the last step boundary within the design's run_s the hold is sent once (to the modules not
   already showing it) and the runner stops. The plan's `feature` (the still design's sentence) is the copy again.
+  A run stopped by a 403 sends nothing (`finish(send=False)`): the step last sent stays, as `held_plan()`.
 - **Governor.** Every write attempt to the run's modules (from the executor's `attempt` events, superseded commands
   included — latest-wins would otherwise hide them) is counted per account over `governor_window_s`. At
   ≥ `governor_min_throttled` attempts answered 429/403 that are ≥ `governor_throttled_share` of the attempts, the run
@@ -43,10 +49,11 @@ import contextlib
 import logging
 import math
 from collections import Counter, deque
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from conductor.drivers.base import Outcome
-from conductor.engine_api import ModePlan, Program
+from conductor.engine_api import ModePlan, Program, Tier
 from conductor.executor_api import DeviceStatus
 
 if TYPE_CHECKING:
@@ -60,6 +67,11 @@ NEEDS_ATTENTION_MIN_S = 10.0  # a write unverified this long (or 2 steps, if lon
 _EPS = 1e-6
 
 RUNNING, DONE = "running", "done"
+
+
+def planned_writes_per_min(settings: Any) -> float:
+    """The write rate stepped runs plan for on one account: the cap less the reserve (`motion.stepped`)."""
+    return settings.account_writes_per_min * (1.0 - settings.budget_reserve)
 
 
 class ProgramRunner:
@@ -82,6 +94,7 @@ class ProgramRunner:
         self.deferred: set[str] = set()  # modules the reconciler left to the next step
         self.steps_sent = 0
         self.skipped = 0
+        self.budget_holds = 0  # steps held back because they would have taken an account past the cap
         # the governor's window: (when, account, throttled) per write attempt to the run's modules
         self.attempts: deque[tuple[float, str, bool]] = deque()
         self._pending: dict[str, float] = {}  # device id → when the oldest write not yet verified was sent
@@ -119,11 +132,13 @@ class ProgramRunner:
         rings = self.engine._rings(self.plan)  # the ripple a mood choice would land with (D64)
         span = (len(rings) - 1) * self.engine.deps.settings.kiosk.ripple_stagger_s if rings else 0.0
         # the ripple's span is 0 without a ripple, so the last term is also the min_step_s floor
-        step = max(self.program.step_s, busiest * 60.0 / s.account_writes_per_min, span + s.min_step_s)
+        planned = planned_writes_per_min(s)
+        step = max(self.program.step_s, busiest * 60.0 / planned, span + s.min_step_s)
         step = math.ceil(step * 1000 - _EPS) / 1000  # whole milliseconds: 6.0, not 6.000000000001
         if step > s.max_step_s + _EPS:
             return step, (
-                f"stepping {busiest} modules on one account within {s.account_writes_per_min:g} writes a minute "
+                f"stepping {busiest} modules on one account at {planned:g} writes a minute (the account's "
+                f"{s.account_writes_per_min:g} less a {s.budget_reserve:.0%} reserve for retries and re-sends) "
                 f"needs {step:g} s steps, longer than motion.stepped.max_step_s ({s.max_step_s:g} s)"
             )
         cooling = {a: until for a, until in self.engine.stepped_cooloff.items() if a in accounts}
@@ -131,8 +146,8 @@ class ProgramRunner:
         if until is not None and until > self.clock.monotonic():
             left = until - self.clock.monotonic()
             return step, (
-                f"the throttle governor stopped a stepped run on account {', '.join(sorted(cooling))}; stepped looks "
-                f"there hold still for another {math.ceil(left)} s"
+                f"Hubspace throttled (429/403) a stepped run on account {', '.join(sorted(cooling))}; stepped looks "
+                f"there hold still for another {math.ceil(left)} s (the throttle governor's cool-off)"
             )
         if self.count_for(step) < 1:
             return step, f"its run ({self.program.run_s:g} s) is shorter than one {step:g} s step"
@@ -226,34 +241,79 @@ class ProgramRunner:
     def _step(self, n: int) -> None:
         if self.state is not RUNNING or self._writes_held():
             return
-        self.shown = n
+        previous, self.shown = self.shown, n
+        over = self._over_cap(self._wanted())
+        if over is not None:  # never past the account's cap: this step is held back, the next one tries again
+            self.shown = previous
+            self.budget_holds += 1
+            account, recent, k = over
+            self.engine.telemetry.record(
+                "program",
+                action="budget_hold",
+                mode=self.plan.mode_id,
+                step=n,
+                account=account,
+                writes_60s=recent,
+                step_writes=k,
+                cap=self.settings.account_writes_per_min,
+            )
+            return
         self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})")
+
+    def _wanted(self) -> list[str]:
+        """The modules a send now writes: those whose desired rows differ from the rows sent, plus the deferred."""
+        engine = self.engine
+        return [
+            d
+            for d in self.plan.modules
+            if d in self.deferred or engine.desired_rows(d) != engine.sent_rows.get(d)
+        ]
+
+    def _over_cap(self, wanted: list[str]) -> tuple[str, int, int] | None:
+        """(account, writes in its last 60 s, this step's writes there) when sending `wanted` now would take an
+        account past `account_writes_per_min` (the executor's count: every write on the account, retries included)."""
+        engine = self.engine
+        per_account: dict[str, list[Any]] = {}
+        for device_id in wanted:
+            target = engine.target_of(device_id)
+            if target is not None:
+                per_account.setdefault(engine._account_of(target.address), []).append(target)
+        cap = self.settings.account_writes_per_min
+        for account, targets in sorted(per_account.items()):
+            recent = int(targets[0].executor.budget(targets[0].address).get("account_writes_60s", 0))
+            if recent + len(targets) > cap + _EPS:
+                return account, recent, len(targets)
+        return None
 
     def _send(self, what: str) -> list[str]:
         engine = self.engine
         engine._early_counts.clear()  # this step's silent drops get their early re-sends too
-        deferred = set(self.deferred)
+        wanted = self._wanted()
         self.deferred.clear()
-        wanted = [
-            d for d in self.plan.modules if d in deferred or engine.desired_rows(d) != engine.sent_rows.get(d)
-        ]
         sent = engine.send(wanted, source="program", label=f"{what}: {self.plan.mode_id}") if wanted else []
         if sent:
             self.steps_sent += 1
             engine.reconciler.on_step([engine.target_of(d).address for d in sent if engine.target_of(d)])
         return sent
 
-    def finish(self, why: str, *, alert: str | None = None) -> None:
-        """End the run: the still look is the desired state again, sent once to the modules not showing it."""
+    def finish(self, why: str, *, alert: str | None = None, send: bool = True) -> None:
+        """End the run: the still look is the desired state again, sent once to the modules not showing it.
+
+        `send=False` (a 403: the venue IP may be blocked) sends nothing: the step last sent — a still, one colour per
+        module look — stays the desired state, so nothing re-asserts either, until the next look replaces it."""
         if self.state is not RUNNING:
             return
-        self.state, self.shown, self.ended = DONE, None, why
+        self.state, self.ended = DONE, why
         self._stop_listening()
         engine = self.engine
-        if engine.outage is None and not engine.commissioning and not engine.stopped:
-            self._send("hold")
+        if not send:
+            self.deferred.clear()
         else:
-            engine.reconciler.schedule_reassert()  # it goes out once the engine can send again
+            self.shown = None
+            if engine.outage is None and not engine.commissioning and not engine.stopped:
+                self._send("hold")
+            else:
+                engine.reconciler.schedule_reassert()  # it goes out once the engine can send again
         engine.telemetry.record(
             "program",
             action="end",
@@ -261,10 +321,46 @@ class ProgramRunner:
             reason=why,
             steps_sent=self.steps_sent,
             skipped=self.skipped,
+            budget_holds=self.budget_holds,
         )
         if alert:
             engine.telemetry.record("alert", level="warn", message=alert, source="program")
         engine._publish_soon()
+
+    def held_plan(self) -> ModePlan | None:
+        """A still plan of the step a stopped run holds (`finish(send=False)`): each module's rows, readback and
+        colours as that step sent them, no program, so the kiosk draws what the canopy shows and nothing re-asserts.
+        None while running, after the hold, or when the step held is step 0 (the plan's own look)."""
+        if self.running or self.shown is None or self.shown % self.cycle == 0:
+            return None
+        step = self.program.steps[self.shown % self.cycle]
+        modules = {}
+        for device_id, mt in self.plan.modules.items():
+            rows = step.rows.get(device_id)
+            entry = self.engine._entry(device_id)
+            colour = step.colours.get(str(entry.module)) if entry is not None and entry.module else None
+            if rows is None or colour is None:
+                modules[device_id] = mt
+                continue
+            rgb = {k: int(colour[1 + 2 * i : 3 + 2 * i], 16) for i, k in enumerate(("r", "g", "b"))}
+            level = next(
+                (r.value for r in rows if r.key == ("brightness", None) and isinstance(r.value, int)), 100
+            )
+            modules[device_id] = replace(
+                mt,
+                rows=list(rows),
+                expect=list(rows),
+                colors=[dict(rgb) for _ in mt.colors],
+                preview=[{k: round(v * level / 100) for k, v in rgb.items()} for _ in mt.preview],
+            )
+        return replace(
+            self.plan,
+            tier=Tier.T3,  # a still module-level look, like the hold
+            modules=modules,
+            program=None,
+            waves=None,
+            notes=[*self.plan.notes, f"Held at step {self.shown} of a stepped run stopped by a 403"],
+        )
 
     # ---- what the engine asks ---------------------------------------------------------------------------------
     @property

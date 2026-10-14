@@ -34,15 +34,18 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     # the stepped scenario (D65 draft): its own run with a SIMULATED stepped rung, each step measured from the lights
     st = results["stepped"]
     assert st["tiers"] == {"stepped": 4} and st["runs"] == 4 and st["interrupted"] == 1
-    assert st["ended"] == {"the run is over": 3, "replaced": 1} and set(st["step_s"]) == {6.0}
-    assert st["steps_landed"] >= 3 * 14 and st["step_spreads"] and st["step_landings"]  # the metrics exist
+    # 7.5 s steps: the design's 6 s stretched to 9 modules at 72 a minute (the cap of 90 less the 20 % reserve)
+    assert st["ended"] == {"the run is over": 3, "replaced": 1} and set(st["step_s"]) == {7.5}
+    assert st["steps_landed"] >= 3 * 11 and st["step_spreads"] and st["step_landings"]  # the metrics exist
     assert st["steps_superseded"] == st["steps_failed"] == st["steps_skipped"] == 0
     assert (
         set(st["puts_per_module_step"]) == {1} and st["missing"] == 0
     )  # one PUT per changed module per step
     assert st["governor_trips"] == 0 and st["downgrades"] == 0  # at the pinned 5% throttling
-    assert st["max_account_program_puts_60s"] <= 90  # the runner's pace: ≤ 90 a minute on the account
-    assert st["max_account_writes_60s"] >= st["max_account_program_puts_60s"]  # retries and re-sends on top
+    assert st["max_account_program_puts_60s"] <= 72 + 9  # the runner's pace, and part of a ninth step's burst
+    assert (
+        st["max_account_program_puts_60s"] <= st["max_account_writes_60s"] <= 90
+    )  # retries, re-sends: the cap
     assert len(st["holds"]) == 3 and st["holds_unsettled"] == 0
     assert st["idle_return"]["mode"] == "lowcountry-calm" and 180 <= st["idle_return"]["after_s"] <= 190
     assert "Stepped, SIMULATED: each step's landing spread" in text and "Stepped scenario (D65 draft" in text
@@ -215,8 +218,8 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
     assert settings["technique"] == {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 90}
     rows = soak._stepped_rows(_stepped())
     assert [r["pass"] for r in rows] == [True] * 9
-    # the spread (05's target, per step) and the account's writes of every kind are reported, not gating
-    assert [r.get("gating", True) for r in rows] == [False, True, True, True, False, True, True, True, True]
+    # the spread (05's target, per step) is reported, not gating; the account's writes of every kind gate (the cap)
+    assert [r.get("gating", True) for r in rows] == [False, True, True, True, True, True, True, True, True]
     failing = [
         _stepped(step_spreads=[2.5] * 4),
         _stepped(steps_superseded=1),
@@ -242,7 +245,7 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
     for index, stepped in zip(rows_failing, failing, strict=True):
         rows = soak._stepped_rows(stepped)
         assert [i for i, r in enumerate(rows) if not r["pass"]] == [index], stepped
-        assert soak.passed(rows) is (index in (0, 4)), stepped  # only the two reported rows never fail it
+        assert soak.passed(rows) is (index == 0), stepped  # only the reported spread never fails it
     line = soak._stepped_line(_stepped(steps_cut=2, interrupted=1))
     assert "2 cut by a newer mood" in line and "`config/sim/acceptance.yaml` is pinned" in line
 
@@ -328,8 +331,8 @@ def test_a_module_is_correct_when_it_shows_the_step_the_run_is_at():
 
 
 def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_path):
-    """The instruments can fail: with the lights taking 7–8 s to apply a write and 6 s steps (the account cap's
-    pace), every step is superseded by the next before it shows, and the verdict says so."""
+    """The instruments can fail: with the lights taking 9–10 s to apply a write and 7.5 s steps (the account cap's
+    pace less its reserve), every step is superseded by the next before it shows, and the verdict says so."""
     from conductor.clock import run_virtual
     from conductor.sim.settings import SimSettings
 
@@ -337,17 +340,17 @@ def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_
         **soak.load_soak_stepped(),
         "runs": 1,
         "interrupt_every": 0,
-        "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 36},
+        "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 45},
     }
     slow = SimSettings.from_acceptance().with_(
-        device_apply_extra_s_min=7.0,
-        device_apply_extra_s_max=8.0,
+        device_apply_extra_s_min=9.0,
+        device_apply_extra_s_max=10.0,
         throttle_429_rate=0.0,
         silent_drop_rate=0.0,
     )
     cfg = soak.SoakConfig(seed=1, report_path=None, stepped=stepped, sim_settings=slow)
     out = run_virtual(lambda: soak._stepped_soak(cfg))
-    assert out["runs"] == 1 and set(out["step_s"]) == {6.0}
+    assert out["runs"] == 1 and set(out["step_s"]) == {7.5}
     assert out["steps_superseded"] >= 4 and out["steps_landed"] <= 1  # only the last step (the hold) can land
     landing = soak._stepped_rows(out)[1]
     assert not landing["pass"] and f"{out['steps_superseded']} superseded" in landing["name"]

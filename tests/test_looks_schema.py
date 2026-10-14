@@ -476,6 +476,59 @@ def test_moving_copy_that_claims_an_effect_or_per_light_animation_is_refused(cla
     assert "moving_feature says" in msg and "one colour at a time through the Hubspace cloud" in msg
 
 
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "every head",
+        "Each head",
+        "all the bulbs",
+        "every bulb",
+        "all nine lights",
+        "individually",
+        "individual",
+        "continuously",
+        "a smooth",
+        "smoothly",
+        "seamlessly",
+        "fluid",
+        "fades",
+        "fading",
+        "glides",
+        "gliding",
+        "shimmer",
+        "twinkling",
+        "sparkle",
+        "chases",
+    ],
+)
+def test_moving_copy_that_claims_per_head_or_smooth_motion_is_refused(claim):
+    """Stepped motion is one colour per strand, switched every few seconds; whether a strand cuts or fades between
+    steps is bench item 6 (not settled), so copy can't promise per-head, smooth or continuous movement."""
+    msg = _bad(_stepped(moving_feature=f"{TIDES_MOVING} It changes {claim} as you watch."))
+    assert "moving_feature says" in msg and "no light-by-light or smooth animation" in msg
+
+
+@pytest.mark.parametrize(
+    "copy_",
+    [
+        "Every head shimmers continuously from the centre out.",
+        "Each strand fades smoothly into its next colour, so the palette glides from the centre out.",
+    ],
+)
+def test_the_reviewers_false_sentences_are_refused(copy_):
+    def radial(d):
+        _sampled(RADIAL)(d)
+        _stepped(moving_feature=copy_)(d)
+
+    assert "moving_feature says" in _bad(radial)
+
+
+def test_moving_copy_must_say_the_strands_change_every_few_seconds():
+    msg = _bad(_stepped(moving_feature="Each strand shows one colour, so the palette moves diagonally."))
+    assert "moving_feature must say the strands change 'every few seconds'" in msg
+    assert _stepped_ok(_stepped()).moving_feature == TIDES_MOVING  # says it
+
+
 def test_moving_copy_may_say_moves_but_static_copy_still_may_not():
     assert "moves" in _stepped_ok(_stepped()).moving_feature
 

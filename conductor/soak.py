@@ -42,8 +42,9 @@ right when its lights show that step. Measured per step from the lights (every p
 each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's) and
 send → last module; steps superseded (a module sent the next step before it showed this one), failed, skipped by a
 late schedule or cut by a newer mood; the program commands per module per step (exactly one, and none missing for a
-module whose rows changed); the most program PUTs on one account in any 60 s (≤ `account_writes_per_min`) and the
-most writes of any kind there (reported: retries and re-sends come on top of the planned pace); governor trips and
+module whose rows changed); the most program PUTs on one account in any 60 s and the most writes of any kind there
+(both ≤ `account_writes_per_min`: the runner paces its steps at the cap less `budget_reserve`, the room retries,
+re-sends and a mood chosen mid-run need, and holds back a step that would pass the cap); governor trips and
 tier downgrades at 5% throttling (0); the still look after each run; and the idle return after the last choice
 (`idle_return_s` to `idle_return_s` + slack — a run never moves the idle clock). Its targets are proposals in
 soak.yaml: `config/sim/acceptance.yaml` is pinned and gains them only with Alon's sign-off.
@@ -1370,17 +1371,16 @@ def _stepped_rows(stepped: dict) -> list[dict]:
         {
             "name": f"{tag}: most stepped program PUTs on one account in any 60 s (by send time)",
             "max": stepped["max_account_program_puts_60s"],
-            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min, the pace the runner plans)",
+            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min; the runner plans below it)",
             "pass": stepped["max_account_program_puts_60s"] <= cap,
         },
         {
             "name": f"{tag}: most writes of any kind on one account in any 60 s (steps, 429 retries, re-sends, "
             "mood changes)",
             "max": stepped["max_account_writes_60s"],
-            "target": f"≤ {cap:g} (reported for D65, not gating: the runner plans its steps at the cap and leaves "
-            "no headroom for retries, re-sends or a mood chosen mid-run)",
+            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min: the steps are paced at the cap less "
+            "motion.stepped.budget_reserve, the room retries, re-sends and a mood chosen mid-run need)",
             "pass": stepped["max_account_writes_60s"] <= cap,
-            "gating": False,
         },
         {
             "name": f"{tag}: throttle governor trips at 5% throttling",

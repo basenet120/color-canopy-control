@@ -970,3 +970,18 @@ def test_the_dev_launcher_is_simulator_only(tmp_path):
     assert "framebuffer_mapping" not in launcher.overlay(solid=True)["devices"]["shop-string-1"]
     makefile = (ROOT / "Makefile").read_text()
     assert "guest-dev:" in makefile and "scripts/dev_guest_panel.py" in makefile
+
+
+def test_a_scene_tapped_during_the_stepped_rehearsal_says_the_canopy_is_being_tested(app_client_show):
+    from test_kiosk_routes import _rehearsing
+
+    from conductor.routes.kiosk import TESTING
+
+    c = app_client_show
+    route = _rehearsing(c)
+    try:
+        r = c.post("/api/kiosk/scene", json={"scene": COASTAL.id})
+        assert r.status_code == 503 and r.json()["detail"] == TESTING, r.text
+        assert 0 < r.json()["retry_after_s"] <= 60
+    finally:
+        assert c.post(f"{route}/stop", json={}).status_code == 200
