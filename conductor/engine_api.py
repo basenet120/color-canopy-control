@@ -138,6 +138,10 @@ class CanopyState:
     guest_power: bool = True
     brightness: int | None = None
     guest_brightness_min: int | None = None
+    # The phase of the look itself, judged over the modules the current plan drives (D62 follow-up): the modules it
+    # left out (`ModePlan.skipped`, e.g. no device registered) keep `phase` at NEEDS_ATTENTION for /ops, but never
+    # hide a change or a finished look from the guest. None = the same as `phase` (an engine that doesn't set it).
+    look_phase: CanopyPhase | None = None
 
     def to_json(self) -> dict:
         return {
@@ -146,6 +150,7 @@ class CanopyState:
             "tier": self.tier,
             "feature": self.feature,
             "phase": str(self.phase),
+            "look_phase": str(self.look_phase) if self.look_phase is not None else None,
             "guest_input": self.guest_input,
             "paused_since": self.paused_since,
             "cooldown_until": self.cooldown_until,

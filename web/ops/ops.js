@@ -2,6 +2,7 @@
 // devices, device enrollment and the log tail. Live over WebSocket topics "canopy" and "ops", plus a 10 s poll.
 import { api, connectLive, copyJSON, simBadge } from "/static/app.js";
 import { fill, fmtAge, h, pill, show, simTag, statusPill } from "/ops/dom.js";
+import { commissionScope, headsCounts, moduleScope, positions, testWaitNote } from "/ops/counts-model.mjs";
 
 const POLL_MS = 10000;
 const LOG_POLL_MS = 5000;
@@ -157,8 +158,12 @@ function drawGrid() {
       const status = eng.status || m.status || "unknown";
       const reason = eng.reason || m.reason || "";
       const name = m.label || m.id;
-      if (status !== "ready" && reason) issues.push({ name, reason, device: m.device_id });
-      const href = m.device_id ? `/ops/module/?device=${encodeURIComponent(m.device_id)}` : null;
+      // A position with no Hubspace device registered (D62) has no module page to open: it links to /ops/accounts.
+      const unregistered = m.registered === false;
+      if (status !== "ready" && reason) issues.push({ name, reason, device: m.device_id, unregistered });
+      const href = unregistered
+        ? "/ops/accounts/"
+        : m.device_id ? `/ops/module/?device=${encodeURIComponent(m.device_id)}` : null;
       const mism = m.counts ? m.counts.mismatch : 0;
       return h(
         href ? "a" : "div",
@@ -166,7 +171,9 @@ function drawGrid() {
           class: `cell s-${status}`,
           href,
           style: `grid-row: ${m.row + 1}; grid-column: ${m.col + 1}`,
-          title: `${name}: ${reason || status} — open the module page`,
+          title: unregistered
+            ? `${name}: no Hubspace device registered — register one on /ops/accounts`
+            : `${name}: ${reason || status} — open the module page`,
           "data-module": m.id,
         },
         h("span", { class: "cell-head" }, h("span", { class: "cell-name" }, name), h("span", { class: "dot-status" })),
@@ -174,7 +181,9 @@ function drawGrid() {
         h(
           "span",
           { class: "cell-foot" },
-          m.lock_owner ? `Held: ${m.lock_owner}` : mism ? `${mism} heads differ` : statusWord(status),
+          unregistered
+            ? "No device registered"
+            : m.lock_owner ? `Held: ${m.lock_owner}` : mism ? `${mism} heads differ` : statusWord(status),
         ),
       );
     }),
@@ -186,14 +195,21 @@ function drawGrid() {
         "li",
         {},
         h("span", { class: "title" }, i.name), " — ", i.reason, " ",
-        i.device ? h("a", { href: `/ops/module/?device=${encodeURIComponent(i.device)}` }, "Open module page") : null,
+        i.unregistered
+          ? h("a", { href: "/ops/accounts/" }, "Register a device")
+          : i.device ? h("a", { href: `/ops/module/?device=${encodeURIComponent(i.device)}` }, "Open module page") : null,
       ),
     ),
   );
-  const c = headsData.counts;
+  // D62: the counts' wording (registered of nine) lives in counts-model.mjs, where node tests pin it
   $("heads-note").textContent =
-    `${c.match} of ${c.heads} heads match their look · ${c.mismatch} differ · ${c.unknown} not read back yet. ` +
-    `Tap a module to open its page. ${headsData.readback_note}`;
+    headsCounts(headsData.counts) + `Tap a module to open its page. ${headsData.readback_note}`;
+}
+
+// How many canopy positions have a Hubspace device registered (D62), from the last heads read: {registered, total},
+// or null before the first read.
+function registeredPositions() {
+  return positions(headsData && headsData.counts);
 }
 
 function statusWord(status) {
@@ -257,8 +273,10 @@ function setupControls() {
   );
   const dialog = $("commission-dialog");
   $("commission-btn").addEventListener("click", () => {
+    const p = registeredPositions();
+    $("commission-scope").textContent = commissionScope(p);
     if (typeof dialog.showModal === "function") dialog.showModal();
-    else if (window.confirm("Commission slots on all nine modules now?")) commission();
+    else if (window.confirm(`Commission slots on ${moduleScope(p)} now?`)) commission();
   });
   dialog.addEventListener("close", () => {
     if (dialog.returnValue === "go") commission();
@@ -308,11 +326,13 @@ async function runChecklist() {
 async function testModeChange() {
   const btn = $("test-mode-btn");
   btn.disabled = true;
-  btn.textContent = "Timing all nine modules…";
-  note($("test-result"), "Changing the mode once and waiting up to 10 s for every module to read back Ready…");
+  const p = registeredPositions();
+  btn.textContent = `Timing ${moduleScope(p)}…`;
+  note($("test-result"), testWaitNote(p));
   try {
     const r = await api("/api/ops/checklist/test-mode-change", { method: "POST", body: {} });
-    const late = r.modules.filter((m) => m.ready_after_s == null);
+    // Positions with no device registered aren't timed: the message names them ("Not timed: …"), never "Not ready".
+    const late = r.modules.filter((m) => m.registered !== false && m.ready_after_s == null);
     const extra = late.length ? ` Not ready: ${late.map((m) => `${m.label} (${m.reason || m.status})`).join("; ")}.` : "";
     const back = r.restored_to ? " Changed back afterwards." : "";
     note($("test-result"), r.message + extra + back + (r.simulated ? " (SIMULATED)" : ""), r.ok ? "ok" : "error");

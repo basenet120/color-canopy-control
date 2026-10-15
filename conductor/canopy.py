@@ -22,7 +22,9 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
 - **Phase.** RESTING while guest input is paused, during an outage, before the first mode and after stop();
   NEEDS_ATTENTION when a module has needed attention (wrong after re-asserts, offline, signed out) longer than
   `reconciler.downgrade_after_wrong_s`, can't be addressed, or every module is locked; UPDATING while any command is pending, verifying or
-  waiting for a readback; READY when every non-locked module's readback matches (tracker READY).
+  waiting for a readback; READY when every non-locked module's readback matches (tracker READY). `look_phase` is
+  the same judgement over the modules the plan drives (the ones it left out don't count), so a partial canopy stays
+  NEEDS_ATTENTION on /ops while the guest still sees its look change and settle.
 - **Outage.** When `CONNECTION` / `TIMEOUT` / `SERVER_ERROR` outcomes — or THROTTLED with HTTP 503/504, which the
   Afero adapter keeps retryable but counts as an outage signature (D15) — hit at least `min(3, modules)` different
   modules with no success in between, the engine rests ("The canopy is resting…"); the reconciler probes one module every
@@ -624,6 +626,7 @@ class CanopyEngine:
                 if "skipped" in statuses
                 else ""
             )
+            + self._left_out_line(report["modes"])
             + "."
         )
         self.telemetry.record(
@@ -633,6 +636,35 @@ class CanopyEngine:
         self._replan_soon()
         self._publish_soon()
         return report
+
+    def _left_out_line(self, commissioned: dict[str, Any]) -> str:
+        """The commission report's account of the modules its plans left out (D62): nothing was written there."""
+        left_out: list[str] = []
+        for mode_id in commissioned:
+            plan = self._t1_plans.get(mode_id)
+            left_out += [d for d in (plan.skipped if plan is not None else {}) if d not in left_out]
+        unregistered, unread = [], []
+        for device_id in left_out:
+            try:
+                self.deps.target(device_id, Purpose.ENGINE)
+            except (LookupError, KeyError):
+                unregistered.append(device_id)  # no address on the engine's driver (services.target)
+            else:
+                unread.append(device_id)  # registered, but its profile hasn't been read (D36)
+
+        def names(ids: list[str]) -> str:
+            return ", ".join(((e.label if (e := self._entry(d)) else "") or d) for d in ids)
+
+        line = ""
+        if unregistered:
+            verb = "has" if len(unregistered) == 1 else "have"
+            line += (
+                f"; {names(unregistered)} {verb} no Hubspace device registered, so nothing was written there"
+            )
+        if unread:
+            verb = "has" if len(unread) == 1 else "have"
+            line += f"; {names(unread)} {verb} no profile read yet, so nothing was written there"
+        return line
 
     # ---- state ------------------------------------------------------------------------------------------------
     def state(self) -> CanopyState:
@@ -650,6 +682,9 @@ class CanopyEngine:
                 "module": entry.module if entry else None,
                 "locked": False,
                 "simulated": simulated,
+                # presentation only (the kiosk preview): left out of the look; driven but wrong past the window
+                "left_out": device_id in skipped,
+                "stuck": False,
             }
             target = self._targets.get(device_id)
             if device_id in skipped:  # left out of the look (e.g. its profile hasn't been read yet)
@@ -681,11 +716,15 @@ class CanopyEngine:
                     if status is DeviceStatus.READY
                     else self.tracker.snapshot(target.address)["reason"]
                 )
-                record.update(status=str(status), reason=reason)
+                record.update(status=str(status), reason=reason, stuck=self._stuck(device_id, status))
                 active_statuses.append((device_id, status))
             modules[device_id] = record
 
         phase, message = self._phase(plan, modules, active_statuses, unresolved, locked_count)
+        # The guest's phase judges the look over the modules it drives: the ones the plan left out keep /ops at
+        # needs attention (D62) but never hide a change in flight or a finished look from the kiosk.
+        driven_unresolved = [d for d in unresolved if d not in skipped]
+        look_phase, _ = self._phase(plan, modules, active_statuses, driven_unresolved, locked_count)
         remaining = self._cooldown_remaining(self.clock.monotonic())
         return CanopyState(
             mode=plan.mode_id if plan else None,
@@ -700,6 +739,7 @@ class CanopyEngine:
             modules=modules,
             simulated=simulated,
             message=message,
+            look_phase=look_phase,
             guest_brightness=self._guest_brightness,
             guest_power=self._guest_power,
             brightness=self._brightness_now(plan),
@@ -723,12 +763,8 @@ class CanopyEngine:
         if plan is None:
             return CanopyPhase.RESTING, STARTING_MESSAGE
         if self._commissioning:
-            return CanopyPhase.UPDATING, "Writing the saved patterns to every strand…"
-        stuck = [
-            d
-            for d, s in active
-            if s is DeviceStatus.NEEDS_ATTENTION and self.reconciler.wrong_too_long(self._targets[d].address)
-        ]
+            return CanopyPhase.UPDATING, "Writing the saved patterns to every registered strand…"
+        stuck = [d for d, s in active if self._stuck(d, s)]
         if stuck or unresolved:
             names = [modules[d]["label"] for d in [*stuck, *unresolved]]
             first = modules[(stuck or unresolved)[0]]["reason"]
@@ -742,6 +778,12 @@ class CanopyEngine:
             return CanopyPhase.UPDATING, "Changing the light…"
         suffix = f" ({locked_count} module(s) in use on a test page)" if locked_count else ""
         return CanopyPhase.READY, "Ready" + suffix
+
+    def _stuck(self, device_id: str, status: DeviceStatus) -> bool:
+        """A driven module that has needed attention longer than `reconciler.downgrade_after_wrong_s`."""
+        return status is DeviceStatus.NEEDS_ATTENTION and self.reconciler.wrong_too_long(
+            self._targets[device_id].address
+        )
 
     def _refused(self, message: str, retry_after_s: float | None) -> CanopyState:
         state = self.state()
@@ -1048,7 +1090,7 @@ class CanopyEngine:
             "alert",
             level="info",
             message=f"Hubspace is answering again ({why}); re-applying "
-            f"{self._plan.label if self._plan else 'nothing'} to every module.",
+            f"{self._plan.label if self._plan else 'nothing'} to every driven module.",
         )
         self.reconciler.on_recovery()
         if self._plan is not None:
