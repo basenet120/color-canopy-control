@@ -5,6 +5,13 @@ Rules implemented:
 - Cross-checks against the rest of the config: every colour a mode names exists in `config/recipes.yaml`; each
   `slot` is one of custom-1..3 and no two modes share one (store-and-select, 04); every ladder entry has its
   technique; a canvas/slot tier needs the mode's slot; module-level (T3) row/column lists match the canopy grid.
+- **A sampled module look (T3 `sample`)** paints each module one colour from a canvas (a 2-D `field` or a `gradient`,
+  `conductor/looks/field.py`). Its `feature` must use the design's layout words (`field.layout_words`: "column by
+  column", "row by row", "diagonally", "from the centre out" only for a radial design centred on the canopy, "from
+  one edge", "from two points", …) and no other layout's words, compared without regard to case, so a radial design
+  can't say "column by column" and an off-centre one can't say "from the centre out". A design whose module
+  centres all sample to one colour (`at: centre`) on the full canopy is refused (it has no layout to describe). A sweep centred
+  exactly on a module's centre has no colour there and is refused when sampled at the centre.
 - **Copy honesty (05 #12, 07 §6):** a technique's `feature` sentence is shown while that technique runs, so it may
   never promise movement. Only `motion_feature` — used when a bench-enabled motion code is actually running — may
   say "moving" or "animated".
@@ -20,6 +27,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from conductor.config import CONFIG_DIR, ConfigError, RecipesFile, _read_yaml, load_recipes
+from conductor.looks import field as F
 from conductor.rows import SLOTS
 
 TechniqueName = Literal["strand", "canvas", "slot", "modules"]
@@ -89,6 +97,13 @@ class BandSpec(ColorLevel):
     width_in: float = Field(gt=0, le=75)
 
 
+def _ordered_stops(v: list[ColorStop]) -> list[ColorStop]:
+    ats = [s.at for s in v]
+    if ats != sorted(ats) or len(set(ats)) != len(ats):
+        raise ValueError("stops must be listed in increasing `at` order (0.0 … 1.0), each position once")
+    return v
+
+
 class GradientCanvas(_Strict):
     kind: Literal["gradient"]
     axis: Literal["x", "y"]
@@ -98,10 +113,21 @@ class GradientCanvas(_Strict):
     @field_validator("stops")
     @classmethod
     def _ordered(cls, v: list[ColorStop]) -> list[ColorStop]:
-        ats = [s.at for s in v]
-        if ats != sorted(ats) or len(set(ats)) != len(ats):
-            raise ValueError("stops must be listed in increasing `at` order (0.0 … 1.0), each position once")
-        return v
+        return _ordered_stops(v)
+
+
+class FieldCanvas(_Strict):
+    """Colour stops over a 2-D design field (`conductor/looks/field.py`): linear at any angle, radial, or a sweep."""
+
+    kind: Literal["field"]
+    field: F.FieldSpec
+    stops: list[ColorStop] = Field(min_length=2)
+    recipe: RecipeKind = "blend"
+
+    @field_validator("stops")
+    @classmethod
+    def _ordered(cls, v: list[ColorStop]) -> list[ColorStop]:
+        return _ordered_stops(v)
 
 
 class PathwayCanvas(_Strict):
@@ -118,7 +144,13 @@ class BandCanvas(_Strict):
     recipe: RecipeKind = "blend"
 
 
-CanvasSpec = Annotated[GradientCanvas | PathwayCanvas | BandCanvas, Field(discriminator="kind")]
+CanvasSpec = Annotated[GradientCanvas | PathwayCanvas | BandCanvas | FieldCanvas, Field(discriminator="kind")]
+SampleCanvas = Annotated[FieldCanvas | GradientCanvas, Field(discriminator="kind")]
+# Discriminator tags pydantic puts in an error's location after a union-typed field; `_where` leaves them out.
+_UNION_TAGS = {
+    "canvas": {"gradient", "pathway", "band_per_module", "field"},
+    "field": set(F.FIELD_KINDS),
+}
 
 
 class MotionEffect(_Strict):
@@ -165,20 +197,45 @@ class SlotTechnique(_Strict):
     feature: str = Field(min_length=10)
 
 
+class ModuleSample(_Strict):
+    """T3 sampled from a canvas: each module set to the canvas colour at its centre (`at: centre`) or the mean of its
+    30 heads' colours (`at: mean`), as one RGB colour at `brightness` — the same brightness on every module (D60)."""
+
+    canvas: SampleCanvas
+    at: Literal["centre", "mean"] = "centre"
+    brightness: int = Field(100, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _rgb_only(self) -> ModuleSample:
+        if self.canvas.recipe != "rgb_only":
+            raise ValueError(
+                "a module-level sample sets each strand to one RGB colour (no per-puck white), so its canvas "
+                "needs recipe: rgb_only"
+            )
+        return self
+
+
 class ModulesTechnique(_Strict):
-    """T3: one strand look per canopy module, by row, by column, or a middle row against the others."""
+    """T3: one strand look per canopy module, by row, by column, a middle row against the others, or sampled from a
+    canvas at each module (`sample`)."""
 
     rows: list[LookSpec] | None = None
     columns: list[LookSpec] | None = None
     middle_row: LookSpec | None = None
     others: LookSpec | None = None
+    sample: ModuleSample | None = None
     feature: str = Field(min_length=10)
 
     @model_validator(mode="after")
     def _one_layout(self) -> ModulesTechnique:
-        layouts = [self.rows is not None, self.columns is not None, self.middle_row is not None]
+        layouts = [
+            self.rows is not None,
+            self.columns is not None,
+            self.middle_row is not None,
+            self.sample is not None,
+        ]
         if sum(layouts) != 1:
-            raise ValueError("give exactly one of rows, columns, or middle_row (+ others)")
+            raise ValueError("give exactly one of rows, columns, middle_row (+ others), or sample")
         if (self.middle_row is None) != (self.others is None):
             raise ValueError("middle_row and others go together")
         if self.rows is not None and not self.rows:
@@ -259,9 +316,11 @@ class ModesFile(_Strict):
 # ---- loading + cross-checks --------------------------------------------------------------------------------------
 def _where(loc: tuple[Any, ...]) -> str:
     parts = list(loc)
+    # a discriminated union's tag follows the field it belongs to (… canvas → field → field → radial → cycles)
+    parts = [p for i, p in enumerate(parts) if not (i and p in _UNION_TAGS.get(parts[i - 1], ()))]
     if len(parts) >= 2 and parts[0] == "modes":
         head = f"mode {parts[1]!r}"
-        rest = [p for p in parts[2:] if p not in ("gradient", "pathway", "band_per_module")]
+        rest = parts[2:]
         return " → ".join([head, *(f"[{p}]" if isinstance(p, int) else str(p) for p in rest)])
     return " → ".join(f"[{p}]" if isinstance(p, int) else str(p) for p in parts) or "(top level)"
 
@@ -275,20 +334,89 @@ def _explain(path: Path | str, err: ValidationError) -> str:
     return "\n".join(lines)
 
 
+def _canvas_refs(c: Any, at: str) -> list[tuple[str, str]]:
+    if isinstance(c, GradientCanvas | FieldCanvas):
+        return [(f"{at} → stops → [{i}] → color", s.color) for i, s in enumerate(c.stops)]
+    if isinstance(c, PathwayCanvas):
+        return [(f"{at} → base → color", c.base.color), (f"{at} → path → color", c.path.color)]
+    if isinstance(c, BandCanvas):
+        return [(f"{at} → base → color", c.base.color), (f"{at} → band → color", c.band.color)]
+    return []
+
+
 def _colour_refs(mode: Mode) -> list[tuple[str, str]]:
     """(where, colour name) for every recipe colour a mode names."""
     out: list[tuple[str, str]] = []
-    canvas = mode.techniques.canvas
-    if canvas is None:
+    if mode.techniques.canvas is not None:
+        out += _canvas_refs(mode.techniques.canvas.canvas, "techniques → canvas → canvas")
+    mods = mode.techniques.modules
+    if mods is not None and mods.sample is not None:
+        out += _canvas_refs(mods.sample.canvas, "techniques → modules → sample → canvas")
+    return out
+
+
+def layout_words(canvas: FieldCanvas | GradientCanvas, canopy: dict | None) -> str | None:
+    """How copy must describe a sampled canvas's layout (`field.layout_words`; a gradient is linear at 0 or 90°).
+    None when that depends on the canopy (a radial or sweep design's centre) and there is none to check against."""
+    if isinstance(canvas, GradientCanvas):
+        return "column by column" if canvas.axis == "x" else "row by row"
+    if isinstance(canvas.field, F.LinearField) or canopy is not None:
+        return F.layout_words(canvas.field, canopy or {})
+    return None
+
+
+def _one_colour(sample: ModuleSample, recipes: RecipesFile, canopy: dict, names: list[str]) -> bool:
+    """Whether the canvas has the same colour at every module centre (only asked when its colours are all known)."""
+    from conductor.looks.composer import evaluate  # composer imports this module
+
+    colours = {
+        evaluate(sample.canvas, x, y, canopy=canopy, recipes=recipes)
+        for x, y in F.module_centres(canopy, names).values()
+    }
+    return len(colours) < 2
+
+
+def _sample_problems(
+    mode_id: str, mods: ModulesTechnique, recipes: RecipesFile, canopy: dict | None
+) -> list[str]:
+    """A sampled module look's copy names its layout (and no other); its design has more than one colour across the
+    module centres; a sweep isn't centred on a module it samples at the centre."""
+    sample = mods.sample
+    if sample is None:
+        return []
+    out = []
+    at = f"mode {mode_id!r} → techniques → modules"
+    words = layout_words(sample.canvas, canopy)
+    feature = mods.feature.lower()
+    if words is not None and words not in feature:
+        out.append(
+            f"{at} → feature: the sampled design is laid out {words!r}, so the copy must say {words!r} "
+            f"(it reads {mods.feature!r})"
+        )
+    others = [p for p in F.LAYOUT_PHRASES if p != words and p in feature]
+    if words is not None and others:
+        out.append(
+            f"{at} → feature: the sampled design is laid out {words!r}, but the copy also says "
+            f"{', '.join(repr(p) for p in others)}, which it isn't"
+        )
+    if canopy is None:
         return out
-    c = canvas.canvas
-    at = "techniques → canvas → canvas"
-    if isinstance(c, GradientCanvas):
-        out += [(f"{at} → stops → [{i}] → color", s.color) for i, s in enumerate(c.stops)]
-    elif isinstance(c, PathwayCanvas):
-        out += [(f"{at} → base → color", c.base.color), (f"{at} → path → color", c.path.color)]
-    elif isinstance(c, BandCanvas):
-        out += [(f"{at} → base → color", c.base.color), (f"{at} → band → color", c.band.color)]
+    grid = canopy["orientations"][canopy["orientation_scheme"]]
+    names = [f"r{r}c{c}" for r, row in enumerate(grid) for c in range(len(row))]
+    known = all(s.color in recipes.colors for s in sample.canvas.stops)
+    if sample.at == "centre" and known and _one_colour(sample, recipes, canopy, names):
+        out.append(
+            f"{at} → sample: the design has the same colour at every module centre, so module level shows one "
+            "colour, not a layout; change the field (fewer cycles, another centre), the stops, or use at: mean"
+        )
+    spec = sample.canvas.field if isinstance(sample.canvas, FieldCanvas) else None
+    if isinstance(spec, F.SweepField) and sample.at == "centre":
+        for pos, centre in F.module_centres(canopy, names).items():
+            if tuple(centre) == tuple(spec.centre_in):
+                out.append(
+                    f"{at} → sample: the sweep is centred exactly on module {pos}'s centre, where it has no "
+                    "direction (that module would just show the first stop); move centre_in or sample with at: mean"
+                )
     return out
 
 
@@ -318,6 +446,8 @@ def cross_check(modes: ModesFile, recipes: RecipesFile, canopy: dict | None = No
             else:
                 slots[mode.slot] = mode_id
         mods = mode.techniques.modules
+        if mods is not None:
+            problems += _sample_problems(mode_id, mods, recipes, canopy)
         if mods is not None and grid is not None:
             if mods.rows is not None and len(mods.rows) != len(grid):
                 problems.append(

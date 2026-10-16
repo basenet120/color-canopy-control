@@ -66,6 +66,19 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   tier change, new capabilities, recovery) keeps both. The safe look clears both. The reconciler's idle reset clears
   them `kiosk.idle_reset_s` after the last guest input (and optionally shows `kiosk.idle_scene`). Kept in memory
   only: a restart comes back on, at the designed brightness.
+- **The ripple (D64).** A mood chosen on the kiosk, by ops or by the idle return (not a source in
+  `RECOMPILE_SOURCES`) whose plan has `waves` lands ring by ring when `kiosk.ripple_stagger_s` > 0: ring 0 is sent
+  at once, ring k `k × stagger` later on the injected clock — each module still gets exactly one full-state PUT, its
+  rows never split. A ring is sent only while its look is still the current one (the generation), so a newer look
+  drops the rings not yet sent. The tracker's desired state moves with each ring as it is sent, so a module still
+  waiting keeps its old desired state and the reconciler can't send it early; the reconciler also skips a waiting
+  module (`wave_pending`) when it re-asserts, true-ups or sees a lock released. `state()` shows a waiting module as
+  updating ("Waiting for its turn in the ripple"), so the look reads UPDATING until the last ring is out, and
+  `CanopyState.ripple` says when each ring goes (the guest panel draws it ring by ring). Anything that sends every
+  module at once (`send(None)`: a re-assert of all, a guest brightness or power change, recovery) sends the waiting
+  rings with it. The safe look, start-up (the first look, however it is requested: `start()`, or the show's wiring
+  asking for the idle mode once its capability reads are back), re-picks of the look now showing (a tier change,
+  recovery, new slot records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -239,6 +252,10 @@ class CanopyEngine:
         self._slot_locks: dict[str, asyncio.Lock] = {}
         self.recovery_listeners: list[Callable[[], Any]] = []  # called when an outage ends (ShowWiring)
         self.stats: dict[str, Any] = {"outages": [], "tier_changes": [], "early_reasserts": 0}
+        # The ripple in progress (D64): {t0 (wall), stagger_s, rings: [[device id]]}, and device id → the
+        # ring each module still waiting for its turn is in. Both empty when no ring is left to send.
+        self._ripple: dict[str, Any] | None = None
+        self._pending: dict[str, int] = {}
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
         self._restore_pause()
 
@@ -317,8 +334,8 @@ class CanopyEngine:
         for device_id in self._module_ids():
             self._resolve(device_id)
         self.reconciler.start()
-        if apply_initial:
-            await self.request_mode(self.deps.settings.kiosk.idle_mode, source="idle")
+        if apply_initial:  # start-up is one burst, never a ripple
+            await self._request(self.deps.settings.kiosk.idle_mode, source="idle", ripple=False)
         self._publish_soon()
 
     async def stop(self) -> None:
@@ -373,7 +390,12 @@ class CanopyEngine:
         return self._stopped
 
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
-        """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state."""
+        """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state. A mood
+        chosen (any source but a re-pick, `RECOMPILE_SOURCES`) lands as a ripple when one is configured (D64); the
+        first look, with nothing showing yet, is one burst."""
+        return await self._request(mode_id, source=source, ripple=source not in RECOMPILE_SOURCES)
+
+    async def _request(self, mode_id: str, *, source: str, ripple: bool) -> CanopyState:
         now = self.clock.monotonic()
         refused = self._refusal(source, now)
         if refused is not None:
@@ -388,7 +410,9 @@ class CanopyEngine:
             self.last_change_mono = now
         if source not in RECOMPILE_SOURCES:  # a mood was chosen: its designed brightness, and on (D60)
             self._guest_brightness, self._guest_power = None, True
-        self._show(plan, source)
+        # The first look (start-up: `start()`, or the show's wiring once its capability reads are back) has no
+        # picture to ripple from, so it is one burst whatever its source.
+        self._show(plan, source, ripple=ripple and self._plan is not None)
         return self.state()
 
     def _refusal(self, source: str, now: float) -> CanopyState | None:
@@ -709,6 +733,10 @@ class CanopyEngine:
                     locked=True,
                     reason=f"In use by {holder.owner}; the show engine leaves it alone until it's released.",
                 )
+            elif device_id in self._pending:
+                # its ring hasn't been sent yet (D64): the look is still on its way to it
+                record.update(status=str(DeviceStatus.UPDATING), reason="Waiting for its turn in the ripple.")
+                active_statuses.append((device_id, DeviceStatus.UPDATING))
             else:
                 status = self.tracker.status(target.address)
                 reason = (
@@ -744,7 +772,25 @@ class CanopyEngine:
             guest_power=self._guest_power,
             brightness=self._brightness_now(plan),
             guest_brightness_min=self.deps.settings.kiosk.guest_brightness_min,
+            ripple=self._ripple_json(),
         )
+
+    def _ripple_json(self) -> dict | None:
+        """The ripple in progress as positions: {t0 (wall), stagger_s, rings: [[position]]}, ring j sent at
+        t0 + j × stagger_s. None when no ring is left to send."""
+        ripple = self._ripple
+        if ripple is None:
+            return None
+
+        def position(device_id: str) -> str:
+            entry = self._entry(device_id)
+            return str(entry.module) if entry is not None and entry.module else device_id
+
+        return {
+            "t0": ripple["t0"],
+            "stagger_s": ripple["stagger_s"],
+            "rings": [[position(d) for d in ring] for ring in ripple["rings"]],
+        }
 
     def _phase(
         self,
@@ -823,14 +869,71 @@ class CanopyEngine:
         return None, f"{mode_id} can't be shown right now ({'; '.join(reasons)})."
 
     # ---- applying ---------------------------------------------------------------------------------------------
-    def _show(self, plan: ModePlan, source: str) -> None:
-        """Make `plan` the current look and (unless resting) send it to every module."""
+    def _show(self, plan: ModePlan, source: str, *, ripple: bool = False) -> None:
+        """Make `plan` the current look and (unless resting) send it to every module: one burst, or with `ripple`
+        ring by ring when the plan has rings and a stagger is configured (D64)."""
         self._install(plan, source)
         if self._outage is None:
-            self.send(None, source=source, label=f"mode: {plan.mode_id}")
+            rings = self._rings(plan) if ripple else None
+            if rings is None:
+                self.send(None, source=source, label=f"mode: {plan.mode_id}")
+            else:
+                self._start_ripple(plan, source, rings)
         self._publish_soon()
 
+    def _rings(self, plan: ModePlan) -> list[list[str]] | None:
+        """The plan's rings to send one after another, or None for one burst (no stagger, a motion plan, no rings,
+        or only one)."""
+        stagger = self.deps.settings.kiosk.ripple_stagger_s
+        if stagger <= 0 or plan.motion or not plan.waves:
+            return None
+        rings = [[d for d in wave if d in plan.modules] for wave in plan.waves]
+        placed = {d for ring in rings for d in ring}
+        rings[0] += [d for d in plan.modules if d not in placed]  # never leave a module out of the look
+        rings = [ring for ring in rings if ring]
+        return rings if len(rings) > 1 else None
+
+    def _start_ripple(self, plan: ModePlan, source: str, rings: list[list[str]]) -> None:
+        stagger = self.deps.settings.kiosk.ripple_stagger_s
+        generation, start = self._generation, self.clock.monotonic()
+        self._ripple = {"t0": self.clock.now(), "stagger_s": stagger, "rings": rings}
+        self._pending = {d: k for k, ring in enumerate(rings) for d in ring if k > 0}
+        self.send(rings[0], source=source, label=f"mode: {plan.mode_id} (ring 1 of {len(rings)})")
+        for k in range(1, len(rings)):
+            self._spawn(
+                self._send_ring(plan, source, generation, k, start + k * stagger, len(rings)),
+                name=f"canopy:ripple:{plan.mode_id}:{k}",
+            )
+
+    async def _send_ring(
+        self, plan: ModePlan, source: str, generation: int, k: int, at: float, count: int
+    ) -> None:
+        """Ring k of a ripple, at its time — only while its look is still the current one."""
+        delay = at - self.clock.monotonic()
+        if delay > 0:
+            await self.clock.sleep(delay)
+        if self._generation != generation or self._outage is not None:
+            return  # a newer look replaced it; while resting, recovery sends the whole look at once
+        ids = [d for d, ring in self._pending.items() if ring == k]
+        for device_id in ids:
+            del self._pending[device_id]
+        if not self._pending:
+            self._ripple = None
+        if ids:
+            self.send(ids, source=source, label=f"mode: {plan.mode_id} (ring {k + 1} of {count})")
+        self._publish_soon()
+
+    def _end_ripple(self) -> None:
+        self._ripple = None
+        self._pending.clear()
+
+    def wave_pending(self, address: str) -> bool:
+        """Is the module at `address` still waiting for its ring of the ripple (nothing of the look sent yet)?"""
+        device_id = self._by_address.get(address)
+        return device_id is not None and device_id in self._pending
+
     def _install(self, plan: ModePlan, source: str) -> None:
+        self._end_ripple()  # the old look's rings not sent yet are dropped
         self._generation += 1
         self._plan = plan
         self._source = source
@@ -850,6 +953,8 @@ class CanopyEngine:
         plan = self._plan
         if plan is None:
             return []
+        if device_ids is None:
+            self._end_ripple()  # every module now: the rings still waiting go with this burst
         wanted = list(plan.modules) if device_ids is None else [d for d in device_ids if d in plan.modules]
         groups: dict[int, tuple[CommandExecutor, list[Command]]] = {}
         sent = []

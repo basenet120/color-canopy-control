@@ -24,6 +24,15 @@ Measured (ground truth = `SimDriver.device_view`, what the lights actually show)
 - time from each fault ending to all nine modules showing the current look — ≤ 60 s;
 - the smallest gap between two writes to one device (≥ the 1 s budget) and the final look.
 
+**The ripple scenario (D64).** The show runs with `kiosk.ripple_stagger_s` 0 (one burst) until Alon flips it, and the
+pinned targets above assume one burst. So the soak also runs a separate, shorter show (`ripple:` in
+`config/sim/soak.yaml`, same pinned conditions) with the stagger set (1.2 s): seeded kiosk mood changes, each landing
+ring by ring. Measured per change from the lights: each ring's landing spread (first to last module of that ring
+correct — 05's "spread ≤ 2 s at p95", per ring: **reported, not gating**, since it is the target D64 asks Alon to
+redefine and the show runs one burst until then), the time until the last ring is correct (≤ (rings − 1) × stagger
++ 5 s), the PUTs each module got for the change (exactly one, none before its ring is due) and tier downgrades (0 at
+5% throttling); those three are part of the verdict.
+
 Writes `docs/reports/sim-acceptance.md` and exits non-zero when any target fails.
 
 The world (07 §7 soak validity, review F11): by default the soak runs **the show's own wiring** — `build_services`
@@ -44,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import logging
 import random
 import shutil
@@ -97,6 +107,7 @@ class BuiltinCompiler:
     def __init__(self, registry: Registry, config_dir: Path = CONFIG_DIR, frame_length: int = 30) -> None:
         with open(config_dir / "modes.yaml", encoding="utf-8") as f:
             self._modes: dict[str, dict] = (yaml.safe_load(f) or {})["modes"]
+        self._config_dir = config_dir
         self._modules = registry.canopy_modules()
         self._frame_length = frame_length
 
@@ -146,6 +157,8 @@ class BuiltinCompiler:
             raw = dict(technique["look"])
             if raw.get("kind") == "preset" and not raw.get("preset"):
                 raw["preset"] = (technique.get("presets") or ["snowfall"])[0]
+        elif "sample" in technique:
+            return self._sampled(technique["sample"], position, notes)
         elif "rows" in technique:
             raw = dict(technique["rows"][row % len(technique["rows"])])
         elif "columns" in technique:
@@ -163,6 +176,38 @@ class BuiltinCompiler:
             notes.append(f"{raw['cct']} K clamped to the device floor {self.CCT_FLOOR} K")
             raw["cct"] = self.CCT_FLOOR
         return R.Look.from_json(raw)
+
+    def _sampled(self, sample: dict, position: str, notes: list[str]) -> R.Look:
+        """A module-level design (D63): the field at the module's centre between its stops' `rgb_only` colours, rounded
+        half up. PlanError (so the engine steps down the ladder) when the field module can't be loaded."""
+        try:
+            from pydantic import TypeAdapter
+
+            from conductor.config import load_recipes
+            from conductor.geometry import load_canopy_config
+            from conductor.looks import field as F
+        except ImportError as e:  # pragma: no cover - this compiler is the fallback for a broken looks
+            raise PlanError(f"a sampled module look needs conductor.looks.field ({e})") from None
+        canvas = sample["canvas"]
+        if canvas.get("kind") != "field":
+            raise PlanError("the built-in compiler samples only `field` canvases")
+        path = self._config_dir / "canopy.yaml"
+        canopy = load_canopy_config(path) if path.exists() else load_canopy_config()
+        recipes = load_recipes(self._config_dir)
+        spec = TypeAdapter(F.FieldSpec).validate_python(canvas["field"])
+        if sample.get("at", "centre") != "centre":
+            notes.append("module-level designs are sampled at each module's centre (built-in compiler)")
+        ((x, y),) = F.module_centres(canopy, [position]).values()
+        t = F.value(spec, x, y, canopy)
+        stops = [(float(s["at"]), recipes.colors[s["color"]].rgb_only) for s in canvas["stops"]]
+        (a_at, a), (b_at, b) = stops[0], stops[-1]
+        for (lo_at, lo), (hi_at, hi) in itertools.pairwise(stops):
+            if lo_at <= t <= hi_at:
+                (a_at, a), (b_at, b) = (lo_at, lo), (hi_at, hi)
+                break
+        f = 0.0 if b_at == a_at else min(1.0, max(0.0, (t - a_at) / (b_at - a_at)))
+        rgb = tuple(int(getattr(a, c) * (1 - f) + getattr(b, c) * f + 0.5) for c in "rgb")
+        return R.Look("rgb", brightness=sample.get("brightness", 100), rgb=rgb)
 
     def _frame(self, look: R.Look, module_index: int) -> list[R.FrameEntry]:
         out = []
@@ -244,6 +289,8 @@ class SoakConfig:
     mash_kiosk_taps: int = 40
     mash_ops_taps: int = 20
     drift_events: int = 12  # out-of-band changes (the Hubspace app) the reconciler must find and undo
+    # the ripple scenario (config/sim/soak.yaml `ripple:`; changes 0 = skip it)
+    ripple: dict = field(default_factory=lambda: load_soak_ripple())
     sim_settings: SimSettings = field(default_factory=SimSettings.from_acceptance)
     targets: dict = field(default_factory=dict)  # from acceptance.yaml
     report_path: Path | None = REPORT_PATH
@@ -266,11 +313,19 @@ class _World:
     motion: dict | None = None  # the SIMULATED motion setting in force
 
 
-def _soak_config_dir(motion: dict | None) -> Path:
-    """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml)."""
+def _soak_config_dir(motion: dict | None, ripple_stagger_s: float | None = None) -> Path:
+    """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml), and with
+    `ripple_stagger_s` as kiosk.ripple_stagger_s when given (the ripple scenario)."""
     root = Path(tempfile.mkdtemp(prefix="canopy-soak-config-"))
     config = root / "config"
     shutil.copytree(CONFIG_DIR, config)
+    if ripple_stagger_s is not None:
+        settings_path = config / "conductor.yaml"
+        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        settings.setdefault("kiosk", {})["ripple_stagger_s"] = float(ripple_stagger_s)
+        settings_path.write_text(
+            yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8"
+        )
     if motion:
         modes_path = config / "modes.yaml"
         modes = yaml.safe_load(modes_path.read_text(encoding="utf-8"))
@@ -297,6 +352,24 @@ def _soak_config_dir(motion: dict | None) -> Path:
     return config
 
 
+RIPPLE_DEFAULTS = {
+    "stagger_s": 1.2,
+    "changes": 30,
+    "spacing_s": 12.0,
+    "ring_spread_p95_s": 2.0,
+    "settle_extra_s": 5.0,
+}
+
+
+def load_soak_ripple(path: Path = SOAK_SETTINGS) -> dict:
+    """The ripple scenario's settings (`ripple:` in config/sim/soak.yaml) over RIPPLE_DEFAULTS."""
+    ripple: dict = {}
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            ripple = (yaml.safe_load(f) or {}).get("ripple") or {}
+    return {**RIPPLE_DEFAULTS, **ripple}
+
+
 def load_soak_motion(path: Path = SOAK_SETTINGS) -> dict | None:
     if not path.exists():
         return None
@@ -305,13 +378,13 @@ def load_soak_motion(path: Path = SOAK_SETTINGS) -> dict | None:
     return motion or None
 
 
-async def _build_show(cfg: SoakConfig) -> _World:
+async def _build_show(cfg: SoakConfig, *, ripple_stagger_s: float | None = None) -> _World:
     """The app's own wiring on the virtual clock: build_services + ShowWiring, a temp data dir (the overlay)."""
     from conductor.services import build_services
     from conductor.show import ShowWiring
 
     motion = load_soak_motion()
-    config_dir = _soak_config_dir(motion)
+    config_dir = _soak_config_dir(motion, ripple_stagger_s)
     data = Path(tempfile.mkdtemp(prefix="canopy-soak-data-"))
     clock = VirtualClock()
     services = build_services(
@@ -720,6 +793,93 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
     return results
 
 
+async def _ripple_soak(cfg: SoakConfig) -> dict:
+    """The ripple scenario (D64): the show's own wiring with `kiosk.ripple_stagger_s` set, seeded kiosk mood changes
+    `spacing_s` (+ up to 2 s) apart, each measured ring by ring from the lights (see the module docstring)."""
+    ripple = cfg.ripple
+    stagger = float(ripple["stagger_s"])
+    world = await _build_show(cfg, ripple_stagger_s=stagger)
+    engine, clock = world.engine, world.clock
+    while world.wiring.last_commission is None and clock.monotonic() < 600:
+        await clock.sleep(1.0)
+    by_position = {str(e.module): e.id for e in world.registry.canopy_modules()}
+    by_address = {a: d for d, a in world.addresses.items()}
+    submits: list[tuple[float, str, str]] = []  # (when, device id, label): every command the engine sent
+    world.executor.add_submit_listener(
+        lambda cmd: submits.append(
+            (clock.monotonic(), by_address.get(cmd.device_id, cmd.device_id), cmd.label)
+        )
+    )
+    rng = random.Random(f"{cfg.seed}:ripple")
+    modes = world.wiring.mode_ids()
+    out: dict[str, Any] = {
+        "stagger_s": stagger,
+        "changes": 0,  # accepted changes that landed as a ripple
+        "bursts": 0,  # accepted changes that went out as one burst (a motion plan, or one ring)
+        "refused": 0,
+        "abandoned": 0,
+        "unsettled": 0,
+        "ring_spreads": [],  # per ring: first to last module of the ring correct (s)
+        "settles": [],  # per change: request → every module correct (s)
+        "rings_max": 0,
+        "puts_per_module": [],  # per (change, module): the commands of that change it got
+        "early": 0,  # commands to a module before its ring was due
+        "settings": {k: ripple[k] for k in RIPPLE_DEFAULTS},
+    }
+    downgrades_before = len([t for t in engine.stats["tier_changes"] if t["direction"] == "down"])
+    for _ in range(int(ripple["changes"])):
+        await clock.sleep(float(ripple["spacing_s"]) + rng.uniform(0.0, 2.0))
+        current = engine.current_plan()
+        mode_id = rng.choice([m for m in modes if current is None or m != current.mode_id] or modes)
+        started = clock.monotonic()
+        state = await engine.request_mode(mode_id, source="kiosk")
+        if state.refused:
+            out["refused"] += 1
+            continue
+        plan = engine.current_plan()
+        if state.ripple is None:
+            out["bursts"] += 1
+            continue
+        rings = [[by_position[p] for p in ring] for ring in state.ripple["rings"]]
+        ring_of = {d: k for k, ring in enumerate(rings) for d in ring}
+        out["rings_max"] = max(out["rings_max"], len(rings))
+        landed: dict[str, float] = {}
+        while clock.monotonic() - started < WATCH_LIMIT_S and len(landed) < len(plan.modules):
+            if engine.current_plan() is not plan:
+                break
+            elapsed = clock.monotonic() - started
+            for d in plan.modules:
+                # a module counts from its ring's turn (its old look may already match the new one)
+                if d not in landed and elapsed >= ring_of.get(d, 0) * stagger and _correct(world, plan, d):
+                    landed[d] = elapsed
+            await clock.sleep(POLL_S)
+        if engine.current_plan() is not plan:
+            out["abandoned"] += 1
+            continue
+        if len(landed) < len(plan.modules):
+            out["unsettled"] += 1
+            continue
+        out["changes"] += 1
+        out["settles"].append(max(landed.values()))
+        for ring in rings:
+            times = [landed[d] for d in ring]
+            out["ring_spreads"].append(max(times) - min(times))
+        settled_at = started + max(landed.values())
+        label = f"mode: {mode_id}"
+        for d in plan.modules:
+            mine = [(t, lab) for t, dev, lab in submits if dev == d and started - 1e-9 <= t <= settled_at]
+            out["puts_per_module"].append(sum(1 for _, lab in mine if lab.startswith(label)))
+            due = started + ring_of.get(d, 0) * stagger
+            out["early"] += sum(1 for t, _ in mine if t < due - 1e-6)
+    out["downgrades"] = (
+        len([t for t in engine.stats["tier_changes"] if t["direction"] == "down"]) - downgrades_before
+    )
+    await world.wiring.close()
+    await world.services.close()
+    world.cleanup()
+    return out
+
+
 def _other(modes: list[str], engine: Any) -> str:
     current = engine.current_plan()
     return next((m for m in modes if current is None or m != current.mode_id), modes[0])
@@ -823,7 +983,58 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
             "pass": bool(results["final_correct"]),
         }
     )
+    if results.get("ripple"):
+        rows += _ripple_rows(results["ripple"])
     return rows
+
+
+def _ripple_rows(ripple: dict) -> list[dict]:
+    """The ripple scenario's verdict rows (D64): per-ring spread (reported, not gating: `gating` False), last-ring
+    settle, one PUT each and none early, no downgrade."""
+    settings = ripple["settings"]
+    stagger = float(ripple["stagger_s"])
+    spread_target = float(settings["ring_spread_p95_s"])
+    settle_target = (max(1, ripple["rings_max"]) - 1) * stagger + float(settings["settle_extra_s"])
+    spreads, settles = ripple["ring_spreads"], ripple["settles"]
+    puts = ripple["puts_per_module"]
+    tag = f"Ripple, SIMULATED {stagger:g} s stagger"
+    return [
+        {
+            "name": f"{tag}: each ring's landing spread ({len(spreads)} rings in {ripple['changes']} changes)",
+            "p50": percentile(spreads, 50),
+            "p95": percentile(spreads, 95),
+            "max": max(spreads) if spreads else None,
+            "target": f"p95 ≤ {spread_target:g} s (05's spread, per ring; reported for D64, not gating while the "
+            "show's stagger is 0)",
+            "pass": bool(spreads) and (percentile(spreads, 95) or 0) <= spread_target,
+            # 05's spread is what D64 redefines per ring, and the show runs one burst until Alon flips it: the
+            # number is reported for that decision, never a reason `make soak` fails
+            "gating": False,
+        },
+        {
+            "name": f"{tag}: every module correct after the request (last ring settled)",
+            "p50": percentile(settles, 50),
+            "p95": percentile(settles, 95),
+            "max": max(settles) if settles else None,
+            "target": f"p95 ≤ {settle_target:g} s ((rings − 1) × stagger + {float(settings['settle_extra_s']):g}), "
+            "every change settles",
+            "pass": bool(settles)
+            and (percentile(settles, 95) or 0) <= settle_target
+            and not ripple["unsettled"],
+        },
+        {
+            "name": f"{tag}: PUTs per module per change ({len(puts)} module changes)",
+            "max": max(puts) if puts else None,
+            "target": "exactly 1, none before its ring is due",
+            "pass": bool(puts) and set(puts) == {1} and ripple["early"] == 0,
+        },
+        {
+            "name": f"{tag}: tier downgrades at 5% throttling",
+            "max": ripple["downgrades"],
+            "target": "= 0",
+            "pass": ripple["downgrades"] == 0,
+        },
+    ]
 
 
 def _fmt(v: Any) -> str:
@@ -834,15 +1045,24 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
+def passed(verdicts: list[dict]) -> bool:
+    """Every gating row passed (a row with `gating` False is reported only)."""
+    return all(v["pass"] for v in verdicts if v.get("gating", True))
+
+
+def _result(v: dict) -> str:
+    return ("PASS" if v["pass"] else "FAIL") + ("" if v.get("gating", True) else " (reported)")
+
+
 def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
-    passed = all(v["pass"] for v in verdicts)
+    ok = passed(verdicts)
     s = meta["sim_settings"]
     windows = results["windows_s"]
     commission = results["commission"]
     lines = [
         "# Simulator acceptance soak",
         "",
-        f"_Generated by `python -m conductor.soak` on {meta['generated']} — {'**PASS**' if passed else '**FAIL**'}._",
+        f"_Generated by `python -m conductor.soak` on {meta['generated']} — {'**PASS**' if ok else '**FAIL**'}._",
         "",
         (
             f"- Simulated time: {results['duration_s'] / 3600:g} h on `VirtualTimeLoop` "
@@ -869,7 +1089,7 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
     for v in verdicts:
         lines.append(
             f"| {v['name']} | {_fmt(v.get('p50'))} | {_fmt(v.get('p95'))} | {_fmt(v.get('max'))} | "
-            f"{v['target']} | {'PASS' if v['pass'] else 'FAIL'} |"
+            f"{v['target']} | {_result(v)} |"
         )
     by_source: dict[str, int] = {}
     for c in results["changes"]:
@@ -897,6 +1117,7 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
         ),
         f"- Changes during a fault (not in the percentiles): {len(faulted)}.",
         _drift_line(results),
+        *([_ripple_line(results["ripple"])] if results.get("ripple") else []),
         f"- Outages the engine detected (resting → recovered): {outages}.",
         (
             f"- Tier changes: {len(results['tier_changes'])}{' — ' + tiers if tiers else ''}. "
@@ -938,6 +1159,19 @@ def _drift_line(results: dict) -> str:
     )
 
 
+def _ripple_line(ripple: dict) -> str:
+    s = ripple["settings"]
+    return (
+        f"- Ripple scenario (D64, SIMULATED): a separate run of the show's own wiring with `kiosk.ripple_stagger_s` "
+        f"{ripple['stagger_s']:g} (the show's setting stays {load_settings(CONFIG_DIR).kiosk.ripple_stagger_s:g} "
+        f"until Alon flips it), {s['changes']} kiosk mood changes about {s['spacing_s']:g} s apart under the same "
+        f"pinned conditions: {ripple['changes']} landed ring by ring (up to {ripple['rings_max']} rings), "
+        f"{ripple['bursts']} went out as one burst (a motion plan or one ring), {ripple['refused']} refused, "
+        f"{ripple['abandoned']} superseded, {ripple['unsettled']} never settled; {ripple['early']} commands reached "
+        "a module before its ring was due."
+    )
+
+
 def _motion_line(results: dict) -> str:
     wiring = results.get("wiring") or {}
     motion = wiring.get("motion")
@@ -967,6 +1201,8 @@ def run_soak(cfg: SoakConfig | None = None, compiler: Any = None) -> tuple[dict,
     results = run_virtual(lambda: _soak(cfg, compiler))
     if results["wiring"]["show_wiring"]:
         description = SHOW_DESCRIPTION
+        if int(cfg.ripple.get("changes", 0)) > 0:
+            results["ripple"] = run_virtual(lambda: _ripple_soak(cfg))
     verdicts = evaluate(results, cfg.targets or load_targets())
     meta = {
         "generated": datetime.fromtimestamp(wall.now(), UTC).strftime("%Y-%m-%d %H:%M UTC"),
@@ -1005,9 +1241,9 @@ def main(argv: list[str] | None = None, *, compiler_factory: Callable[[], Any] |
     width = max(len(v["name"]) for v in verdicts)
     for v in verdicts:
         numbers = " ".join(f"{k}={_fmt(v.get(k))}" for k in ("p50", "p95", "max") if v.get(k) is not None)
-        print(f"{'PASS' if v['pass'] else 'FAIL'}  {v['name']:<{width}}  {numbers}  (target {v['target']})")
+        print(f"{_result(v)}  {v['name']:<{width}}  {numbers}  (target {v['target']})")
     print(f"Report: {args.report} — {meta['wall_s']:.1f} s wall, compiler: {meta['compiler']}")
-    return 0 if all(v["pass"] for v in verdicts) else 1
+    return 0 if passed(verdicts) else 1
 
 
 if __name__ == "__main__":

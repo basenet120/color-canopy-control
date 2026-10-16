@@ -56,6 +56,11 @@ is the one the last job applied, and only while no one else has written either m
 command). `feature` is the true sentence for what is showing (gradient or solid), else null, and `look` says which
 ("gradient" | "solid", null while changing or on the engine target) so the panel's preview draws what is lit.
 
+**The canopy picture (engine target only).** `canopy()` is the 270-light geometry and `state()["lit"]` what each canopy
+position truthfully shows (`conductor/canopy_view.py`: off, dark, unknown, lit or changing, with full-strength colours
+and the level). The workshop target has neither (`None`): its two strands are drawn as their own 30-light serpentine,
+which is true there.
+
 Try it without hardware: `make guest-dev` (scripts/dev_guest_panel.py).
 """
 
@@ -71,6 +76,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from conductor import canopy_view
 from conductor.clock import Clock
 from conductor.config import ConductorSettings
 from conductor.engine_api import CanopyPhase, CanopyState, ModeRefused, PlanError
@@ -297,6 +303,9 @@ class WorkshopTarget:
     # ---- what the panel can do -------------------------------------------------------------------------------------
     def capabilities(self) -> dict[str, bool]:
         return {"scene": True, "brightness": True, "power": True}
+
+    def canopy(self) -> None:
+        """No canopy picture: the two shop strands are previewed as their own 30-light serpentine."""
 
     @property
     def simulated(self) -> bool:
@@ -611,6 +620,7 @@ class WorkshopTarget:
             "message": message,
             "feature": feature,
             "cooldown_remaining_s": cooldown,
+            "lit": None,
         }
 
     def lease_holders(self) -> dict[str, str | None]:
@@ -714,6 +724,23 @@ class EngineTarget:
         if not getattr(plan, "skipped", None):
             return self.FULL_LABEL
         return f"The Color Canopy ({len(plan.modules)} of {total} strands)"
+
+    def _canopy_cfg(self) -> dict:
+        return canopy_view.load_canopy(str(self.services.config_dir))
+
+    def canopy(self) -> dict:
+        """The canopy's 270 lights in inches, per module in lattice order, with the install's view (kiosk.preview)."""
+        return canopy_view.canopy_geometry(self._canopy_cfg(), self.services.settings.kiosk.preview)
+
+    def _lit(self, engine: Any, st: CanopyState) -> dict | None:
+        """What each canopy position truthfully shows (canopy_view.lit_state), or None before the first look."""
+        try:
+            return canopy_view.lit_state(
+                self._canopy_cfg(), self.services.registry, K._current_plan(engine), st
+            )
+        except Exception:  # the picture never fails the panel; no picture is no claim
+            log.exception("The guest panel couldn't work out the canopy picture.")
+            return None
 
     def capabilities(self) -> dict[str, bool]:
         engine = self.engine()
@@ -839,6 +866,7 @@ class EngineTarget:
             "message": K.RESTING,
             "feature": None,
             "cooldown_remaining_s": 0.0,
+            "lit": None,
         }
         if engine is None:
             return resting
@@ -883,6 +911,7 @@ class EngineTarget:
             if power is False or look in (CanopyPhase.UPDATING, CanopyPhase.NEEDS_ATTENTION)
             else st.feature,
             "cooldown_remaining_s": cooldown,
+            "lit": self._lit(engine, st),
         }
 
     def lease_holders(self) -> dict[str, str | None]:

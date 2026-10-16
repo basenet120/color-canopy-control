@@ -24,6 +24,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from conductor.tokens import atomic_write
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+# The ripple (D64): a mood lands in at most this many rings, and the last ring goes out at most this long after the
+# first ((rings − 1) × kiosk.ripple_stagger_s), so every module is still sent within 05's 2.4 s spread.
+RIPPLE_MAX_WAVES = 3
+RIPPLE_SPAN_MAX_S = 2.4
 
 
 class ConfigError(ValueError):
@@ -88,6 +92,26 @@ class ReconcilerSettings(_Strict):
     outage_probe_interval_s: float = 10
 
 
+class PreviewSettings(_Strict):
+    """How the guest panel draws the canopy's 270 lights (the reflected-ceiling view, as config/canopy.yaml lists it:
+    looking up, origin at the canopy's top-left). Set at install so the iPad's picture matches what a guest standing
+    at the stand sees overhead: `mirror_x` flips it left to right, `rotate_deg` turns it by quarter turns, and
+    `dim_floor` is the opacity of the dimmest guest level (the level is drawn as opacity, from this up to 1)."""
+
+    mirror_x: bool = False
+    rotate_deg: int = 0
+    dim_floor: float = Field(0.35, ge=0.0, le=1.0)
+
+    @field_validator("rotate_deg")
+    @classmethod
+    def _quarter_turn(cls, v: int) -> int:
+        if v not in (0, 90, 180, 270):
+            raise ValueError(
+                f"rotate_deg must be 0, 90, 180 or 270 (a quarter turn of the ceiling view), not {v}"
+            )
+        return v
+
+
 class KioskSettings(_Strict):
     cooldown_s: float = 8
     idle_return_s: float = 180
@@ -98,6 +122,26 @@ class KioskSettings(_Strict):
     guest_brightness_min: int = Field(10, ge=1, le=100)
     idle_reset_s: float = Field(300, gt=0)
     idle_scene: str | None = None
+    preview: PreviewSettings = Field(default_factory=PreviewSettings)
+    # The ripple (D64): a mood chosen on the kiosk, by ops or by the idle return lands ring by ring in its design's
+    # order, this many seconds between rings (each module still gets one PUT). 0 = one burst (today's behaviour).
+    ripple_stagger_s: float = 0.0
+
+    @field_validator("ripple_stagger_s")
+    @classmethod
+    def _ripple_stagger(cls, v: float) -> float:
+        if not 0 <= v <= 1.5:
+            raise ValueError(
+                f"ripple_stagger_s must be from 0 (one burst) to 1.5 seconds between rings, not {v}"
+            )
+        span = (RIPPLE_MAX_WAVES - 1) * v
+        if span > RIPPLE_SPAN_MAX_S + 1e-9:
+            raise ValueError(
+                f"ripple_stagger_s {v:g} s would send the last of {RIPPLE_MAX_WAVES} rings {span:g} s after the first; "
+                f"keep that within {RIPPLE_SPAN_MAX_S:g} s (ripple_stagger_s ≤ "
+                f"{RIPPLE_SPAN_MAX_S / (RIPPLE_MAX_WAVES - 1):g})"
+            )
+        return v
 
 
 class ModulePageSettings(_Strict):

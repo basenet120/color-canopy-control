@@ -36,12 +36,27 @@ Rules implemented:
   heads at their mapped entries, every other entry OFF. A saved map that doesn't match the kit, or a longer frame with
   no map, refuses T1 with `conductor.framemap.head_check`'s reason (whole-strand tiers and app-painted T2 slots still
   compile). Without `addresses` no map is consulted.
+- **A sampled module look (T3 `sample`).** Each module is set to one RGB colour: the canvas (a 2-D field or a
+  gradient) at the module's centre ((col + ½)·75, (row + ½)·40 in), or the mean of its 30 heads' colours with
+  `at: mean`, at the sample's brightness — the same on every module (D60). An x-linear field sampled at the centres
+  is the scene's literal columns (D59). When the design is finer than the module grid (it repeats with
+  centre sampling, or a whole canopy samples to one colour) a note says so; when the whole canopy samples to one
+  colour the feature says that instead of the design's layout (kiosk copy is true).
+- **The ripple order (D64).** Every plan that isn't a motion plan carries `waves`: its driven modules (the ones left
+  out excluded) grouped into at most `RIPPLE_MAX_WAVES` rings by the mode's design field at their centres
+  (`field.bands`), lowest t first. The design is the compiled technique's own (a canvas tier's canvas, module level's
+  sample or its literal columns / rows), else the mode's other one; a whole-strand tier uses the mode's design too, so
+  a new colour still arrives in the design's order. The order is the design's geometry before `cycles`, `mirror` and
+  `invert`: a ripple starts where the layout words say the design starts ("from the centre out" stays centre first
+  when the palette runs inwards). A mode with no design, or a module with no canopy position, gets None (one burst).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
-  kit's map when it has one).
+  kit's map when it has one); `ModuleTarget.colors` is the same render with the brightness row at 100 (full-strength
+  colours for the guest panel, which shows the level on its own).
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -52,12 +67,28 @@ from typing import Any
 from conductor import framemap, render
 from conductor import rows as R
 from conductor.capabilities import Capabilities
-from conductor.config import CONFIG_DIR, DeviceEntry, DeviceFlags, RecipesFile, load_recipes
+from conductor.config import (
+    CONFIG_DIR,
+    RIPPLE_MAX_WAVES,
+    DeviceEntry,
+    DeviceFlags,
+    RecipesFile,
+    load_recipes,
+)
 from conductor.drivers.base import StateRow
 from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Tier
 from conductor.geometry import load_canopy_config, panel_lattice
-from conductor.looks.composer import compose_canvas, parse_position, placement_for
-from conductor.looks.schema import LookSpec, Mode, ModesFile, load_modes
+from conductor.looks import field as F
+from conductor.looks.composer import compose_canvas, evaluate, head_positions, parse_position, placement_for
+from conductor.looks.schema import (
+    FieldCanvas,
+    GradientCanvas,
+    LookSpec,
+    Mode,
+    ModesFile,
+    ModuleSample,
+    load_modes,
+)
 
 NUMBER_WORDS = {
     1: "one",
@@ -71,6 +102,9 @@ NUMBER_WORDS = {
     9: "nine",
 }
 STATIC_EFFECTS = {"motionEffect": 0, "brightnessEffect": 0}
+FINER_THAN_GRID = (
+    "The pattern repeats faster than the module grid; at module level some bands disappear (try at: mean)"
+)
 SAFE_MODES = frozenset({"lowcountry-calm"})  # the safe look: must compile even before a profile is read
 # What the safe look assumes for a module whose profile hasn't been read (the sibling string's documented white
 # range, 04): enough for a whole-strand white or RGB look, nothing painted.
@@ -282,6 +316,7 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
         plan = _slot(mode_id, mode, ctx, ready)
     else:
         plan = _modules(mode_id, mode, ctx, ready)
+    plan.waves = _waves(mode, tier, plan, ctx)
     if assumed:
         plan.notes.append(
             "Profile not read yet, so the safe look assumes the sibling string's white range (2700–6500 K): "
@@ -376,6 +411,59 @@ def available_tiers(mode_id: str, ctx: CompileContext) -> list[Tier]:
             continue
         out.append(tier)
     return out
+
+
+# ---- the ripple order (D64) ---------------------------------------------------------------------------------------
+def _canvas_field(canvas: Any) -> Any | None:
+    if isinstance(canvas, FieldCanvas):
+        return canvas.field
+    if isinstance(canvas, GradientCanvas):  # x / width or y / height: the linear field at 0° or 90°
+        return F.LinearField(kind="linear", angle_deg=0.0 if canvas.axis == "x" else 90.0)
+    return None  # a pathway or one band per module has no direction across the canopy
+
+
+def _modules_field(tech: Any) -> Any | None:
+    if tech.sample is not None:
+        return _canvas_field(tech.sample.canvas)
+    if tech.columns is not None:
+        return F.LinearField(kind="linear", angle_deg=0.0)
+    if tech.rows is not None:
+        return F.LinearField(kind="linear", angle_deg=90.0)
+    return None  # a middle row against the others has no direction
+
+
+def design_field(mode: Mode, tier: Tier | str) -> Any | None:
+    """The mode's design as a field spec, for the order a ripple lands in: the technique compiled at `tier` first
+    (canvas tiers: the canvas; module level: its sample, columns or rows), else the mode's other one. Only the
+    geometry counts: `cycles`, `mirror` and `invert` are dropped, so the order starts where the layout words say the
+    design starts. None when the mode has no design with a direction."""
+    tech = mode.techniques
+    order = ("canvas", "modules") if Tier(tier) in (Tier.T1, Tier.T2) else ("modules", "canvas")
+    for name in order:
+        technique = getattr(tech, name)
+        if technique is None:
+            continue
+        spec = _canvas_field(technique.canvas) if name == "canvas" else _modules_field(technique)
+        if spec is not None:
+            return spec.model_copy(update={"cycles": 1, "transform": "linear", "invert": False})
+    return None
+
+
+def _waves(mode: Mode, tier: Tier, plan: ModePlan, ctx: CompileContext) -> list[list[str]] | None:
+    """The plan's driven modules in ripple rings (device ids, the ring the design starts from first), or None."""
+    if plan.motion or not plan.modules or ctx.canopy is None:
+        return None  # a motion plan re-triggers every module as one burst (07 §6)
+    spec = design_field(mode, tier)
+    if spec is None:
+        return None
+    by_position = {str(d.module): d.id for d in ctx.devices if d.id in plan.modules}
+    if len(by_position) != len(plan.modules):
+        return None  # a driven module with no canopy position (or two at one): no order to land in
+    try:
+        rings = F.bands(spec, ctx.canopy, list(by_position), RIPPLE_MAX_WAVES)
+    except (ValueError, KeyError):
+        return None
+    return [[by_position[pos] for pos in ring] for ring in rings]
 
 
 # ---- helpers -----------------------------------------------------------------------------------------------------
@@ -504,12 +592,12 @@ def _target(
     indices: list[int] | None = None,
 ) -> ModuleTarget:
     rows = R.dedupe(rows)
-    preview = render.head_colors(
-        preview_rows if preview_rows is not None else rows,
-        len(indices) if indices is not None else _heads(entry, caps),
-        caps,
-        indices,
-    )
+    shown = preview_rows if preview_rows is not None else rows
+    n = len(indices) if indices is not None else _heads(entry, caps)
+    preview = render.head_colors(shown, n, caps, indices)
+    # the same heads at full strength: the brightness row replaced by 100 (the device level is shown on its own)
+    full = [R.brightness(100) if r.key == ("brightness", None) else r for r in shown]
+    colors = render.head_colors(full, n, caps, indices)
     return ModuleTarget(
         device_id=entry.id,
         rows=rows,
@@ -519,6 +607,7 @@ def _target(
         slot_hash=slot_hash,
         brightness_range=caps.brightness_range,
         preview=preview,
+        colors=colors,
     )
 
 
@@ -752,7 +841,7 @@ def _slot(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEnt
             d, c, rows, slot=slot, slot_hash=recorded, preview_rows=preview_rows, indices=indices
         )
         if preview_rows is None:
-            modules[d.id].preview = []
+            modules[d.id].preview, modules[d.id].colors = [], []
     return ModePlan(mode_id, mode.label, Tier.T2, tech.feature, motion, modules, notes.lines(len(devices)))
 
 
@@ -779,10 +868,36 @@ def _design_frames(
 
 
 # ---- modules (T3) ------------------------------------------------------------------------------------------------
-def module_look(mode: Mode, row: int, col: int, n_rows: int) -> LookSpec:
-    """The T3 strand look for the module at (row, col)."""
+def _half_up(x: float) -> int:
+    return math.floor(x + 0.5)
+
+
+def _sampled_rgb(sample: ModuleSample, entry: DeviceEntry, ctx: CompileContext) -> tuple[int, int, int]:
+    """The sample's one RGB colour for this module: the canvas at the module's centre, or its heads' mean."""
+    assert ctx.canopy is not None and ctx.recipes is not None
+    if sample.at == "centre":
+        points = list(F.module_centres(ctx.canopy, [str(entry.module)]).values())
+    else:
+        points = head_positions(ctx.canopy, placement_for(ctx.canopy, entry, frame_length=None))
+    colours = [evaluate(sample.canvas, x, y, canopy=ctx.canopy, recipes=ctx.recipes) for x, y in points]
+    # rgb_only (the schema insists): a colour level dims the RGB itself, since a strand look has one brightness
+    channels = [
+        [c.r * c.colorBrightness / 100, c.g * c.colorBrightness / 100, c.b * c.colorBrightness / 100]
+        for c in colours
+    ]
+    r, g, b = (_half_up(sum(ch[i] for ch in channels) / len(channels)) for i in range(3))
+    return r, g, b
+
+
+def module_look(mode: Mode, entry: DeviceEntry, ctx: CompileContext) -> LookSpec:
+    """The T3 strand look for this module at its canopy position."""
     tech = mode.techniques.modules
-    assert tech is not None
+    assert tech is not None and ctx.canopy is not None
+    row, col = parse_position(entry.module, ctx.canopy)
+    n_rows = len(ctx.canopy["orientations"][ctx.canopy["orientation_scheme"]])
+    if tech.sample is not None:
+        rgb = _sampled_rgb(tech.sample, entry, ctx)
+        return LookSpec(kind="rgb", rgb=rgb, brightness=tech.sample.brightness)
     if tech.rows is not None:
         return tech.rows[min(row, len(tech.rows) - 1)]
     if tech.columns is not None:
@@ -797,15 +912,32 @@ def _modules(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
     grid = ctx.canopy["orientations"][ctx.canopy["orientation_scheme"]]
     notes = _Notes()
     modules = {}
+    sampled = set()
     for d in devices:
         c = ctx.caps(d.id)
-        row, col = parse_position(d.module, ctx.canopy)
-        spec = module_look(mode, row, col, len(grid))
+        spec = module_look(mode, d, ctx)
         if problem := _look_problem(spec, c):
             raise PlanError(f"{mode.label} (module level) can't run on {d.id}: {problem}")
+        sampled.add(spec.rgb)
         look = _to_look(spec, c, notes, d.id)
         modules[d.id] = _target(d, c, _vector(look, c), indices=ctx.frame_indices(d, c))
-    return ModePlan(mode_id, mode.label, Tier.T3, tech.feature, False, modules, notes.lines(len(devices)))
+    sample = tech.sample
+    feature = tech.feature
+    if sample is not None:
+        repeats = isinstance(sample.canvas, FieldCanvas) and sample.canvas.field.cycles > 1
+        # a partial canopy's copy is D62's, which is true of any colours (compile_mode)
+        one_colour = len(devices) == sum(len(row) for row in grid) and len(sampled) < 2
+        if (repeats and sample.at == "centre") or one_colour:
+            notes.add(FINER_THAN_GRID)
+        if one_colour:
+            # the copy's layout ("column by column", "from the centre out") isn't what the strands show
+            feature = _one_colour_feature(len(devices))
+    return ModePlan(mode_id, mode.label, Tier.T3, feature, False, modules, notes.lines(len(devices)))
+
+
+def _one_colour_feature(n: int) -> str:
+    """The module-level (T3) sentence when a sampled design gives every strand of the full canopy the same colour."""
+    return f"Colour and dimming: all {_count_words(n)} Hubspace strands set to one colour from the scene."
 
 
 class EngineCompiler:

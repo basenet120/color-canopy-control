@@ -29,6 +29,17 @@ kiosk:
   guest_brightness_min: 10       # the guest panel can't dim the canopy below this (D60)
   idle_reset_s: 300              # no guest input this long → guest brightness/off cleared: on, designed brightness
   idle_scene: null               # optionally also return to this mood on that reset (null = stay on the current one)
+  # The guest panel's picture of the 270 lights: the reflected-ceiling view of config/canopy.yaml (looking up, origin
+  # at the canopy's top-left). SET AT INSTALL so the iPad matches what a guest at the stand sees overhead.
+  preview:
+    mirror_x: false              # flip left to right
+    rotate_deg: 0                # 0 | 90 | 180 | 270 (a quarter turn of the ceiling view)
+    dim_floor: 0.35              # the dimmest guest level is drawn at this opacity (full brightness at 1)
+  # The ripple (D64): a mood chosen on the kiosk, by ops or by the idle return lands ring by ring in its design's
+  # order (at most 3 rings; still one PUT per module), this many seconds apart. 0 = one burst. Validated 0–1.5 with
+  # (rings − 1) × stagger ≤ 2.4 s. Off until Alon flips it to 1.2: 05's spread target and the pinned acceptance
+  # file assume one burst; `make soak` measures a 1.2 s ripple separately.
+  ripple_stagger_s: 0
 
 module_page:
   lock_idle_timeout_s: 600

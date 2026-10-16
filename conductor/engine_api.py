@@ -40,7 +40,11 @@ class ModuleTarget:
     slot_hash: str | None = None  # canonical hash of slot_value (or the recorded hash for T2)
     preview: list[dict] = field(
         default_factory=list
-    )  # per-head {r,g,b} as it should look (visualizer / kiosk)
+    )  # per-head {r,g,b} as it should look at the look's brightness (visualizer, /ops)
+    # Per-head {r,g,b} at full strength (the same rows with brightness 100), in wire order like `preview`: the guest
+    # panel's preview draws these and shows the level separately, so a guest brightness never changes a colour.
+    # Empty when the compiler can't say what the heads show (a T2 slot whose content isn't known).
+    colors: list[dict] = field(default_factory=list)
     # The device's own brightness range: a guest level is clamped to it, as the designed one was (D60).
     brightness_range: tuple[int, int] | None = None
 
@@ -57,6 +61,11 @@ class ModePlan:
     # Canopy modules left out of this plan and why (e.g. their profile hasn't been read yet): the engine shows them
     # as needing attention and drives the others (07 §6: one module's problem never blocks the rest).
     skipped: dict[str, str] = field(default_factory=dict)
+    # The ripple order (D64): the driven modules' device ids grouped into at most three rings by the mode's design
+    # field at their centres, the ring the design starts from first (`looks.compile._waves`). The engine sends a
+    # kiosk/ops/idle mood ring by ring, `kiosk.ripple_stagger_s` apart; still one PUT per module. None = one burst
+    # (a motion plan, a mode with no design, or modules with no canopy position).
+    waves: list[list[str]] | None = None
 
     def to_json(self) -> dict:
         return {
@@ -67,6 +76,7 @@ class ModePlan:
             "motion": self.motion,
             "notes": self.notes,
             "skipped": self.skipped,
+            "waves": self.waves,
             "modules": {
                 d: {"slot": t.slot, "slot_hash": t.slot_hash, "rows": [r.to_json() for r in t.rows]}
                 for d, t in self.modules.items()
@@ -142,6 +152,9 @@ class CanopyState:
     # left out (`ModePlan.skipped`, e.g. no device registered) keep `phase` at NEEDS_ATTENTION for /ops, but never
     # hide a change or a finished look from the guest. None = the same as `phase` (an engine that doesn't set it).
     look_phase: CanopyPhase | None = None
+    # A ripple in progress (D64): {t0: wall time ring 0 was sent, stagger_s, rings: [[position]]} — ring j goes out
+    # at t0 + j × stagger_s. None when no ring is left to send (or the look went out as one burst).
+    ripple: dict[str, Any] | None = None
 
     def to_json(self) -> dict:
         return {
@@ -164,6 +177,7 @@ class CanopyState:
             "guest_power": self.guest_power,
             "brightness": self.brightness,
             "guest_brightness_min": self.guest_brightness_min,
+            "ripple": self.ripple,
         }
 
 

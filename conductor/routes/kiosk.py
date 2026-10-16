@@ -7,9 +7,10 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
                             `preview` is the mode's colour swatch (config/modes.yaml); `pattern` says how the kiosk's
                             illustrated canopy spreads those colours *at the tier the engine would use now* ("modules"
                             at T3, and for a one-colour whole-strand look: one flat colour per module, from
-                            `module_colours`; a modules-first mode lists its static column colours until a plan says
-                            otherwise); `feature` is the "Hubspace feature" sentence for the tier actually in
-                            use — known only for the mode now showing (from the engine), else null.
+                            `module_colours`; a modules-first mode lists its design sampled at each module, as the
+                            compiler samples it, until a plan says otherwise; a 2-D `field` canvas is "design");
+                            `feature` is the "Hubspace feature" sentence for the tier actually in use — known only for
+                            the mode now showing (from the engine), else null.
 - `GET  /api/kiosk/state`   the engine's CanopyState JSON, plus `server_now` and `cooldown_remaining_s` so the page
                             counts the cooldown down in server-relative time (the kiosk's own clock may be off), and
                             `module_colours` (nine "#RRGGBB", r0c0…r2c2) when the plan in use shows one flat colour per
@@ -112,7 +113,8 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     wash       — one whole-strand look (the colours vary gently, as warm white does across a room)
     scatter    — a preset with mixed colours
     gradient   — a canvas gradient down the canopy (axis y)
-    gradient-x — a canvas gradient across the canopy, left to right (axis x: the scenes, D59)
+    gradient-x — a canvas gradient across the canopy, left to right (axis x: D59's scenes)
+    design     — a 2-D design over the canopy (a `field` canvas: radial, corner to corner, … — the scenes, D63)
     pathway    — a winding bright path over a darker base
     bands      — one soft band per module
     modules    — one flat colour per module (`module_colours`): module level (T3), and a whole-strand look that
@@ -136,6 +138,8 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     kind = canvas.get("kind")
     if kind == "gradient":
         return "gradient-x" if canvas.get("axis") == "x" else "gradient"
+    if kind == "field":
+        return "design"
     if kind == "pathway":
         return "pathway"
     if kind == "band_per_module":
@@ -143,16 +147,47 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     return "wash"
 
 
-def _column_colours(spec: Mapping[str, Any]) -> list[str] | None:
-    """Nine "#RRGGBB" (r0c0…r2c2) from a modules-first mode's static `techniques.modules.columns`, so its picture
-    steps column by column like the ceiling even before the engine can compile a plan for it; else None."""
+def _rgb_hex(rgb: Any) -> str:
+    return "#" + "".join(f"{int(v):02X}" for v in rgb)
+
+
+def _sampled_colours(mode: Any) -> list[str] | None:
+    """Nine "#RRGGBB" (r0c0…r2c2): a validated mode's module-level design at each canopy position, through the
+    compiler's own `module_look` (the same sampling T3 sends), or None when it can't be worked out."""
+    try:
+        from conductor.config import DeviceEntry
+        from conductor.looks import CompileContext, module_look
+
+        ctx = CompileContext(registry=[], capabilities={})
+        return [
+            _rgb_hex(
+                module_look(
+                    mode,
+                    DeviceEntry(id=f"kiosk-{pos}", role="canopy_module", account="kiosk", module=pos),
+                    ctx,
+                ).rgb
+            )
+            for pos in GRID
+        ]
+    except Exception as exc:  # noqa: BLE001 - the tile falls back to the palette; ops sees the log line
+        log.warning("The kiosk couldn't sample a module-level design: %s", exc)
+        return None
+
+
+def _static_module_colours(spec: Mapping[str, Any], mode: Any = None) -> list[str] | None:
+    """Nine "#RRGGBB" (r0c0…r2c2) for a modules-first mode, so its picture shows what module level puts on the
+    ceiling even before the engine can compile a plan for it: its design (`sample`, from the validated `mode`)
+    sampled at each module, or its literal `columns`; else None."""
     if (spec.get("ladder") or ["strand"])[0] != "modules":
         return None
-    columns = ((spec.get("techniques") or {}).get("modules") or {}).get("columns") or []
+    modules = (spec.get("techniques") or {}).get("modules") or {}
+    if modules.get("sample") is not None:
+        return _sampled_colours(mode) if mode is not None else None  # None: the looks loader refused the file
+    columns = modules.get("columns") or []
     if len(columns) != 3 or any((c or {}).get("kind") != "rgb" for c in columns):
         return None
     try:
-        hexes = ["#" + "".join(f"{int(v):02X}" for v in c["rgb"]) for c in columns]
+        hexes = [_rgb_hex(c["rgb"]) for c in columns]
     except (KeyError, TypeError, ValueError):
         return None
     return [hexes[i % 3] for i in range(9)]
@@ -218,7 +253,7 @@ def load_kiosk_modes(path: Path = MODES_FILE) -> list[dict[str, Any]]:
                 "pattern_primary": _pattern(spec),  # the picture above T3 (the kiosk falls back to it)
                 "feature": None,
                 "tier": None,
-                "module_colours": _column_colours(spec),
+                "module_colours": _static_module_colours(spec, loaded),
             }
         )
     return modes

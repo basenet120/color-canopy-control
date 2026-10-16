@@ -407,11 +407,10 @@ def test_f8_t3_state_and_modes_carry_one_colour_per_module(t3_show):
     listing = {m["id"]: m for m in client.get("/api/kiosk/modes").json()}
     assert listing[SUNSET]["tier"] == "modules" and listing[SUNSET]["pattern"] == "modules"
     assert len(listing[SUNSET]["module_colours"]) == 9
-    calm = listing[
-        CALM
-    ]  # Lowcountry Calm starts at module level too (D59): mirrored, so the side columns match
+    calm = listing[CALM]  # Lowcountry Calm starts at module level too (D59), radial from the centre (D63)
     assert calm["tier"] == "modules" and calm["pattern"] == "modules"
-    assert calm["module_colours"][0] == calm["module_colours"][2] != calm["module_colours"][1]
+    corners = {calm["module_colours"][i] for i in (0, 2, 6, 8)}
+    assert len(corners) == 1 and calm["module_colours"][4] not in corners  # 4 corners alike, centre not
 
     assert client.post("/api/canopy/mode", json={"mode": SUNSET}).status_code == 200
     _settled(client, SUNSET)
@@ -422,7 +421,7 @@ def test_f8_t3_state_and_modes_carry_one_colour_per_module(t3_show):
     plan = _engine(client).current_plan()
     first = plan.modules["canopy-r0c0"].preview[0]
     assert colours[0] == "#{:02X}{:02X}{:02X}".format(first["r"], first["g"], first["b"])
-    assert len(set(colours)) > 1, "Sunset's columns differ at module level"
+    assert len(set(colours)) > 1, "Sunset's design differs across the modules at module level"
 
     # the safe look is Calm's whole-strand technique: one flat colour (soft ivory) on every module, drawn as such
     assert client.post("/api/canopy/safe-look", json={}).status_code == 200
