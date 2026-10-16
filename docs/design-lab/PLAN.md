@@ -95,6 +95,7 @@ the module functions), `conductor/design_lab/service.py` complete, empty placeho
 | `tests/test_lab_export.py`, `tests/test_scene_rules.py`, `tests/test_lab_roundtrip.py` | new | S3 | A |
 | `tests/lab-model.test.mjs`, `tests/test_lab_static.py` | new | S4 | A |
 | `tests/test_dev_design_lab.py` | new | L | A |
+| `tests/test_lab_router.py` (mounted, guarded, every Slice A route answers; 501 while a stream's stub stands) | new | L | A |
 | `tests/test_lab_trial.py` | new | B1 | B |
 | `tests/test_lab_stepped.py` | new | C1 | C |
 | `conductor/app.py` | **shared**: line 19 import gains `design_lab`; `app.include_router(design_lab.router)` right after `app.include_router(design.router)` (line 176), before the StaticFiles mounts | L | A |
@@ -115,6 +116,68 @@ the module functions), `conductor/design_lab/service.py` complete, empty placeho
 | `conductor/config.py`, `config/conductor.yaml` | changed (`LabSettings`) | B1 | B |
 | `web/kiosk/kiosk.js`, `web/kiosk/panel-model.mjs`, `tests/guest-panel.test.mjs` | changed (`cardsKey`) | B2 | B |
 | `docs/STATUS.md`, `docs/DECISIONS.md` (D66), PR bodies, `docs/reports/sim-acceptance.md` (C only) | changed | L | A, B, C |
+
+### 2.3 The contracts commit as built (deviations from §3–§5, L, Fri Oct 16)
+Everything below is in the contracts commit; streams build against it. Where this list and §3–§5 differ, this list
+wins.
+- **Package re-exports:** `conductor/design_lab/__init__.py` does **not** re-export the `preview()` function: the
+  name would shadow the submodule, so `from conductor.design_lab import preview` would give the function, not the
+  module. Import `conductor.design_lab.preview` as a module (`from conductor.design_lab import preview as P`).
+- **`lab_of`'s lock** is an `asyncio.Lock` kept per Services in `extras["design_lab:lock"]` (`service.LOCK_KEY`),
+  not a module-level `_LOCK`: a module-level lock binds to the first event loop that contends for it, and each
+  `TestClient` runs its own loop. Same get-or-create, same threadpool construction, same alert on the loop thread.
+- **`LabService`** also carries `config_sha` (of the config `approved` was read from, computed once at
+  construction; the catalog, the store and every save use it), and `settings` / `simulated` properties.
+  `ENGINE_KEY`/`SHOW_KEY` are `"canopy"`/`"show"`.
+- **`load_trio` lives in `draft.py`** (as §3.2 lists it) and is implemented in this commit; `service.py` imports it.
+- **`draft.py`:** the `SceneDraft` field is named `copy` as the contract says; it shadows pydantic's deprecated
+  `BaseModel.copy()`, so the class is created under a `warnings` filter for that one message (use `model_copy`).
+  The §3.1 validators are implemented here as **field** validators (`solid`, palette name uniqueness, `mood`,
+  `DraftColour.name`/`hex`, `DraftStepped.run_s`), so a refused body names its field (`palette.1.name`); the D63
+  locks (`layout.cycles == 1`, `sample_at == "centre"`) are **not** in the model: S1 refuses them in `apply_drafts`
+  as `Problem`s. `Problem.to_json()` and `DraftError(problems, message=None)` (`.problems`) added. `FIELD_FOR` is
+  the §3.2.3 table as a constant (`stepped.<name>` rows map to `"stepped"`; S1's `problems_from_config_error`
+  refines it). `NUMBER_NAMES` uses `re.IGNORECASE` (lint).
+- **`store.py`** adds what the routes need from S2: `LookStore.read_only` and `.pending_alert` (named in §3.5's
+  text), `unreadable() -> list[dict]`, `version_summaries(*, approved, canopy, settings, config_sha) -> list[dict]`
+  (VersionSummary, newest first, then the unreadable ones) and `version_json(version_id, *, …) -> dict`
+  (VersionJSON; KeyError), the exception `StoreReadOnly(RuntimeError)` (→ 409) and its sentence `READ_ONLY`.
+  Implemented now: `__init__`, `file()`, `get()` (KeyError), `unreadable()`, `default_name`, `config_sha` (sha256
+  over `scenes.yaml`, `modes.yaml`, `recipes.yaml` bytes in that order, `[:12]`), and `load()` **only for a missing
+  file** (an empty store, so the Lab runs before S2 lands); an existing file is S2's (`NotImplementedError`).
+- **`preview.py`** holds the T1 lock (§3.8 named no module): `T1_LOCKED`, `t1_lock(lab, scene_id)`, the exception
+  `T1Locked(detail, field)` (→ 409 `{detail, field}`) and a new S1 function `check_t1_lock(lab, draft)` that
+  preview and the save route both call. `design_registry()` and `design_caps()` are implemented.
+- **`scene_rules.py`:** `WARNING_TESTS` (rule → the test the export's 409 names: `two-d` →
+  `test_no_scene_reads_as_three_columns_at_module_level`, `kits-differ` →
+  `test_on_the_partial_live_canopy_the_two_kits_show_different_colours`; S3 may refine) and
+  `SceneProblem.to_json()` added; `delta_e76` is implemented (moved verbatim from the test's `_lab`/`_delta_e`).
+- **`export.py`:** `LabExport` as §3.6 (only `problem` has a default).
+- **Routes (`routes/design_lab.py`):**
+  - The router uses a router-scoped route class `LabRoute` (FastAPI exception handlers are app-wide): every answer,
+    errors included, is `Cache-Control: no-store`; a body pydantic refuses is a **422 in the Lab's shape**
+    `{detail, problems: [{path, field, message}]}` (`field` = the SceneDraft path past `draft` / `drafts.<scene>`,
+    e.g. `palette.2.hex`), not FastAPI's default list; a stream's stub (`NotImplementedError`) answers **501**
+    `{detail: "Not built yet: S1: seed_draft.", not_built: true}` so the page degrades readably.
+  - `catalog_json(lab)` and `state_json(lab)` (the CatalogJSON/StateJSON builders) live in the routes module (L).
+    Catalog: `copy` holds each rung's approved sentence (`stepped` = the moving sentence); `idle` is true for
+    `kiosk.idle_mode` or `kiosk.idle_scene`; `state` is `draft` when the current version drafts the scene and
+    `is_approved` is false. State: `engine.running` = the engine exists and isn't `stopped`.
+  - Error bodies beyond §4: stale → 409 `{detail, stale: true, problems}`; read-only store → 409
+    `{detail, read_only: true}` (save, delete, restore check it first); T1 lock → 409 `{detail, field}`; a draft
+    whose `scene_id` differs from its key → 422 on field `scene_id`; an unknown parent on save → 404.
+  - Export checks staleness (`apply_drafts`) and the D63 warnings (`scene_mode_problems(rules=WARNINGS)`, 409
+    `{detail, warnings}`) **before** calling `export_patch`; ExportJSON is `asdict(LabExport) + filename`.
+  - Restore re-applies the version (stale → 409) before `set_current`; "approved" sets `current` to null.
+  - FastAPI 0.141 nests included routers (`_IncludedRouter` in `app.routes`), so dependant walks use
+    `design_lab.router.routes`, and "is it mounted" reads `app.openapi()["paths"]` (S2's
+    `test_every_lab_route_requires_ops_past_the_path_table`).
+- **`scripts/dev_design_lab.py`** also drops `CONDUCTOR_ENGINE` (the engine runs, as on the show box) and any
+  variable whose name looks secret (`SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL`); a `--data` dir
+  is resolved and kept; the refusals are one `refusal(port, host, data, home)` helper (`parser.error`, exit 2).
+- **Makefile:** the three Lab targets use `uv run --offline`.
+- **Lint:** ruff 0.16 formats Python blocks inside Markdown, and this file at `9b73765` failed `make lint`; it is
+  now `ruff format`ted (code blocks only; pseudo-code that doesn't parse is left as written).
 
 ---
 
@@ -137,7 +200,7 @@ class LabService:
     def show(self) -> Any | None: return self.services.extras.get("show")          # ShowWiring
     def engine(self) -> Any | None: return self.services.extras.get("canopy")      # CanopyEngine (ENGINE_KEY)
 
-_LOCK = asyncio.Lock()
+# (as built, §2.3) the lock is per Services — extras["design_lab:lock"] — not a module-level _LOCK
 async def lab_of(request: Request) -> LabService:
     # get-or-create, never `setdefault(KEY, LabService(...))` (that builds a throwaway service — ~37 ms of YAML parsing
     # on the engine's loop, measured on the Mac mini — on every request):
@@ -169,41 +232,49 @@ from conductor.scenes import HEX, SceneCatalog
 from conductor.config import RecipesFile, ConductorSettings
 
 GRID: tuple[str, ...] = tuple(f"r{r}c{c}" for r in range(3) for c in range(3))
-PALETTE_MIN, PALETTE_MAX = 2, 6          # Mode.preview caps at 6 (schema.py Mode.preview max_length=6)
+PALETTE_MIN, PALETTE_MAX = 2, 6  # Mode.preview caps at 6 (schema.py Mode.preview max_length=6)
 NUMBER_NAMES = re.compile(r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|both)\b", re.I)
 
-class _Strict(BaseModel): model_config = ConfigDict(extra="forbid")
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
 
 class DraftColour(_Strict):
-    name: str = Field(min_length=1, max_length=40)        # = PaletteColor.name bounds
-    hex: str                                               # HEX (#RRGGBB), upper-cased by a validator
+    name: str = Field(min_length=1, max_length=40)  # = PaletteColor.name bounds
+    hex: str  # HEX (#RRGGBB), upper-cased by a validator
     # validators: name has no MOTION_WORDS match, no STEPPED_FALSE_CLAIMS match, no LAYOUT/MOTION phrase
     # (MOTION_PHRASES), and no numeral/number word (NUMBER_NAMES) — names go into generated copy, which `_counted`
     # rewrites by number words (D62), so a colour called "Nine" would be miscounted.
 
-class DraftStepped(_Strict):                               # = SteppedTechnique's bounds (schema.py:265)
+
+class DraftStepped(_Strict):  # = SteppedTechnique's bounds (schema.py:265)
     direction: Literal["forward", "reverse"]
     steps_per_cycle: int = Field(ge=3, le=12)
     step_s: float = Field(ge=4.0, le=12.0)
-    run_s: float = Field(gt=0, le=180.0)                   # ≥ step_s (validator); ≤ kiosk.idle_return_s in apply
+    run_s: float = Field(gt=0, le=180.0)  # ≥ step_s (validator); ≤ kiosk.idle_return_s in apply
+
 
 class DraftCopy(_Strict):
     # "auto" (the default): the approved sentence while §3.3 says it is still true, else the generated one; the
     # server resolves it and reports {chosen, why}. An explicit "approved" that is no longer true → 422 on save only.
     modules: Literal["auto", "approved", "generated"] = "auto"  # the T3 sentence
-    stepped: Literal["auto", "approved", "generated"] = "auto"  # the moving sentence (scenes with a stepped rung)
+    stepped: Literal["auto", "approved", "generated"] = (
+        "auto"  # the moving sentence (scenes with a stepped rung)
+    )
+
 
 class SceneDraft(_Strict):
-    scene_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,40}$")   # must be an existing scene (checked in apply)
-    name: str = Field(min_length=1, max_length=40)              # client copy → Scene.name and Mode.label
-    mood: str = Field(min_length=1, max_length=60)              # client copy → Scene.mood and Mode.blurb
-    description: str = Field(min_length=1, max_length=200)      # client copy → Scene.description
+    scene_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,40}$")  # must be an existing scene (checked in apply)
+    name: str = Field(min_length=1, max_length=40)  # client copy → Scene.name and Mode.label
+    mood: str = Field(min_length=1, max_length=60)  # client copy → Scene.mood and Mode.blurb
+    description: str = Field(min_length=1, max_length=200)  # client copy → Scene.description
     palette: list[DraftColour] = Field(min_length=PALETTE_MIN, max_length=PALETTE_MAX)
-    layout: F.FieldSpec                                         # LinearField | RadialField | SweepField, reused
+    layout: F.FieldSpec  # LinearField | RadialField | SweepField, reused
     sample_at: Literal["centre", "mean"] = "centre"
-    brightness: int = Field(ge=1, le=100)                       # brightness_draft and every rung's brightness
-    solid: int = Field(ge=0)                                    # index into palette (default_solid)
-    stepped: DraftStepped | None = None                         # present iff the approved ladder has "stepped"
+    brightness: int = Field(ge=1, le=100)  # brightness_draft and every rung's brightness
+    solid: int = Field(ge=0)  # index into palette (default_solid)
+    stepped: DraftStepped | None = None  # present iff the approved ladder has "stepped"
     copy: DraftCopy = Field(default_factory=DraftCopy)
     # model validators: solid < len(palette); palette names unique (case-insensitive); mood has no MOTION_WORDS
     # (it is the blurb, shown at every tier: schema.py Mode._ladder).
@@ -669,7 +740,8 @@ def t1_lock(lab: LabService, scene_id: str) -> dict
 ## 4. HTTP API (`conductor/routes/design_lab.py`)
 
 ```python
-from conductor.routes.ops import _no_cross_site          # reused: same-origin + JSON-only for non-GET
+from conductor.routes.ops import _no_cross_site  # reused: same-origin + JSON-only for non-GET
+
 router = APIRouter(prefix="/api/lab", dependencies=[Depends(require_ops), Depends(_no_cross_site)])
 ```
 `require_ops` first (a kiosk/tester/vignette gets 403/401 before anything else; the auth middleware's path table
@@ -964,18 +1036,22 @@ def trial_bound_s(settings: ConductorSettings) -> float:   # min(lab.trial_max_s
 ```python
 TRIAL_SOURCE = "lab"
 TRIAL_MESSAGE = "Staff are trying a new look on the canopy. Try again in a few minutes."
-TRIAL_SKIP = frozenset({Tier.T1, Tier.T2, Tier.STEPPED})   # a try-on is module level only, and never steps
-ONE_BURST_SOURCES = RECOMPILE_SOURCES | {TRIAL_SOURCE}     # ripple seam; RECOMPILE_SOURCES itself unchanged
+TRIAL_SKIP = frozenset({Tier.T1, Tier.T2, Tier.STEPPED})  # a try-on is module level only, and never steps
+ONE_BURST_SOURCES = RECOMPILE_SOURCES | {TRIAL_SOURCE}  # ripple seam; RECOMPILE_SOURCES itself unchanged
+
 
 @dataclass
 class Trial:
     mode_id: str
-    label: str              # the draft's name / version name (telemetry, Lab)
-    modes: Any              # the patched ModesFile — opaque to the engine; ShowWiring compiles with it
-    recipes: Any            # the patched RecipesFile — T3/strand colours come from recipes, so without it a hex
-                            #   edit would show the APPROVED colour and a renamed colour would fail modules → strand
-    started_mono: float; ends_mono: float; started_at: float
-    version: str | None = None; applies: int = 1
+    label: str  # the draft's name / version name (telemetry, Lab)
+    modes: Any  # the patched ModesFile — opaque to the engine; ShowWiring compiles with it
+    recipes: Any  # the patched RecipesFile — T3/strand colours come from recipes, so without it a hex
+    #   edit would show the APPROVED colour and a renamed colour would fail modules → strand
+    started_mono: float
+    ends_mono: float
+    started_at: float
+    version: str | None = None
+    applies: int = 1
 ```
 `CanopyEngine` additions: `self._trial: Trial | None = None`, `self._trial_task: asyncio.Task | None = None` (a
 loop task like `_settle_task` (canopy.py:1157), **not** in `self._tasks`, so `wait_idle` never waits 150 s);
@@ -1045,11 +1121,14 @@ def _trial_for(self, mode_id: str) -> Any | None:
     trial = getattr(self.engine, "trial", None) if self.engine is not None else None
     return trial if trial is not None and trial.mode_id == mode_id else None
 
-def context(self, modes=None, recipes=None):  # show.py:349 — new `recipes` param forwarded to
-    ...                                       # CompileContext.from_settings(recipes=recipes); None keeps today's default
 
-def compile(self, mode_id, tier):            # show.py:374
-    if tier is Tier.STEPPED and self._rehearsing(mode_id): return self.rehearsal_plan(mode_id)
+def context(self, modes=None, recipes=None):  # show.py:349 — new `recipes` param forwarded to
+    ...  # CompileContext.from_settings(recipes=recipes); None keeps today's default
+
+
+def compile(self, mode_id, tier):  # show.py:374
+    if tier is Tier.STEPPED and self._rehearsing(mode_id):
+        return self.rehearsal_plan(mode_id)
     trial = self._trial_for(mode_id)
     if trial is not None and tier in (Tier.T3, Tier.STRAND):
         return compile_mode(mode_id, tier, self.context(trial.modes, trial.recipes))
