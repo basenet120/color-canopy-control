@@ -53,19 +53,21 @@ def _working_tree_copy(dest: Path) -> Path:
 
 @pytest.mark.parametrize("case", CASES)
 def test_an_edited_export_passes_the_whole_suite(case, tmp_path):
-    from test_lab_export import APPROVED, CANOPY, NOW, canonical_edits, structural
+    from test_lab_export import CANOPY, LIVE, NOW, canonical_edits, structural
 
     from conductor.design_lab.export import export_patch
 
-    patched = canonical_edits() if case == "canonical" else structural(case)
-    result = export_patch(APPROVED, patched, root=ROOT, canopy=CANOPY, version=None, now=NOW)
+    # the edits are written for the approved config of 2026-10-16 (tests/fixtures_lab_baseline/), applied to the
+    # working tree's: run this before the scenes change
+    patched = canonical_edits(LIVE) if case == "canonical" else structural(case, LIVE)
+    result = export_patch(LIVE, patched, root=ROOT, canopy=CANOPY, version=None, now=NOW)
     assert result.problem == "" and result.patch, result.problem
     repo = _working_tree_copy(tmp_path / "tree")
     (tmp_path / "lab.patch").write_text(result.patch, encoding="utf-8")
     apply = _run(repo, "git", "apply", str(tmp_path / "lab.patch"))
     assert apply.returncode == 0, apply.stderr
     changed = _run(repo, "git", "diff", "--name-only")
-    assert changed.stdout.split() == result.files
+    assert sorted(changed.stdout.split()) == sorted(result.files)  # git lists them alphabetically
     env = {k: v for k, v in os.environ.items() if k != "LAB_ROUNDTRIP" and not k.startswith("HUBSPACE_")}
     started = time.monotonic()
     suite = _run(

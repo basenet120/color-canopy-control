@@ -4,16 +4,22 @@ The patched trios here are built by hand (`edit_scene`: model_validate of edited
 lockstep), so the export is tested independently of S1's `apply_drafts`; one test runs through `apply_drafts` and is
 skipped while that is still a stub. Every patch is proven the way the PLAN asks: it applies with `git apply` to a
 copy of the working tree's config/ and fixture, and the files it leaves re-read (through the real loaders) as the
-edited trio."""
+edited trio.
+
+The edits are written against a frozen baseline (tests/fixtures_lab_baseline/: config/{scenes,modes,recipes,canopy}.yaml
+as approved on 2026-10-16), exported from a scratch root holding that config and its fixture, so these tests keep
+passing after an edited export changes config/ itself. The tests marked "live" run on the working tree's config/."""
 
 from __future__ import annotations
 
+import atexit
 import difflib
 import importlib.util
 import json
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +35,24 @@ from conductor.looks import scene_rules as R
 from conductor.looks.schema import FieldCanvas, motion_words, parse_modes
 from conductor.scenes import SceneCatalog, load_scenes
 
-ROOT = CONFIG_DIR.parent
+REPO = CONFIG_DIR.parent
+BASELINE = Path(__file__).with_name("fixtures_lab_baseline")
 CANOPY = load_canopy_config()
-APPROVED = load_trio(CONFIG_DIR)
+APPROVED = load_trio(BASELINE)  # the baseline every hand edit below is written against
+LIVE = load_trio(CONFIG_DIR)  # the working tree's approved config
+
+
+def _baseline_root() -> Path:
+    """A repo-shaped root: the baseline as config/, and the fixture it gives as tests/fixtures_scene_frames.json."""
+    root = Path(tempfile.mkdtemp(prefix="lab-baseline-"))
+    atexit.register(shutil.rmtree, root, True)
+    shutil.copytree(BASELINE, root / "config")
+    (root / "tests").mkdir()
+    (root / X.FIXTURE_FILE).write_text(X.fixture_for(APPROVED, CANOPY), encoding="utf-8")
+    return root
+
+
+ROOT = _baseline_root()
 NOW = 1_792_270_800.0  # 2026-10-17
 GOLDEN = [
     ("Soft gold", "#FFDB9B"),
@@ -163,10 +184,10 @@ def golden_edit(trio: ConfigTrio = APPROVED) -> ConfigTrio:
     )
 
 
-def canonical_edits() -> ConfigTrio:
+def canonical_edits(trio: ConfigTrio = APPROVED) -> ConfigTrio:
     """The three canonical edits (PLAN §8): Golden Hour as above; Coastal Tides at 60° with Aqua #6FD0D8; Lowcountry
     Calm's Sea glass #CDEBE6."""
-    trio = golden_edit()
+    trio = golden_edit(trio)
     trio = edit_scene(
         trio,
         "coastal-tides",
@@ -220,9 +241,9 @@ STRUCTURAL: dict[str, tuple[str, dict]] = {
 }
 
 
-def structural(case: str) -> ConfigTrio:
+def structural(case: str, trio: ConfigTrio = APPROVED) -> ConfigTrio:
     scene_id, kw = STRUCTURAL[case]
-    return edit_scene(APPROVED, scene_id, **kw)
+    return edit_scene(trio, scene_id, **kw)
 
 
 # ---- helpers ---------------------------------------------------------------------------------------------------------
@@ -235,7 +256,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def scratch_repo(tmp: Path, *, with_tests: bool = True) -> Path:
-    """A git repo holding the working tree's config/ (and the fixture), committed: what a reviewer applies to."""
+    """A git repo holding the root's config/ (and the fixture), committed: what a reviewer applies to."""
     repo = tmp / "repo"
     shutil.copytree(ROOT / "config", repo / "config")
     if with_tests:
@@ -305,12 +326,19 @@ def test_an_unchanged_version_exports_nothing_and_rereads_equal():
     assert X.rewrite_recipes_yaml(texts[X.RECIPES_FILE], APPROVED, APPROVED) == texts[X.RECIPES_FILE]
 
 
+def test_live_an_unchanged_export_of_the_working_tree_is_empty():
+    result = X.export_patch(LIVE, LIVE, root=REPO, canopy=CANOPY, version=None, now=NOW)
+    assert (result.patch, result.files, result.problem) == ("", [], "")
+    texts = {path: (REPO / path).read_text(encoding="utf-8") for path in X.EXPORT_FILES[:3]}
+    assert X.reread(texts, CANOPY).dump() == LIVE.dump()
+
+
 def test_the_fixture_is_regenerated_byte_for_byte_on_no_change():
-    committed = (ROOT / X.FIXTURE_FILE).read_text(encoding="utf-8")
-    assert X.fixture_for(APPROVED, CANOPY) == committed
+    committed = (REPO / X.FIXTURE_FILE).read_text(encoding="utf-8")  # live: the committed fixture
+    assert X.fixture_for(LIVE, CANOPY) == committed
     assert not committed.endswith("\n")  # json.dumps(…, indent=0): no trailing newline
     frames = json.loads(committed)
-    assert [k for k in frames if k != "_pins"] == [s.id for s in APPROVED.scenes.scenes]
+    assert [k for k in frames if k != "_pins"] == [s.id for s in LIVE.scenes.scenes]
 
 
 # ---- an edit -----------------------------------------------------------------------------------------------------------
@@ -653,12 +681,13 @@ def _route_export(app_client, monkeypatch, patched: ConfigTrio, *, format: str =
 
 
 def test_an_export_with_a_d63_warning_is_refused(app_client, monkeypatch):
-    stripes = edit_scene(APPROVED, "rainbow-row-sunset", layout={"kind": "linear", "angle_deg": 0})
+    # live: the app's Lab holds the working tree's config, so the draft is made from it
+    stripes = edit_scene(LIVE, "rainbow-row-sunset", layout={"kind": "linear", "angle_deg": 0})
     r = _route_export(app_client, monkeypatch, stripes)
     assert r.status_code == 409, r.text
     body = r.json()
     assert [w["rule"] for w in body["warnings"]] == ["two-d"]
-    assert body["detail"].startswith("Rainbow Row Sunset: " + R.STRIPES)
+    assert body["detail"].startswith(LIVE.scenes.get("rainbow-row-sunset").name + ": " + R.STRIPES)
     assert (
         "tests/test_modes_match_scenes.py::test_no_scene_reads_as_three_columns_at_module_level would fail"
         in (body["detail"])
@@ -666,13 +695,18 @@ def test_an_export_with_a_d63_warning_is_refused(app_client, monkeypatch):
 
 
 def test_the_route_exports_json_and_a_patch_file(app_client, monkeypatch):
-    r = _route_export(app_client, monkeypatch, golden_edit())
+    # live: a brightness edit of the working tree's Golden Hour (whatever its approved value)
+    level = LIVE.scenes.get("golden-hour").brightness_draft
+    patched = edit_scene(LIVE, "golden-hour", brightness=level + 1 if level < 100 else level - 1)
+    r = _route_export(app_client, monkeypatch, patched)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["problem"] == "" and body["files"] == list(X.EXPORT_FILES)
+    # a brightness edit: scenes, modes and the pinned brightness; no recipe changes
+    assert body["problem"] == "" and body["files"] == [X.SCENES_FILE, X.MODES_FILE, X.FIXTURE_FILE]
     assert re.fullmatch(r"design-lab-v0002-\d{8}T\d{6}Z\.patch", body["filename"])
-    assert body["patch"] == export(golden_edit(), version=_version()).patch
-    r = _route_export(app_client, monkeypatch, golden_edit(), format="patch")
+    direct = X.export_patch(LIVE, patched, root=REPO, canopy=CANOPY, version=_version(), now=NOW)
+    assert body["patch"] == direct.patch
+    r = _route_export(app_client, monkeypatch, patched, format="patch")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/x-diff")
     assert "attachment" in r.headers["content-disposition"] and r.text.startswith(
         "diff --git a/config/scenes.yaml"
@@ -718,7 +752,7 @@ def test_an_export_of_applied_drafts_rereads_as_the_patched_trio(tmp_path):
 # ---- make scene-pins ----------------------------------------------------------------------------------------------------
 def _regen_script():
     spec = importlib.util.spec_from_file_location(
-        "regen_scene_pins", ROOT / "scripts" / "regen_scene_pins.py"
+        "regen_scene_pins", REPO / "scripts" / "regen_scene_pins.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -728,7 +762,7 @@ def _regen_script():
 
 def test_regen_scene_pins_matches_the_committed_fixture(tmp_path, capsys):
     regen = _regen_script()
-    committed = (ROOT / X.FIXTURE_FILE).read_text(encoding="utf-8")
+    committed = (REPO / X.FIXTURE_FILE).read_text(encoding="utf-8")  # live: the committed fixture
     assert regen.fixture_text() == committed
     assert regen.main(["--check"]) == 0
     out = tmp_path / "frames.json"

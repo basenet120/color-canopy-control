@@ -237,7 +237,7 @@ def test_no_scene_reads_as_three_columns_at_module_level(mode_id):
 def test_golden_hours_sun_shows_at_module_level():
     """The sun sits at the middle of the left edge: on the grid the middle-left module is the goldest, and the sun's
     arc shows — the left column's corners are visibly pinker than its middle, and so is the middle column's."""
-    if F.RadialField.model_validate(PINS["golden-hour"]["layout"]) != D63_SUN:
+    if PINS["golden-hour"]["layout"] != D63_SUN.model_dump(mode="json"):  # any other kind or place
         pytest.skip("Golden Hour's sun was redesigned in the Design Lab; see DECISIONS")
     t = {
         p: F.value(_design("golden-hour").field, x, y, CANOPY)

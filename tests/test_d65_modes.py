@@ -107,7 +107,7 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
 
 
 def test_golden_hours_rays_move_out_from_the_middle_of_the_left_edge():
-    if F.RadialField.model_validate(PINS["golden-hour"]["layout"]) != D63_SUN:
+    if PINS["golden-hour"]["layout"] != D63_SUN.model_dump(mode="json"):  # any other kind or place
         pytest.skip("Golden Hour's sun was redesigned in the Design Lab; see DECISIONS")
     steps = compile_mode("golden-hour", Tier.STEPPED, _ctx()).program.steps
     for (

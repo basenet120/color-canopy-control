@@ -1,0 +1,185 @@
+# Colour recipes (06 #7): how each named show colour is made on a puck. Starting points only — every value here
+# is UNVERIFIED until Prototype 01's colour study (clear + frosted Mylar, show brightness, photographed at equal
+# exposure). Tune here, not in code.
+#
+# Each colour has:
+#   rgb_only: a frame entry that uses only the RGB die (cct 0, whiteBrightness 0)
+#   blend:    RGB plus the warm-white LEDs in the same puck (cct + whiteBrightness) — needs per-puck white to be
+#             honoured by the device (bench gate 6, "per-puck white"); if it isn't, blend == rgb_only visually
+#   strand:   the whole-strand fallback (T3): a `color-rgb` value or a white `cct`
+#
+# Two groups:
+#   - the scene palette colours (D59, D63): the approved palettes of all six scenes (config/scenes.yaml) — the
+#     painted three since D59, and Lowcountry Calm, Coastal Tides and The Goodnight Glow since D63, whose module
+#     level (T3) samples the same kind of design. Each is the palette hex at full strength (colorBrightness 100 —
+#     brightness is the device setting, never multiplied in). The palettes are RGB designs and per-puck white is
+#     unverified (gate 6), so `blend` is the same RGB with no white; config/modes.yaml paints them with `rgb_only`.
+#     A key is the colour's name, or <scene id>-<name> when that name is already taken by another colour.
+#   - the colour-study colours (HD orange, amber, …): the module page's colour and recipe-compare cards
+#     (conductor/module/cards.py). No mode uses them since D59.
+colors:
+  # ---- scene palette colours (D59) ----------------------------------------------------------------------------
+  # Rainbow Row Sunset
+  pastel-coral:
+    label: Pastel coral
+    hex: "#FF9E96"
+    rgb_only: {r: 255, g: 158, b: 150, colorBrightness: 100}
+    blend: {r: 255, g: 158, b: 150, colorBrightness: 100}
+    strand: {rgb: [255, 158, 150]}
+  blush-pink:
+    label: Blush pink
+    hex: "#FFD2E0"
+    rgb_only: {r: 255, g: 210, b: 224, colorBrightness: 100}
+    blend: {r: 255, g: 210, b: 224, colorBrightness: 100}
+    strand: {rgb: [255, 210, 224]}
+  lilac:
+    label: Lilac
+    hex: "#C4B3EC"
+    rgb_only: {r: 196, g: 179, b: 236, colorBrightness: 100}
+    blend: {r: 196, g: 179, b: 236, colorBrightness: 100}
+    strand: {rgb: [196, 179, 236]}
+  # Garden Gathering
+  sage-green:
+    label: Sage green
+    hex: "#8FBF9D"
+    rgb_only: {r: 143, g: 191, b: 157, colorBrightness: 100}
+    blend: {r: 143, g: 191, b: 157, colorBrightness: 100}
+    strand: {rgb: [143, 191, 157]}
+  pale-lime:
+    label: Pale lime
+    hex: "#E6EED1"
+    rgb_only: {r: 230, g: 238, b: 209, colorBrightness: 100}
+    blend: {r: 230, g: 238, b: 209, colorBrightness: 100}
+    strand: {rgb: [230, 238, 209]}
+  ivory:
+    label: Ivory
+    hex: "#F7F2E7"
+    rgb_only: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    blend: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    strand: {rgb: [247, 242, 231]}
+  # Golden Hour
+  soft-gold:
+    label: Soft gold
+    hex: "#FFDB9B"
+    rgb_only: {r: 255, g: 219, b: 155, colorBrightness: 100}
+    blend: {r: 255, g: 219, b: 155, colorBrightness: 100}
+    strand: {rgb: [255, 219, 155]}
+  golden-hour-peach:
+    label: Peach
+    hex: "#FFB69D"
+    rgb_only: {r: 255, g: 182, b: 157, colorBrightness: 100}
+    blend: {r: 255, g: 182, b: 157, colorBrightness: 100}
+    strand: {rgb: [255, 182, 157]}
+  sunset-pink:
+    label: Sunset pink
+    hex: "#FF9BC4"
+    rgb_only: {r: 255, g: 155, b: 196, colorBrightness: 100}
+    blend: {r: 255, g: 155, b: 196, colorBrightness: 100}
+    strand: {rgb: [255, 155, 196]}
+  rose:
+    label: Rose
+    hex: "#E779B0"
+    rgb_only: {r: 231, g: 121, b: 176, colorBrightness: 100}
+    blend: {r: 231, g: 121, b: 176, colorBrightness: 100}
+    strand: {rgb: [231, 121, 176]}
+  lavender:
+    label: Lavender
+    hex: "#B59AE2"
+    rgb_only: {r: 181, g: 154, b: 226, colorBrightness: 100}
+    blend: {r: 181, g: 154, b: 226, colorBrightness: 100}
+    strand: {rgb: [181, 154, 226]}
+  # Lowcountry Calm (T3 only)
+  soft-ivory:
+    label: Soft ivory
+    hex: "#F7F2E7"
+    rgb_only: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    blend: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    strand: {rgb: [247, 242, 231]}
+  sea-glass:
+    label: Sea glass
+    hex: "#D1EAE3"
+    rgb_only: {r: 209, g: 234, b: 227, colorBrightness: 100}
+    blend: {r: 209, g: 234, b: 227, colorBrightness: 100}
+    strand: {rgb: [209, 234, 227]}
+  # Coastal Tides (T3 only)
+  ocean-blue:
+    label: Ocean blue
+    hex: "#659BD5"
+    rgb_only: {r: 101, g: 155, b: 213, colorBrightness: 100}
+    blend: {r: 101, g: 155, b: 213, colorBrightness: 100}
+    strand: {rgb: [101, 155, 213]}
+  aqua:
+    label: Aqua
+    hex: "#79CED4"
+    rgb_only: {r: 121, g: 206, b: 212, colorBrightness: 100}
+    blend: {r: 121, g: 206, b: 212, colorBrightness: 100}
+    strand: {rgb: [121, 206, 212]}
+  seafoam:
+    label: Seafoam
+    hex: "#B2E8D2"
+    rgb_only: {r: 178, g: 232, b: 210, colorBrightness: 100}
+    blend: {r: 178, g: 232, b: 210, colorBrightness: 100}
+    strand: {rgb: [178, 232, 210]}
+  foam-white:
+    label: Foam white
+    hex: "#E9F3E7"
+    rgb_only: {r: 233, g: 243, b: 231, colorBrightness: 100}
+    blend: {r: 233, g: 243, b: 231, colorBrightness: 100}
+    strand: {rgb: [233, 243, 231]}
+  # The Goodnight Glow (T3 only)
+  periwinkle:
+    label: Periwinkle
+    hex: "#8B8BD1"
+    rgb_only: {r: 139, g: 139, b: 209, colorBrightness: 100}
+    blend: {r: 139, g: 139, b: 209, colorBrightness: 100}
+    strand: {rgb: [139, 139, 209]}
+  goodnight-glow-lavender:
+    label: Lavender
+    hex: "#BEA9E6"
+    rgb_only: {r: 190, g: 169, b: 230, colorBrightness: 100}
+    blend: {r: 190, g: 169, b: 230, colorBrightness: 100}
+    strand: {rgb: [190, 169, 230]}
+  moonlight-blue:
+    label: Moonlight blue
+    hex: "#C4D6F3"
+    rgb_only: {r: 196, g: 214, b: 243, colorBrightness: 100}
+    blend: {r: 196, g: 214, b: 243, colorBrightness: 100}
+    strand: {rgb: [196, 214, 243]}
+
+  # ---- colour-study colours (module page cards) ----------------------------------------------------------------
+  hd-orange:
+    label: Home Depot orange
+    hex: "#F96302"
+    rgb_only: {r: 249, g: 99, b: 2, colorBrightness: 100}
+    blend: {r: 249, g: 80, b: 0, colorBrightness: 100, cct: 2700, whiteBrightness: 25}
+    strand: {rgb: [249, 99, 2]}
+  amber:
+    label: Amber
+    hex: "#FF8C1A"
+    rgb_only: {r: 255, g: 126, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 100, b: 0, colorBrightness: 100, cct: 2700, whiteBrightness: 40}
+    strand: {rgb: [255, 126, 0]}
+  deep-amber:
+    label: Deep amber
+    hex: "#E0600A"
+    rgb_only: {r: 255, g: 90, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 70, b: 0, colorBrightness: 100, cct: 2700, whiteBrightness: 20}
+    strand: {rgb: [255, 90, 0]}
+  peach:
+    label: Peach
+    hex: "#FFB08A"
+    rgb_only: {r: 255, g: 160, b: 110, colorBrightness: 100}
+    blend: {r: 255, g: 120, b: 70, colorBrightness: 100, cct: 2700, whiteBrightness: 45}
+    strand: {rgb: [255, 160, 110]}
+  warm-ivory:
+    label: Warm ivory
+    hex: "#FFE4BC"
+    rgb_only: {r: 255, g: 214, b: 160, colorBrightness: 100}
+    blend: {r: 255, g: 170, b: 90, colorBrightness: 40, cct: 2700, whiteBrightness: 100}
+    strand: {cct: 2700}
+  warm-white:
+    label: Warm white
+    hex: "#FFD9A8"
+    rgb_only: {r: 255, g: 200, b: 140, colorBrightness: 100}
+    blend: {r: 0, g: 0, b: 0, colorBrightness: 0, cct: 2700, whiteBrightness: 100}
+    strand: {cct: 2700}
