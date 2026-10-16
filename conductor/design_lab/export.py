@@ -904,7 +904,12 @@ def export_patch(
     present, `tests/`), re-read and proven equal to `patched` before it is offered."""
     root = Path(root)
     scene_ids = changed_scenes(approved, patched)
-    changes = _changes(approved, patched, scene_ids, canopy)
+    try:
+        changes = _changes(approved, patched, scene_ids, canopy)
+    except (KeyError, ValueError) as e:  # a trio whose ids or ladders moved: never a patch
+        return LabExport(
+            "", [], scene_ids, "", [], [], [], f"the draft doesn't match the scenes ({_first_line(e)})"
+        )
     review_notes = [*changes.slot_repaint, *changes.notes]
 
     def refused(problem: str) -> LabExport:
@@ -943,7 +948,7 @@ def export_patch(
             RECIPES_FILE: rewrite_recipes_yaml(before[RECIPES_FILE], approved, patched),
             FIXTURE_FILE: fixture_for(patched, canopy),
         }
-    except (LocateError, KeyError) as e:
+    except (LocateError, KeyError, ValueError) as e:
         return refused(f"the edit couldn't be placed in the files ({_first_line(e)})")
     try:
         got = reread(after, canopy)
@@ -981,8 +986,9 @@ def export_patch(
 
 
 def _first_line(e: BaseException) -> str:
-    text = str(e).strip().splitlines()
-    return (text[0] if text else type(e).__name__)[:200]
+    """The error in one line: a ConfigError's heading and its first bullet ("… has 2 problem(s): • mode …")."""
+    text = [line.strip() for line in str(e).strip().splitlines() if line.strip()]
+    return (" ".join(text[:2]) if text else type(e).__name__)[:300]
 
 
 __all__ = [
