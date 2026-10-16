@@ -60,7 +60,12 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
     assert modes.kiosk.title == "The Color Canopy"
     sunset = modes.mode("rainbow-row-sunset")
     assert isinstance(sunset.techniques.canvas.canvas, FieldCanvas)  # a 2-D design since D63
-    assert [s.color for s in sunset.techniques.canvas.canvas.stops] == ["pastel-coral", "blush-pink", "lilac"]
+    # its stops name the scene's palette (approved: pastel-coral, blush-pink, lilac; a Design Lab export may rename
+    # or reorder them, so the recipes' labels are checked against the catalog rather than the keys pinned)
+    from conductor.scenes import load_scenes
+
+    labels = [RECIPES.colors[s.color].label for s in sunset.techniques.canvas.canvas.stops]
+    assert labels == [c.name for c in load_scenes().get("rainbow-row-sunset").palette]
     assert sunset.techniques.modules.sample.canvas == sunset.techniques.canvas.canvas  # one design, two tiers
     # no scene has on-device motion (D59), and no still copy claims movement; only the two stepped rungs' moving
     # copy may (D65: Coastal Tides and Golden Hour)

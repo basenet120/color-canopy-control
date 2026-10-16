@@ -17,7 +17,7 @@ from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, module_look, parse_modes
 from conductor.looks.compile import FINER_THAN_GRID
 from conductor.looks.schema import ModesFile
-from conductor.scenes import load_scenes
+from conductor.scenes import PaletteColor, load_scenes
 from conductor.sim.profiles import profile_parts
 
 PATH = Path(__file__).with_name("fixtures_modes_field.yaml")
@@ -39,7 +39,18 @@ D59_COLUMNS = {
 }
 
 
-RECIPES = load_recipes()  # every scene's palette is a recipe since D63
+FROZEN = Path(__file__).with_name("fixtures_recipes_frozen.yaml")
+
+
+def _frozen_recipes() -> RecipesFile:
+    """config's recipes with today's scene colours frozen over them (Design Lab PLAN §3.7): the fixture names the
+    scenes' recipe keys, so a Design Lab export that renames or drops one can't break these compiler tests."""
+    live = load_recipes().model_dump()
+    frozen = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))
+    return RecipesFile.model_validate({**live, "colors": {**live["colors"], **frozen["colors"]}})
+
+
+RECIPES = _frozen_recipes()  # every scene's palette is a recipe since D63
 FIELD = parse_modes(
     yaml.safe_load(PATH.read_text(encoding="utf-8")), recipes=RECIPES, canopy=CANOPY, path=PATH
 )
@@ -91,8 +102,12 @@ def test_an_x_linear_field_at_the_module_centres_is_d59s_literal_columns(mode_id
 
 @pytest.mark.parametrize("mode_id", [s.id for s in SCENES.scenes])
 def test_d59s_columns_are_each_scenes_x_gradient_at_the_column_centres(mode_id):
-    """The pinned anchor is no typo: each column is the scene catalog's own gradient at its centre."""
-    scene = SCENES.get(mode_id)
+    """The pinned anchor is no typo: each column is the scene catalog's own gradient at its centre (the palette is
+    the fixture's own preview, so a Design Lab colour change in config/ can't move this pin)."""
+    preview = FIELD.mode(mode_id).preview
+    scene = SCENES.get(mode_id).model_copy(
+        update={"palette": [PaletteColor(name=f"stop {i}", hex=h) for i, h in enumerate(preview)]}
+    )
     assert D59_COLUMNS[mode_id] == [scene.color_at((c + 0.5) * 75 / 225) for c in range(3)]
 
 
@@ -103,7 +118,9 @@ def test_a_radial_design_gives_four_levels_from_the_centre_out():
     assert colours["r0c1"] == colours["r2c1"] and colours["r1c0"] == colours["r1c2"]
     assert len({colours[p] for p in ("r0c0", "r0c2", "r2c0", "r2c2")}) == 1
     assert len(set(colours.values())) == 4  # 0 / 40 / 75 / 85 in from the centre
-    assert colours["r1c1"] == (255, 158, 150)  # pastel coral, the first stop, at the centre
+    assert (
+        colours["r1c1"] == RECIPES.colors["pastel-coral"].strand.rgb
+    )  # pastel coral, the first stop, at the centre
     for m in MODULES:
         assert R.color_rgb(*colours[m.module]) in plan.modules[m.id].rows
     assert FINER_THAN_GRID not in " ".join(plan.notes)
@@ -125,7 +142,7 @@ def test_the_mean_of_a_uniform_field_is_its_centre():
     sample.at = "mean"
     mean = compile_mode("radial-sunset", Tier.T3, _ctx(modes=modes))
     assert mean.modules == centre.modules
-    assert set(_colours("radial-sunset", _ctx(modes=modes)).values()) == {(196, 179, 236)}
+    assert set(_colours("radial-sunset", _ctx(modes=modes)).values()) == {RECIPES.colors["lilac"].strand.rgb}
 
 
 def test_the_mean_averages_the_modules_heads():
@@ -133,7 +150,7 @@ def test_the_mean_averages_the_modules_heads():
     modes.modes["radial-sunset"].techniques.modules.sample.at = "mean"
     centre, mean = _colours("radial-sunset", _ctx()), _colours("radial-sunset", _ctx(modes=modes))
     # the centre module's heads are all away from the centre point, so their mean is further along the palette
-    assert centre["r1c1"] == (255, 158, 150) != mean["r1c1"]
+    assert centre["r1c1"] == RECIPES.colors["pastel-coral"].strand.rgb != mean["r1c1"]
     # r0c0 and r0c2 are A panels mirrored left to right about the centre: their heads sit at the same distances
     assert mean["r0c0"] == mean["r0c2"]
 

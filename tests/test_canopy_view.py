@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 from test_engine_program import MODES as STEPPED_MODES  # the P8 fixture modes (stepped), on the same canopy
+from test_engine_program import RECIPES as STEPPED_RECIPES  # config + frozen scene recipes (Design Lab §3.7)
 from test_engine_program import quiet_start, stepped_world
 
 from conductor import render
@@ -186,7 +188,8 @@ def test_a_whole_strand_look_is_one_colour_on_all():
     plan = compile_mode("lowcountry-calm", Tier.STRAND, CTX)
     lit = lit_state(CFG, REGISTRY, plan, _state(plan))
     assert {m["state"] for m in lit["modules"]} == {"lit"}
-    assert {m["color"] for m in lit["modules"]} == {"#F7F2E7"}  # soft ivory at full strength
+    solid = load_scenes().get("lowcountry-calm").solid  # soft ivory (#F7F2E7)
+    assert {m["color"] for m in lit["modules"]} == {solid.hex}  # soft ivory at full strength
     assert all(m["colors"] is None for m in lit["modules"])
 
 
@@ -198,7 +201,9 @@ def test_a_guest_level_never_changes_a_colour():
     assert designed["level"] == 85 and dimmed["level"] == 30
     assert designed["modules"] == dimmed["modules"]
     r0c0 = _by_pos(dimmed)["r0c0"]["color"]
-    assert r0c0 == "#6FB5D5"  # [111, 181, 213], not dimmed to the look's 85%
+    # [111, 181, 213] approved (#6FB5D5; the pinned fixture, Design Lab PLAN §3.7), not dimmed to the look's 85%
+    pins = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+    assert r0c0 == _hex(pins["coastal-tides"]["t3"]["r0c0"])
 
 
 def test_the_guest_turning_the_canopy_off_is_all_off_with_no_level():
@@ -353,8 +358,14 @@ def test_no_ripple_is_drawn_while_off_or_resting(kw):
 def test_the_plan_keeps_preview_at_the_look_and_colors_at_full_strength():
     plan = compile_mode("coastal-tides", Tier.T3, CTX)
     target = plan.modules["canopy-r0c0"]
-    assert target.colors == [{"r": 111, "g": 181, "b": 213}] * 30
-    assert target.preview == [{"r": 94, "g": 154, "b": 181}] * 30  # 85% for /ops and the visualizer
+    # approved: (111, 181, 213) at full strength, (94, 154, 181) at the look's 85 % (the pinned fixture's colour,
+    # Design Lab PLAN §3.7; the 85 % as a strand shows it, render.head_colors)
+    pins = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+    r, g, b = pins["coastal-tides"]["t3"]["r0c0"]
+    assert target.colors == [{"r": r, "g": g, "b": b}] * 30
+    level = pins["coastal-tides"]["brightness"]
+    shown = [R.power(True), R.color_mode("color"), R.color_rgb(r, g, b), R.brightness(level)]
+    assert target.preview == render.head_colors(shown, 1) * 30 != target.colors  # for /ops and the visualizer
     t1 = compile_mode("golden-hour", Tier.T1, CTX).modules["canopy-r0c0"]
     assert len(t1.colors) == len(t1.preview) == 30 and t1.colors != t1.preview
 
@@ -375,7 +386,7 @@ def test_the_preview_view_defaults_and_validation(tmp_path):
 # ---- a stepped run (Tier.STEPPED, D65) ------------------------------------------------------------------------
 # The kiosk draws `motion.frames[floor((now − t0) / step_s)]` (web/kiosk/canopy-preview.mjs `motionColors`, time
 # clamped to just before `ends_at`); these tests hold the server to that contract.
-STEPPED_CTX = _ctx(modes=STEPPED_MODES)
+STEPPED_CTX = _ctx(modes=STEPPED_MODES, recipes=STEPPED_RECIPES)  # the fixture names frozen scene colours
 
 
 def _program(plan: ModePlan, *, t0: float = 1000.0, step_s: float = 6.0, count: int = 15) -> dict:
@@ -420,7 +431,9 @@ def test_a_stepped_run_is_the_panels_motion_frame_by_frame_in_grid_order():
 def test_stepped_frames_are_null_where_a_panel_isnt_lit_or_changing():
     live = [BY_POSITION["r0c0"], BY_POSITION["r1c1"]]
     partial = compile_mode(
-        "radial-outward", Tier.STEPPED, _ctx(modes=STEPPED_MODES, addresses={m.id: f"a-{m.id}" for m in live})
+        "radial-outward",
+        Tier.STEPPED,
+        _ctx(modes=STEPPED_MODES, recipes=STEPPED_RECIPES, addresses={m.id: f"a-{m.id}" for m in live}),
     )
     assert set(partial.skipped) and len(partial.modules) == 2
     # even given colours everywhere, a left-out (dark) position is null in every frame
