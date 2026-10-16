@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -186,7 +187,8 @@ def test_a_whole_strand_look_is_one_colour_on_all():
     plan = compile_mode("lowcountry-calm", Tier.STRAND, CTX)
     lit = lit_state(CFG, REGISTRY, plan, _state(plan))
     assert {m["state"] for m in lit["modules"]} == {"lit"}
-    assert {m["color"] for m in lit["modules"]} == {"#F7F2E7"}  # soft ivory at full strength
+    solid = load_scenes().get("lowcountry-calm").solid  # soft ivory (#F7F2E7)
+    assert {m["color"] for m in lit["modules"]} == {solid.hex}  # soft ivory at full strength
     assert all(m["colors"] is None for m in lit["modules"])
 
 
@@ -198,7 +200,9 @@ def test_a_guest_level_never_changes_a_colour():
     assert designed["level"] == 85 and dimmed["level"] == 30
     assert designed["modules"] == dimmed["modules"]
     r0c0 = _by_pos(dimmed)["r0c0"]["color"]
-    assert r0c0 == "#6FB5D5"  # [111, 181, 213], not dimmed to the look's 85%
+    # [111, 181, 213] approved (#6FB5D5; the pinned fixture, Design Lab PLAN §3.7), not dimmed to the look's 85%
+    pins = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+    assert r0c0 == _hex(pins["coastal-tides"]["t3"]["r0c0"])
 
 
 def test_the_guest_turning_the_canopy_off_is_all_off_with_no_level():

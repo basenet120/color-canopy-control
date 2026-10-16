@@ -39,9 +39,11 @@ def test_lowcountry_calm_is_mirrored_with_ivory_ends():
 
 
 def test_solid_fallbacks_match_the_handoff_defaults():
+    """The handoff's defaults (Coastal Tides aqua, Golden Hour sunset pink, Lowcountry Calm soft ivory), as the
+    pinned fixture holds them: a Design Lab export (or `make scene-pins`) regenerates the pins."""
     solids = {s.id: s.solid.name for s in load_scenes().scenes}
-    assert solids["coastal-tides"] == "Aqua" and solids["golden-hour"] == "Sunset pink"
-    assert solids["lowcountry-calm"] == "Soft ivory"
+    pinned = {scene_id: pin["solid"] for scene_id, pin in FRAMES["_pins"].items()}
+    assert solids == pinned, "approved value changed: run make scene-pins and review the fixture diff"
 
 
 def test_a_bad_catalog_names_the_file_and_the_problem(tmp_path):

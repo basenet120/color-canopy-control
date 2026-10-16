@@ -177,11 +177,11 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     _wait_ready(app_client, "golden-hour")
     body = app_client.get("/api/canopy/heads").json()
     assert body["engine"] is True and body["mode"] == "golden-hour" and body["tier"] == "modules"
-    assert body["feature"] == (  # the T3 sentence names the design's layout (D63: a sun at one edge)
-        "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: "
-        "gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the "
-        "far side."
-    )
+    from conductor.looks import load_modes
+
+    # the T3 sentence names the design's layout (D63: a sun at one edge, "… laid out from one edge: gold and peach at
+    # the middle of one short side, …"), read from the live mode so a Design Lab export can't strand a literal here
+    assert body["feature"] == load_modes().mode("golden-hour").techniques.modules.feature
     assert len(body["heads"]) == 270 and body["counts"]["match"] == 270
     plan = engine.current_plan()
     by_module = {m["id"]: m for m in body["modules"]}

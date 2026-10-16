@@ -15,7 +15,14 @@ from conductor import canopy_view
 from conductor import rows as R
 from conductor.capabilities import detect
 from conductor.clock import run_virtual
-from conductor.config import CONFIG_DIR, ConductorSettings, ConfigError, load_recipes, load_settings
+from conductor.config import (
+    CONFIG_DIR,
+    ConductorSettings,
+    ConfigError,
+    RecipesFile,
+    load_recipes,
+    load_settings,
+)
 from conductor.engine_api import CanopyPhase, Tier
 from conductor.executor_api import CommandStatus
 from conductor.geometry import load_canopy_config
@@ -40,10 +47,24 @@ CALM = {
 }
 
 
+FROZEN = Path(__file__).with_name("fixtures_recipes_frozen.yaml")
+
+
+def _frozen_recipes() -> RecipesFile:
+    """config's recipes with today's scene colours frozen over them (Design Lab PLAN §3.7): the fixture names the
+    scenes' recipe keys, so a Design Lab export that renames or drops one can't break these tests."""
+    live = load_recipes().model_dump()
+    frozen = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))
+    return RecipesFile.model_validate({**live, "colors": {**live["colors"], **frozen["colors"]}})
+
+
+RECIPES = _frozen_recipes()
+
+
 def stepped_modes():
     raw = yaml.safe_load(PATH.read_text(encoding="utf-8"))
     raw["modes"]["lowcountry-calm"] = CALM  # a still idle mode (the idle mode never steps)
-    return parse_modes(raw, recipes=load_recipes(), canopy=load_canopy_config(), path=PATH)
+    return parse_modes(raw, recipes=RECIPES, canopy=load_canopy_config(), path=PATH)
 
 
 MODES = stepped_modes()
@@ -84,7 +105,7 @@ def stepped_world(*, sim=None, tier_allowed=None, seed: int = 0, shipped: bool =
         registry=w.registry,
         capabilities={e.id: CAPS for e in w.registry.canopy_modules()},
         modes=MODES,
-        recipes=load_recipes(),
+        recipes=RECIPES,
         canopy=load_canopy_config(),
     )
     w.engine.deps.compile = lambda mode_id, tier: compile_mode(mode_id, tier, ctx)
@@ -367,7 +388,7 @@ def test_a_run_shorter_than_the_step_the_budget_needs_holds_still():
     raw = yaml.safe_load(PATH.read_text(encoding="utf-8"))
     raw["modes"]["lowcountry-calm"] = CALM
     raw["modes"]["linear-rows"]["techniques"]["stepped"].update(step_s=6, run_s=6)
-    modes = parse_modes(raw, recipes=load_recipes(), canopy=load_canopy_config(), path=PATH)
+    modes = parse_modes(raw, recipes=RECIPES, canopy=load_canopy_config(), path=PATH)
 
     async def main():
         w = stepped_world(motion={"stepped": {"account_writes_per_min": 90}})  # 90 less 25 % → 8 s steps
@@ -375,7 +396,7 @@ def test_a_run_shorter_than_the_step_the_budget_needs_holds_still():
             registry=w.registry,
             capabilities={e.id: CAPS for e in w.registry.canopy_modules()},
             modes=modes,
-            recipes=load_recipes(),
+            recipes=RECIPES,
             canopy=load_canopy_config(),
         )
         w.engine.deps.compile = lambda mode_id, tier: compile_mode(mode_id, tier, ctx)
@@ -952,6 +973,9 @@ def test_the_show_checks_stepped_runs_against_the_kiosk_settings_when_it_loads(t
     raw = yaml.safe_load(PATH.read_text(encoding="utf-8"))
     raw["modes"]["lowcountry-calm"] = CALM
     (config / "modes.yaml").write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    # the fixture names today's scene colours: frozen over config's (Design Lab PLAN §3.7)
+    recipes = yaml.safe_dump(RECIPES.model_dump(mode="json"), sort_keys=False)
+    (config / "recipes.yaml").write_text(recipes, encoding="utf-8")
     ok = SimpleNamespace(config_dir=config, settings=ConductorSettings())
     assert "radial-outward" in ShowWiring(ok).modes_file.modes
     short = SimpleNamespace(config_dir=config, settings=settings_with(kiosk={"idle_return_s": 60}))

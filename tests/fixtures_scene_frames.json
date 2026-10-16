@@ -910,5 +910,405 @@
 214,
 243
 ]
+],
+"_pins": {
+"lowcountry-calm": {
+"layout": {
+"transform": "linear",
+"invert": true,
+"cycles": 1,
+"kind": "radial",
+"centre_in": [
+112.5,
+60.0
+],
+"centres_in": null,
+"radius_in": "auto",
+"metric": "inches"
+},
+"layout_words": "from the centre out",
+"sample_at": "centre",
+"solid": "Soft ivory",
+"brightness": 70,
+"t3": {
+"r0c0": [
+234,
+239,
+230
+],
+"r0c1": [
+221,
+237,
+228
+],
+"r0c2": [
+234,
+239,
+230
+],
+"r1c0": [
+231,
+239,
+229
+],
+"r1c1": [
+209,
+234,
+227
+],
+"r1c2": [
+231,
+239,
+229
+],
+"r2c0": [
+234,
+239,
+230
+],
+"r2c1": [
+221,
+237,
+228
+],
+"r2c2": [
+234,
+239,
+230
 ]
+}
+},
+"rainbow-row-sunset": {
+"layout": {
+"transform": "linear",
+"invert": false,
+"cycles": 1,
+"kind": "linear",
+"angle_deg": 45.0
+},
+"layout_words": "diagonally",
+"sample_at": "centre",
+"solid": "Pastel coral",
+"brightness": 85,
+"t3": {
+"r0c0": [
+255,
+175,
+175
+],
+"r0c1": [
+255,
+193,
+199
+],
+"r0c2": [
+255,
+210,
+224
+],
+"r1c0": [
+255,
+193,
+199
+],
+"r1c1": [
+255,
+210,
+224
+],
+"r1c2": [
+235,
+200,
+228
+],
+"r2c0": [
+255,
+210,
+224
+],
+"r2c1": [
+235,
+200,
+228
+],
+"r2c2": [
+216,
+189,
+232
+]
+}
+},
+"garden-gathering": {
+"layout": {
+"transform": "linear",
+"invert": true,
+"cycles": 1,
+"kind": "radial",
+"centre_in": [
+112.5,
+120.0
+],
+"centres_in": null,
+"radius_in": "auto",
+"metric": "inches"
+},
+"layout_words": "from one edge",
+"sample_at": "centre",
+"solid": "Sage green",
+"brightness": 75,
+"t3": {
+"r0c0": [
+185,
+214,
+182
+],
+"r0c1": [
+211,
+228,
+198
+],
+"r0c2": [
+185,
+214,
+182
+],
+"r1c0": [
+215,
+230,
+200
+],
+"r1c1": [
+235,
+239,
+215
+],
+"r1c2": [
+215,
+230,
+200
+],
+"r2c0": [
+231,
+238,
+210
+],
+"r2c1": [
+243,
+241,
+226
+],
+"r2c2": [
+231,
+238,
+210
+]
+}
+},
+"coastal-tides": {
+"layout": {
+"transform": "linear",
+"invert": false,
+"cycles": 1,
+"kind": "linear",
+"angle_deg": 78.0
+},
+"layout_words": "diagonally",
+"sample_at": "centre",
+"solid": "Aqua",
+"brightness": 85,
+"t3": {
+"r0c0": [
+111,
+181,
+213
+],
+"r0c1": [
+115,
+189,
+212
+],
+"r0c2": [
+118,
+198,
+212
+],
+"r1c0": [
+140,
+214,
+211
+],
+"r1c1": [
+150,
+219,
+211
+],
+"r1c2": [
+159,
+224,
+211
+],
+"r2c0": [
+186,
+234,
+213
+],
+"r2c1": [
+196,
+236,
+217
+],
+"r2c2": [
+206,
+238,
+221
+]
+},
+"stepped": {
+"direction": "forward",
+"steps_per_cycle": 6,
+"step_s": 6.0,
+"run_s": 90.0
+},
+"flow_words": "diagonally"
+},
+"golden-hour": {
+"layout": {
+"transform": "linear",
+"invert": false,
+"cycles": 1,
+"kind": "radial",
+"centre_in": [
+0.0,
+60.0
+],
+"centres_in": null,
+"radius_in": "auto",
+"metric": "canopy"
+},
+"layout_words": "from one edge",
+"sample_at": "centre",
+"solid": "Sunset pink",
+"brightness": 95,
+"t3": {
+"r0c0": [
+255,
+173,
+170
+],
+"r0c1": [
+251,
+150,
+193
+],
+"r0c2": [
+220,
+128,
+187
+],
+"r1c0": [
+255,
+197,
+156
+],
+"r1c1": [
+255,
+161,
+188
+],
+"r1c2": [
+231,
+122,
+176
+],
+"r2c0": [
+255,
+173,
+170
+],
+"r2c1": [
+251,
+150,
+193
+],
+"r2c2": [
+220,
+128,
+187
+]
+},
+"stepped": {
+"direction": "forward",
+"steps_per_cycle": 6,
+"step_s": 6.0,
+"run_s": 90.0
+},
+"flow_words": "from one edge"
+},
+"goodnight-glow": {
+"layout": {
+"transform": "linear",
+"invert": true,
+"cycles": 1,
+"kind": "radial",
+"centre_in": [
+187.5,
+20.0
+],
+"centres_in": null,
+"radius_in": "auto",
+"metric": "inches"
+},
+"layout_words": "from one spot",
+"sample_at": "centre",
+"solid": "Periwinkle",
+"brightness": 28,
+"t3": {
+"r0c0": [
+169,
+157,
+221
+],
+"r0c1": [
+192,
+182,
+234
+],
+"r0c2": [
+196,
+214,
+243
+],
+"r1c0": [
+166,
+155,
+220
+],
+"r1c1": [
+191,
+178,
+233
+],
+"r1c2": [
+194,
+197,
+238
+],
+"r2c0": [
+159,
+151,
+217
+],
+"r2c1": [
+188,
+168,
+229
+],
+"r2c2": [
+191,
+180,
+233
+]
+}
+}
+}
 }
