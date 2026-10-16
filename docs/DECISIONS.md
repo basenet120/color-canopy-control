@@ -640,3 +640,46 @@ Alon asked for looks that move across the 3×3 grid. The cheapest motion the bin
 - **To turn it on:** Alon sets `kiosk.ripple_stagger_s: 1.2` and signs off the per-ring redefinition of 05's spread
   target. Needs real hardware before it is trusted: start skew across kits well under the stagger (bench gate 12), and
   whether a whole-strand colour change cuts or fades (bench item 6).
+
+## 2026-10-14 — scenes that move
+
+**D65 — Coastal Tides and Golden Hour step through the cloud at module level, in bounded runs; live stays off until
+Gate R (supersedes D59's "every scene is static" for these two scenes only).** Alon asked for looks that move. The lead's
+defaults, in `config/modes.yaml` (Alon can change them there):
+- **What moves.** Coastal Tides: ladder `stepped, modules, strand`: the tide rolls diagonally across the panels.
+  Golden Hour: `canvas, slot, stepped, modules, strand`: the per-head sun (T1) where it is commissioned; where it
+  isn't, sun-ray steps move out from the middle of the left edge at module level; below that its static modules rung.
+  Each stepped rung reuses its scene's own design (the same YAML anchor as its modules rung), so step 0 is the still
+  module-level look exactly (the schema and the compiler both check it). Lowcountry Calm (the idle look) and The
+  Goodnight Glow stay still; Rainbow Row Sunset and Garden Gathering are unchanged. The three slots keep their looks.
+- **Why only at module level through the cloud.** 07 §6: one full-state PUT per module per update, never split, so a
+  module can only show one colour per step. Slots are store-and-select (04), the controller holds three, and all three
+  hold painted scenes, so there is no slot to cycle through; on-device motion codes are unbenched (`effects.enabled`
+  is empty). What moves is the Conductor re-sending each strand one colour every few seconds, and the moving copy
+  says exactly that ("through the Hubspace cloud … every few seconds"), names the design's flow ("diagonally", "from
+  one edge"), and is shown only while a run moves. On a partial canopy it only counts the strands it drives (D62).
+- **Cadence.** Designed at 6 s a step, 6 steps a cycle. The runner stretches it to the account's budget: the cap of 90
+  writes a minute less the 20% reserve (`motion.stepped.budget_reserve`) is 72, so nine modules on one account step
+  every 7.5 s. Never faster than 4 s (`min_step_s`; a step's verification takes about 2.6 s), never slower than 12 s
+  (it holds still instead), and a step that would take the account past 90 in any 60 s is held back.
+- **Bounded runs.** A run lasts 90 s (`run_s`, at most `kiosk.idle_return_s`), then the still design holds. The idle
+  return never moves for a run, and the idle look never steps (the show refuses to load otherwise).
+- **Live off until Gate R.** `motion.stepped.live_enabled` stays false: on any non-simulated driver the show's
+  `tier_allowed` refuses the stepped rung, so Coastal Tides shows its still modules rung and Golden Hour its canvas,
+  slot or modules rung, with nothing stepped (tests/test_d65_modes.py proves it through the show's own wiring on a
+  live-named driver). Only the stepped rehearsal opens it, for its one mode while it runs
+  (`docs/runbooks/stepped-rehearsal.md`). Alon flips the setting after a pass on the show kits.
+- **Verified (simulator only).** The main soak now steps Coastal Tides whenever it is chosen (19 of 167 accepted
+  changes) and still passes every pinned row (`config/sim/acceptance.yaml` unchanged). The stepped scenario runs both
+  scenes' own rungs first: 124 steps over 12 runs at 7.5 s, none superseded, failed or skipped, one PUT per changed
+  module per step, at most 72 program PUTs and 89 writes of any kind in any 60 s on the account (cap 90), no governor
+  trip, no downgrade at 5% throttling. Each step's landing spread is p95 2.78 s against 05's 2 s (reported, not
+  gating, until Alon signs off a per-step target).
+- **Needs real hardware.** Gate R (the rehearsal's 429/403 share and write rate from the venue IP, vignettes clean),
+  whether a strand cuts or fades between colours (bench item 6), and start skew across kits.
+- **What would change it.** A Gate R fail (it stays off), or Paris or Alon preferring other scenes to move. In a show
+  run, throttling stops it on its own: the governor ends a run at 8 or more 429/403 answers that are a quarter of its
+  writes in 60 s, and stepped looks on that account hold still for 5 minutes. A hysteresis downgrade never lands
+  on a stepped rung: from Golden Hour's per-head sun (or its slot) it passes over the stepped rung to the still
+  modules rung, and the floor lifts back past it, so easing off never starts a run (`CanopyEngine.downgrade` /
+  `upgrade`).

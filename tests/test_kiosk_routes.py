@@ -486,3 +486,34 @@ def test_an_engine_that_cant_report_state_is_resting(app_client, engine):
     assert r.status_code == 503 and r.json()["detail"] == RESTING
     assert app_client.post("/api/kiosk/select", json={"mode": SUNSET}).status_code == 503
     assert app_client.get("/api/kiosk/modes").status_code == 200  # the list still serves
+
+
+# ---- the stepped rehearsal (Gate R) ------------------------------------------------------------------------------
+def _rehearsing(c) -> str:
+    """Start a 2-minute stepped rehearsal from /ops on the show engine (as an operator does); returns the route."""
+    import time
+
+    engine = c.app.state.services.extras["canopy"]
+    deadline = time.monotonic() + 30
+    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    route = "/api/canopy/stepped-rehearsal"
+    sentence = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]["confirm"]
+    started = c.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
+    assert started.status_code == 200, started.text
+    return route
+
+
+def test_a_mood_tapped_during_the_stepped_rehearsal_says_the_canopy_is_being_tested(app_client_show):
+    """Every mood waits for the rehearsal, so "choose another" would be false: the guest hears the canopy is being
+    tested, and when to try again."""
+    from conductor.routes.kiosk import TESTING
+
+    c = app_client_show
+    route = _rehearsing(c)
+    try:
+        r = c.post("/api/kiosk/select", json={"mode": "coastal-tides"})
+        assert r.status_code == 503 and r.json()["detail"] == TESTING, r.text
+        assert 0 < r.json()["retry_after_s"] <= 60
+    finally:
+        assert c.post(f"{route}/stop", json={}).status_code == 200

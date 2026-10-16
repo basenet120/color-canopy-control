@@ -19,9 +19,9 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
    *Default:* every code disabled in config until benched — unchanged: `effects.enabled` stays empty; one bounded run doesn't enable code 1 (D55).
 5. **Start skew and drift across controllers** for one 9-PUT burst.
    *Partly answered (2 kits, not 9):* Oct 2, Kingston + String light 1 were sent Rainbow Road in one paired burst (speed 0, 30 %): both showed a rainbow — PHYSICAL ("BOTH RAINBOW"); head-to-head phase unconfirmed ("hard to tell from their positions", package `VALIDATION-STATUS.json`, `CHANGELOG.txt`). Host send skew 0 ms at clock resolution, acks ~200 ms, readback 1.3–2.4 s — CLOUD/host timing, not hardware phase. A paired Fade 3 has cloud readback only; drift never measured (package `evidence/paired-*.json`).
-   *Default:* ≤ 1.5 s start skew, free drift; Golden Hour re-triggers all nine on every selection.
+   *Default:* ≤ 1.5 s start skew, free drift; a look with on-device motion re-triggers all nine on every selection (no show mode has one since D59). Stepped looks (D65) don't depend on controller phase: the Conductor sends each step, so skew shows as each step's landing spread (#27).
 6. **Real Afero limits** for 9-PUT bursts plus a stepped sweep on one account, alongside 4 vignette accounts behind one IP. Per account or per IP? 429s or silent drops?
-   *Default:* ≤ 1 write/s per device, bursts of 9 per change, stepped sweep ≥ 2 s/step with a hard cap, hysteresis downgrade (`07` §6). Note: numbers measured from Railway reflect a datacenter IP — re-measure from the venue box.
+   *Default:* ≤ 1 write/s per device, bursts of 9 per change, hysteresis downgrade (`07` §6). Stepped looks: #27 (cadence and cap) and #28 (per account or per IP). Note: numbers measured from Railway reflect a datacenter IP — re-measure from the venue box (Gate R does, `04` gate 14).
 7. **Per-puck white and color recipes** through clear/frosted Mylar at show brightness.
    *Default:* recipes in config; start with RGB + warm-white blends for ivory and amber; tune on Prototype 01.
 8. **Power-loss behavior**: do slots, mode and speed survive? Is restore-values exposed? Does the profile change when the 12-puck fault happens?
@@ -36,6 +36,7 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     *Default:* build thin custom pages in P4; if they aren't solid by Oct 12, ship the stock app on the vignette iPads.
 12. **Golden Hour technique — by Oct 5**, from bench footage: on-device motion burst vs. stepped sweep. *Default:* build one technique (on-device motion) first; the other is a seam.
     *Answered by the approved scenes (D59, Oct 11):* Golden Hour is a static five-colour gradient; no show mode uses motion. Motion stays a seam.
+    *Superseded (D65, Oct 14):* neither technique. Golden Hour keeps its still per-head sun at T1 and T2 (D63); below them it has a **stepped** rung, where the Conductor moves sun rays out from the left edge at module level, a step every few seconds, in 90 s runs. Coastal Tides steps too. Simulator only: live stays off until Gate R and Alon sets `motion.stepped.live_enabled` (#27). On-device motion is still a seam (#4).
     *New input (as of Oct 7):* only code 1's bounded block movement on Kingston (#4); no direction, period, run-to-run consistency or multi-controller phase data (#5). The Studio's Golden Hour per-head gradient (D56) is SCREEN only, 30 static colours, and has never been sent to hardware (preflight blocks it; package `evidence/scene-gradient-browser-2026-10-06.json`, `evidence/scene-gradient-api-2026-10-06.json`). Only whole-strand single palette colours have reached real lights (package `CHANGELOG.txt`).
 13. **Kiosk look — to the client by Oct 5** for copy and brand sign-off. *Default:* House Beautiful × Home Depot styling, words-only "Hubspace".
     *Note (Oct 6):* Paris's Studio (`/ops/showcase/`, D56) shows six scene palettes chosen in his session as the primary interface; its list has Coastal Tides where `02` and `config/modes.yaml` have Holiday at Home (`web/ops/showcase/demo-model.mjs`). It's an ops page, not the guest kiosk; no client sign-off recorded.
@@ -56,6 +57,7 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 
 ## Hearst / Home Depot
 19. **Golden Hour**: is "amber wash moving across the canopy" a hard requirement? Who approves the bench footage? *Default:* ship the best benched technique; kiosk copy matches what it actually does.
+    *Now (D65):* the moving technique is module-level steps through the cloud, off live until Gate R; Paris or Alon can choose other scenes to move in `config/modes.yaml`. Until Gate R passes, Golden Hour is a still sun on real lights and the kiosk says so.
 20. **Authorization letter** from Home Depot for programmatic control of activation-owned Hubspace devices/accounts (Oct 15 – Nov 2). *Default:* no writes to show accounts from any runtime until it exists or Alon explicitly says go; show accounts only ever live on the venue box.
 21. **Accounts**: who creates and owns the canopy and vignette accounts. *Default:* Alon creates them; MFA off; staff don't open the Hubspace app on show accounts during public hours.
 22. **Kiosk branding and copy**: the Hubspace logo in the UI needs brand sign-off. *Default:* words-only "Hubspace" references.
@@ -67,3 +69,30 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 ## Logistics (Alon)
 24. **Spares**: 12 kits (9 + 3) + 2 SQHDE03-5PSL strings at the $99 Special Buy (ends Nov 3) — confirm stock and buy this week. *Default:* the registry supports unassigned spare devices.
 25. **Staff phones**: freeze the Hubspace app version before Oct 20 (an Aug 2026 update removed custom colors from some effects). *Default:* documented in the show-day runbook.
+
+## Motion and the guest picture (D63–D65; owner: Alon)
+26. **Preview orientation.** Does the guest panel's picture of the canopy match what a guest at the stand sees
+    overhead? The designs and the picture use the reflected-ceiling view of `config/canopy.yaml` (looking up, origin
+    at the canopy's top-left, `02` "Which way is left"), so where Golden Hour's sun (the left edge) and the Goodnight
+    moon (r0c2) land in the room depends on how the canopy is hung and where the stand faces.
+    *Default:* `kiosk.preview.mirror_x: false`, `rotate_deg: 0` (the RCP drawn as is). Set both at install, standing
+    at the stand under the lit canopy. This changes only the picture, never the lights. If the sun should sit on the
+    other side of the room, that is a design change for Paris (`config/modes.yaml`) and makes the painted scenes'
+    slot hashes stale (D63), so decide it before commissioning.
+27. **Stepped cadence and cap.** How fast can the canopy step through the cloud without throttling, does a strand
+    cut or fade between colours (bench item 6), and is a step's landing spread acceptable?
+    *Default (D65, `motion.stepped` in `config/conductor.yaml`):* design pace 6 s a step, 6 steps a cycle; the runner
+    plans at the account cap of 90 writes a minute less a 20% reserve (72), so nine modules on one account step every
+    7.5 s (two kits every 6 s); never faster than 4 s, and a step that would need more than 12 s holds still instead.
+    A step that would take the account past 90 writes in any 60 s is held back. Runs last 90 s, then the still design
+    holds. The governor stops a run at ≥ 8 throttled attempts that are ≥ 25% of its attempts in 60 s and holds stepped
+    looks on that account still for 5 min. **Live off** (`live_enabled: false`) until a Gate R pass on the show kits
+    (`04` gate 14); only Alon flips it. Each step's landing spread was p95 2.78 s in the simulator against 05's 2 s
+    target: reported, not gating, until Alon signs off a per-step target.
+28. **Throttling: per account or per IP?** The canopy account and the four vignette accounts all write from the
+    venue box's one IP.
+    *Default:* assume per account. The executor's budgets (≤ 1 write/s per device, bounded concurrency per account),
+    the stepped cap and the governor all count per account. Gate R runs with the vignette accounts connected and
+    fails if any of them sees a 429/403, a failed command or a sign-in problem. If it turns out to be per IP, the
+    stepped cap would have to count every account's writes from the box, and stepped stays off until it does. Never
+    rotate accounts or IPs to get around a limit.

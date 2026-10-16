@@ -260,13 +260,13 @@ class _Evaluator:
         else:  # pragma: no cover - the schema's discriminator admits nothing else
             raise PlanError(f"unknown canvas kind {getattr(canvas, 'kind', canvas)!r}")
 
-    def __call__(self, x: float, y: float) -> FrameEntry:
+    def __call__(self, x: float, y: float, phase: float = 0.0) -> FrameEntry:
         c = self.canvas
         if isinstance(c, GradientCanvas):
             t = (x / self.w) if c.axis == "x" else (y / self.h)
             return self._gradient(min(1.0, max(0.0, t)))
         if isinstance(c, FieldCanvas):
-            return self._gradient(F.value(c.field, x, y, self.canopy))
+            return self._gradient(F.value(c.field, x, y, self.canopy, phase))
         if isinstance(c, PathwayCanvas):
             d = min(math.hypot(x - cx, y - cy) for cx, cy in self.curve)
             half = c.path.width_in / 2
@@ -289,10 +289,17 @@ class _Evaluator:
 
 
 def evaluate(
-    canvas: Any, x: float, y: float, *, canopy: Mapping[str, Any], recipes: RecipesFile
+    canvas: Any,
+    x: float,
+    y: float,
+    *,
+    canopy: Mapping[str, Any],
+    recipes: RecipesFile,
+    phase: float = 0.0,
 ) -> FrameEntry:
-    """The canvas colour at one canopy point (inches from the top-left, reflected-ceiling view)."""
-    return _Evaluator(canvas, canopy, recipes)(x, y)
+    """The canvas colour at one canopy point (inches from the top-left, reflected-ceiling view). `phase` shifts a
+    `field` canvas's design (`field.value`; a stepped look's steps); the other canvas kinds have none."""
+    return _Evaluator(canvas, canopy, recipes)(x, y, phase)
 
 
 def compose_canvas(

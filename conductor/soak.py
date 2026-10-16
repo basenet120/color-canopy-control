@@ -33,6 +33,25 @@ redefine and the show runs one burst until then), the time until the last ring i
 + 5 s), the PUTs each module got for the change (exactly one, none before its ring is due) and tier downgrades (0 at
 5% throttling); those three are part of the verdict.
 
+**The stepped scenario (D65).** Coastal Tides and Golden Hour have a stepped rung in `config/modes.yaml` (the
+simulator steps them; `motion.stepped.live_enabled` stays false, so live hardware doesn't). The main run steps Coastal
+Tides whenever it is chosen (its rung is first); Golden Hour's rung comes after its painted canvas, which the simulator
+commissions, so it never steps there. So a third, separate run (`stepped:` in `config/sim/soak.yaml`, same pinned
+conditions) moves the stepped rung first in the candidate moods' ladders in the soak's config copy: the mode's own
+stepped technique (design, cadence and copy as the show has them), or for a candidate without one a SIMULATED rung
+made from its module-level design (so the still look it holds is that rung). It makes seeded kiosk runs of them, some
+cut short by a still mood, then leaves the canopy alone until the idle return. Correctness is program-aware (`_wanted`): while a run shows a step, a module is
+right when its lights show that step. Measured per step from the lights (every program command, grouped by step):
+each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's) and
+send → last module; steps superseded (a module sent the next step before it showed this one), failed, skipped by a
+late schedule or cut by a newer mood; the program commands per module per step (exactly one, and none missing for a
+module whose rows changed); the most program PUTs on one account in any 60 s and the most writes of any kind there
+(both ≤ `account_writes_per_min`: the runner paces its steps at the cap less `budget_reserve`, the room retries,
+re-sends and a mood chosen mid-run need, and holds back a step that would pass the cap); governor trips and
+tier downgrades at 5% throttling (0); the still look after each run; and the idle return after the last choice
+(`idle_return_s` to `idle_return_s` + slack — a run never moves the idle clock). Its targets are proposals in
+soak.yaml: `config/sim/acceptance.yaml` is pinned and gains them only with Alon's sign-off.
+
 Writes `docs/reports/sim-acceptance.md` and exits non-zero when any target fails.
 
 The world (07 §7 soak validity, review F11): by default the soak runs **the show's own wiring** — `build_services`
@@ -40,7 +59,7 @@ on the virtual clock with a temporary `CONDUCTOR_DATA_DIR` and `conductor.show.S
 lifespan builds it: capabilities read from each module's (simulated) profile in the background, the looks compiler,
 the commissioning gate on T1, slot records (hash, origin, effect fields) in the registry overlay, the same ladder and
 tier rules. Only the simulator's conditions (pinned) and one soak-only setting differ: `config/sim/soak.yaml` enables a
-SIMULATED on-device motion code for one painted mode (Golden Hour; every show scene is static, D59), so the
+SIMULATED on-device motion code for one painted mode (Golden Hour; no show scene has an on-device effect), so the
 all-or-none motion re-trigger (07 §6) is measured too. On real hardware code 1 has only bounded bench runs on Kingston
 (one physically observed, Oct 2) and `effects.enabled` stays empty; the report says so.
 
@@ -53,12 +72,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import itertools
 import logging
 import random
 import shutil
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -92,6 +113,7 @@ SHOW_DESCRIPTION = (
 POLL_S = 0.1  # how often a measurement looks at the lights
 WATCH_LIMIT_S = 120.0  # a measurement gives up (and fails) after this long
 
+# The tiers the built-in compiler can compile ("stepped" isn't one: it has no program to step, BuiltinCompiler).
 _TIER_NAMES = {"canvas": Tier.T1, "slot": Tier.T2, "modules": Tier.T3, "strand": Tier.STRAND}
 
 
@@ -99,7 +121,8 @@ _TIER_NAMES = {"canvas": Tier.T1, "slot": Tier.T2, "modules": Tier.T3, "strand":
 class BuiltinCompiler:
     """Compiles `config/modes.yaml` without the looks composer: strand looks as written, module-level looks per
     canopy position, and canvas (T1) as one colour per module with a brightness ramp along the wire. T2 is left
-    out (nothing is hand-painted in the simulator)."""
+    out (nothing is hand-painted in the simulator), and so is a stepped rung (D65): this compiler has no program to step,
+    so a stepped mode shows its still module-level rung (the look a stepped run holds)."""
 
     description = "built-in soak compiler (strand + module-level + one-colour-per-module canvas frames)"
     CCT_FLOOR = 2700  # the simulator profile's range is 2700–6500 K
@@ -291,6 +314,8 @@ class SoakConfig:
     drift_events: int = 12  # out-of-band changes (the Hubspace app) the reconciler must find and undo
     # the ripple scenario (config/sim/soak.yaml `ripple:`; changes 0 = skip it)
     ripple: dict = field(default_factory=lambda: load_soak_ripple())
+    # the stepped scenario (config/sim/soak.yaml `stepped:`; runs 0 = skip it)
+    stepped: dict = field(default_factory=lambda: load_soak_stepped())
     sim_settings: SimSettings = field(default_factory=SimSettings.from_acceptance)
     targets: dict = field(default_factory=dict)  # from acceptance.yaml
     report_path: Path | None = REPORT_PATH
@@ -313,12 +338,17 @@ class _World:
     motion: dict | None = None  # the SIMULATED motion setting in force
 
 
-def _soak_config_dir(motion: dict | None, ripple_stagger_s: float | None = None) -> Path:
-    """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml), and with
-    `ripple_stagger_s` as kiosk.ripple_stagger_s when given (the ripple scenario)."""
+def _soak_config_dir(
+    motion: dict | None, ripple_stagger_s: float | None = None, stepped: dict | None = None
+) -> Path:
+    """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml), with
+    `ripple_stagger_s` as kiosk.ripple_stagger_s when given (the ripple scenario), and with `stepped` modes given a
+    SIMULATED stepped rung first in their ladder (the stepped scenario, `_apply_stepped`)."""
     root = Path(tempfile.mkdtemp(prefix="canopy-soak-config-"))
     config = root / "config"
     shutil.copytree(CONFIG_DIR, config)
+    if stepped:
+        _apply_stepped(config, stepped)
     if ripple_stagger_s is not None:
         settings_path = config / "conductor.yaml"
         settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
@@ -334,7 +364,7 @@ def _soak_config_dir(motion: dict | None, ripple_stagger_s: float | None = None)
             **(canvas.get("motion_effect") or {}),
             "motionEffect": int(motion["motionEffect"]),
         }
-        # Every show scene is static (D59), so the show's modes carry no motion copy: the soak adds its own.
+        # No show scene has an on-device effect (D59), so the show's modes carry no motion copy: the soak adds its own.
         canvas.setdefault(
             "motion_feature", str(motion.get("feature") or "SIMULATED on-device motion (soak only)")
         )
@@ -370,6 +400,71 @@ def load_soak_ripple(path: Path = SOAK_SETTINGS) -> dict:
     return {**RIPPLE_DEFAULTS, **ripple}
 
 
+STEPPED_DEFAULTS = {
+    "modes": ["golden-hour", "coastal-tides"],
+    "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0},
+    "runs": 12,
+    "hold_s": 20.0,
+    "interrupt_every": 4,
+    "step_spread_p95_s": 2.0,
+    "idle_return_slack_s": 10.0,
+}
+
+
+def load_soak_stepped(path: Path = SOAK_SETTINGS) -> dict:
+    """The stepped scenario's settings (`stepped:` in config/sim/soak.yaml) over STEPPED_DEFAULTS (`technique` merged
+    key by key)."""
+    stepped: dict = {}
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            stepped = (yaml.safe_load(f) or {}).get("stepped") or {}
+    technique = {**STEPPED_DEFAULTS["technique"], **(stepped.get("technique") or {})}
+    return {**copy.deepcopy(STEPPED_DEFAULTS), **stepped, "technique": technique}
+
+
+def _apply_stepped(config: Path, stepped: dict) -> None:
+    """Move the stepped rung first in each of `stepped["modes"]`' ladders, in the config copy. A mode with its own
+    stepped technique (config/modes.yaml, D65) keeps it as the show has it: its design, cadence and copy. A mode
+    without one gets a SIMULATED rung: its own module-level design (the `modules` sample's canvas and brightness, so
+    the hold is that rung exactly) with the scenario's `technique` fields, and moving copy that names the design's flow
+    (`motion_words`) and says SIMULATED."""
+    from pydantic import TypeAdapter
+
+    from conductor.geometry import load_canopy_config
+    from conductor.looks.schema import FieldCanvas, motion_words
+
+    modes_path = config / "modes.yaml"
+    modes = yaml.safe_load(modes_path.read_text(encoding="utf-8"))
+    canopy_path = config / "canopy.yaml"
+    canopy = load_canopy_config(canopy_path) if canopy_path.exists() else load_canopy_config()
+    technique = dict(stepped["technique"])
+    for mode_id in stepped["modes"]:
+        mode = modes["modes"][mode_id]
+        if mode["techniques"].get("stepped") is None:
+            sample = mode["techniques"]["modules"]["sample"]
+            canvas = copy.deepcopy(sample["canvas"])
+            words = motion_words(
+                TypeAdapter(FieldCanvas).validate_python(canvas),
+                canopy,
+                technique.get("direction", "forward"),
+            )
+            if (
+                words is None
+            ):  # pragma: no cover - a stepped design always has a field canvas over a canopy here
+                raise ValueError(f"{mode_id}: its design has no layout words to name the stepped flow")
+            mode["techniques"]["stepped"] = {
+                "canvas": canvas,
+                "brightness": sample.get("brightness", 100),
+                **technique,
+                "moving_feature": (
+                    "SIMULATED stepped look (soak only; never shown to guests): each Hubspace strand is sent its "
+                    f"next colour every few seconds, so the palette moves {words}."
+                ),
+            }
+        mode["ladder"] = ["stepped", *(t for t in mode["ladder"] if t != "stepped")]
+    modes_path.write_text(yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
 def load_soak_motion(path: Path = SOAK_SETTINGS) -> dict | None:
     if not path.exists():
         return None
@@ -378,13 +473,15 @@ def load_soak_motion(path: Path = SOAK_SETTINGS) -> dict | None:
     return motion or None
 
 
-async def _build_show(cfg: SoakConfig, *, ripple_stagger_s: float | None = None) -> _World:
+async def _build_show(
+    cfg: SoakConfig, *, ripple_stagger_s: float | None = None, stepped: dict | None = None
+) -> _World:
     """The app's own wiring on the virtual clock: build_services + ShowWiring, a temp data dir (the overlay)."""
     from conductor.services import build_services
     from conductor.show import ShowWiring
 
     motion = load_soak_motion()
-    config_dir = _soak_config_dir(motion, ripple_stagger_s)
+    config_dir = _soak_config_dir(motion, ripple_stagger_s, stepped)
     data = Path(tempfile.mkdtemp(prefix="canopy-soak-data-"))
     clock = VirtualClock()
     services = build_services(
@@ -461,10 +558,22 @@ def _build(cfg: SoakConfig, compiler: Any) -> _World:
     )
 
 
-def _correct(world: _World, plan: ModePlan, device_id: str) -> bool:
+def _wanted(world: _World, plan: ModePlan, device_id: str) -> list[StateRow]:
+    """The rows `device_id` should show for `plan` now: while a stepped run of that plan has a step showing, that
+    step's (a stepped look's lights are right when they show the step the engine is at, not the hold); else the
+    plan's own expected rows."""
+    runner = getattr(world.engine, "runner", None)
+    if plan.program is not None and runner is not None and runner.plan is plan:
+        step = runner.rows_for(device_id)
+        if step is not None:
+            return step
     mt = plan.modules[device_id]
+    return mt.expect or mt.rows
+
+
+def _correct(world: _World, plan: ModePlan, device_id: str) -> bool:
     view = world.sim.device_view(world.addresses[device_id])
-    return not R.compare(mt.expect or mt.rows, view)
+    return not R.compare(_wanted(world, plan, device_id), view)
 
 
 def _all_correct(world: _World, plan: ModePlan) -> bool:
@@ -880,6 +989,252 @@ async def _ripple_soak(cfg: SoakConfig) -> dict:
     return out
 
 
+async def _stepped_soak(cfg: SoakConfig) -> dict:
+    """The stepped scenario (D65): the show's own wiring with the stepped rung first on `stepped["modes"]` (their own,
+    or a SIMULATED one for a mode without), kiosk runs of them under the pinned conditions, each step measured from the
+    lights (see the module docstring)."""
+    st = cfg.stepped
+    world = await _build_show(cfg, stepped=st)
+    engine, clock, sim = world.engine, world.clock, world.sim
+    while world.wiring.last_commission is None and clock.monotonic() < 600:
+        await clock.sleep(1.0)
+    settings = engine.deps.settings
+    stepped_settings = settings.motion.stepped
+    by_address = {a: d for d, a in world.addresses.items()}
+    rng = random.Random(f"{cfg.seed}:stepped")
+    stepped_modes = list(st["modes"])
+    still = [m for m in world.wiring.mode_ids() if m not in stepped_modes and m != settings.kiosk.idle_mode]
+    from conductor.looks import load_modes
+
+    show_modes = load_modes(CONFIG_DIR)  # the show's own modes.yaml: which candidates bring their own rung
+    out: dict[str, Any] = {
+        "modes": stepped_modes,
+        "techniques": {  # what each candidate steps with in this run
+            m: {
+                "own": show_modes.modes[m].techniques.stepped is not None,
+                **{
+                    k: getattr(world.wiring.modes_file.mode(m).techniques.stepped, k)
+                    for k in ("steps_per_cycle", "step_s", "run_s")
+                },
+            }
+            for m in stepped_modes
+        },
+        "settings": {k: st[k] for k in STEPPED_DEFAULTS},
+        "cap": stepped_settings.account_writes_per_min,
+        "requests": 0,
+        "refused": 0,
+        "runs": 0,  # accepted choices that started a run
+        "not_stepping": 0,  # accepted choices that installed a stepped look that held still, or another tier
+        "tiers": {},
+        "ended": {},  # why each run stopped: "the run is over", "replaced" (cut short by a newer mood), …
+        "interrupted": 0,
+        "step_s": [],  # the runner's step per run
+        "step_spreads": [],  # per landed step: first to last of its modules showing it (s)
+        "step_landings": [],  # per landed step: its send → the last of its modules showing it (s)
+        "steps_landed": 0,
+        "steps_superseded": 0,  # a module was sent the next step before it showed this one
+        "steps_cut": 0,  # a newer mood replaced the look before the step landed (not a failure)
+        "steps_failed": 0,  # never shown within WATCH_LIMIT_S
+        "steps_skipped": 0,  # steps the runner's schedule skipped (it came due late)
+        "puts_per_module_step": [],  # per (step, module sent): the program commands that step sent it
+        "missing": 0,  # modules whose rows changed from the step before but weren't sent
+        "holds": [],  # per finished run: the still look sent → every module showing it (s)
+        "holds_unsettled": 0,
+        "max_account_writes_60s": 0,  # every write the simulator received on one account, any 60 s
+        "max_account_program_puts_60s": 0,  # the stepped program's commands on one account, by send time, any 60 s
+        "idle_return": None,  # {after_s, mode, settled_s}
+        "idle_return_s": settings.kiosk.idle_return_s,
+    }
+    # every write the simulator receives, per account: the sliding 60 s maximum
+    writes: dict[str, list[float]] = {}
+    original_write = sim.write
+
+    async def counted_write(device_id: str, rows: list[StateRow], *, purpose: Purpose):
+        writes.setdefault(sim.account_of(device_id), []).append(clock.monotonic())
+        return await original_write(device_id, rows, purpose=purpose)
+
+    sim.write = counted_write  # type: ignore[method-assign]
+    program_puts: dict[str, list[float]] = {}  # account → when each program command was sent
+    # every program command, grouped by step: (runner, label) → the step's record
+    groups: dict[tuple[int, str], dict] = {}
+    latest: dict[str, dict] = {}  # device id → the group that last sent it a program command
+    watchers: set[asyncio.Task] = set()
+
+    def on_submit(cmd: Any) -> None:
+        if cmd.source != "program":
+            return
+        runner, device_id = engine.runner, by_address.get(cmd.device_id, cmd.device_id)
+        key = (id(runner), cmd.label)
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = {
+                "t": clock.monotonic(),
+                "plan": engine.current_plan(),
+                "runner": runner,
+                "label": cmd.label,
+                "rows": {},
+                "counts": Counter(),
+                "landed": {},
+                "superseded": False,
+            }
+            task = asyncio.get_running_loop().create_task(watch_step(group))
+            watchers.add(task)
+            task.add_done_callback(watchers.discard)
+        previous = latest.get(device_id)
+        if previous is not None and previous is not group and device_id not in previous["landed"]:
+            previous["superseded"] = True
+        latest[device_id] = group
+        program_puts.setdefault(sim.account_of(cmd.device_id), []).append(clock.monotonic())
+        group["rows"][device_id] = list(cmd.rows)
+        group["counts"][device_id] += 1
+
+    world.executor.add_submit_listener(on_submit)
+
+    async def watch_step(group: dict) -> None:
+        await asyncio.sleep(0)  # the step's other modules are submitted in the same call
+        while True:
+            now = clock.monotonic()
+            for device_id, rows in group["rows"].items():
+                if device_id not in group["landed"]:
+                    view = sim.device_view(world.addresses[device_id])
+                    if not R.compare(rows, view):
+                        group["landed"][device_id] = now - group["t"]
+            if len(group["landed"]) == len(group["rows"]):
+                times = list(group["landed"].values())
+                out["steps_landed"] += 1
+                out["step_spreads"].append(max(times) - min(times))
+                out["step_landings"].append(max(times))
+                return
+            if group["superseded"]:
+                out["steps_superseded"] += 1
+                return
+            if engine.current_plan() is not group["plan"]:
+                out["steps_cut"] += 1
+                return
+            if now - group["t"] > WATCH_LIMIT_S:
+                out["steps_failed"] += 1
+                return
+            await clock.sleep(POLL_S)
+
+    tier_downs = len([t for t in engine.stats["tier_changes"] if t["direction"] == "down"])
+    trips = engine.stats.get("governor_trips", 0)
+    last_choice = clock.monotonic()
+    for i in range(int(st["runs"])):
+        await clock.sleep(float(st["hold_s"]) + rng.uniform(0.0, 2.0))
+        mode_id = stepped_modes[i % len(stepped_modes)]
+        out["requests"] += 1
+        state = await engine.request_mode(mode_id, source="kiosk")
+        if state.refused:
+            out["refused"] += 1
+            continue
+        last_choice = clock.monotonic()
+        out["tiers"][str(state.tier)] = out["tiers"].get(str(state.tier), 0) + 1
+        runner = engine.runner
+        if runner is None or not runner.running:
+            out["not_stepping"] += 1
+            continue
+        out["runs"] += 1
+        out["step_s"].append(runner.step_s)
+        plan = engine.current_plan()
+        run_s = runner.count * runner.step_s
+        every = int(st.get("interrupt_every") or 0)
+        if every and (i + 1) % every == 0 and still:
+            # a guest chooses a still mood mid-run: the run stops there, its steps not yet landed are cut
+            await clock.sleep(
+                rng.uniform(2 * runner.step_s, max(2 * runner.step_s, run_s - 2 * runner.step_s))
+            )
+            state = await engine.request_mode(rng.choice(still), source="kiosk")
+            if not state.refused:
+                out["interrupted"] += 1
+                last_choice = clock.monotonic()
+        while runner.running and clock.monotonic() - last_choice < run_s + WATCH_LIMIT_S:
+            await clock.sleep(POLL_S)
+        out["ended"][runner.ended or "?"] = out["ended"].get(runner.ended or "?", 0) + 1
+        out["steps_skipped"] += runner.skipped
+        if engine.current_plan() is plan and not runner.running:
+            ended = clock.monotonic()  # the still look was sent when the run ended
+            while clock.monotonic() - ended < WATCH_LIMIT_S and not _all_correct(world, plan):
+                await clock.sleep(POLL_S)
+            if _all_correct(world, plan):
+                out["holds"].append(clock.monotonic() - ended)
+            else:
+                out["holds_unsettled"] += 1
+    # no input after the last choice: the idle hold returns to the idle mode, the runs never moving its clock
+    idle_mode = settings.kiosk.idle_mode
+    deadline = last_choice + settings.kiosk.idle_return_s + 2 * float(st["idle_return_slack_s"])
+    while clock.monotonic() < deadline:
+        plan = engine.current_plan()
+        if plan is not None and plan.mode_id == idle_mode:
+            back = clock.monotonic()
+            while clock.monotonic() - back < WATCH_LIMIT_S and not _all_correct(world, plan):
+                await clock.sleep(POLL_S)
+            out["idle_return"] = {
+                "after_s": back - last_choice,
+                "mode": idle_mode,
+                "settled_s": clock.monotonic() - back if _all_correct(world, plan) else None,
+            }
+            break
+        await clock.sleep(POLL_S)
+    for task in list(watchers):
+        await task
+    out["max_account_writes_60s"] = max((_most_in_60s(times) for times in writes.values()), default=0)
+    out["max_account_program_puts_60s"] = max((_most_in_60s(t) for t in program_puts.values()), default=0)
+    for group in groups.values():
+        out["puts_per_module_step"] += list(group["counts"].values())
+    out["missing"] = _missing_steps(groups)
+    out["governor_trips"] = engine.stats.get("governor_trips", 0) - trips
+    out["downgrades"] = (
+        len([t for t in engine.stats["tier_changes"] if t["direction"] == "down"]) - tier_downs
+    )
+    await world.wiring.close()
+    await world.services.close()
+    world.cleanup()
+    return out
+
+
+def _most_in_60s(times: list[float]) -> int:
+    """The most of `times` in any half-open 60 s window (a step 60 s after another starts the next window)."""
+    times = sorted(times)
+    most = lo = 0
+    for hi, t in enumerate(times):
+        while t - times[lo] >= 60.0 - 1e-6:
+            lo += 1
+        most = max(most, hi - lo + 1)
+    return most
+
+
+def _missing_steps(groups: dict) -> int:
+    """Modules whose rows changed from one step to the next of the same run but that the later step didn't send."""
+    missing = 0
+    by_runner: dict[int, list[dict]] = {}
+    for (runner_id, _label), group in groups.items():
+        by_runner.setdefault(runner_id, []).append(group)
+    for runs in by_runner.values():
+        runs.sort(key=lambda g: g["t"])
+        for before, after in itertools.pairwise(runs):
+            runner = after["runner"]
+            for device_id in after["plan"].modules:
+                old = before["rows"].get(device_id)
+                if old is None or device_id in after["rows"]:
+                    continue
+                new = _step_rows(runner, after["label"], device_id)
+                if new is not None and R.compare(new, old):
+                    missing += 1
+    return missing
+
+
+def _step_rows(runner: Any, label: str, device_id: str) -> list[StateRow] | None:
+    """The rows step `label` ("step 7 (2 of 6): …", "hold: …") was to send `device_id`."""
+    if label.startswith("hold"):
+        mt = runner.plan.modules[device_id]
+        return mt.rows
+    try:
+        n = int(label.split()[1])
+    except (IndexError, ValueError):
+        return None
+    return runner.program.steps[n % runner.cycle].rows.get(device_id)
+
+
 def _other(modes: list[str], engine: Any) -> str:
     current = engine.current_plan()
     return next((m for m in modes if current is None or m != current.mode_id), modes[0])
@@ -985,7 +1340,103 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
     )
     if results.get("ripple"):
         rows += _ripple_rows(results["ripple"])
+    if results.get("stepped"):
+        rows += _stepped_rows(results["stepped"])
     return rows
+
+
+def _stepped_rows(stepped: dict) -> list[dict]:
+    """The stepped scenario's verdict rows (D65). Each step's landing spread is reported, not gating (05's
+    spread target, which D65 asks Alon to sign off per step); the rest gate: every step lands before the next one
+    (none superseded, none failed), exactly one PUT per changed module per step, the account inside the cap, no
+    governor trip and no downgrade at 5% throttling, every run's still look shown, the idle return on time."""
+    s = stepped["settings"]
+    spread_target = float(s["step_spread_p95_s"])
+    spreads, landings, puts = (
+        stepped["step_spreads"],
+        stepped["step_landings"],
+        stepped["puts_per_module_step"],
+    )
+    holds = stepped["holds"]
+    step_s = min(stepped["step_s"]) if stepped["step_s"] else None
+    cap = stepped["cap"]
+    idle = stepped.get("idle_return") or {}
+    idle_limit = float(s["idle_return_slack_s"])
+    tag = "Stepped, SIMULATED"
+    runs = f"{stepped['runs']} runs of {', '.join(stepped['modes'])}"
+    return [
+        {
+            "name": f"{tag}: each step's landing spread ({len(spreads)} steps in {runs})",
+            "p50": percentile(spreads, 50),
+            "p95": percentile(spreads, 95),
+            "max": max(spreads) if spreads else None,
+            "target": f"p95 ≤ {spread_target:g} s (05's spread, per step; reported for D65, not gating until Alon "
+            "signs a stepped target off)",
+            "pass": bool(spreads) and (percentile(spreads, 95) or 0) <= spread_target,
+            "gating": False,
+        },
+        {
+            "name": f"{tag}: each step shown on all its modules, send → last module ({stepped['steps_landed']} "
+            f"steps; {stepped['steps_superseded']} superseded, {stepped['steps_failed']} failed, "
+            f"{stepped['steps_skipped']} skipped)",
+            "p50": percentile(landings, 50),
+            "p95": percentile(landings, 95),
+            "max": max(landings) if landings else None,
+            "target": f"every step on all its modules before the next is sent ({_fmt(step_s)} s steps): 0 "
+            "superseded, failed or skipped",
+            "pass": bool(landings)
+            and stepped["steps_superseded"] == stepped["steps_failed"] == stepped["steps_skipped"] == 0,
+        },
+        {
+            "name": f"{tag}: PUTs per changed module per step ({len(puts)} module steps)",
+            "max": max(puts) if puts else None,
+            "target": "exactly 1, none missing",
+            "pass": bool(puts) and set(puts) == {1} and stepped["missing"] == 0,
+        },
+        {
+            "name": f"{tag}: most stepped program PUTs on one account in any 60 s (by send time)",
+            "max": stepped["max_account_program_puts_60s"],
+            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min; the runner plans below it)",
+            "pass": stepped["max_account_program_puts_60s"] <= cap,
+        },
+        {
+            "name": f"{tag}: most writes of any kind on one account in any 60 s (steps, 429 retries, re-sends, "
+            "mood changes)",
+            "max": stepped["max_account_writes_60s"],
+            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min: the steps are paced at the cap less "
+            "motion.stepped.budget_reserve, the room retries, re-sends and a mood chosen mid-run need)",
+            "pass": stepped["max_account_writes_60s"] <= cap,
+        },
+        {
+            "name": f"{tag}: throttle governor trips at 5% throttling",
+            "max": stepped["governor_trips"],
+            "target": "= 0",
+            "pass": stepped["governor_trips"] == 0,
+        },
+        {
+            "name": f"{tag}: tier downgrades at 5% throttling",
+            "max": stepped["downgrades"],
+            "target": "= 0",
+            "pass": stepped["downgrades"] == 0,
+        },
+        {
+            "name": f"{tag}: the still look shown after each run ({len(holds)} runs ran to the end)",
+            "p50": percentile(holds, 50),
+            "p95": percentile(holds, 95),
+            "max": max(holds) if holds else None,
+            "target": "every one settles",
+            "pass": bool(holds) and stepped["holds_unsettled"] == 0,
+        },
+        {
+            "name": f"{tag}: idle return after the last choice",
+            "max": idle.get("after_s"),
+            "target": f"{idle.get('mode') or 'the idle mode'} {stepped['idle_return_s']:g}–"
+            f"{stepped['idle_return_s'] + idle_limit:g} s after it (idle_return_s + {idle_limit:g}), then settles",
+            "pass": bool(idle)
+            and stepped["idle_return_s"] - 1e-6 <= idle["after_s"] <= stepped["idle_return_s"] + idle_limit
+            and idle["settled_s"] is not None,
+        },
+    ]
 
 
 def _ripple_rows(ripple: dict) -> list[dict]:
@@ -1118,6 +1569,7 @@ def render_report(results: dict, verdicts: list[dict], meta: dict) -> str:
         f"- Changes during a fault (not in the percentiles): {len(faulted)}.",
         _drift_line(results),
         *([_ripple_line(results["ripple"])] if results.get("ripple") else []),
+        *([_stepped_line(results["stepped"])] if results.get("stepped") else []),
         f"- Outages the engine detected (resting → recovered): {outages}.",
         (
             f"- Tier changes: {len(results['tier_changes'])}{' — ' + tiers if tiers else ''}. "
@@ -1172,6 +1624,31 @@ def _ripple_line(ripple: dict) -> str:
     )
 
 
+def _stepped_line(stepped: dict) -> str:
+    tiers = ", ".join(f"{k} {n}" for k, n in sorted(stepped["tiers"].items())) or "none"
+    ended = "; ".join(f"{why} {n}" for why, n in sorted(stepped["ended"].items())) or "none"
+    steps = sorted(set(stepped["step_s"]))
+    used = "; ".join(
+        f"{m}: {'its own (config/modes.yaml)' if t['own'] else 'a SIMULATED one'}, {t['steps_per_cycle']} steps a "
+        f"cycle, {t['step_s']:g} s steps designed, {t['run_s']:g} s runs"
+        for m, t in stepped["techniques"].items()
+    )
+    return (
+        f"- Stepped scenario (D65, SIMULATED): a separate run of the show's own wiring with the stepped rung moved "
+        f"first on {', '.join(stepped['modes'])} in the soak's config copy ({used}; `motion.stepped.live_enabled` "
+        f"stays false, so live hardware never steps), under the same pinned conditions. {stepped['requests']} kiosk "
+        f"choices, {stepped['refused']} refused; by tier: {tiers}; {stepped['runs']} runs at "
+        f"{', '.join(f'{x:g}' for x in steps) or '—'} s a step ({stepped['not_stepping']} held still instead), "
+        f"{stepped['interrupted']} cut short by a still mood chosen mid-run; how runs ended: {ended}. Steps: "
+        f"{stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "
+        f"{stepped['steps_superseded']} superseded, {stepped['steps_failed']} failed, {stepped['steps_skipped']} "
+        f"skipped; {stepped['missing']} changed modules a step didn't send. The 60 s account maximum counts every "
+        f"write the simulator received on that account (steps, re-sends, retries) against the "
+        f"{stepped['cap']:g}/min cap. Targets live in `config/sim/soak.yaml` until Alon signs them off "
+        "(`config/sim/acceptance.yaml` is pinned)."
+    )
+
+
 def _motion_line(results: dict) -> str:
     wiring = results.get("wiring") or {}
     motion = wiring.get("motion")
@@ -1203,6 +1680,8 @@ def run_soak(cfg: SoakConfig | None = None, compiler: Any = None) -> tuple[dict,
         description = SHOW_DESCRIPTION
         if int(cfg.ripple.get("changes", 0)) > 0:
             results["ripple"] = run_virtual(lambda: _ripple_soak(cfg))
+        if int(cfg.stepped.get("runs", 0)) > 0:
+            results["stepped"] = run_virtual(lambda: _stepped_soak(cfg))
     verdicts = evaluate(results, cfg.targets or load_targets())
     meta = {
         "generated": datetime.fromtimestamp(wall.now(), UTC).strftime("%Y-%m-%d %H:%M UTC"),

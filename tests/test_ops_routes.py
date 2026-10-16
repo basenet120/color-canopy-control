@@ -8,8 +8,10 @@ heads and the test mode change see real (simulated) readback.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import time
+from types import SimpleNamespace
 
 import pytest
 from fake_engine import FakeEngine, RecordingEngine
@@ -17,6 +19,7 @@ from partial_canopy import LIVE, partial_show, showing
 
 from conductor import logring, redact
 from conductor.engine_api import PlanError
+from conductor.gate import Purpose
 from conductor.geometry import build_layout, load_canopy_config, panel_order
 from conductor.routes import ops as ops_routes
 
@@ -450,6 +453,9 @@ OPS_PATHS = [
     ("POST", "/api/canopy/pause"),
     ("POST", "/api/canopy/mode"),
     ("POST", "/api/ops/checklist/test-mode-change"),
+    ("GET", "/api/canopy/stepped-rehearsal"),
+    ("POST", "/api/canopy/stepped-rehearsal"),
+    ("POST", "/api/canopy/stepped-rehearsal/stop"),
 ]
 
 
@@ -471,6 +477,8 @@ def test_enrolled_devices_get_401(app_client_auth, role, grants):
             if path.endswith("pause")
             else {"mode": "golden-hour"}
             if path.endswith("mode")
+            else {"mode": "golden-hour", "minutes": 2, "confirm": "x"}
+            if path.endswith("rehearsal")
             else {}
         )
         response = app_client_auth.request(method, path, json=body if method == "POST" else None)
@@ -812,3 +820,197 @@ def test_sent_line_during_an_outage_names_the_registered_modules(monkeypatch):
     )
     full = _sent(monkeypatch, registered=nine, unregistered=[], driven=nine, outage=1.0)
     assert full.endswith("so it goes to every module as soon as Hubspace answers again.")
+
+
+# ---- the stepped card (Tier.STEPPED, D65; web/ops/stepped-model.mjs words it) --------------------------------
+def _runner(services, **kw):
+    """Just enough ProgramRunner for the gauge: a run of all the canopy modules, at step 2 of 15, 6 s steps."""
+    modules = dict.fromkeys(e.id for e in services.registry.canopy_modules())
+    return SimpleNamespace(
+        running=True,
+        plan=SimpleNamespace(mode_id="golden-hour", modules=modules),
+        index=2,
+        count=15,
+        step_s=6.0,
+        program=SimpleNamespace(step_s=6.0),
+        t0_wall=1000.0,
+        **kw,
+    )
+
+
+def test_the_stepped_card_shows_the_accounts_writes_a_minute_and_the_cap(app_client):
+    services = _services(app_client)
+    engine = _install(app_client)
+    app_client.post("/api/canopy/mode", json={"mode": "garden-gathering"})
+    _wait_ready(app_client, "garden-gathering")
+    assert (
+        app_client.get("/api/canopy/state").json()["stepped"] is None
+    )  # no stepped run, no cool-off: no card
+    engine.runner, engine.stepping, engine.stats = _runner(services), True, {"governor_trips": 0}
+    gauge = app_client.get("/api/canopy/state").json()["stepped"]
+    entry = services.registry.canopy_modules()[0]
+    target = services.target(entry.id, Purpose.ENGINE)
+    account = target.driver.account_of(target.address)
+    written = target.executor.budget()["accounts"][account]["writes_60s"]
+    assert written >= 9  # the mode change: one write per module, on the canopy's account
+    assert gauge == {
+        "running": True,
+        "moving": True,
+        "cap": 90.0,
+        "live_enabled": False,
+        "cooloff": [],
+        "governor_trips": 0,
+        "mode": "golden-hour",
+        "step": 2,
+        "steps": 15,
+        "step_s": 6.0,
+        "design_step_s": 6.0,
+        "holds_at": 1090.0,
+        "account": account,
+        "writes_60s": written,
+    }
+    # held (paused, resting, off): the run's clock goes on, nothing is sent
+    engine.stepping = False
+    assert app_client.get("/api/canopy/state").json()["stepped"]["moving"] is False
+
+
+def test_the_stepped_card_shows_the_governors_cool_off_without_a_run(app_client):
+    services = _services(app_client)
+    engine = _install(app_client, RecordingEngine)
+    engine.runner, engine.stats = None, {"governor_trips": 1}
+    now, mono = services.clock.now(), services.clock.monotonic()
+    engine.stepped_cooloff = {"canopy": mono + 120.0, "old": mono - 1.0}  # an expired cool-off isn't shown
+    gauge = app_client.get("/api/canopy/state").json()["stepped"]
+    assert gauge["running"] is False and gauge["governor_trips"] == 1 and "writes_60s" not in gauge
+    (cooling,) = gauge["cooloff"]
+    assert cooling["account"] == "canopy" and cooling["until"] == pytest.approx(now + 120.0, abs=2.0)
+    engine.stepped_cooloff = {}
+    assert app_client.get("/api/canopy/state").json()["stepped"] is None
+
+
+def test_the_ops_page_draws_the_stepped_card_from_the_served_model(app_client):
+    page = app_client.get("/ops/").text
+    assert 'id="canopy-stepped"' in page
+    script = app_client.get("/ops/ops.js").text
+    assert (
+        'from "/ops/stepped-model.mjs"' in script
+        and "steppedLines(st.program, steppedGauge, clock)" in script
+    )
+    assert 'stepped: "T3 stepped' in script  # the tier chip knows the stepped tier
+    model = app_client.get("/ops/stepped-model.mjs")
+    assert model.status_code == 200 and "javascript" in model.headers["content-type"]
+    assert "export function steppedLines" in model.text
+    assert "http://" not in model.text and "https://" not in model.text
+
+
+# ---- the stepped rehearsal (Gate R; conductor/rehearsal.py) ------------------------------------------------------
+class RehearsalEngine(RecordingEngine):
+    """RecordingEngine plus the rehearsal calls: the preview's sentence names the modules and the minutes."""
+
+    def rehearsal_preview(self, mode_id: str, minutes: int) -> dict:
+        self._call("rehearsal_preview", mode_id=mode_id, minutes=minutes)
+        return {
+            "mode": mode_id,
+            "minutes": minutes,
+            "confirm": f"Rehearse {mode_id} for {minutes} min on Module 1?",
+        }
+
+    async def rehearse(self, mode_id: str, minutes: int, *, source: str) -> dict:
+        self._call("rehearse", mode_id=mode_id, minutes=minutes, source=source)
+        return {"ok": True, "message": "Stepped rehearsal started."}
+
+    def stop_rehearsal(self, *, source: str) -> dict:
+        self._call("stop_rehearsal", source=source)
+        return {"ok": True, "message": "Stopped."}
+
+    def rehearsal_status(self) -> dict:
+        return {"running": None, "last": None, "max_minutes": 10}
+
+
+def test_the_rehearsal_starts_only_with_the_confirm_sentence_and_never_past_ten_minutes(app_client):
+    engine = _install(app_client, RehearsalEngine)
+    route = "/api/canopy/stepped-rehearsal"
+    for minutes in (11, 0, 2.5):
+        assert app_client.post(route, json={"mode": "golden-hour", "minutes": minutes}).status_code == 422
+    assert app_client.get(route, params={"mode": "golden-hour", "minutes": 11}).status_code == 400
+    assert app_client.get(route, params={"mode": "golden-hour"}).status_code == 400  # minutes are part of it
+    assert app_client.post(route, json={"mode": "disco", "minutes": 2}).status_code == 400
+    assert engine.calls == []
+    # no sentence: 409 with the sentence to confirm, and nothing started
+    asked = app_client.post(route, json={"mode": "golden-hour", "minutes": 2})
+    sentence = "Rehearse golden-hour for 2 min on Module 1?"
+    assert asked.status_code == 409 and asked.json()["confirm_required"] is True
+    assert asked.json()["confirm"] == sentence and sentence in asked.json()["detail"]
+    # a sentence for other minutes (or modules) isn't this one
+    stale = app_client.post(route, json={"mode": "golden-hour", "minutes": 3, "confirm": sentence})
+    assert stale.status_code == 409
+    assert [name for name, _ in engine.calls] == ["rehearsal_preview", "rehearsal_preview"]
+    engine.calls.clear()
+    preview = app_client.get(route, params={"mode": "golden-hour", "minutes": 2}).json()
+    assert preview["preview"]["confirm"] == sentence and "lowcountry-calm" not in [
+        m["id"] for m in preview["modes"]
+    ]
+    started = app_client.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
+    assert started.status_code == 200 and started.json()["ok"] is True
+    assert engine.calls[-1] == ("rehearse", {"mode_id": "golden-hour", "minutes": 2, "source": "ops"})
+    stop = app_client.post(f"{route}/stop", json={})
+    assert stop.status_code == 200 and engine.calls[-1] == ("stop_rehearsal", {"source": "ops"})
+    # same-site JSON only, like every control
+    evil = app_client.post(
+        route,
+        json={"mode": "golden-hour", "minutes": 2, "confirm": sentence},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert evil.status_code == 403 and engine.calls[-1][0] == "stop_rehearsal"
+
+
+def test_an_engine_without_the_rehearsal_says_so(app_client):
+    _install(app_client, RecordingEngine)
+    response = app_client.post(
+        "/api/canopy/stepped-rehearsal", json={"mode": "golden-hour", "minutes": 2, "confirm": "x"}
+    )
+    assert response.status_code == 409 and response.json()["detail"] == ops_routes.NO_REHEARSAL
+
+
+def test_a_rehearsal_from_ops_on_the_show_engine_writes_its_report_and_leaves_the_look_still(
+    app_client_show, tmp_path
+):
+    from test_stepped_rehearsal import REPORT_FIELDS
+
+    c = app_client_show
+    engine = _services(c).extras["canopy"]
+    deadline = time.monotonic() + 30
+    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    route = "/api/canopy/stepped-rehearsal"
+    preview = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]
+    sentence = preview["confirm"]
+    labels = [e.label for e in _services(c).registry.canopy_modules()]
+    assert "for 2 minutes" in sentence and all(label in sentence for label in labels)
+    assert "(simulator: no real lights)" in sentence
+    started = c.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
+    assert started.status_code == 200, started.text
+    state = c.get("/api/canopy/state").json()
+    assert state["tier"] == "stepped" and state["rehearsal"]["running"]["mode"] == "golden-hour"
+    assert c.post("/api/canopy/mode", json={"mode": "golden-hour"}).status_code == 200  # ops still decides
+    deadline = time.monotonic() + 30
+    while engine.last_rehearsal is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    last = c.get("/api/canopy/state").json()["rehearsal"]["last"]
+    assert last["verdict"] == "fail" and last["ended"] == "ops chose golden-hour"  # not a silent restart
+    report = json.loads((tmp_path / "data" / "bench" / "rehearsals" / f"{last['run_id']}.json").read_text())
+    assert set(report) == REPORT_FIELDS and report["source"] == "ops" and report["simulated"] is True
+    after = c.get("/api/canopy/state").json()
+    assert after["program"] is None and after["rehearsal"]["running"] is None and after["tier"] != "stepped"
+    assert c.post(f"{route}/stop", json={}).status_code == 409  # nothing left to stop
+
+
+def test_the_ops_page_starts_a_rehearsal_only_through_its_confirm_dialog(app_client):
+    page = app_client.get("/ops/").text
+    for element in ('id="rehearsal-mode"', 'id="rehearsal-minutes"', 'max="10"', 'id="rehearsal-dialog"'):
+        assert element in page
+    script = app_client.get("/ops/ops.js").text
+    assert "rehearsalText" in script and 'from "/ops/stepped-model.mjs"' in script
+    # the only POST that starts one carries the sentence the dialog showed
+    assert script.count('"/api/canopy/stepped-rehearsal", pending') == 1
+    assert 'dialog.returnValue === "go") startRehearsal()' in script

@@ -49,6 +49,16 @@ Rules implemented:
   a new colour still arrives in the design's order. The order is the design's geometry before `cycles`, `mirror` and
   `invert`: a ripple starts where the layout words say the design starts ("from the centre out" stays centre first
   when the palette runs inwards). A mode with no design, or a module with no canopy position, gets None (one burst).
+- **A stepped look (Tier.STEPPED, D65).** The plan's `modules` are the hold: the mode's static module-level
+  look (`_modules`), which the schema makes the stepped design's own canvas at the module centres. `program.steps[n]`
+  is that design with its field shifted by n / `steps_per_cycle` of one repeat (`field.value` phase; `forward` flows
+  the way the layout words read, `reverse` back), one full state vector per driven module (power, colour mode, RGB,
+  brightness, speed, party off — never a slot object), so step 0 is the hold, checked. `motion` stays False: the
+  Conductor holds the phase, so one module's re-send of the current step is correct (07 §6's one burst is for
+  on-device motion). `feature` is the hold's sentence (nothing moves until a runner steps it); the moving copy is
+  `program.moving_feature`: the mode's own on the full canopy, a count of the driven strands with no canopy pattern
+  on a partial one, "set to one colour" when every step is one colour across the strands, and the hold's sentence
+  when no step differs from the hold (nothing would move).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
   kit's map when it has one); `ModuleTarget.colors` is the same render with the brightness row at 100 (full-strength
   colours for the guest panel, which shows the level on its own).
@@ -76,7 +86,7 @@ from conductor.config import (
     load_recipes,
 )
 from conductor.drivers.base import StateRow
-from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Tier
+from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Program, ProgramStep, Tier
 from conductor.geometry import load_canopy_config, panel_lattice
 from conductor.looks import field as F
 from conductor.looks.composer import compose_canvas, evaluate, head_positions, parse_position, placement_for
@@ -87,6 +97,7 @@ from conductor.looks.schema import (
     Mode,
     ModesFile,
     ModuleSample,
+    SteppedTechnique,
     load_modes,
 )
 
@@ -102,6 +113,9 @@ NUMBER_WORDS = {
     9: "nine",
 }
 STATIC_EFFECTS = {"motionEffect": 0, "brightnessEffect": 0}
+STEPPED_STILL = (
+    "No step of the stepped design differs from the hold, so nothing moves and the copy doesn't say it does"
+)
 FINER_THAN_GRID = (
     "The pattern repeats faster than the module grid; at module level some bands disappear (try at: mean)"
 )
@@ -314,6 +328,8 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
         plan = _canvas(mode_id, mode, ctx, ready)
     elif tier is Tier.T2:
         plan = _slot(mode_id, mode, ctx, ready)
+    elif tier is Tier.STEPPED:
+        plan = _stepped(mode_id, mode, ctx, ready)
     else:
         plan = _modules(mode_id, mode, ctx, ready)
     plan.waves = _waves(mode, tier, plan, ctx)
@@ -324,7 +340,7 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
         )
     if skipped:
         plan.skipped = skipped
-        if tier is Tier.T3:
+        if tier in (Tier.T3, Tier.STEPPED):
             # "the palette steps across the canopy column by column" isn't true of the modules that are left
             plan.feature = _partial_modules_feature(len(ready))
         else:
@@ -333,6 +349,8 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
             plan.notes.append(f"Left out (no Hubspace device registered): {', '.join(unregistered)}")
         if unread:
             plan.notes.append(f"Left out (no capabilities yet): {', '.join(unread)}")
+    if plan.program is not None:
+        plan.program.moving_feature = _moving_feature(mode, plan, partial=bool(skipped))
     return plan
 
 
@@ -872,14 +890,19 @@ def _half_up(x: float) -> int:
     return math.floor(x + 0.5)
 
 
-def _sampled_rgb(sample: ModuleSample, entry: DeviceEntry, ctx: CompileContext) -> tuple[int, int, int]:
-    """The sample's one RGB colour for this module: the canvas at the module's centre, or its heads' mean."""
+def _sampled_rgb(
+    sample: ModuleSample, entry: DeviceEntry, ctx: CompileContext, phase: float = 0.0
+) -> tuple[int, int, int]:
+    """The sample's one RGB colour for this module: the canvas at the module's centre, or its heads' mean. `phase`
+    shifts a field canvas's design (a stepped look's steps)."""
     assert ctx.canopy is not None and ctx.recipes is not None
     if sample.at == "centre":
         points = list(F.module_centres(ctx.canopy, [str(entry.module)]).values())
     else:
         points = head_positions(ctx.canopy, placement_for(ctx.canopy, entry, frame_length=None))
-    colours = [evaluate(sample.canvas, x, y, canopy=ctx.canopy, recipes=ctx.recipes) for x, y in points]
+    colours = [
+        evaluate(sample.canvas, x, y, canopy=ctx.canopy, recipes=ctx.recipes, phase=phase) for x, y in points
+    ]
     # rgb_only (the schema insists): a colour level dims the RGB itself, since a strand look has one brightness
     channels = [
         [c.r * c.colorBrightness / 100, c.g * c.colorBrightness / 100, c.b * c.colorBrightness / 100]
@@ -938,6 +961,82 @@ def _modules(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
 def _one_colour_feature(n: int) -> str:
     """The module-level (T3) sentence when a sampled design gives every strand of the full canopy the same colour."""
     return f"Colour and dimming: all {_count_words(n)} Hubspace strands set to one colour from the scene."
+
+
+# ---- stepped (module level, a step at a time) ----------------------------------------------------------------------
+def _hex(rgb: Sequence[int]) -> str:
+    return "#" + "".join(f"{c:02X}" for c in rgb)
+
+
+def _stepped(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEntry]) -> ModePlan:
+    tech: SteppedTechnique | None = mode.techniques.stepped
+    assert tech is not None and ctx.canopy is not None
+    # The hold: the static module-level look (its copy, notes, previews and checks — every module takes RGB).
+    plan = _modules(mode_id, mode, ctx, devices)
+    sample = ModuleSample(canvas=tech.canvas, at="centre", brightness=tech.brightness)
+    sign = -1.0 if tech.direction == "forward" else 1.0  # forward: a colour moves on to higher t (outwards)
+    # An RGB look clamps nothing a note would report (its brightness is the hold's, checked below).
+    unused = _Notes()
+    steps = []
+    for n in range(tech.steps_per_cycle):
+        rows: dict[str, list[StateRow]] = {}
+        colours: dict[str, str] = {}
+        for d in devices:
+            c = ctx.caps(d.id)
+            rgb = _sampled_rgb(sample, d, ctx, phase=sign * n / tech.steps_per_cycle)
+            look = _to_look(LookSpec(kind="rgb", rgb=rgb, brightness=tech.brightness), c, unused, d.id)
+            rows[d.id] = _vector(look, c)
+            colours[str(d.module)] = _hex(rgb)
+        steps.append(ProgramStep(index=n, rows=rows, colours=colours))
+    if steps[0].rows != {d: t.rows for d, t in plan.modules.items()}:
+        raise PlanError(
+            f"{mode.label} (stepped) can't run: its first step isn't the static module-level look it holds "
+            "(techniques → stepped needs the modules sample's canvas and brightness)"
+        )
+    plan.tier = Tier.STEPPED
+    plan.program = Program(
+        kind="stepped",
+        field=tech.canvas.field.model_dump(mode="json"),
+        direction=tech.direction,
+        step_s=tech.step_s,
+        run_s=tech.run_s,
+        steps=steps,
+        moving_feature=tech.moving_feature,  # `_moving_feature` settles it once the driven modules are known
+    )
+    plan.notes.append(
+        f"Stepped: {tech.steps_per_cycle} steps of {tech.step_s:g} s, a run of {tech.run_s:g} s, then the static "
+        "look holds (the first step is that look)"
+    )
+    return plan
+
+
+def _moving_feature(mode: Mode, plan: ModePlan, *, partial: bool) -> str:
+    """The copy shown while a stepped run is going, true of the strands the plan drives (see the module docstring)."""
+    assert plan.program is not None and mode.techniques.stepped is not None
+    steps = plan.program.steps
+    if all(s.rows == steps[0].rows for s in steps[1:]):
+        plan.notes.append(STEPPED_STILL)
+        return plan.feature
+    n = len(plan.modules)
+    if partial:
+        if n == 1:
+            return (
+                "Colour and dimming through the Hubspace cloud: one Hubspace strand showing one colour from the "
+                "scene, sent its next colour every few seconds."
+            )
+        count = "both" if n == 2 else _count_words(n)
+        return (
+            f"Colour and dimming through the Hubspace cloud: {count} Hubspace strands, each showing one colour from "
+            "the scene and sent its next colour every few seconds."
+        )
+    if all(len(set(s.colours.values())) < 2 for s in steps):
+        # every strand shows the same colour at every step: there is no layout for the copy's words to describe
+        return _small_counts(
+            f"Colour and dimming through the Hubspace cloud: all {_count_words(n)} Hubspace strands set to one "
+            "colour from the scene, sent the next colour every few seconds.",
+            n,
+        )
+    return mode.techniques.stepped.moving_feature
 
 
 class EngineCompiler:

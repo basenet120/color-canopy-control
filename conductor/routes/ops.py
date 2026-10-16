@@ -10,7 +10,16 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `POST /api/canopy/guest-reset`     clear the guest panel's brightness / off (D60): on, at the look's designed brightness
 - `POST /api/canopy/commission`      write T1 slot contents and record readback hashes (the engine rate-limits)
 - `POST /api/canopy/mode`            `{mode}` an ops mode change (no guest cooldown)
-- `GET  /api/canopy/state`           CanopyState + the mode list for the picker
+- `GET  /api/canopy/state`           CanopyState + the mode list for the picker + `stepped`, the stepped card's gauge
+                                     (`stepped_gauge`; None unless a stepped run goes or the governor is cooling off)
+                                     + `rehearsal` (the stepped rehearsal running now and the last one's verdict)
+- `GET  /api/canopy/stepped-rehearsal[?mode=&minutes=]`  the rehearsal's status, the looks it can run and, with a
+                                     mode and minutes, the preview: the modules it writes to and the confirm sentence
+- `POST /api/canopy/stepped-rehearsal`  `{mode, minutes (1–10), confirm}` start the stepped rehearsal (Gate R,
+                                     conductor/rehearsal.py). Without `confirm` equal to the preview's sentence (it
+                                     names every module and the minutes) it answers 409 `confirm_required` and sends
+                                     nothing. Operator-started only: nothing else ever starts one.
+- `POST /api/canopy/stepped-rehearsal/stop`  stop it now: the still look holds and the report says it was stopped
 - `GET  /api/canopy/heads`           all 270 heads: position (per-device calibration), desired and reported colour
 - `GET  /api/ops/calibration`        the nine modules' wire-order calibration (the /ops/calibrate/ hub)
 - `GET  /api/ops/checklist[?client_ms=]`  the 7 am checklist, each item pass / warn / fail with a plain fix
@@ -68,6 +77,7 @@ from conductor.geometry import build_layout, load_canopy_config
 from conductor.logring import installed as installed_logring
 from conductor.module.layout import calibration_for, module_map, shown_corner
 from conductor.redact import redact
+from conductor.rehearsal import MAX_MINUTES as REHEARSAL_MAX_MINUTES
 from conductor.render import head_colors
 from conductor.roles_api import Principal
 from conductor.routes.accounts import same_origin
@@ -142,6 +152,12 @@ class ModeBody(_Body):
 class TestModeBody(_Body):
     mode: str | None = Field(None, max_length=64)
     restore: bool = True
+
+
+class RehearsalBody(_Body):
+    mode: str = Field(min_length=1, max_length=64)
+    minutes: int = Field(ge=1, le=REHEARSAL_MAX_MINUTES)
+    confirm: str | None = Field(None, max_length=2000)
 
 
 # ---- helpers -------------------------------------------------------------------------------------------------
@@ -270,6 +286,7 @@ async def _engine_call(what: str, call: Callable[[], Any]) -> Any:
 
 
 TIER_WORDS = {
+    "stepped": "T3 stepped, one colour per module a step at a time",
     "canvas": "T1, every head painted",
     "slot": "T2, a slot painted in the app",
     "modules": "T3, one colour per module",
@@ -487,7 +504,173 @@ async def canopy_state(request: Request, _ops: Ops) -> JSONResponse:
     services = services_of(request)
     engine = engine_of(services)
     state = await _engine_call("report its state", engine.state)
-    return JSONResponse({**state.to_json(), "modes": mode_list(services)}, headers=NO_STORE)
+    return JSONResponse(
+        {
+            **state.to_json(),
+            "modes": mode_list(services),
+            "stepped": stepped_gauge(services, engine),
+            "rehearsal": _rehearsal_status(engine),
+        },
+        headers=NO_STORE,
+    )
+
+
+# ---- the stepped rehearsal (Gate R; conductor/rehearsal.py, docs/runbooks/stepped-rehearsal.md) ---------------------
+NO_REHEARSAL = "This canopy engine can't run the stepped rehearsal."
+
+
+def _rehearsal_status(engine: Any) -> dict | None:
+    status = getattr(engine, "rehearsal_status", None)
+    if status is None:
+        return None
+    try:
+        return status()
+    except Exception:
+        log.exception("canopy engine rehearsal_status() failed")
+        return None
+
+
+def _rehearsal_modes(services: Any) -> list[dict]:
+    """The looks a rehearsal can run: every mode but the idle one (D65: the resting look never steps)."""
+    idle = services.settings.kiosk.idle_mode
+    return [{"id": m["id"], "label": m["label"]} for m in mode_list(services) if m["id"] != idle]
+
+
+def _rehearsal_engine(services: Any) -> Any:
+    engine = engine_of(services)
+    if getattr(engine, "rehearsal_preview", None) is None:
+        raise HTTPException(status_code=409, detail=NO_REHEARSAL)
+    return engine
+
+
+@router.get("/api/canopy/stepped-rehearsal")
+async def rehearsal_info(
+    request: Request, _ops: Ops, mode: str | None = None, minutes: int | None = None
+) -> JSONResponse:
+    services = services_of(request)
+    engine = _rehearsal_engine(services)
+    body: dict[str, Any] = {
+        "status": _rehearsal_status(engine),
+        "modes": _rehearsal_modes(services),
+        "max_minutes": REHEARSAL_MAX_MINUTES,
+        "preview": None,
+    }
+    if mode is not None:
+        _known_mode(services, mode)
+        if minutes is None or not 1 <= minutes <= REHEARSAL_MAX_MINUTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A stepped rehearsal runs 1 to {REHEARSAL_MAX_MINUTES} whole minutes.",
+            )
+        body["preview"] = await _engine_call(
+            "prepare the stepped rehearsal", lambda: engine.rehearsal_preview(mode, minutes)
+        )
+    return JSONResponse(body, headers=NO_STORE)
+
+
+@router.post("/api/canopy/stepped-rehearsal")
+async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> JSONResponse:
+    services = services_of(request)
+    engine = _rehearsal_engine(services)
+    _known_mode(services, body.mode)
+    preview = await _engine_call(
+        "prepare the stepped rehearsal", lambda: engine.rehearsal_preview(body.mode, body.minutes)
+    )
+    if body.confirm != preview["confirm"]:
+        # Nothing is sent until ops has confirmed this very sentence (the modules or minutes may have changed).
+        return JSONResponse(
+            {
+                "detail": f"Confirm the rehearsal first: {preview['confirm']}",
+                "confirm_required": True,
+                "confirm": preview["confirm"],
+                "preview": preview,
+            },
+            status_code=409,
+            headers=NO_STORE,
+        )
+    result = await _engine_call(
+        "start the stepped rehearsal", lambda: engine.rehearse(body.mode, body.minutes, source="ops")
+    )
+    _publish(services, "rehearsal", mode=body.mode, minutes=body.minutes)
+    return JSONResponse(
+        {
+            "ok": bool(result.get("ok")),
+            "message": result.get("message") or "",
+            "rehearsal": _rehearsal_status(engine),
+            "state": _state_json(engine),
+        },
+        headers=NO_STORE,
+    )
+
+
+@router.post("/api/canopy/stepped-rehearsal/stop")
+async def rehearsal_stop(request: Request, _ops: Ops) -> JSONResponse:
+    services = services_of(request)
+    engine = _rehearsal_engine(services)
+    result = await _engine_call("stop the stepped rehearsal", lambda: engine.stop_rehearsal(source="ops"))
+    _publish(services, "rehearsal_stop")
+    return JSONResponse(
+        {
+            "ok": True,
+            "message": result.get("message") or "",
+            "rehearsal": _rehearsal_status(engine),
+            "state": _state_json(engine),
+        },
+        headers=NO_STORE,
+    )
+
+
+def stepped_gauge(services: Any, engine: Any) -> dict | None:
+    """The /ops stepped card (Tier.STEPPED, conductor/sequence.py): the run's step, its pace against the account cap,
+    when it holds, and the throttle governor's cool-offs. None while no stepped run is going and no account is
+    cooling off. `writes_60s` is the executor's own count of writes sent on the run's busiest account in the last
+    60 s (every write there — steps, re-asserts, retries, other devices on that account), against
+    `motion.stepped.account_writes_per_min`. Wall times (`holds_at`, `until`) are the server's clock."""
+    settings = services.settings.motion.stepped
+    clock = getattr(engine, "clock", None) or services.clock
+    mono, now = clock.monotonic(), clock.now()
+    cooloff = [
+        {"account": account, "until": now + (until - mono)}
+        for account, until in sorted((getattr(engine, "stepped_cooloff", None) or {}).items())
+        if until > mono
+    ]
+    runner = getattr(engine, "runner", None)
+    running = bool(getattr(runner, "running", False))
+    if not running and not cooloff:
+        return None
+    gauge: dict[str, Any] = {
+        "running": running,
+        "cap": settings.account_writes_per_min,
+        "live_enabled": settings.live_enabled,
+        "cooloff": cooloff,
+        "governor_trips": int((getattr(engine, "stats", None) or {}).get("governor_trips", 0)),
+    }
+    if not running:
+        return gauge
+    writes: dict[str, int] = {}
+    budgets: dict[int, dict] = {}  # executor → its budget, read once
+    for device_id in runner.plan.modules:
+        try:
+            target = services.target(device_id, Purpose.ENGINE)
+            account = target.driver.account_of(target.address)
+        except LookupError:
+            continue
+        budget = budgets.setdefault(id(target.executor), target.executor.budget())
+        writes[account] = int(((budget.get("accounts") or {}).get(account) or {}).get("writes_60s", 0))
+    busiest = max(sorted(writes), key=lambda a: writes[a], default=None)
+    gauge.update(
+        mode=runner.plan.mode_id,
+        # moving: steps go out now; held: the run's clock goes on but nothing is sent (paused, resting, set-up, off)
+        moving=bool(getattr(engine, "stepping", False)),
+        step=runner.index,
+        steps=runner.count,
+        step_s=runner.step_s,
+        design_step_s=runner.program.step_s,
+        holds_at=runner.t0_wall + runner.count * runner.step_s,
+        account=busiest,
+        writes_60s=writes.get(busiest, 0) if busiest is not None else None,
+    )
+    return gauge
 
 
 # ---- heads: desired vs reported ------------------------------------------------------------------------------

@@ -14,7 +14,21 @@ from conductor.geometry import load_canopy_config
 from conductor.looks import load_modes, parse_modes
 from conductor.looks.schema import MOTION_WORDS, FieldCanvas
 
-RAW = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
+SHIPPED = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
+
+
+def _still_tides(raw: dict) -> dict:
+    """The shipped file with Coastal Tides still (no stepped rung, as before D65): the module-level checks below
+    mutate its sampled design, which its stepped rung would otherwise have to follow (the hold rule). The stepped
+    tests add their own rung; the shipped stepped rungs are tested in tests/test_d65_modes.py."""
+    out = copy.deepcopy(raw)
+    tides = out["modes"]["coastal-tides"]
+    tides["ladder"] = [t for t in tides["ladder"] if t != "stepped"]
+    tides["techniques"].pop("stepped", None)
+    return out
+
+
+RAW = _still_tides(SHIPPED)
 RECIPES = load_recipes()
 CANOPY = load_canopy_config()
 
@@ -48,7 +62,8 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
     assert isinstance(sunset.techniques.canvas.canvas, FieldCanvas)  # a 2-D design since D63
     assert [s.color for s in sunset.techniques.canvas.canvas.stops] == ["pastel-coral", "blush-pink", "lilac"]
     assert sunset.techniques.modules.sample.canvas == sunset.techniques.canvas.canvas  # one design, two tiers
-    # every scene is static (D59): no mode carries motion, and no copy claims movement
+    # no scene has on-device motion (D59), and no still copy claims movement; only the two stepped rungs' moving
+    # copy may (D65: Coastal Tides and Golden Hour)
     for mode in modes.modes.values():
         assert mode.motion is False
         if mode.techniques.canvas is not None:
@@ -56,7 +71,12 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
                 mode.techniques.canvas.motion_effect is None and mode.techniques.canvas.motion_feature is None
             )
         for name in mode.ladder:
-            assert not MOTION_WORDS.search(getattr(mode.techniques, name).feature)
+            if name != "stepped":
+                assert not MOTION_WORDS.search(getattr(mode.techniques, name).feature)
+    assert [m for m, mode in modes.modes.items() if "stepped" in mode.ladder] == [
+        "coastal-tides",
+        "golden-hour",
+    ]
 
 
 def test_load_modes_reads_a_config_dir(tmp_path):
@@ -402,3 +422,204 @@ def test_without_a_canopy_only_the_layouts_that_dont_need_one_are_checked():
     assert parse(_sampled({"kind": "radial", "centre_in": [0, 60]})).mode("coastal-tides") is not None
     with pytest.raises(ConfigError, match="laid out 'diagonally'"):
         parse(_sampled({"kind": "linear", "angle_deg": 30}))
+
+
+# ---- stepped (D65; these build Coastal Tides' rung from RAW, the shipped one is in tests/test_d65_modes.py) ---------
+TIDES_MOVING = (
+    "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent "
+    "its next colour every few seconds, so the palette moves diagonally like a tide."
+)
+
+
+def _stepped(ladder=("stepped", "modules", "strand"), **over):
+    """modes.yaml with Coastal Tides stepping its own sampled design (valid by default), `over` merged in."""
+
+    def mutate(d):
+        tides = d["modes"]["coastal-tides"]
+        tides["ladder"] = list(ladder)
+        tides["techniques"]["stepped"] = {
+            "canvas": copy.deepcopy(tides["techniques"]["modules"]["sample"]["canvas"]),
+            "brightness": tides["techniques"]["modules"]["sample"]["brightness"],
+            "moving_feature": TIDES_MOVING,
+            **over,
+        }
+
+    return mutate
+
+
+def _stepped_ok(mutate):
+    data = copy.deepcopy(RAW)
+    mutate(data)
+    return _parse(data).mode("coastal-tides").techniques.stepped
+
+
+def test_a_stepped_technique_loads_with_its_defaults():
+    stepped = _stepped_ok(_stepped())
+    assert (stepped.direction, stepped.steps_per_cycle, stepped.step_s, stepped.run_s) == (
+        "forward",
+        6,
+        6.0,
+        90.0,
+    )
+    assert stepped.canvas == _parse(copy.deepcopy(RAW)).mode("coastal-tides").techniques.modules.sample.canvas
+
+
+@pytest.mark.parametrize(
+    ("over", "where", "message"),
+    [
+        ({"step_s": 3}, "stepped → step_s", "greater than or equal to 4"),
+        ({"step_s": 13}, "stepped → step_s", "less than or equal to 12"),
+        ({"run_s": 181}, "stepped → run_s", "less than or equal to 180"),
+        ({"steps_per_cycle": 2}, "stepped → steps_per_cycle", "greater than or equal to 3"),
+        ({"steps_per_cycle": 13}, "stepped → steps_per_cycle", "less than or equal to 12"),
+        ({"direction": "inwards"}, "stepped → direction", "'forward' or 'reverse'"),
+        ({"wavelength": 2}, "stepped → wavelength", "Extra inputs are not permitted"),
+    ],
+)
+def test_stepped_ranges_name_the_mode_and_field(over, where, message):
+    msg = _bad(_stepped(**over))
+    assert f"mode 'coastal-tides' → techniques → {where}:" in msg and message in msg
+
+
+def test_a_run_shorter_than_one_step_is_refused():
+    msg = _bad(_stepped(step_s=8, run_s=5))
+    assert "run_s (5 s) is shorter than one step (8 s)" in msg
+    assert _stepped_ok(_stepped(step_s=8, run_s=8)).run_s == 8
+
+
+@pytest.mark.parametrize(
+    "claim", ["animation", "Animated", "effect", "controller", "each light", "every light", "270"]
+)
+def test_moving_copy_that_claims_an_effect_or_per_light_animation_is_refused(claim):
+    msg = _bad(_stepped(moving_feature=f"{TIDES_MOVING} An {claim} you can see."))
+    assert "mode 'coastal-tides' → techniques → stepped:" in msg
+    assert "moving_feature says" in msg and "one colour at a time through the Hubspace cloud" in msg
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "every head",
+        "Each head",
+        "all the bulbs",
+        "every bulb",
+        "all nine lights",
+        "individually",
+        "individual",
+        "continuously",
+        "a smooth",
+        "smoothly",
+        "seamlessly",
+        "fluid",
+        "fades",
+        "fading",
+        "glides",
+        "gliding",
+        "shimmer",
+        "twinkling",
+        "sparkle",
+        "chases",
+    ],
+)
+def test_moving_copy_that_claims_per_head_or_smooth_motion_is_refused(claim):
+    """Stepped motion is one colour per strand, switched every few seconds; whether a strand cuts or fades between
+    steps is bench item 6 (not settled), so copy can't promise per-head, smooth or continuous movement."""
+    msg = _bad(_stepped(moving_feature=f"{TIDES_MOVING} It changes {claim} as you watch."))
+    assert "moving_feature says" in msg and "no light-by-light or smooth animation" in msg
+
+
+@pytest.mark.parametrize(
+    "copy_",
+    [
+        "Every head shimmers continuously from the centre out.",
+        "Each strand fades smoothly into its next colour, so the palette glides from the centre out.",
+    ],
+)
+def test_the_reviewers_false_sentences_are_refused(copy_):
+    def radial(d):
+        _sampled(RADIAL)(d)
+        _stepped(moving_feature=copy_)(d)
+
+    assert "moving_feature says" in _bad(radial)
+
+
+def test_moving_copy_must_say_the_strands_change_every_few_seconds():
+    msg = _bad(_stepped(moving_feature="Each strand shows one colour, so the palette moves diagonally."))
+    assert "moving_feature must say the strands change 'every few seconds'" in msg
+    assert _stepped_ok(_stepped()).moving_feature == TIDES_MOVING  # says it
+
+
+def test_moving_copy_may_say_moves_but_static_copy_still_may_not():
+    assert "moves" in _stepped_ok(_stepped()).moving_feature
+
+    def static_moves(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["feature"] = (
+            "Each strand one colour, so the palette moves diagonally."
+        )
+
+    assert "techniques → modules → feature mentions movement ('moves')" in _bad(static_moves)
+
+
+def test_a_stepped_rung_needs_a_later_modules_rung_with_the_same_design():
+    for ladder in (("stepped", "strand"), ("modules", "stepped", "strand")):
+        msg = _bad(_stepped(ladder=ladder))
+        assert "mode 'coastal-tides'" in msg and "needs a later 'modules' rung" in msg
+
+    def other_canvas(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["field"]["angle_deg"] = 80
+
+    assert "stepped → canvas must be the modules sample's canvas" in _bad(other_canvas)
+    assert "brightness (50) must be the modules sample's (85)" in _bad(_stepped(brightness=50))
+
+    def mean(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["at"] = "mean"
+
+    assert "needs at: centre" in _bad(mean)
+
+    def literal(d):
+        _stepped()(d)
+        modules = d["modes"]["coastal-tides"]["techniques"]["modules"]
+        level = modules.pop("sample")["brightness"]
+        modules["columns"] = [{"kind": "rgb", "rgb": [121, 206, 212], "brightness": level}] * 3
+
+    assert "needs a later 'modules' rung" in _bad(literal)
+
+
+def test_moving_copy_names_the_flow_and_no_other():
+    silent = _bad(_stepped(moving_feature="Each strand is sent its next colour every few seconds."))
+    assert (
+        "stepped → moving_feature: the design flows 'diagonally' (forward), so the copy must say 'diagonally'"
+        in silent
+    )
+    other = _bad(_stepped(moving_feature=f"{TIDES_MOVING} It moves column by column."))
+    assert "but the copy also says 'column by column'" in other
+
+    def radial(direction, words):
+        def mutate(d):
+            _sampled(RADIAL)(d)
+            _stepped(
+                direction=direction, moving_feature=f"Each strand's colour moves {words} every few seconds."
+            )(d)
+
+        return mutate
+
+    assert _stepped_ok(radial("forward", "from the centre out")).direction == "forward"
+    assert _stepped_ok(radial("reverse", "toward the centre")).direction == "reverse"
+    backwards = _bad(radial("reverse", "from the centre out"))
+    assert (
+        "the design flows 'toward the centre' (reverse), so the copy must say 'toward the centre'"
+        in backwards
+    )
+    assert "also says 'from the centre out'" in backwards
+
+
+def test_a_stepped_canvas_names_known_colours():
+    def unknown(d):
+        _stepped(ladder=("modules", "strand"))(d)  # not on the ladder: only the colour check can catch it
+        d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["stops"][0]["color"] = "salmon"
+
+    msg = _bad(unknown)
+    assert "techniques → stepped → canvas → stops → [0] → color: unknown colour 'salmon'" in msg

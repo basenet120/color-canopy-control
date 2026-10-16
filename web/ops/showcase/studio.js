@@ -1,7 +1,7 @@
 import {api} from '/static/app.js';
-import {matchingStaticFrames} from './demo-model.mjs?v=show-design-2';
+import {matchingStaticFrames} from './demo-model.mjs?v=show-design-3';
 import {previewFrame,previewKey} from '/ops/module/preset-preview.js?v=preview-motion-2';
-import {LOOKS,EFFECT_PARAMS,buildLook,validateKingston,motionReady,currentLookId,progressForRun,MODULES,validateTarget,customColor,whiteLook,effectLook,gradientColors,rgbFromHex,PAIR_IDS,matchingWholeSettings,sharedCapabilities,SCENES,sceneLook,sceneFrame,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-2';
+import {LOOKS,EFFECT_PARAMS,buildLook,validateKingston,motionReady,currentLookId,progressForRun,MODULES,validateTarget,customColor,whiteLook,effectLook,gradientColors,rgbFromHex,PAIR_IDS,matchingWholeSettings,sharedCapabilities,SCENES,sceneLook,sceneFrame,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-3';
 
 
 const $=id=>document.getElementById(id);
@@ -238,7 +238,7 @@ function sceneNote(view){
   const d=view.design,ladder=d.ladder||[];
   if(view.level==='modules'){
     const where=d.sample_at==='mean'?'the mean of its 30 lights':'its centre';
-    const step=ladder[0]==='modules'?'the way the show sets this scene first':ladder.includes('modules')?'a later step of the show’s ladder for this scene':'not a step of this scene’s ladder';
+    const step=ladder[0]==='modules'?'the way the show sets this scene first':ladder[0]==='stepped'?'the still look the show steps this scene from, and holds after each run':ladder.includes('modules')?'a later step of the show’s ladder for this scene':'not a step of this scene’s ladder';
     return 'Module level · one colour per panel, the design sampled at '+where+': '+step+'.'+tail;
   }
   if(d.design==='canvas')return 'The show’s design, head by head: what the canopy shows when this scene runs with every light painted on its own.'+tail;

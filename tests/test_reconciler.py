@@ -4,6 +4,8 @@ slot drift with its rewrite limit."""
 
 from __future__ import annotations
 
+import itertools
+
 from fake_compiler import MODULES, FakeCompiler, make_world, settings_with
 
 from conductor import rows as R
@@ -454,3 +456,83 @@ def test_an_offline_module_needs_attention_but_never_downgrades():
     )
     assert offline.tier == "canvas" and tiers == []
     assert back is not None
+
+
+# ---- stepped looks (D65): the reconciler stands down for what each step already verifies ----------------------
+def test_a_moving_stepped_look_has_no_true_up_reads_but_its_slots_are_still_checked_every_minute():
+    from test_engine_program import quiet_start, stepped_world
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        checks: list[tuple[float, str]] = []
+        original = w.engine.reconciler.check_slots
+
+        def spy(device_id, target, rows):
+            checks.append((w.clock.monotonic(), device_id))
+            return original(device_id, target, rows)
+
+        w.engine.reconciler.check_slots = spy
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("radial-outward", source="ops")
+        await w.run_for(4)
+        reads_early = w.engine.reconciler.stats["true_up_reads"]
+        await w.run_for(80)
+        reads_late = w.engine.reconciler.stats["true_up_reads"]
+        moving = w.engine.stepping
+        await w.run_for(30)  # the run is over: the rolling reads come back
+        reads_after = w.engine.reconciler.stats["true_up_reads"]
+        await w.close()
+        return t0, checks, reads_early, reads_late, reads_after, moving
+
+    t0, checks, early, late, after, moving = run_virtual(main)
+    assert moving and late == early  # flat while it moves: every step is a verified write
+    assert after > late
+    for device_id in MODULES:
+        times = [t - t0 for t, d in checks if d == device_id and t < t0 + 84]
+        during = [t for t in times if t >= 4]
+        assert during, device_id  # checked from the steps' verification readbacks …
+        gaps = [b - a for a, b in itertools.pairwise(times)]
+        # … never more than a minute (and a step's verification) after the last check, at most once a minute
+        assert all(60 <= g <= 60 + 6 + 3 for g in gaps if g >= 4), (device_id, times)
+
+
+def test_a_stepped_module_that_differs_waits_for_the_next_step_unless_its_write_failed_well_before_it():
+    from test_engine_program import quiet_start, stepped_world
+
+    from conductor.executor_api import CommandStatus
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="ops")
+        await w.run_for(9.0)  # step 1 is out and verified: the next is 3 s away
+        runner, rec = w.engine.runner, w.engine.reconciler
+        a, b, c = w.address("canopy-r0c0"), w.address("canopy-r2c2"), w.address("canopy-r1c1")
+        w.engine.last_status[a] = CommandStatus.FAILED
+        app_edit(
+            w, c, [R.color_rgb(1, 2, 3)]
+        )  # c differs on its readback, but its write didn't fail: the step fixes it
+        w.tracker.note_readback(c, await w.sim.read_state(c))
+        now_sent = await rec.reassert()
+        deferred_early = set(runner.deferred)
+        await w.run_for(runner.next_step_in() - 1.5)  # 1.5 s before step 2
+        w.engine.last_status[b] = CommandStatus.FAILED
+        n = len(w.writes)
+        deferred_sent = await rec.reassert()
+        deferred = set(runner.deferred)
+        # a deferred module goes out with the step even when the step leaves its rows as they were sent
+        w.engine.sent_rows["canopy-r2c2"] = (
+            w.engine.current_plan().program.steps[runner.index + 1].rows["canopy-r2c2"]
+        )
+        await w.run_for(2.5)
+        b_writes = [x for x in w.writes[n:] if x[1] == "canopy-r2c2"]
+        await w.close()
+        return now_sent, deferred_early, deferred_sent, deferred, b_writes
+
+    now_sent, deferred_early, deferred_sent, deferred, b_writes = run_virtual(main)
+    assert now_sent == ["canopy-r0c0"]  # failed, and the next step is 3 s off: re-sent now
+    assert deferred_early == {"canopy-r1c1"}  # differs without a failed write: the step 3 s away carries it
+    # failed, but the step 1.5 s away carries it (and still the one that differs)
+    assert deferred_sent == [] and deferred == {"canopy-r1c1", "canopy-r2c2"}
+    assert len(b_writes) == 1  # one write, with the step

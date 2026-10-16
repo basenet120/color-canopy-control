@@ -105,7 +105,8 @@ def test_every_mode_compiles_at_every_tier_of_its_ladder(mode_id, tier):
 
 
 def test_ladder_is_read_from_the_modes_file():
-    assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.T3, Tier.STRAND]
+    assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.STEPPED, Tier.T3, Tier.STRAND]  # D65
+    assert ladder("coastal-tides") == [Tier.STEPPED, Tier.T3, Tier.STRAND]
     assert ladder("lowcountry-calm") == [Tier.T3, Tier.STRAND]
     assert ladder("lowcountry-calm", TM) == [Tier.STRAND]
     with pytest.raises(PlanError, match="no mode 'disco'"):
@@ -261,6 +262,12 @@ def test_features_differ_per_tier_and_only_motion_copy_mentions_movement():
         for tier in ladder(mode_id):
             plan = compile_mode(mode_id, tier, _ctx(**_painted()))
             assert not MOTION_WORDS.search(plan.feature), (mode_id, tier)
+            if tier is Tier.STEPPED:
+                # D65: a stepped plan's feature is its hold's (the modules rung's: nothing moves until a runner
+                # steps it); only the moving copy, shown while a run moves, says it moves
+                assert plan.feature == compile_mode(mode_id, Tier.T3, _ctx()).feature, mode_id
+                assert MOTION_WORDS.search(plan.program.moving_feature), mode_id
+                continue
             features.append(plan.feature)
         assert len(set(features)) == len(features), mode_id
     moving = compile_mode("golden-hour", Tier.T1, _ctx(modes=_golden_with_code(4), effects_enabled=enabled))
@@ -313,7 +320,9 @@ def test_bench_flags_gate_t1_and_t2_on_live_hardware():
     plan = compile_first("rainbow-row-sunset", _ctx(flags=unproven))
     assert plan.tier is Tier.T3 and any("Gate C" in n for n in plan.notes)
     assert available_tiers("rainbow-row-sunset", _ctx(flags=unproven)) == [Tier.T3, Tier.STRAND]
-    assert compile_first("golden-hour", _ctx(), skip=[Tier.T1]).tier is Tier.T3
+    # the compiler doesn't gate the stepped tier (the show's tier_allowed does, tests/test_d65_modes.py)
+    assert compile_first("golden-hour", _ctx(), skip=[Tier.T1]).tier is Tier.STEPPED
+    assert compile_first("golden-hour", _ctx(), skip=[Tier.T1, Tier.STEPPED]).tier is Tier.T3
 
 
 def test_a_wrong_head_count_refuses_t1_but_t3_still_compiles():

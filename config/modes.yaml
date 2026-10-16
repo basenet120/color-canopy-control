@@ -23,8 +23,16 @@
 # in the canopy's proportions so it arcs at module level too; The Goodnight Glow a moon over r0c2 (moonlight blue
 # there). Changing a design changes the T1 frames, so every recorded slot hash of a painted scene goes stale: freeze
 # the designs before commissioning at install (D63).
-# Brightness is the scene's `brightness_draft` at every tier (a device setting; colours stay full strength). Every
-# scene is static: no mode has a motion effect (the soak may enable a SIMULATED one, config/sim/soak.yaml).
+# Brightness is the scene's `brightness_draft` at every tier (a device setting; colours stay full strength). No mode
+# has an on-device motion effect (the soak may enable a SIMULATED one, config/sim/soak.yaml).
+#
+# Which scenes move (D65, superseding D59's "every scene is static" for these two only): Coastal Tides and Golden Hour
+# have a `stepped` rung. The Conductor re-sends the scene's own design (the same `&…` anchor, so the still look it
+# holds is the scene's module-level rung exactly) a step at a time, one colour per strand through the Hubspace cloud
+# every few seconds, for a bounded run (`run_s`), then the static design holds. Live hardware refuses the stepped
+# rung until the stepped rehearsal (Gate R) passes and Alon sets motion.stepped.live_enabled (config/conductor.yaml);
+# until then the ladder lands on the next rung. Lowcountry Calm (the idle look) and The Goodnight Glow stay still;
+# Rainbow Row Sunset and Garden Gathering are unchanged.
 #
 # Only three modes have a canvas: the controller holds three custom slots (custom-1..3) and painted looks are stored
 # at commissioning and only selected at show time (store-and-select, 04), so three slots hold three painted looks.
@@ -36,6 +44,9 @@
 #             at commissioning and only SELECTED at show time (store-and-select, 04)
 #   slot    — T2: select `slot`, hand-painted in the Hubspace app (the reconciler verifies its hash, never rewrites)
 #   modules — T3: module-level composition: each module = one coarse pixel (a strand look per canopy position)
+#   stepped — module level, a step at a time (D65): the modules rung's design shifted along its layout every
+#             `step_s` (more on a busy account: the rate budget, 07 §6), `steps_per_cycle` steps per repeat, for
+#             `run_s`; then the modules rung holds. `moving_feature` is shown only while a run moves.
 #
 # `ladder` is tried in order; the engine uses the first tier the capabilities + bench flags allow, and downgrades
 # with hysteresis (07 §6). Colours name entries in config/recipes.yaml.
@@ -130,11 +141,11 @@ modes:
     label: Coastal Tides
     blurb: Find your coast
     preview: ["#659BD5", "#79CED4", "#B2E8D2", "#E9F3E7"]
-    ladder: [modules, strand]
+    ladder: [stepped, modules, strand]
     techniques:
       modules:
         sample:
-          canvas:   # a tilted shoreline: ocean blue along the top long edge, foam white along the bottom
+          canvas: &tides-design   # a tilted shoreline: ocean blue along the top long edge, foam white along the bottom
             kind: field
             field: {kind: linear, angle_deg: 78}
             stops:
@@ -146,6 +157,14 @@ modes:
           at: centre
           brightness: 85
         feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally like a tilted shoreline: ocean blue and aqua toward one long side, seafoam and foam white toward the other."
+      stepped:   # D65: the tide rolls across the panels, a step every few seconds, then the shoreline above holds
+        canvas: *tides-design
+        direction: forward      # ocean blue moves on toward the foam-white side
+        steps_per_cycle: 6
+        step_s: 6               # design pace; nine strands on one account step every 7.5 s (motion.stepped budget)
+        run_s: 90
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the shoreline's colours move diagonally across the canopy like a tide coming in: ocean blue and aqua, then seafoam and foam white."
       strand:
         look: {kind: rgb, rgb: [121, 206, 212], brightness: 85}   # aqua
         feature: "Colour and dimming: all nine Hubspace strands set to aqua."
@@ -154,7 +173,7 @@ modes:
     label: Golden Hour
     blurb: Let the evening glow
     preview: ["#FFDB9B", "#FFB69D", "#FF9BC4", "#E779B0", "#B59AE2"]
-    ladder: [canvas, slot, modules, strand]
+    ladder: [canvas, slot, stepped, modules, strand]
     slot: custom-3
     techniques:
       canvas:
@@ -179,6 +198,14 @@ modes:
       modules:
         sample: {canvas: *golden-design, at: centre, brightness: 95}
         feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the far side."
+      stepped:   # D65: where the per-head sun (canvas) isn't available, its rays move out from the left edge
+        canvas: *golden-design
+        direction: forward      # outwards from the sun
+        steps_per_cycle: 6
+        step_s: 6               # design pace; nine strands on one account step every 7.5 s (motion.stepped budget)
+        run_s: 90
+        brightness: 95
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the sunset's colours move out from one edge like rays from a low sun: gold and peach, then sunset pink, rose and lavender."
       strand:
         look: {kind: rgb, rgb: [255, 155, 196], brightness: 95}   # sunset pink
         feature: "Colour and dimming: all nine Hubspace strands set to sunset pink."

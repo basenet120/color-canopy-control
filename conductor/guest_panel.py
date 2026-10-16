@@ -736,7 +736,11 @@ class EngineTarget:
         """What each canopy position truthfully shows (canopy_view.lit_state), or None before the first look."""
         try:
             return canopy_view.lit_state(
-                self._canopy_cfg(), self.services.registry, K._current_plan(engine), st
+                self._canopy_cfg(),
+                self.services.registry,
+                K._current_plan(engine),
+                st,
+                now=self.services.clock.now(),
             )
         except Exception:  # the picture never fails the panel; no picture is no claim
             log.exception("The guest panel couldn't work out the canopy picture.")

@@ -840,7 +840,8 @@ def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_
     engine = showing(c)
     _lit_settled(c)
     _services(c).settings.kiosk.ripple_stagger_s = 1.2
-    scene = next(s for s in ("coastal-tides", "garden-gathering") if s != engine.current_plan().mode_id)
+    # (Coastal Tides steps in sim since D65: its picture carries steps, not a ripple)
+    scene = next(s for s in ("garden-gathering", "goodnight-glow") if s != engine.current_plan().mode_id)
     r = c.post("/api/kiosk/scene", json={"scene": scene})
     assert r.status_code == 200, r.text
     body = _panel(c)
@@ -852,6 +853,30 @@ def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_
     assert abs(motion["t0"] - body["server_now"]) < 1.0 and body["state"]["phase"] == "changing"
     _no_device_names(body)
     time.sleep(2 * 1.2 + 0.3)
+    assert _panel(c)["state"]["lit"]["motion"] is None
+
+
+def test_a_stepped_runs_frames_are_the_picture_until_its_still_look_is_sent(app_client_show, monkeypatch):
+    """Tier.STEPPED (D65) through the real app: the engine's `program` reaches the picture as `steps` frames
+    in grid order, judged at the server's own time, so once the still look is sent (`ends_at`) the picture is still
+    even if the engine's state hasn't caught up."""
+    import dataclasses
+
+    c = app_client_show
+    engine = showing(c)
+    lit = _lit_settled(c)["state"]["lit"]
+    colours = [m["color"] for m in lit["modules"]]
+    real_state = engine.state
+    now = _services(c).clock.now()
+    program = {"t0": now - 10.0, "step_s": 6.0, "step": 1, "ends_at": now + 80.0, "frames": [colours] * 16}
+    monkeypatch.setattr(engine, "state", lambda: dataclasses.replace(real_state(), program=program))
+    body = _panel(c)
+    motion = body["state"]["lit"]["motion"]
+    assert motion["kind"] == "steps" and motion["frames"] == [colours] * 16
+    assert motion["ends_at"] == now + 86.0  # one step past the still look's send
+    assert abs(motion["t0"] - (body["server_now"] - 10.0)) < 1.0
+    _no_device_names(body)
+    program["ends_at"] = _services(c).clock.now() - 0.5  # the still look went out half a second ago
     assert _panel(c)["state"]["lit"]["motion"] is None
 
 
@@ -946,3 +971,18 @@ def test_the_dev_launcher_is_simulator_only(tmp_path):
     assert "framebuffer_mapping" not in launcher.overlay(solid=True)["devices"]["shop-string-1"]
     makefile = (ROOT / "Makefile").read_text()
     assert "guest-dev:" in makefile and "scripts/dev_guest_panel.py" in makefile
+
+
+def test_a_scene_tapped_during_the_stepped_rehearsal_says_the_canopy_is_being_tested(app_client_show):
+    from test_kiosk_routes import _rehearsing
+
+    from conductor.routes.kiosk import TESTING
+
+    c = app_client_show
+    route = _rehearsing(c)
+    try:
+        r = c.post("/api/kiosk/scene", json={"scene": COASTAL.id})
+        assert r.status_code == 503 and r.json()["detail"] == TESTING, r.text
+        assert 0 < r.json()["retry_after_s"] <= 60
+    finally:
+        assert c.post(f"{route}/stop", json={}).status_code == 200

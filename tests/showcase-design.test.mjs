@@ -52,6 +52,8 @@ test('the default level is the one the show tries first for the scene',()=>{
   assert.equal(defaultDesignLevel(design()),'heads');
   assert.equal(defaultDesignLevel(design({ladder:['modules','strand'],design:'sample'})),'modules');
   assert.equal(defaultDesignLevel(design({ladder:['modules','strand'],modules:null})),'heads');
+  assert.equal(defaultDesignLevel(design({ladder:['stepped','modules','strand'],design:'sample'})),'modules');  // D65: Coastal Tides
+  assert.equal(defaultDesignLevel(design({ladder:['canvas','slot','stepped','modules','strand']})),'heads');  // D65: Golden Hour
   assert.equal(defaultDesignLevel(design({heads:null,modules:null})),null);
   assert.deepEqual(designLevels(design()),['heads','modules']);
   assert.deepEqual(designLevels(design({heads:null})),['modules']);

@@ -32,6 +32,7 @@
             <span class="chip" id="canopy-guest" hidden></span>
             <span class="chip warn" id="canopy-guest-look" hidden></span></div>
           <p class="feature" id="canopy-feature" hidden></p>
+          <p class="notice" id="canopy-stepped" aria-live="polite" hidden></p>
           <p class="notice" id="canopy-message" hidden></p>
         </div>
         <div class="canopy-grid" id="canopy-grid" aria-label="The nine canopy positions"></div>
@@ -55,6 +56,20 @@
             <select id="mode-select"></select>
             <button type="button" id="mode-btn">Change</button>
           </div>
+        </div>
+        <div class="mode-picker" id="rehearsal-box">
+          <label for="rehearsal-mode">Stepped rehearsal (Gate R): one bounded stepped run on the canopy's own
+            modules, to measure Hubspace's write rate</label>
+          <div class="copy-row">
+            <select id="rehearsal-mode"></select>
+            <input id="rehearsal-minutes" type="number" min="1" max="10" step="1" value="10"
+              aria-label="Minutes (1 to 10)" title="Minutes (1 to 10)">
+            <button type="button" class="secondary" id="rehearsal-btn">Rehearse…</button>
+            <button type="button" class="danger" id="rehearsal-stop" hidden>Stop rehearsal</button>
+          </div>
+          <p class="muted small" id="rehearsal-note">Only someone at this page starts it, after confirming the
+            modules and minutes. Who runs it and how it passes: docs/runbooks/stepped-rehearsal.md.</p>
+          <p class="notice" id="rehearsal-status" role="status" hidden></p>
         </div>
         <p class="notice" id="control-result" role="status" hidden></p>
         <p class="muted small">Safe look = Lowcountry Calm on every module with a Hubspace device registered, now.
@@ -180,6 +195,19 @@
     <div class="actions">
       <button type="submit" value="cancel" class="secondary">Cancel</button>
       <button type="submit" value="go">Commission</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rehearsal-dialog" class="confirm">
+  <form method="dialog">
+    <h2>Start the stepped rehearsal?</h2>
+    <p id="rehearsal-confirm"></p>
+    <p>Stepped motion stays off for guests afterwards: only Alon turns it on, once a rehearsal on the real kits
+      passes.</p>
+    <div class="actions">
+      <button type="submit" value="cancel" class="secondary">Cancel</button>
+      <button type="submit" value="go">Rehearse</button>
     </div>
   </form>
 </dialog>

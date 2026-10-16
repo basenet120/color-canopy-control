@@ -19,18 +19,22 @@ LIVE = ("canopy-r0c0", "canopy-r0c1")  # the two shop kits registered at canopy 
 
 def partial_show(monkeypatch, tmp_path, registered, *, t3_only: bool = True) -> TestClient:
     """The real engine with only `registered` canopy positions having a device on the engine's driver. With
-    `t3_only` (the default) it runs as live does before Gate B/C (as tests/test_surfaces_review_fixes.py's t3_show):
-    T1 and T2 are refused. `t3_only=False` keeps the show's own tier rules (startup commissioning unlocks T1)."""
+    `t3_only` (the default) it runs as live does before Gate B/C and Gate R: T1 and T2 are refused (as
+    tests/test_surfaces_review_fixes.py's t3_show), and so is the stepped tier (D65; motion.stepped.live_enabled
+    false). `t3_only=False` keeps
+    the show's own tier rules (startup commissioning unlocks T1; the simulator steps Coastal Tides)."""
     from conftest import _env as _show_env
 
     from conductor.app import app
     from conductor.config import Registry
     from conductor.engine_api import Tier
-    from conductor.show import ShowWiring
+    from conductor.show import STEPPED_LIVE_OFF, ShowWiring
 
     def only_t3(self, mode_id, tier):
         if tier in (Tier.T1, Tier.T2):
             return False, "Gate C isn't proven on this kit (test)"
+        if tier is Tier.STEPPED:
+            return False, STEPPED_LIVE_OFF
         return True, ""
 
     real = Registry.address
