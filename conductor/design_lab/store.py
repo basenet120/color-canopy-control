@@ -20,32 +20,59 @@ one lock around read-modify-write; never into `config/`; the show never reads th
 and flagged on /ops (`pending_alert`, recorded by `service.lab_of` on the loop thread); a file that can't be read or
 set aside makes the store read-only (`StoreReadOnly`, a 409).
 
+Loading is per version: the top level (`format`, `seq`, `current`, `versions` as a list) is validated first and only
+it can make the file corrupt; each version is then validated on its own, and one that doesn't parse is listed as
+unreadable and written back verbatim on the next save. The size is checked before the file is read.
+
+Staleness (does a version still apply to the approved trio?) is computed lazily, in the routes' threadpool, and cached
+by `(version id, config_sha)`; loading never re-applies a version.
+
 Owners: the models, constants, `LookStore.__init__`/`file`/`get`/`unreadable`, `default_name` and `config_sha` are
-the contracts commit (L); the bodies marked `S2` are stream S2's.
+the contracts commit (L); the rest is stream S2's.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import re
 import threading
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from conductor.clock import Clock
 from conductor.config import ConductorSettings
-from conductor.design_lab.draft import ConfigTrio, SceneDraft
+from conductor.design_lab import draft as D
+from conductor.design_lab.draft import ConfigTrio, Problem, SceneDraft
 from conductor.telemetry import Telemetry
+from conductor.tokens import atomic_write
+
+log = logging.getLogger(__name__)
 
 LOOKS_FILE = "looks.yaml"
 MAX_VERSIONS = 200
 MAX_BYTES = 1_000_000
 CONFIG_FILES = ("scenes.yaml", "modes.yaml", "recipes.yaml")
 READ_ONLY = "The Lab's store couldn't be set aside: {reason}; saved versions are kept as they are."
+NOT_SAVED = "The Lab couldn't save overrides/looks.yaml ({reason}); nothing was changed."
+CORRUPT_ALERT = (
+    "Design Lab: overrides/looks.yaml couldn't be read ({reason}), so it was set aside as {set_aside} and the Lab "
+    "started with no saved versions. The show doesn't use this file."
+)
+READ_ONLY_ALERT = (
+    "Design Lab: overrides/looks.yaml couldn't be read or set aside ({reason}); the Lab won't save until it is "
+    "moved by hand."
+)
+REASON_MAX = 120  # an alert's reason: the first line of the error, at most this long
+STORE_PATH = "overrides/looks.yaml"
+_VERSION_N = re.compile(r"^v(\d+)$")
 
 
 class _Strict(BaseModel):
@@ -69,11 +96,72 @@ class LooksFile(_Strict):
     versions: list[Version] = Field(default_factory=list, max_length=MAX_VERSIONS)
 
 
+class _TopLevel(_Strict):
+    """The file's top level, validated apart from its versions: only this failing makes the file corrupt."""
+
+    format: Literal[1]
+    seq: int = Field(0, ge=0)
+    current: str | None = None
+    versions: list[Any] = Field(default_factory=list, max_length=MAX_VERSIONS)
+
+
 class StoreReadOnly(RuntimeError):
     """The store couldn't read or set aside a bad looks.yaml, so it won't write over it (a 409 on every write)."""
 
 
+class _Corrupt(Exception):
+    """looks.yaml can't be used as it stands: set it aside and start empty."""
+
+
+@dataclass(frozen=True)
+class _Unreadable:
+    """A saved version that didn't parse: written back exactly as it was read."""
+
+    id: str
+    raw: Any
+
+
+Entry = Version | _Unreadable
+
+
+def _short(text: str) -> str:
+    line = (text.strip().splitlines() or [""])[0].strip()
+    return line if len(line) <= REASON_MAX else line[: REASON_MAX - 1] + "…"
+
+
+def _reason(exc: BaseException) -> str:
+    """The first line of an error, at most REASON_MAX characters: what the alert and the Lab's banner say."""
+    if isinstance(exc, ValidationError):
+        errors = exc.errors()
+        first = errors[0] if errors else {}
+        where = ".".join(str(p) for p in first.get("loc", ())) or "the file"
+        return _short(f"{where}: {first.get('msg', 'invalid')}")
+    return _short(str(exc)) or type(exc).__name__
+
+
+def _number(version_id: Any) -> int:
+    m = _VERSION_N.match(version_id) if isinstance(version_id, str) else None
+    return int(m.group(1)) if m else 0
+
+
+def _free_name(directory: Path, stem: str, suffix: str = ".yaml") -> Path:
+    """`<stem><suffix>`, or `<stem>-2<suffix>`, `-3`, … when that name is taken."""
+    candidate = directory / f"{stem}{suffix}"
+    n = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}-{n}{suffix}"
+        n += 1
+    return candidate
+
+
+def _utc_stamp(now: float) -> str:
+    return datetime.fromtimestamp(now, UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
 class LookStore:
+    """The Lab's saved versions. One lock around every read-modify-write, and the in-memory state changes only after
+    the file is written, so a failed write leaves both as they were."""
+
     def __init__(self, data: Path, *, clock: Clock, telemetry: Telemetry) -> None:
         self.data = Path(data)
         self.clock = clock
@@ -84,18 +172,105 @@ class LookStore:
         self.read_only: bool = False  # the bad file couldn't be read or moved: writes answer 409
         self.pending_alert: str | None = None  # the /ops alert `lab_of` records on the loop thread
         self._file = LooksFile()
+        self._entries: list[Entry] = []  # the file's order, unreadable versions included
         self._unreadable: list[dict] = []  # {"id", "unreadable": True, "error"} per version that didn't parse
+        self._checks: dict[
+            tuple[str, str], dict
+        ] = {}  # (version id, config_sha) → {stale, problems, needs_d59}
         self._lock = threading.Lock()
 
+    # ---- loading -------------------------------------------------------------------------------------------------
     def load(self) -> LooksFile:
-        """Read looks.yaml; never raises (§3.5). Contracts-commit behaviour: no file → an empty store; anything
-        else is S2's."""
-        if not self.path.exists():
-            self._file = LooksFile()
-            self._unreadable = []
+        """Read looks.yaml; never raises (§3.5). No file → an empty store. A corrupt file (bad YAML, a bad top level,
+        an unknown format, over MAX_BYTES — checked before reading) is set aside and the store starts empty; a file
+        that can't be read (OSError) or set aside stays where it is and the store goes read-only."""
+        with self._lock:
+            self.error = self.set_aside = self.pending_alert = None
+            self.read_only = False
+            self._checks.clear()
+            self._set(LooksFile(), [], [])
+            try:
+                self._load_file()
+            except _Corrupt as exc:
+                self._quarantine(str(exc))
+            except Exception as exc:  # noqa: BLE001 - never raises: an unreadable file is left alone, read-only
+                self._go_read_only(_reason(exc))
             return self._file
-        raise NotImplementedError("S2: LookStore.load of an existing looks.yaml")
 
+    def _load_file(self) -> None:
+        try:
+            size = self.path.stat().st_size
+        except FileNotFoundError:
+            return
+        if size > MAX_BYTES:  # never read it
+            raise _Corrupt(f"it is {size} bytes, over the {MAX_BYTES}-byte limit")
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise _Corrupt(f"it isn't UTF-8 text ({exc.reason})") from None
+        try:
+            raw = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise _Corrupt(f"it isn't valid YAML ({_reason(exc)})") from None
+        if not isinstance(raw, dict):
+            raise _Corrupt("it isn't a mapping of format, seq, current and versions")
+        if "format" in raw and raw["format"] != 1:
+            raise _Corrupt(f"format {raw['format']!r} isn't one this Lab reads (it reads format 1)")
+        try:
+            top = _TopLevel.model_validate(raw)
+        except ValidationError as exc:
+            raise _Corrupt(_reason(exc)) from None
+        entries: list[Entry] = []
+        unreadable: list[dict] = []
+        seen: set[str] = set()
+        for item in top.versions:
+            raw_id = item.get("id") if isinstance(item, dict) else None
+            label = raw_id if isinstance(raw_id, str) else "?"
+            try:
+                if not isinstance(item, dict):
+                    raise TypeError("a version must be a mapping")
+                if label in seen:
+                    raise ValueError(f"a second version with the id {label!r}")
+                entries.append(Version.model_validate(item))
+            except (ValidationError, ValueError, TypeError) as exc:
+                entries.append(_Unreadable(label, item))
+                unreadable.append({"id": label, "unreadable": True, "error": _reason(exc)})
+            seen.add(label)
+        versions = [e for e in entries if isinstance(e, Version)]
+        current = top.current if top.current in {v.id for v in versions} else None
+        self._set(LooksFile(seq=top.seq, current=current, versions=versions), entries, unreadable)
+
+    def _quarantine(self, reason: str) -> None:
+        """Move the corrupt file aside (it is never overwritten), start empty and raise the /ops alert."""
+        target = _free_name(self.path.parent, f"looks.corrupt-{_utc_stamp(self.clock.now())}")
+        try:
+            os.replace(self.path, target)
+        except OSError as exc:
+            self._go_read_only(f"{reason}; moving it aside failed: {_reason(exc)}")
+            return
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            log.warning("Design Lab: couldn't make %s 0600", target)
+        self.error = _short(reason)
+        self.set_aside = target.name
+        self.pending_alert = CORRUPT_ALERT.format(reason=self.error, set_aside=target.name)
+        log.warning("Design Lab: %s couldn't be read (%s); set aside as %s", self.path, reason, target.name)
+
+    def _go_read_only(self, reason: str) -> None:
+        self.error = _short(reason)
+        self.read_only = True
+        self.pending_alert = READ_ONLY_ALERT.format(reason=self.error)
+        log.warning(
+            "Design Lab: %s couldn't be read or set aside (%s); the store is read-only", self.path, reason
+        )
+
+    def _set(self, looks: LooksFile, entries: list[Entry], unreadable: list[dict]) -> None:
+        self._file = looks
+        self._entries = list(entries)
+        self._unreadable = list(unreadable)
+
+    # ---- reading -------------------------------------------------------------------------------------------------
     def file(self) -> LooksFile:
         """The loaded state."""
         return self._file
@@ -111,6 +286,51 @@ class LookStore:
         """The versions that didn't parse, as `{"id", "unreadable": true, "error"}` (kept in the file verbatim)."""
         return list(self._unreadable)
 
+    # ---- writing (the caller holds the lock) ---------------------------------------------------------------------
+    def _writable(self) -> None:
+        if self.read_only:
+            raise StoreReadOnly(READ_ONLY.format(reason=self.error or "the file couldn't be read or moved"))
+
+    @staticmethod
+    def _refuse(message: str) -> D.DraftError:
+        return D.DraftError([Problem(path=STORE_PATH, field="draft", message=message)])
+
+    def _write(self, seq: int, current: str | None, entries: list[Entry]) -> None:
+        """Validate the whole proposed file, write the history copy, then the file (atomic, 0600); only then
+        change the in-memory state."""
+        if len(entries) > MAX_VERSIONS:
+            raise self._refuse(f"The Lab keeps at most {MAX_VERSIONS} versions; delete an old one first.")
+        versions = [e for e in entries if isinstance(e, Version)]
+        looks = LooksFile.model_validate(
+            {"seq": seq, "current": current, "versions": [v.model_dump() for v in versions]}
+        )
+        if current is not None and current not in {v.id for v in versions}:
+            raise KeyError(current)
+        document = {
+            "format": 1,
+            "seq": seq,
+            "current": current,
+            "versions": [e.model_dump(mode="json") if isinstance(e, Version) else e.raw for e in entries],
+        }
+        _TopLevel.model_validate(document)  # the top level exactly as load() will read it
+        text = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode()
+        if len(text) > MAX_BYTES:
+            raise self._refuse(
+                f"The saved versions would be {len(text)} bytes, over the {MAX_BYTES}-byte limit; delete an old "
+                "version first."
+            )
+        try:
+            history = _free_name(self.path.parent / "history", f"looks-{_utc_stamp(self.clock.now())}")
+            atomic_write(history, text, mode=0o600)
+            atomic_write(self.path, text, mode=0o600)
+        except OSError as exc:
+            raise StoreReadOnly(NOT_SAVED.format(reason=_reason(exc))) from None
+        kept = {e.id for e in entries if isinstance(e, _Unreadable)}
+        self._set(looks, entries, [u for u in self._unreadable if u["id"] in kept])
+
+    def _next_seq(self) -> int:
+        return max([self._file.seq, *(_number(e.id) for e in self._entries)]) + 1
+
     def save_version(
         self,
         *,
@@ -123,17 +343,120 @@ class LookStore:
         settings: ConductorSettings,
         config_sha: str,
     ) -> Version:
-        """Validate (apply_drafts against `approved`), history copy, atomic 0600 write; the new version becomes
-        `current`. DraftError (422), StoreReadOnly (409), KeyError for an unknown parent (404)."""
-        raise NotImplementedError("S2: LookStore.save_version")
+        """Validate (apply_drafts of the new version against `approved`; older versions aren't re-validated), history
+        copy, atomic 0600 write; the new version becomes `current`. Only the scenes that differ from approved are
+        kept, in catalog order. DraftError (422), StoreReadOnly (409), KeyError for an unknown parent (404)."""
+        order = [s.id for s in approved.scenes.scenes]
+        ranked = sorted(drafts.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order))
+        with self._lock:
+            self._writable()
+            if parent is not None:
+                self.get(parent)
+            kept = {sid: d for sid, d in ranked if sid not in order or not D.is_approved(approved, d)}
+            D.apply_drafts(approved, kept, canopy=canopy, settings=settings)
+            now = self.clock.now()
+            seq = self._next_seq()
+            names = [e.name for e in self._entries if isinstance(e, Version)] + [
+                e.raw["name"]
+                for e in self._entries
+                if isinstance(e, _Unreadable)
+                and isinstance(e.raw, dict)
+                and isinstance(e.raw.get("name"), str)
+            ]
+            version = Version(
+                id=f"v{seq:04d}",
+                name=name or default_name(note, now, names),
+                note=note,
+                created_at=now,
+                parent=parent,
+                config_sha=config_sha,
+                drafts=kept,
+            )
+            self._write(seq, version.id, [*self._entries, version])
+            self._check(
+                version,
+                approved=approved,
+                canopy=canopy,
+                settings=settings,
+                config_sha=config_sha,
+                applies=True,
+            )
+            return version
 
     def delete_version(self, version_id: str) -> None:
-        """KeyError; clears `current` if it pointed there. StoreReadOnly."""
-        raise NotImplementedError("S2: LookStore.delete_version")
+        """KeyError; clears `current` if it pointed there. StoreReadOnly. An unreadable version can be deleted too.
+        Its number is never issued again (`seq` stays)."""
+        with self._lock:
+            self._writable()
+            entries = [e for e in self._entries if e.id != version_id]
+            if len(entries) == len(self._entries):
+                raise KeyError(version_id)
+            current = None if self._file.current == version_id else self._file.current
+            self._write(self._next_seq() - 1, current, entries)
+            for key in [k for k in self._checks if k[0] == version_id]:
+                self._checks.pop(key, None)
 
     def set_current(self, version_id: str | None) -> None:
-        """The version the Lab opens on (None = approved). KeyError; StoreReadOnly."""
-        raise NotImplementedError("S2: LookStore.set_current")
+        """The version the Lab opens on (None = approved). KeyError; StoreReadOnly. Nothing is written when it is
+        already current."""
+        with self._lock:
+            self._writable()
+            if version_id is not None:
+                self.get(version_id)
+            if version_id == self._file.current:
+                return
+            self._write(self._file.seq, version_id, list(self._entries))
+
+    # ---- answers -------------------------------------------------------------------------------------------------
+    def _check(
+        self,
+        version: Version,
+        *,
+        approved: ConfigTrio,
+        canopy: dict,
+        settings: ConductorSettings,
+        config_sha: str,
+        applies: bool = False,
+    ) -> dict:
+        """Does the version still apply to the approved trio? Cached by (version id, config_sha); a version that
+        doesn't is stale (with its problems), never a load failure. `applies`: the caller has just applied it (a
+        save), so it isn't applied again."""
+        key = (version.id, config_sha)
+        cached = self._checks.get(key)
+        if cached is not None:
+            return cached
+        problems: list[dict] = []
+        try:
+            if not applies:
+                D.apply_drafts(approved, version.drafts, canopy=canopy, settings=settings)
+        except D.DraftError as exc:
+            problems = [p.to_json() for p in exc.problems]
+        needs_d59 = False
+        for draft in version.drafts.values():
+            try:
+                needs_d59 = needs_d59 or bool(
+                    D.draft_changes(approved, draft, canopy=canopy).get("needs_d59")
+                )
+            except (KeyError, ValueError):  # a scene the approved config no longer has: the problems say so
+                continue
+        result = {"stale": bool(problems), "problems": problems, "needs_d59": needs_d59}
+        self._checks[key] = result
+        return result
+
+    def _summary(self, version: Version, **ctx: Any) -> dict:
+        check = self._check(version, **ctx)
+        return {
+            "id": version.id,
+            "name": version.name,
+            "note": version.note,
+            "created_at": version.created_at,
+            "parent": version.parent,
+            "scenes": list(version.drafts),
+            "needs_d59": check["needs_d59"],
+            "stale": check["stale"],
+            "problems": list(check["problems"]),
+            "older_config": version.config_sha != ctx["config_sha"],
+        }
 
     def version_summaries(
         self, *, approved: ConfigTrio, canopy: dict, settings: ConductorSettings, config_sha: str
@@ -141,7 +464,9 @@ class LookStore:
         """Every version as a VersionSummary (§4: id, name, note, created_at, parent, scenes, needs_d59, stale,
         problems, older_config), newest first, then the unreadable ones as `{"id", "unreadable": true, "error"}`.
         Staleness is computed lazily (threadpool) and cached by (version id, config_sha)."""
-        raise NotImplementedError("S2: LookStore.version_summaries")
+        ctx = {"approved": approved, "canopy": canopy, "settings": settings, "config_sha": config_sha}
+        newest_first = sorted(self._file.versions, key=lambda v: (_number(v.id), v.created_at), reverse=True)
+        return [self._summary(v, **ctx) for v in newest_first] + self.unreadable()
 
     def version_json(
         self,
@@ -153,7 +478,12 @@ class LookStore:
         config_sha: str,
     ) -> dict:
         """VersionJSON = VersionSummary + {"drafts": {scene_id: SceneDraft JSON}}. KeyError."""
-        raise NotImplementedError("S2: LookStore.version_json")
+        version = self.get(version_id)
+        ctx = {"approved": approved, "canopy": canopy, "settings": settings, "config_sha": config_sha}
+        return {
+            **self._summary(version, **ctx),
+            "drafts": {sid: d.model_dump(mode="json") for sid, d in version.drafts.items()},
+        }
 
 
 _NAME_N = re.compile(r"^Client (?P<mon>[A-Z][a-z]{2}) (?P<day>\d{1,2}) v(?P<n>\d+)")
