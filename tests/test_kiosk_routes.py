@@ -140,28 +140,81 @@ def test_modes_list_matches_modes_yaml(app_client, engine):
 
 def test_modes_patterns_follow_each_modes_technique():
     patterns = {m["id"]: m["pattern"] for m in load_kiosk_modes()}
-    assert patterns == {
+    assert patterns == {  # the painted three's canvas is a 2-D design (D63); the rest start at module level
         "lowcountry-calm": "modules",
-        "rainbow-row-sunset": "gradient-x",
-        "garden-gathering": "gradient-x",
+        "rainbow-row-sunset": "design",
+        "garden-gathering": "design",
         "coastal-tides": "modules",
-        "golden-hour": "gradient-x",
+        "golden-hour": "design",
         "goodnight-glow": "modules",
     }
+    # a hand-painted slot draws like its canvas
+    assert _pattern(MODES_YAML["modes"][SUNSET], "slot") == "design"
+    assert _pattern(MODES_YAML["modes"][SUNSET], "modules") == "modules"
 
 
-def test_module_level_modes_picture_their_columns_without_a_plan(app_client, engine):
-    """No compiled plan (FakeEngine has no compile_best): a modules-first mode still lists its static column colours
-    in r0c0…r2c2 order, so the tile steps left to right like the ceiling (Calm mirrored), not row by row."""
+def test_module_level_modes_picture_their_designs_without_a_plan(app_client, engine):
+    """No compiled plan (FakeEngine has no compile_best): a modules-first mode still lists its design at each
+    module's centre in r0c0…r2c2 order (D63), so the tile shows what module level puts on the ceiling."""
+    from conductor.geometry import load_canopy_config
+    from conductor.looks import field as F
+    from conductor.looks import load_modes
+    from conductor.scenes import load_scenes
+
+    canopy, modes, scenes = load_canopy_config(), load_modes(), load_scenes()
     by_id = {m["id"]: m for m in app_client.get("/api/kiosk/modes").json()}
     for mode_id in ("lowcountry-calm", "coastal-tides", "goodnight-glow"):
-        columns = MODES_YAML["modes"][mode_id]["techniques"]["modules"]["columns"]
-        hexes = ["#" + "".join(f"{v:02X}" for v in c["rgb"]) for c in columns]
+        spec = modes.mode(mode_id).techniques.modules.sample.canvas.field
+        palette = scenes.get(mode_id).model_copy(update={"transform": "linear"})  # the design's stops
+        expected = [
+            "#" + "".join(f"{v:02X}" for v in palette.color_at(F.value(spec, x, y, canopy)))
+            for x, y in F.module_centres(canopy, [f"r{r}c{c}" for r in range(3) for c in range(3)]).values()
+        ]
         assert by_id[mode_id]["pattern"] == "modules"
-        assert by_id[mode_id]["module_colours"] == hexes * 3
+        assert by_id[mode_id]["module_colours"] == expected
+        assert len(set(expected)) >= 4  # a 2-D design, not three columns
+    # radial: sea glass in the centre, the four corners alike
     calm = by_id["lowcountry-calm"]["module_colours"]
-    assert calm[0] == calm[2] != calm[1]  # ivory at both ends, sea glass in the middle
+    assert calm[0] == calm[2] == calm[6] == calm[8] != calm[4] == "#D1EAE3"
+    assert calm[1] == calm[7] and calm[3] == calm[5] and calm[1] != calm[3]
     assert all(by_id[m]["module_colours"] is None for m in (SUNSET, "garden-gathering", "golden-hour"))
+
+
+def test_a_design_tile_needs_the_validated_mode_and_says_nothing_it_cant_work_out(caplog):
+    """Raw YAML can't be sampled (the looks loader refused it, or a fixture path): no colours rather than a guess."""
+    from conductor.looks import load_modes
+    from conductor.routes.kiosk import _static_module_colours
+
+    spec = MODES_YAML["modes"][CALM]
+    with caplog.at_level("WARNING", logger="conductor.routes.kiosk"):
+        assert _static_module_colours(spec, None) is None
+    assert not caplog.text  # the refusal was logged where the loader failed; nothing to add here
+    broken = load_modes().mode(CALM).model_copy(deep=True)
+    broken.techniques.modules.sample.canvas.stops[0].color = "no-such-colour"
+    with caplog.at_level("WARNING", logger="conductor.routes.kiosk"):
+        assert _static_module_colours(spec, broken) is None
+    assert "couldn't sample a module-level design" in caplog.text
+    assert len(_static_module_colours(spec, load_modes().mode(CALM))) == 9
+
+
+def test_a_modules_first_mode_with_literal_columns_pictures_them_column_by_column():
+    """The schema still takes literal `columns` (no show mode uses them since D63): a modules-first mode lists its
+    three column colours in r0c0…r2c2 order — the left column's colour on c0 of every row — with no plan and no
+    validated mode; anything but three RGB columns says nothing rather than guess."""
+    from conductor.routes.kiosk import _static_module_colours
+
+    modules = yaml.safe_load(TECHNIQUES.read_text())["modes"]["golden-hour"]["techniques"]["modules"]
+    spec = {"ladder": ["modules", "strand"], "techniques": {"modules": modules}}
+    hexes = ["#FF5A00", "#FF7E00", "#FFAA3C"]  # the fixture's amber columns, left to right
+    assert [c["rgb"] for c in modules["columns"]] == [[255, 90, 0], [255, 126, 0], [255, 170, 60]]
+    assert _static_module_colours(spec) == hexes * 3
+    assert _static_module_colours({**spec, "ladder": ["canvas", "modules"]}) is None  # not modules-first
+    two = {"ladder": ["modules"], "techniques": {"modules": {"columns": modules["columns"][:2]}}}
+    assert _static_module_colours(two) is None
+    white = [*modules["columns"][:2], {"kind": "white", "cct": 2700, "brightness": 50}]
+    assert (
+        _static_module_colours({"ladder": ["modules"], "techniques": {"modules": {"columns": white}}}) is None
+    )
 
 
 def test_each_tier_draws_what_the_ceiling_shows():
@@ -335,7 +388,7 @@ def test_a_tester_cant_use_the_kiosk_api(app_client_auth):
 
 
 # ---- the page (the Hubspace-style guest panel, docs/design/guest-panel.md) -------------------------------------
-PAGE_FILES = ("index.html", "kiosk.css", "kiosk.js", "panel-model.mjs")
+PAGE_FILES = ("index.html", "kiosk.css", "kiosk.js", "panel-model.mjs", "canopy-preview.mjs")
 FONT_FACE_URL = re.compile(r'url\("(/static/fonts/canopy-rounded/[\w.-]+\.woff2)"\)')
 
 
@@ -353,13 +406,34 @@ def test_kiosk_page_is_served_and_vendored(app_client):
     for url in urls:
         assert app_client.get(url).status_code == 200, url
     assert (ROOT / "web" / "static" / "fonts" / "canopy-rounded" / "OFL.txt").is_file()
-    for asset in ("/kiosk/kiosk.js", "/kiosk/panel-model.mjs", "/kiosk/brand/hubspace-logo.svg"):
+    for asset in (
+        "/kiosk/kiosk.js",
+        "/kiosk/panel-model.mjs",
+        "/kiosk/canopy-preview.mjs",
+        "/kiosk/brand/hubspace-logo.svg",
+    ):
         assert app_client.get(asset).status_code == 200, asset
     html = (KIOSK_DIR / "index.html").read_text()
     assert 'src="/kiosk/kiosk.js"' in html and 'href="/kiosk/kiosk.css"' in html
     assert "user-scalable=no" in html and "viewport-fit=cover" in html
     assert 'name="apple-mobile-web-app-capable" content="yes"' in html
     assert 'rel="apple-touch-icon"' in html
+
+
+def test_kiosk_page_serves_every_module_it_imports_and_draws_the_canopy(app_client):
+    """Now showing draws the canopy's 270 lights (canopy-preview.mjs) in an svg the screen reader can name, and every
+    module kiosk.js imports is a vendored file the app serves as JavaScript."""
+    js = (KIOSK_DIR / "kiosk.js").read_text()
+    imports = re.findall(r'from "(/[^"]+)"', js)
+    assert "/kiosk/canopy-preview.mjs" in imports and "/kiosk/panel-model.mjs" in imports
+    for path in imports:
+        r = app_client.get(path)
+        assert r.status_code == 200, path
+        assert "javascript" in r.headers["content-type"], (path, r.headers["content-type"])
+    html = (KIOSK_DIR / "index.html").read_text()
+    svg = re.search(r'<svg class="canopy-preview" id="canopy-preview"[^>]*>', html)
+    assert svg and 'role="img"' in svg.group(0) and "aria-label=" in svg.group(0)
+    assert 'id="snake"' in html  # the fallback when there is no picture (the workshop strands, no look yet)
 
 
 def test_kiosk_title_matches_the_signage_plan():
@@ -377,7 +451,7 @@ def test_kiosk_never_writes_its_own_hubspace_feature_copy():
                     assert technique[key] not in page
     js = (KIOSK_DIR / "kiosk.js").read_text()
     assert "state.feature" in js
-    for name in ("kiosk.js", "panel-model.mjs"):
+    for name in ("kiosk.js", "panel-model.mjs", "canopy-preview.mjs"):
         js = re.sub(r"(^|\s)//.*$", "", (KIOSK_DIR / name).read_text(), flags=re.MULTILINE)
         assert not re.search(r"['\"`][^'\"`\n]*Hubspace[^'\"`\n]*['\"`]", js), (
             f"{name} must not write Hubspace copy"
@@ -412,3 +486,34 @@ def test_an_engine_that_cant_report_state_is_resting(app_client, engine):
     assert r.status_code == 503 and r.json()["detail"] == RESTING
     assert app_client.post("/api/kiosk/select", json={"mode": SUNSET}).status_code == 503
     assert app_client.get("/api/kiosk/modes").status_code == 200  # the list still serves
+
+
+# ---- the stepped rehearsal (Gate R) ------------------------------------------------------------------------------
+def _rehearsing(c) -> str:
+    """Start a 2-minute stepped rehearsal from /ops on the show engine (as an operator does); returns the route."""
+    import time
+
+    engine = c.app.state.services.extras["canopy"]
+    deadline = time.monotonic() + 30
+    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    route = "/api/canopy/stepped-rehearsal"
+    sentence = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]["confirm"]
+    started = c.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
+    assert started.status_code == 200, started.text
+    return route
+
+
+def test_a_mood_tapped_during_the_stepped_rehearsal_says_the_canopy_is_being_tested(app_client_show):
+    """Every mood waits for the rehearsal, so "choose another" would be false: the guest hears the canopy is being
+    tested, and when to try again."""
+    from conductor.routes.kiosk import TESTING
+
+    c = app_client_show
+    route = _rehearsing(c)
+    try:
+        r = c.post("/api/kiosk/select", json={"mode": "coastal-tides"})
+        assert r.status_code == 503 and r.json()["detail"] == TESTING, r.text
+        assert 0 < r.json()["retry_after_s"] <= 60
+    finally:
+        assert c.post(f"{route}/stop", json={}).status_code == 200

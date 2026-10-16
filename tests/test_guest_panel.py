@@ -21,11 +21,13 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from partial_canopy import LIVE, partial_show, showing
 
 from conductor import rows as R
 from conductor.engine_api import CanopyPhase
 from conductor.guest_panel import (
     BUSY,
+    CHANGING,
     FEATURE_GRADIENT,
     FEATURE_SOLID,
     GUEST_OWNER,
@@ -210,6 +212,8 @@ def test_the_panel_lists_the_six_approved_scenes(shop):
     assert body["state"]["scene"] is None and body["state"]["feature"] is None
     assert body["state"]["phase"] == "ready" and isinstance(body["server_now"], float)
     assert shop.get("/api/kiosk/panel").headers["cache-control"] == "no-store"
+    # no canopy picture on the workshop: the panel draws the two strands' own 30-light serpentine
+    assert body["canopy"] is None and body["state"]["lit"] is None
 
 
 # ---- workshop scenes -----------------------------------------------------------------------------------------------
@@ -634,75 +638,102 @@ def test_engine_paused_resting_and_missing(app_client):
 
 
 # ---- the engine target on a partial canopy (D62) -----------------------------------------------------------------
-LIVE = ("canopy-r0c0", "canopy-r0c1")  # the two shop kits registered at canopy positions
-
-
 def _canopy_ids() -> list[str]:
     from conductor.config import load_registry
 
     return [m.id for m in load_registry().canopy_modules()]
 
 
-def _partial_show(monkeypatch, tmp_path, registered):
-    """The real engine as live runs before Gate B/C (as tests/test_surfaces_review_fixes.py's t3_show), with only
-    `registered` canopy positions having a device on the engine's driver."""
-    from conftest import _env as _show_env
-
-    from conductor.app import app
-    from conductor.config import Registry
-    from conductor.engine_api import Tier
-    from conductor.show import ShowWiring
-
-    def only_t3(self, mode_id, tier):
-        if tier in (Tier.T1, Tier.T2):
-            return False, "Gate C isn't proven on this kit (test)"
-        return True, ""
-
-    real = Registry.address
-
-    def address(self, device_id, driver_name):
-        return real(self, device_id, driver_name) if device_id in registered else None
-
-    monkeypatch.setattr(ShowWiring, "tier_allowed", only_t3)
-    monkeypatch.setattr(Registry, "address", address)
-    _show_env(monkeypatch, tmp_path, engine=True, CONDUCTOR_AUTH="off")
-    return TestClient(app)
+TWO_STRANDS = "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
 
 
-def _showing(c, timeout: float = 30.0):
-    """The engine once its first look is out and startup commissioning is over (a partial canopy never reads
-    READY: the modules left out keep it at needs attention)."""
-    engine = _services(c).extras["canopy"]
+def _settled_panel(c, engine, timeout: float = 10.0) -> dict:
+    """The panel's state once it stops reading "changing" (≤ 10 s in the fast simulator). The engine's own phase
+    (/ops) stays at needs attention the whole time: seven positions have no device registered (D62)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if engine.current_plan() is not None and not engine.commissioning:
-            return engine
+        assert engine.state().phase == CanopyPhase.NEEDS_ATTENTION
+        state = _panel(c)["state"]
+        if state["phase"] != "changing":
+            return state
         time.sleep(0.05)
-    raise AssertionError(f"the canopy never showed a look: {engine.state()}")
+    raise AssertionError(f"the panel never settled: {_panel(c)['state']} / {engine.state()}")
 
 
 def test_a_partial_canopy_takes_every_scene_and_counts_only_its_strands(monkeypatch, tmp_path):
-    with _partial_show(monkeypatch, tmp_path, LIVE) as c:
-        engine = _showing(c)
+    """The panel follows the look over the strands it drives (`look_phase`), not the engine's /ops phase: each
+    scene reads "Changing the lights…" with no feature line, then settles with the two-strand sentence, while /ops
+    stays needs attention naming the positions left out."""
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = showing(c)
         body = _panel(c)
         assert body["target"] == "canopy" and body["target_label"] == "The Color Canopy (2 of 9 strands)"
-        features = []
         for scene in SCENES.scenes:
             engine._last_kiosk_mono = None  # no guest cooldown left over from the last scene
             r = c.post("/api/kiosk/scene", json={"scene": scene.id})
             assert r.status_code == 200, (scene.id, r.text)
+            changing = r.json()["state"]
+            assert changing["phase"] == "changing" and changing["message"] == CHANGING, (scene.id, changing)
+            assert changing["feature"] is None, (scene.id, changing)
             assert sorted(engine.current_plan().modules) == list(LIVE)
-            deadline = time.monotonic() + 10
-            while engine.state().phase == CanopyPhase.UPDATING and time.monotonic() < deadline:
-                time.sleep(0.05)
-            feature = _panel(c)["state"]["feature"]
-            assert feature is not None, scene.id
-            features.append(feature)
-        assert all("nine" not in f and "270" not in f and "column by column" not in f for f in features)
-        assert set(features) == {
-            "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
-        }
+            assert engine.state().phase == CanopyPhase.NEEDS_ATTENTION
+            settled = _settled_panel(c, engine)
+            assert settled["phase"] in ("ready", "cooldown"), (scene.id, settled)
+            assert settled["feature"] == TWO_STRANDS, (scene.id, settled)
+            ops = engine.state()
+            assert ops.phase == CanopyPhase.NEEDS_ATTENTION and ops.look_phase == CanopyPhase.READY
+            assert all(m in ops.message for m in ("Module 3", "Module 9")), ops.message
         assert _panel(c)["target_label"] == "The Color Canopy (2 of 9 strands)"
+
+
+def test_a_driven_strand_that_loses_its_address_hides_the_feature_line(monkeypatch, tmp_path):
+    """Module 2 stays in the look's plan but its address lookup fails: nothing reaches that strand, so the panel
+    shows no feature sentence for it (look_phase needs attention, not Ready)."""
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = showing(c)
+        _settled_panel(c, engine)
+        assert _panel(c)["state"]["feature"] == TWO_STRANDS
+        lookup = engine.deps.target
+
+        def target(device_id, purpose):
+            if device_id == "canopy-r0c1":
+                raise LookupError(f"{device_id} lost its address (test)")
+            return lookup(device_id, purpose)
+
+        engine.deps.target = target
+        engine._resolve("canopy-r0c1")
+        ops = engine.state()
+        state = _panel(c)["state"]
+    assert "canopy-r0c1" in engine.current_plan().modules
+    assert ops.look_phase == CanopyPhase.NEEDS_ATTENTION and ops.modules["canopy-r0c1"]["left_out"] is False
+    assert state["feature"] is None, state
+
+
+def test_before_the_first_look_the_label_counts_the_registered_strands(monkeypatch, tmp_path):
+    """With no plan yet (an engine that hasn't shown a look) the label counts what is registered (D62)."""
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        showing(c)
+        _engine(c)  # tests/test_kiosk_routes.py's FakeEngine: current_plan() is None
+        assert _panel(c)["target_label"] == "The Color Canopy (2 of 9 strands)"
+
+
+def test_the_full_canopy_label_without_a_plan_says_nine_strands(app_client):
+    _engine(app_client)
+    assert _panel(app_client)["target_label"] == "The Color Canopy (nine strands)"
+
+
+def test_an_engine_without_look_phase_still_drives_the_panel_by_its_phase(app_client):
+    """tests/test_kiosk_routes.py's FakeEngine never sets `look_phase`: the panel reads its `phase` as before, and
+    hides the feature line while it needs attention (a stuck strand) as well as while it changes."""
+    engine = _engine(app_client)
+    state = _panel(app_client)["state"]
+    assert state["phase"] == "ready" and state["feature"] is not None
+    engine.phase = CanopyPhase.UPDATING
+    state = _panel(app_client)["state"]
+    assert state["phase"] == "changing" and state["feature"] is None
+    engine.phase = CanopyPhase.NEEDS_ATTENTION
+    state = _panel(app_client)["state"]
+    assert state["phase"] == "ready" and state["feature"] is None
 
 
 def test_the_full_canopy_label_says_nine_strands(app_client_show):
@@ -714,20 +745,32 @@ def test_the_full_canopy_label_says_nine_strands(app_client_show):
     assert _panel(app_client_show)["target_label"] == "The Color Canopy (nine strands)"
 
 
+def test_while_commissioning_the_kiosk_view_rests_the_look_phase_too(app_client):
+    """kiosk_view rests the guest's view while slots are written: `look_phase` with `phase`, so nothing reading
+    either says the look is changing for minutes."""
+    engine = _engine(app_client)
+    engine.phase = CanopyPhase.UPDATING
+    engine.commissioning = True
+    state = app_client.get("/api/kiosk/state").json()
+    assert state["phase"] == "resting" and state["look_phase"] == "resting"
+    assert _panel(app_client)["state"]["phase"] == "resting"
+
+
 def test_with_no_strand_registered_a_scene_is_a_503_resting(monkeypatch, tmp_path):
-    with _partial_show(monkeypatch, tmp_path, ()) as c:
+    with partial_show(monkeypatch, tmp_path, ()) as c:
         time.sleep(1.0)  # the capability loop's first round (it has nothing to read)
         engine = _services(c).extras["canopy"]
         assert engine.current_plan() is None and engine.state().phase == CanopyPhase.RESTING
         body = _panel(c)
         assert body["state"]["phase"] == "resting"
+        assert body["target_label"] == "The Color Canopy"  # no strand to count (D62)
         r = c.post("/api/kiosk/scene", json={"scene": CALM.id})
         assert r.status_code == 503, r.text
 
 
 def test_an_unregistered_position_needing_attention_links_to_the_accounts_page(monkeypatch, tmp_path):
-    with _partial_show(monkeypatch, tmp_path, LIVE) as c:
-        _showing(c)
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        showing(c)
         items = c.get("/api/ops/summary").json()["attention"]
         unregistered = [i for i in items if "no Hubspace device registered" in i["message"]]
         assert len(unregistered) == 7, items
@@ -740,6 +783,133 @@ def test_the_ops_safe_look_help_doesnt_promise_all_nine_modules():
     help_text = " ".join(html[start : html.index(".", start)].split())
     assert "nine" not in help_text and "warm white" not in help_text, help_text  # D62; Calm isn't warm white
     assert "registered" in help_text
+
+
+# ---- the canopy picture (conductor/canopy_view.py) -----------------------------------------------------------------
+def _lit_settled(c, timeout: float = 15.0, want=("lit",), driven=None) -> dict:
+    """The panel once every driven position of its picture reads one of `want`."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        body = _panel(c)
+        lit = body["state"]["lit"]
+        if lit is not None and all(
+            m["state"] in want for m in lit["modules"] if driven is None or m["pos"] in driven
+        ):
+            return body
+        time.sleep(0.05)
+    raise AssertionError(f"the picture never settled on {want}: {body['state']}")
+
+
+def _no_device_names(body: dict) -> None:
+    text = json.dumps({"canopy": body["canopy"], "lit": body["state"]["lit"]})
+    for word in ("canopy-r", "sim-", "Module ", "reason", "Hubspace", "label"):
+        assert word not in text, word
+
+
+def test_the_engine_panel_serves_the_canopy_and_the_lit_state_of_the_installed_plan(app_client_show):
+    from conductor.canopy_view import load_canopy, module_colours
+
+    c = app_client_show
+    engine = showing(c)
+    body = _lit_settled(c)
+    canopy = body["canopy"]
+    assert [m["pos"] for m in canopy["modules"]] == [f"r{r}c{col}" for r in range(3) for col in range(3)]
+    assert sum(len(m["heads"]) for m in canopy["modules"]) == 270
+    assert canopy["view"] == {"mirror_x": False, "rotate_deg": 0, "dim_floor": 0.35}
+    plan = engine.current_plan()
+    cfg = load_canopy(str(_services(c).config_dir))
+    by_position = {e.module: e for e in _services(c).registry.canopy_modules()}
+    lit = body["state"]["lit"]
+    assert lit["level"] == engine.state().brightness and lit["motion"] is None
+    for m in lit["modules"]:
+        entry = by_position[m["pos"]]
+        colours = module_colours(cfg, entry, plan.modules[entry.id].colors)
+        assert (m["colors"] or [m["color"]] * 30) == colours, m
+    _no_device_names(body)
+
+    assert c.post("/api/kiosk/power", json={"on": False}).status_code == 200
+    body = _lit_settled(c, want=("off",))
+    assert body["state"]["lit"]["level"] is None and body["state"]["power"] is False
+    assert all(m["color"] is None and m["colors"] is None for m in body["state"]["lit"]["modules"])
+
+
+def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_is_sent(app_client_show):
+    """D64 through the real app: with a stagger set, a scene from the panel goes out ring by ring and the picture
+    carries the ripple (positions and times only) until the last ring is sent, then a still picture."""
+    c = app_client_show
+    engine = showing(c)
+    _lit_settled(c)
+    _services(c).settings.kiosk.ripple_stagger_s = 1.2
+    # (Coastal Tides steps in sim since D65: its picture carries steps, not a ripple)
+    scene = next(s for s in ("garden-gathering", "goodnight-glow") if s != engine.current_plan().mode_id)
+    r = c.post("/api/kiosk/scene", json={"scene": scene})
+    assert r.status_code == 200, r.text
+    body = _panel(c)
+    motion = body["state"]["lit"]["motion"]
+    plan = engine.current_plan()
+    by_id = {e.id: e.module for e in _services(c).registry.canopy_modules()}
+    assert motion["kind"] == "ripple" and motion["stagger_s"] == 1.2
+    assert motion["rings"] == [[by_id[d] for d in ring] for ring in plan.waves] and len(motion["rings"]) == 3
+    assert abs(motion["t0"] - body["server_now"]) < 1.0 and body["state"]["phase"] == "changing"
+    _no_device_names(body)
+    time.sleep(2 * 1.2 + 0.3)
+    assert _panel(c)["state"]["lit"]["motion"] is None
+
+
+def test_a_stepped_runs_frames_are_the_picture_until_its_still_look_is_sent(app_client_show, monkeypatch):
+    """Tier.STEPPED (D65) through the real app: the engine's `program` reaches the picture as `steps` frames
+    in grid order, judged at the server's own time, so once the still look is sent (`ends_at`) the picture is still
+    even if the engine's state hasn't caught up."""
+    import dataclasses
+
+    c = app_client_show
+    engine = showing(c)
+    lit = _lit_settled(c)["state"]["lit"]
+    colours = [m["color"] for m in lit["modules"]]
+    real_state = engine.state
+    now = _services(c).clock.now()
+    program = {"t0": now - 10.0, "step_s": 6.0, "step": 1, "ends_at": now + 80.0, "frames": [colours] * 16}
+    monkeypatch.setattr(engine, "state", lambda: dataclasses.replace(real_state(), program=program))
+    body = _panel(c)
+    motion = body["state"]["lit"]["motion"]
+    assert motion["kind"] == "steps" and motion["frames"] == [colours] * 16
+    assert motion["ends_at"] == now + 86.0  # one step past the still look's send
+    assert abs(motion["t0"] - (body["server_now"] - 10.0)) < 1.0
+    _no_device_names(body)
+    program["ends_at"] = _services(c).clock.now() - 0.5  # the still look went out half a second ago
+    assert _panel(c)["state"]["lit"]["motion"] is None
+
+
+def test_a_partial_canopy_picture_is_two_lit_and_seven_dark(monkeypatch, tmp_path):
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        engine = showing(c)
+        body = _lit_settled(c, want=("lit",), driven={"r0c0", "r0c1"})
+        lit = {m["pos"]: m for m in body["state"]["lit"]["modules"]}
+        assert [lit[p]["state"] for p in ("r0c0", "r0c1")] == ["lit", "lit"]
+        assert all(lit[p]["color"] or lit[p]["colors"] for p in ("r0c0", "r0c1"))
+        dark = [m for p, m in lit.items() if p not in ("r0c0", "r0c1")]
+        assert len(dark) == 7 and all(m["state"] == "dark" and m["color"] is None for m in dark)
+        assert engine.state().phase == CanopyPhase.NEEDS_ATTENTION  # /ops stays loud (D62)
+        _no_device_names(body)
+
+
+def test_a_picture_that_cant_be_worked_out_is_no_picture_never_a_failed_panel(monkeypatch, app_client_show):
+    from conductor import canopy_view
+
+    showing(app_client_show)
+
+    def broken(*_a, **_kw):
+        raise RuntimeError("test")
+
+    monkeypatch.setattr(canopy_view, "lit_state", broken)
+    body = _panel(app_client_show)
+    assert body["state"]["lit"] is None and body["state"]["phase"] in ("ready", "cooldown", "changing")
+
+
+def test_an_engine_with_no_plan_serves_the_canopy_but_no_picture(app_client):
+    _engine(app_client)  # tests/test_kiosk_routes.py's FakeEngine: current_plan() is None
+    body = _panel(app_client)
+    assert len(body["canopy"]["modules"]) == 9 and body["state"]["lit"] is None
 
 
 # ---- who may call --------------------------------------------------------------------------------------------------
@@ -759,6 +929,8 @@ def test_the_kiosk_reaches_the_panel_but_not_its_debug_view(app_client_auth):
     _enroll(client, "kiosk")
     body = _panel(client)
     assert body["viewer"] == "kiosk"
+    # the kiosk reads the canopy picture
+    assert len(body["canopy"]["modules"]) == 9 and "lit" in body["state"]
     assert client.post("/api/kiosk/scene", json={"scene": "rainbow-row-sunset"}).status_code == 200
     assert client.post("/api/kiosk/brightness", json={"level": 40}).status_code == 200
     assert client.post("/api/kiosk/power", json={"on": True}).status_code == 200
@@ -799,3 +971,18 @@ def test_the_dev_launcher_is_simulator_only(tmp_path):
     assert "framebuffer_mapping" not in launcher.overlay(solid=True)["devices"]["shop-string-1"]
     makefile = (ROOT / "Makefile").read_text()
     assert "guest-dev:" in makefile and "scripts/dev_guest_panel.py" in makefile
+
+
+def test_a_scene_tapped_during_the_stepped_rehearsal_says_the_canopy_is_being_tested(app_client_show):
+    from test_kiosk_routes import _rehearsing
+
+    from conductor.routes.kiosk import TESTING
+
+    c = app_client_show
+    route = _rehearsing(c)
+    try:
+        r = c.post("/api/kiosk/scene", json={"scene": COASTAL.id})
+        assert r.status_code == 503 and r.json()["detail"] == TESTING, r.text
+        assert 0 < r.json()["retry_after_s"] <= 60
+    finally:
+        assert c.post(f"{route}/stop", json={}).status_code == 200

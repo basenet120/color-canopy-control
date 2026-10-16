@@ -571,3 +571,115 @@ the canopy column by column" — false on two of nine (CLAUDE.md: kiosk copy mus
 Follow-ups (separate PRs): derive the guest panel's "changing" state and feature line from the driven modules'
 readback; an honest Now Showing preview at the strand and module tiers; "N of 9 modules" in the rest of the ops copy
 (the commissioning dialog and the timing button still say "all nine modules").
+
+## 2026-10-13 — the scenes as 2-D designs
+
+**D63 — Each scene is one 2-D design over the canopy, and module level samples it (supersedes D59's x / 225 canvas
+and column-only T3).** Alon asked for designs that use the canopy's geometry; these layouts are drafts for Paris to
+review in the PR. Palettes, names, moods, brightness, ladders, slots and the strand looks are D59's, unchanged.
+- **One design per scene** (`config/modes.yaml`): a `field` canvas (`conductor/looks/field.py`, canopy inches in the
+  reflected-ceiling view) whose stops are the scene's palette, in order and evenly spaced, painted `rgb_only`. The
+  painted three name it once with a YAML anchor, so T1's canvas and T3's sample are the same design.
+  - Lowcountry Calm: radial from the canopy's centre, inverted (sea glass in the middle, paling toward ivory at
+    the corners).
+  - Rainbow Row Sunset (custom-1): linear at 45°, corner to corner.
+  - Garden Gathering (custom-2): radial from the middle of one long edge (112.5, 120), inverted (ivory there).
+  - Coastal Tides: a tilted shoreline, linear at 78°.
+  - Golden Hour (custom-3): a radial sun at the middle of the left edge (0, 60), measured in the canopy's
+    proportions (`metric: canopy`, a ring is an ellipse that fills the canopy). In true inches the rows sit only
+    40 in apart against an auto radius of 233 in, so T3 read as D59's three columns; in canopy proportions the
+    middle-left module is the goldest and the left column's corners are visibly pinker (ΔE76 about 21), so the
+    sun's arc shows on the grid as well as at T1.
+  - The Goodnight Glow: a radial moon over r0c2 (187.5, 20), inverted (moonlight blue there).
+  Radii are `auto` (the farthest canopy point from the centre, in the design's metric) and every design is static
+  (`cycles: 1`).
+- **T1** paints the design at each of the 270 heads (the palette at `field.value`, head for head). **T3** sets each
+  module to the design at its centre (`sample: {at: centre}`, the scene's brightness): 4 to 9 distinct module
+  colours per scene, never three columns (in every scene some column changes from top to bottom by at least a
+  third of the largest change along a row, in ΔE76; `tests/test_modes_match_scenes.py`). **T2** is still "a custom pattern painted light by light in the Hubspace
+  app"; matching a hand-painted slot to the new design needs a per-module painting guide (P12's illustration).
+- **Copy.** T1, T2 and strand sentences are unchanged. Each T3 sentence names its layout in the words
+  `field.layout_words` requires ("from the centre out", "diagonally", "from one edge", "from one spot") and no other
+  layout's, with no movement words. On a partial canopy the T3 sentence is still D62's generated one ("two Hubspace
+  strands, each set to a single colour from the scene"), which never claims a canopy-wide layout. On the Mac box's
+  two kits (r0c0, r0c1) all six scenes show two different colours.
+- **Recipes.** Lowcountry Calm, Coastal Tides and The Goodnight Glow get palette recipes too (D59's rule: the colour's
+  name, or `<scene id>-<name>` when taken: `goodnight-glow-lavender`).
+- **Kiosk.** `/api/kiosk/modes` draws a field canvas as pattern `design`, and a modules-first mode's tile lists its
+  design at each module (through the compiler's own `module_look`) until a plan says otherwise.
+- **Slot hashes.** Changing any canvas changes the compiled T1 frames, so every recorded slot hash of a painted scene
+  goes stale and the reconciler would report drift. Freeze the designs (this decision merged) before commissioning at
+  install, and commission at install rather than relying on show-time rewrites: re-painting after commissioning costs
+  27 slot writes, each slot at most once per 10 minutes. No live runtime holds T1 records on a canopy module today, so
+  this change triggers no live slot writes.
+- **Not changed here.** The Studio's illustration and `config/scenes.yaml` still describe D59's x / 225 strand
+  gradient (P12), and the guest panel's preview is P5's. D59's columns stay pinned in `tests/test_compile_field.py`
+  as the regression anchor (an x-linear field at the module centres reproduces them byte for byte), so reverting
+  this one change restores D59 exactly.
+
+## 2026-10-13 — the ripple arrival
+
+**D64 — A new mood can land ring by ring in its design's own order, with no extra writes (built; off by default).**
+Alon asked for looks that move across the 3×3 grid. The cheapest motion the binding rules allow is the arrival itself:
+- **What it does.** A mood chosen by a guest, by ops or by the idle hold goes out in up to three rings
+  (`RIPPLE_MAX_WAVES`), ordered by the scene's 2-D design (D63) over the driven modules (`field.bands`): the canopy fills
+  from the centre out, from one edge, or corner to corner. Each module still gets exactly one full-state PUT for the
+  change; nothing is split (07 §6), so the ripple costs no writes. The ring order follows the design's geometry, not
+  `invert`/`mirror`/`cycles`, so an inverted radial still lands from its centre.
+- **One burst, as before:** the safe look, re-assert, recovery, downgrade/upgrade, guest brightness and power, lock
+  release, and any look sent while nothing is showing (start-up).
+- **Safety.** A newer mood cancels the rings not yet sent; the reconciler never re-sends a module still waiting for its
+  ring; an outage holds the waiting rings. A waiting module reads `updating` ("Waiting for its turn in the ripple.").
+  The kiosk preview animates the same rings from `state.lit.motion` (P5).
+- **Off by default: `kiosk.ripple_stagger_s: 0`** (today's single burst, byte for byte). Allowed 0–1.5 s with
+  (rings − 1) × stagger ≤ 2.4 s, so 1.2 s at most. It stays off because 05's acceptance target ("first to last module
+  within 2 s at p95; settled within 5 s") fails by design under a ripple, and `config/sim/acceptance.yaml` is pinned
+  (07 §7). The soak runs a separate ripple scenario at 1.2 s: settled p95 5.77 s against (3 − 1) × 1.2 + 5 = 7.4 s,
+  one PUT per module per change, no early sends, no downgrades; each ring's own landing spread is p95 2.29 s against
+  2 s (reported, not gating).
+- **To turn it on:** Alon sets `kiosk.ripple_stagger_s: 1.2` and signs off the per-ring redefinition of 05's spread
+  target. Needs real hardware before it is trusted: start skew across kits well under the stagger (bench gate 12), and
+  whether a whole-strand colour change cuts or fades (bench item 6).
+
+## 2026-10-14 — scenes that move
+
+**D65 — Coastal Tides and Golden Hour step through the cloud at module level, in bounded runs; live stays off until
+Gate R (supersedes D59's "every scene is static" for these two scenes only).** Alon asked for looks that move. The lead's
+defaults, in `config/modes.yaml` (Alon can change them there):
+- **What moves.** Coastal Tides: ladder `stepped, modules, strand`: the tide rolls diagonally across the panels.
+  Golden Hour: `canvas, slot, stepped, modules, strand`: the per-head sun (T1) where it is commissioned; where it
+  isn't, sun-ray steps move out from the middle of the left edge at module level; below that its static modules rung.
+  Each stepped rung reuses its scene's own design (the same YAML anchor as its modules rung), so step 0 is the still
+  module-level look exactly (the schema and the compiler both check it). Lowcountry Calm (the idle look) and The
+  Goodnight Glow stay still; Rainbow Row Sunset and Garden Gathering are unchanged. The three slots keep their looks.
+- **Why only at module level through the cloud.** 07 §6: one full-state PUT per module per update, never split, so a
+  module can only show one colour per step. Slots are store-and-select (04), the controller holds three, and all three
+  hold painted scenes, so there is no slot to cycle through; on-device motion codes are unbenched (`effects.enabled`
+  is empty). What moves is the Conductor re-sending each strand one colour every few seconds, and the moving copy
+  says exactly that ("through the Hubspace cloud … every few seconds"), names the design's flow ("diagonally", "from
+  one edge"), and is shown only while a run moves. On a partial canopy it only counts the strands it drives (D62).
+- **Cadence.** Designed at 6 s a step, 6 steps a cycle. The runner stretches it to the account's budget: the cap of 90
+  writes a minute less the 20% reserve (`motion.stepped.budget_reserve`) is 72, so nine modules on one account step
+  every 7.5 s. Never faster than 4 s (`min_step_s`; a step's verification takes about 2.6 s), never slower than 12 s
+  (it holds still instead), and a step that would take the account past 90 in any 60 s is held back.
+- **Bounded runs.** A run lasts 90 s (`run_s`, at most `kiosk.idle_return_s`), then the still design holds. The idle
+  return never moves for a run, and the idle look never steps (the show refuses to load otherwise).
+- **Live off until Gate R.** `motion.stepped.live_enabled` stays false: on any non-simulated driver the show's
+  `tier_allowed` refuses the stepped rung, so Coastal Tides shows its still modules rung and Golden Hour its canvas,
+  slot or modules rung, with nothing stepped (tests/test_d65_modes.py proves it through the show's own wiring on a
+  live-named driver). Only the stepped rehearsal opens it, for its one mode while it runs
+  (`docs/runbooks/stepped-rehearsal.md`). Alon flips the setting after a pass on the show kits.
+- **Verified (simulator only).** The main soak now steps Coastal Tides whenever it is chosen (19 of 167 accepted
+  changes) and still passes every pinned row (`config/sim/acceptance.yaml` unchanged). The stepped scenario runs both
+  scenes' own rungs first: 124 steps over 12 runs at 7.5 s, none superseded, failed or skipped, one PUT per changed
+  module per step, at most 72 program PUTs and 89 writes of any kind in any 60 s on the account (cap 90), no governor
+  trip, no downgrade at 5% throttling. Each step's landing spread is p95 2.78 s against 05's 2 s (reported, not
+  gating, until Alon signs off a per-step target).
+- **Needs real hardware.** Gate R (the rehearsal's 429/403 share and write rate from the venue IP, vignettes clean),
+  whether a strand cuts or fades between colours (bench item 6), and start skew across kits.
+- **What would change it.** A Gate R fail (it stays off), or Paris or Alon preferring other scenes to move. In a show
+  run, throttling stops it on its own: the governor ends a run at 8 or more 429/403 answers that are a quarter of its
+  writes in 60 s, and stepped looks on that account hold still for 5 minutes. A hysteresis downgrade never lands
+  on a stepped rung: from Golden Hour's per-head sun (or its slot) it passes over the stepped rung to the still
+  modules rung, and the floor lifts back past it, so easing off never starts a run (`CanopyEngine.downgrade` /
+  `upgrade`).

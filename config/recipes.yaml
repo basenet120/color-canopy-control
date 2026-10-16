@@ -9,11 +9,12 @@
 #   strand:   the whole-strand fallback (T3): a `color-rgb` value or a white `cct`
 #
 # Two groups:
-#   - the scene palette colours (D59): the approved palettes of the scenes whose canvas is painted (config/scenes.yaml).
-#     Each is the palette hex at full strength (colorBrightness 100 — brightness is the device setting, never
-#     multiplied in). The palettes are RGB designs and per-puck white is unverified (gate 6), so `blend` is the same
-#     RGB with no white; config/modes.yaml paints them with `rgb_only`. A key is the colour's name, or
-#     <scene id>-<name> when that name is already taken by another colour.
+#   - the scene palette colours (D59, D63): the approved palettes of all six scenes (config/scenes.yaml) — the
+#     painted three since D59, and Lowcountry Calm, Coastal Tides and The Goodnight Glow since D63, whose module
+#     level (T3) samples the same kind of design. Each is the palette hex at full strength (colorBrightness 100 —
+#     brightness is the device setting, never multiplied in). The palettes are RGB designs and per-puck white is
+#     unverified (gate 6), so `blend` is the same RGB with no white; config/modes.yaml paints them with `rgb_only`.
+#     A key is the colour's name, or <scene id>-<name> when that name is already taken by another colour.
 #   - the colour-study colours (HD orange, amber, …): the module page's colour and recipe-compare cards
 #     (conductor/module/cards.py). No mode uses them since D59.
 colors:
@@ -87,6 +88,63 @@ colors:
     rgb_only: {r: 181, g: 154, b: 226, colorBrightness: 100}
     blend: {r: 181, g: 154, b: 226, colorBrightness: 100}
     strand: {rgb: [181, 154, 226]}
+  # Lowcountry Calm (T3 only)
+  soft-ivory:
+    label: Soft ivory
+    hex: "#F7F2E7"
+    rgb_only: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    blend: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    strand: {rgb: [247, 242, 231]}
+  sea-glass:
+    label: Sea glass
+    hex: "#D1EAE3"
+    rgb_only: {r: 209, g: 234, b: 227, colorBrightness: 100}
+    blend: {r: 209, g: 234, b: 227, colorBrightness: 100}
+    strand: {rgb: [209, 234, 227]}
+  # Coastal Tides (T3 only)
+  ocean-blue:
+    label: Ocean blue
+    hex: "#659BD5"
+    rgb_only: {r: 101, g: 155, b: 213, colorBrightness: 100}
+    blend: {r: 101, g: 155, b: 213, colorBrightness: 100}
+    strand: {rgb: [101, 155, 213]}
+  aqua:
+    label: Aqua
+    hex: "#79CED4"
+    rgb_only: {r: 121, g: 206, b: 212, colorBrightness: 100}
+    blend: {r: 121, g: 206, b: 212, colorBrightness: 100}
+    strand: {rgb: [121, 206, 212]}
+  seafoam:
+    label: Seafoam
+    hex: "#B2E8D2"
+    rgb_only: {r: 178, g: 232, b: 210, colorBrightness: 100}
+    blend: {r: 178, g: 232, b: 210, colorBrightness: 100}
+    strand: {rgb: [178, 232, 210]}
+  foam-white:
+    label: Foam white
+    hex: "#E9F3E7"
+    rgb_only: {r: 233, g: 243, b: 231, colorBrightness: 100}
+    blend: {r: 233, g: 243, b: 231, colorBrightness: 100}
+    strand: {rgb: [233, 243, 231]}
+  # The Goodnight Glow (T3 only)
+  periwinkle:
+    label: Periwinkle
+    hex: "#8B8BD1"
+    rgb_only: {r: 139, g: 139, b: 209, colorBrightness: 100}
+    blend: {r: 139, g: 139, b: 209, colorBrightness: 100}
+    strand: {rgb: [139, 139, 209]}
+  goodnight-glow-lavender:
+    label: Lavender
+    hex: "#BEA9E6"
+    rgb_only: {r: 190, g: 169, b: 230, colorBrightness: 100}
+    blend: {r: 190, g: 169, b: 230, colorBrightness: 100}
+    strand: {rgb: [190, 169, 230]}
+  moonlight-blue:
+    label: Moonlight blue
+    hex: "#C4D6F3"
+    rgb_only: {r: 196, g: 214, b: 243, colorBrightness: 100}
+    blend: {r: 196, g: 214, b: 243, colorBrightness: 100}
+    strand: {rgb: [196, 214, 243]}
 
   # ---- colour-study colours (module page cards) ----------------------------------------------------------------
   hd-orange:

@@ -8,14 +8,18 @@ heads and the test mode change see real (simulated) readback.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import time
+from types import SimpleNamespace
 
 import pytest
 from fake_engine import FakeEngine, RecordingEngine
+from partial_canopy import LIVE, partial_show, showing
 
 from conductor import logring, redact
 from conductor.engine_api import PlanError
+from conductor.gate import Purpose
 from conductor.geometry import build_layout, load_canopy_config, panel_order
 from conductor.routes import ops as ops_routes
 
@@ -173,9 +177,10 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     _wait_ready(app_client, "golden-hour")
     body = app_client.get("/api/canopy/heads").json()
     assert body["engine"] is True and body["mode"] == "golden-hour" and body["tier"] == "modules"
-    assert body["feature"] == (
-        "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy "
-        "column by column."
+    assert body["feature"] == (  # the T3 sentence names the design's layout (D63: a sun at one edge)
+        "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: "
+        "gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the "
+        "far side."
     )
     assert len(body["heads"]) == 270 and body["counts"]["match"] == 270
     plan = engine.current_plan()
@@ -188,7 +193,7 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     for m in body["modules"]:
         assert m["status"] == "ready" and m["desired_source"] == "plan" and m["reported_at"]
         assert m["counts"] == {"match": 30, "mismatch": 0, "unknown": 0}
-    # left column soft gold, right rose-lavender (the modes.yaml columns), so colours really come per module
+    # the sun's side gold-peach, the far side rose-lavender (the design at each module), so colours come per module
     left = next(h for h in body["heads"] if h["module"] == "r0c0")["reported"]
     right = next(h for h in body["heads"] if h["module"] == "r0c2")["reported"]
     assert left["g"] > right["g"] and left["b"] < right["b"]
@@ -448,6 +453,9 @@ OPS_PATHS = [
     ("POST", "/api/canopy/pause"),
     ("POST", "/api/canopy/mode"),
     ("POST", "/api/ops/checklist/test-mode-change"),
+    ("GET", "/api/canopy/stepped-rehearsal"),
+    ("POST", "/api/canopy/stepped-rehearsal"),
+    ("POST", "/api/canopy/stepped-rehearsal/stop"),
 ]
 
 
@@ -469,6 +477,8 @@ def test_enrolled_devices_get_401(app_client_auth, role, grants):
             if path.endswith("pause")
             else {"mode": "golden-hour"}
             if path.endswith("mode")
+            else {"mode": "golden-hour", "minutes": 2, "confirm": "x"}
+            if path.endswith("rehearsal")
             else {}
         )
         response = app_client_auth.request(method, path, json=body if method == "POST" else None)
@@ -501,9 +511,506 @@ def test_ops_pages_are_served_and_vendored(app_client):
     ):
         page = app_client.get(path)
         assert page.status_code == 200 and needle in page.text, path
-    for asset in ("/ops/ops.js", "/ops/ops.css", "/ops/calibrate/calibrate.js", "/visualizer/"):
+    for asset in (
+        "/ops/ops.js",
+        "/ops/counts-model.mjs",
+        "/ops/ops.css",
+        "/ops/calibrate/calibrate.js",
+        "/visualizer/",
+    ):
         text = app_client.get(asset).text
         assert "http://" not in text and "https://" not in text, f"{asset} references an external URL"
     visualizer = app_client.get("/visualizer/").text
     assert 'connectLive({\n  topics: ["canopy"]' in visualizer and "/api/canopy/heads" in visualizer
     assert 'id="schemes"' in visualizer and 'id="wire"' in visualizer and "pitch_violations" in visualizer
+
+
+# ---- D62 follow-up: a partial canopy, every /ops count says registered of nine -------------------------------------
+# The real engine with only Modules 1-2 registered (tests/partial_canopy.py), as on the Mac show box before install.
+def _partial_settled(c, timeout: float = 30.0) -> dict:
+    """The partial canopy once its two registered modules read back Ready (the other seven are dark)."""
+    showing(c)
+    deadline = time.monotonic() + timeout
+    state = {}
+    while time.monotonic() < deadline:
+        state = c.get("/api/canopy/state").json()
+        if state["look_phase"] == "ready":
+            heads = c.get("/api/canopy/heads").json()
+            if heads["counts"]["unknown"] == 0 and heads["counts"]["mismatch"] == 0:
+                return state
+        time.sleep(0.05)
+    raise AssertionError(f"the partial canopy never settled: {state}")
+
+
+def test_partial_canopy_sent_line_counts_what_the_plan_drives_and_names_the_held_and_left_out(
+    monkeypatch, tmp_path
+):
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        lease = services.locks.acquire("sim-canopy-r0c1", "VWBD shop phone")
+        try:
+            r = c.post("/api/canopy/mode", json={"mode": "golden-hour"})
+        finally:
+            services.locks.release("sim-canopy-r0c1", lease.token)
+    assert r.status_code == 200, r.text
+    message = r.json()["message"]
+    assert (
+        "on 1 of 9 modules; 1 held on a test page are left alone until they're released; 7 have no "
+        in message
+    )
+    assert "no Hubspace device registered, so they were left out (register them on /ops/accounts)." in message
+
+
+def test_partial_canopy_test_mode_change_times_only_the_registered_modules_and_still_fails(
+    monkeypatch, tmp_path
+):
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        item = _items(c.get("/api/ops/checklist").json())["test_mode_change"]
+        assert "times every module with a Hubspace device registered (2 of 9 now) to Ready" in item["fix"]
+        result = c.post("/api/ops/checklist/test-mode-change", json={}).json()
+        after = _items(c.get("/api/ops/checklist").json())["test_mode_change"]
+    # broke out as soon as both registered modules were Ready, rather than waiting the window out on the other seven
+    assert result["elapsed_s"] < ops_routes.TEST_WINDOW_S / 2, result
+    assert result["ok"] is False
+    timed = {m["device_id"]: m for m in result["modules"] if m["registered"]}
+    assert sorted(timed) == sorted(LIVE) and all(m["ready_after_s"] is not None for m in timed.values())
+    others = [m for m in result["modules"] if not m["registered"]]
+    assert len(others) == 7 and all(m["ready_after_s"] is None for m in others)
+    message = result["message"]
+    assert message.startswith("Module 1 and Module 2 (the 2 registered modules) reached Ready on "), message
+    assert "didn't reach Ready" not in message
+    assert (
+        "Not timed: Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9 have no Hubspace device "
+        "registered (register them on /ops/accounts)." in message
+    )
+    assert "/ops/accounts" in result["fix"]
+    assert after["status"] == "fail" and after["detail"] == message and after["fix"] == result["fix"]
+
+
+def test_partial_canopy_test_mode_change_names_only_the_registered_module_that_missed_the_window(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(ops_routes, "TEST_WINDOW_S", 3.0)  # Module 2 is held, so it never reaches Ready
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        lease = services.locks.acquire("sim-canopy-r0c1", "VWBD shop phone")
+        try:
+            result = c.post("/api/ops/checklist/test-mode-change", json={}).json()
+        finally:
+            services.locks.release("sim-canopy-r0c1", lease.token)
+    assert result["ok"] is False
+    message = result["message"]
+    assert message.startswith("Module 2 didn't reach Ready within 3 s of changing to "), message
+    assert (
+        " Not timed: Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9 have no Hubspace "
+        "device registered (register them on /ops/accounts)." in message
+    )
+    assert result["fix"].startswith("Open the modules that didn't reach Ready"), result["fix"]
+    assert "/ops/accounts" in result["fix"]
+
+
+def test_partial_canopy_checklist_counts_registered_of_nine(monkeypatch, tmp_path):
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        items = _items(c.get("/api/ops/checklist").json())
+    modules = items["modules"]
+    assert modules["title"] == "2/9 modules online" and modules["status"] == "fail", modules
+    assert "No Hubspace device registered: Module 3, Module 4" in modules["detail"]
+    assert modules["fix"] == "Register a device for each of those positions on /ops/accounts."
+    assert "Module 3 (" not in modules["detail"]  # its own clause, not a needs-attention line
+    heads = items["heads"]
+    assert heads["status"] == "warn", heads
+    text = heads["detail"] + heads["fix"] + heads["note"]
+    assert "270" not in text and "Couldn't read the profile" not in text
+    assert "All 2 registered modules report their expected heads" in heads["detail"]
+    assert (
+        "the 60 heads of the 2 registered modules should light; the other 7 positions stay dark"
+        in heads["note"]
+    )
+    assert "/ops/accounts" in heads["fix"]
+    slots = items["slots"]
+    assert slots["detail"].startswith("No recorded slot hash for Module 1 and Module 2 ("), slots
+    assert (
+        "Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9 have no Hubspace device "
+        in (slots["detail"])
+    )
+    assert slots["fix"].startswith("Press Commission slots.") and "/ops/accounts" in slots["fix"]
+    assert "T1) shows only once all nine have their slots recorded" in slots["fix"]
+
+
+def test_partial_canopy_slots_never_pass_on_hashes_no_device_can_read_back(monkeypatch, tmp_path):
+    # the full canopy commissioned (hashes on all nine), then seven registrations lost: the hashes stay on the
+    # registry entries, but nothing reads them back, so the item warns and names those positions
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        snap = services.tracker.snapshot("sim-canopy-r0c0")
+        from conductor.rows import slot_hash
+
+        good = {
+            r["functionInstance"]: slot_hash(r["value"])
+            for r in snap["reported"]
+            if r["functionClass"] == "color-sequence-v2"
+        }
+        assert good, "the simulator's readback carries the slot objects"
+        for entry in services.registry.canopy_modules():
+            services.update_registry(entry.id, {"slot_hashes": good})
+        slots = _items(c.get("/api/ops/checklist").json())["slots"]
+    assert slots["status"] == "warn", slots
+    assert "reads back with its recorded hash" not in slots["detail"]
+    assert slots["detail"] == (
+        "Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9 have slot hashes recorded but no "
+        "Hubspace device registered, so they can't be read back."
+    )
+    assert "Commission slots" not in slots["fix"] and "/ops/accounts" in slots["fix"]
+
+
+def test_partial_canopy_modules_item_fails_and_names_the_unregistered_in_every_branch(monkeypatch, tmp_path):
+    # Module 2 waiting on readback (just after a reboot), offline, then held on a test page: each branch still fails
+    # and names the seven positions with no device, and its fix ends by sending them to /ops/accounts
+    gap = " No Hubspace device registered: Module 3, Module 4, Module 5, Module 6, Module 7, Module 8 and Module 9."
+    then = " Then register a device on /ops/accounts for each position that has none."
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        services = _services(c)
+        real = services.tracker.snapshot
+        override: dict = {}
+
+        def snapshot(address):
+            snap = real(address)
+            return {**snap, **override} if address == "sim-canopy-r0c1" else snap
+
+        monkeypatch.setattr(services.tracker, "snapshot", snapshot)
+        override.update(reported_at=None, status="updating")
+        waiting = _items(c.get("/api/ops/checklist").json())["modules"]
+        override.clear()
+        override.update(available=False)
+        offline = _items(c.get("/api/ops/checklist").json())["modules"]
+        override.clear()
+        lease = services.locks.acquire("sim-canopy-r0c1", "VWBD shop phone")
+        try:
+            held = _items(c.get("/api/ops/checklist").json())["modules"]
+        finally:
+            services.locks.release("sim-canopy-r0c1", lease.token)
+    assert waiting["status"] == "fail" and waiting["title"] == "1/9 modules online", waiting
+    assert waiting["detail"].endswith(f"No confirmed readback yet: Module 2.{gap}"), waiting
+    assert waiting["fix"].startswith("Press Re-assert all") and waiting["fix"].endswith(then), waiting
+    assert offline["status"] == "fail" and offline["detail"].endswith(f"Offline: Module 2.{gap}"), offline
+    assert offline["fix"].endswith(then), offline
+    assert held["status"] == "fail" and "Needs attention: Module 2 (open on the module page" in held["detail"]
+    assert held["detail"].endswith(gap) and held["fix"].endswith(then), held
+
+
+def test_partial_canopy_heads_count_the_dark_positions_apart(monkeypatch, tmp_path):
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        _partial_settled(c)
+        body = c.get("/api/canopy/heads").json()
+    counts = body["counts"]
+    assert counts["heads"] == 270 and counts["no_device"] == 210 and counts["unknown"] == 0
+    assert counts["match"] == 60 and counts["modules"] == {"total": 9, "registered": 2}
+    registered = {m["device_id"]: m["registered"] for m in body["modules"]}
+    assert [d for d, r in registered.items() if r] == list(LIVE)
+    dark = next(m for m in body["modules"] if m["device_id"] == "canopy-r2c2")
+    assert dark["counts"] == {"match": 0, "mismatch": 0, "unknown": 30}  # per-module counts unchanged
+
+
+def test_nothing_registered_says_register_on_ops_accounts_not_restart(monkeypatch, tmp_path):
+    with partial_show(monkeypatch, tmp_path, ()) as c:
+        engine = c.app.state.services.extras["canopy"]
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and engine.state().phase != "resting":
+            time.sleep(0.05)
+        item = _items(c.get("/api/ops/checklist").json())["guest_input"]
+        result = c.post("/api/ops/checklist/test-mode-change", json={"mode": "golden-hour"}).json()
+    assert item["status"] == "fail", item
+    assert "/ops/accounts" in item["fix"] and "restart the Conductor" not in item["fix"]
+    assert "comes out of rest on its own" in item["fix"]
+    assert result["ok"] is False and "/ops/accounts" in result["fix"]
+    assert "restart the Conductor" not in result["fix"]
+    assert not any(m["registered"] for m in result["modules"])
+
+
+def test_full_canopy_test_mode_change_marks_every_module_registered(app_client):
+    _install(app_client)
+    item = _items(app_client.get("/api/ops/checklist").json())["test_mode_change"]
+    assert (
+        item["fix"]
+        == "Press Run test mode change: it changes the mode once and times all nine modules to Ready."
+    )
+    result = app_client.post("/api/ops/checklist/test-mode-change", json={}).json()
+    assert result["ok"] is True and all(m["registered"] for m in result["modules"]) and "fix" not in result
+    heads = app_client.get("/api/canopy/heads").json()["counts"]
+    assert heads["no_device"] == 0 and heads["modules"] == {"total": 9, "registered": 9}
+
+
+def test_ops_page_counts_positions_not_nine(app_client):
+    page = app_client.get("/ops/").text
+    start = page.index('<dialog id="commission-dialog"')
+    dialog = page[start : page.index("</dialog>", start)]
+    assert "nine" not in dialog and 'id="commission-scope"' in dialog
+    assert "with a Hubspace device registered" in dialog
+    assert 'aria-label="The nine canopy positions"' in page
+    script = app_client.get("/ops/ops.js").text
+    assert "all nine" not in script
+    assert "m.registered !== false" in script  # an unregistered position is never "Not ready"
+    # an unregistered position's grid cell and its issue line both link to /ops/accounts, not a module page
+    assert 'const href = unregistered\n        ? "/ops/accounts/"' in script
+    assert 'h("a", { href: "/ops/accounts/" }, "Register a device")' in script
+    # the counts' wording is the pure module tests/ops-counts.test.mjs pins, served as JavaScript
+    assert 'from "/ops/counts-model.mjs"' in script
+    assert "headsCounts(headsData.counts)" in script and "commissionScope(p)" in script
+    model = app_client.get("/ops/counts-model.mjs")
+    assert model.status_code == 200 and "javascript" in model.headers["content-type"]
+    assert "export function headsCounts" in model.text
+
+
+class _PlanEngine:
+    """Just enough engine for _sent_line: a plan, and optionally an outage."""
+
+    def __init__(self, plan, outage=None):
+        self._plan, self.outage = plan, outage
+
+    def current_plan(self):
+        return self._plan
+
+
+def _sent(monkeypatch, *, registered, unregistered, driven, skipped=(), locked=(), outage=None, plan=True):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        ops_routes, "split_canopy_positions", lambda services: (list(registered), list(unregistered))
+    )
+    the_plan = (
+        SimpleNamespace(modules=dict.fromkeys(driven), skipped=dict.fromkeys(skipped, "left out"))
+        if plan
+        else None
+    )
+    modules = {d: {"locked": d in locked} for d in [*registered, *unregistered]}
+    state = SimpleNamespace(label="Golden Hour", mode="golden-hour", tier="modules", modules=modules)
+    return ops_routes._sent_line(None, _PlanEngine(the_plan, outage), state, "Changing to")
+
+
+def test_sent_line_counts_from_the_plan_and_registry(monkeypatch):
+    nine = [f"m{i}" for i in range(9)]
+    full = _sent(monkeypatch, registered=nine, unregistered=[], driven=nine, locked=["m2"])
+    assert full == (
+        "Changing to: Golden Hour (T3, one colour per module) on 8 of 9 modules; 1 held on a test page are left alone "
+        "until they're released."
+    )
+    one = _sent(monkeypatch, registered=nine[:8], unregistered=nine[8:], driven=nine[:8])
+    assert one.endswith(
+        "on 8 of 9 modules; 1 has no Hubspace device registered, so it was left out (register it on /ops/accounts)."
+    )
+    # a registered module whose profile hasn't been read is left out of the plan (D36) and isn't counted as sent
+    unread = _sent(monkeypatch, registered=nine[:2], unregistered=nine[2:], driven=["m0"], skipped=nine[1:])
+    assert "on 1 of 9 modules; 7 have no Hubspace device registered" in unread
+    assert unread.endswith("; 1 whose profile hasn't been read was left out.")
+    # an engine with no plan to read: the modules its state reports (the fakes)
+    assert "on 9 of 9 modules" in _sent(monkeypatch, registered=nine, unregistered=[], driven=[], plan=False)
+
+
+def test_sent_line_during_an_outage_names_the_registered_modules(monkeypatch):
+    nine = [f"m{i}" for i in range(9)]
+    partial = _sent(monkeypatch, registered=nine[:2], unregistered=nine[2:], driven=nine[:2], outage=1.0)
+    assert partial.endswith(
+        "so it goes to the 2 modules with a device registered as soon as Hubspace answers again."
+    )
+    full = _sent(monkeypatch, registered=nine, unregistered=[], driven=nine, outage=1.0)
+    assert full.endswith("so it goes to every module as soon as Hubspace answers again.")
+
+
+# ---- the stepped card (Tier.STEPPED, D65; web/ops/stepped-model.mjs words it) --------------------------------
+def _runner(services, **kw):
+    """Just enough ProgramRunner for the gauge: a run of all the canopy modules, at step 2 of 15, 6 s steps."""
+    modules = dict.fromkeys(e.id for e in services.registry.canopy_modules())
+    return SimpleNamespace(
+        running=True,
+        plan=SimpleNamespace(mode_id="golden-hour", modules=modules),
+        index=2,
+        count=15,
+        step_s=6.0,
+        program=SimpleNamespace(step_s=6.0),
+        t0_wall=1000.0,
+        **kw,
+    )
+
+
+def test_the_stepped_card_shows_the_accounts_writes_a_minute_and_the_cap(app_client):
+    services = _services(app_client)
+    engine = _install(app_client)
+    app_client.post("/api/canopy/mode", json={"mode": "garden-gathering"})
+    _wait_ready(app_client, "garden-gathering")
+    assert (
+        app_client.get("/api/canopy/state").json()["stepped"] is None
+    )  # no stepped run, no cool-off: no card
+    engine.runner, engine.stepping, engine.stats = _runner(services), True, {"governor_trips": 0}
+    gauge = app_client.get("/api/canopy/state").json()["stepped"]
+    entry = services.registry.canopy_modules()[0]
+    target = services.target(entry.id, Purpose.ENGINE)
+    account = target.driver.account_of(target.address)
+    written = target.executor.budget()["accounts"][account]["writes_60s"]
+    assert written >= 9  # the mode change: one write per module, on the canopy's account
+    assert gauge == {
+        "running": True,
+        "moving": True,
+        "cap": 90.0,
+        "live_enabled": False,
+        "cooloff": [],
+        "governor_trips": 0,
+        "mode": "golden-hour",
+        "step": 2,
+        "steps": 15,
+        "step_s": 6.0,
+        "design_step_s": 6.0,
+        "holds_at": 1090.0,
+        "account": account,
+        "writes_60s": written,
+    }
+    # held (paused, resting, off): the run's clock goes on, nothing is sent
+    engine.stepping = False
+    assert app_client.get("/api/canopy/state").json()["stepped"]["moving"] is False
+
+
+def test_the_stepped_card_shows_the_governors_cool_off_without_a_run(app_client):
+    services = _services(app_client)
+    engine = _install(app_client, RecordingEngine)
+    engine.runner, engine.stats = None, {"governor_trips": 1}
+    now, mono = services.clock.now(), services.clock.monotonic()
+    engine.stepped_cooloff = {"canopy": mono + 120.0, "old": mono - 1.0}  # an expired cool-off isn't shown
+    gauge = app_client.get("/api/canopy/state").json()["stepped"]
+    assert gauge["running"] is False and gauge["governor_trips"] == 1 and "writes_60s" not in gauge
+    (cooling,) = gauge["cooloff"]
+    assert cooling["account"] == "canopy" and cooling["until"] == pytest.approx(now + 120.0, abs=2.0)
+    engine.stepped_cooloff = {}
+    assert app_client.get("/api/canopy/state").json()["stepped"] is None
+
+
+def test_the_ops_page_draws_the_stepped_card_from_the_served_model(app_client):
+    page = app_client.get("/ops/").text
+    assert 'id="canopy-stepped"' in page
+    script = app_client.get("/ops/ops.js").text
+    assert (
+        'from "/ops/stepped-model.mjs"' in script
+        and "steppedLines(st.program, steppedGauge, clock)" in script
+    )
+    assert 'stepped: "T3 stepped' in script  # the tier chip knows the stepped tier
+    model = app_client.get("/ops/stepped-model.mjs")
+    assert model.status_code == 200 and "javascript" in model.headers["content-type"]
+    assert "export function steppedLines" in model.text
+    assert "http://" not in model.text and "https://" not in model.text
+
+
+# ---- the stepped rehearsal (Gate R; conductor/rehearsal.py) ------------------------------------------------------
+class RehearsalEngine(RecordingEngine):
+    """RecordingEngine plus the rehearsal calls: the preview's sentence names the modules and the minutes."""
+
+    def rehearsal_preview(self, mode_id: str, minutes: int) -> dict:
+        self._call("rehearsal_preview", mode_id=mode_id, minutes=minutes)
+        return {
+            "mode": mode_id,
+            "minutes": minutes,
+            "confirm": f"Rehearse {mode_id} for {minutes} min on Module 1?",
+        }
+
+    async def rehearse(self, mode_id: str, minutes: int, *, source: str) -> dict:
+        self._call("rehearse", mode_id=mode_id, minutes=minutes, source=source)
+        return {"ok": True, "message": "Stepped rehearsal started."}
+
+    def stop_rehearsal(self, *, source: str) -> dict:
+        self._call("stop_rehearsal", source=source)
+        return {"ok": True, "message": "Stopped."}
+
+    def rehearsal_status(self) -> dict:
+        return {"running": None, "last": None, "max_minutes": 10}
+
+
+def test_the_rehearsal_starts_only_with_the_confirm_sentence_and_never_past_ten_minutes(app_client):
+    engine = _install(app_client, RehearsalEngine)
+    route = "/api/canopy/stepped-rehearsal"
+    for minutes in (11, 0, 2.5):
+        assert app_client.post(route, json={"mode": "golden-hour", "minutes": minutes}).status_code == 422
+    assert app_client.get(route, params={"mode": "golden-hour", "minutes": 11}).status_code == 400
+    assert app_client.get(route, params={"mode": "golden-hour"}).status_code == 400  # minutes are part of it
+    assert app_client.post(route, json={"mode": "disco", "minutes": 2}).status_code == 400
+    assert engine.calls == []
+    # no sentence: 409 with the sentence to confirm, and nothing started
+    asked = app_client.post(route, json={"mode": "golden-hour", "minutes": 2})
+    sentence = "Rehearse golden-hour for 2 min on Module 1?"
+    assert asked.status_code == 409 and asked.json()["confirm_required"] is True
+    assert asked.json()["confirm"] == sentence and sentence in asked.json()["detail"]
+    # a sentence for other minutes (or modules) isn't this one
+    stale = app_client.post(route, json={"mode": "golden-hour", "minutes": 3, "confirm": sentence})
+    assert stale.status_code == 409
+    assert [name for name, _ in engine.calls] == ["rehearsal_preview", "rehearsal_preview"]
+    engine.calls.clear()
+    preview = app_client.get(route, params={"mode": "golden-hour", "minutes": 2}).json()
+    assert preview["preview"]["confirm"] == sentence and "lowcountry-calm" not in [
+        m["id"] for m in preview["modes"]
+    ]
+    started = app_client.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
+    assert started.status_code == 200 and started.json()["ok"] is True
+    assert engine.calls[-1] == ("rehearse", {"mode_id": "golden-hour", "minutes": 2, "source": "ops"})
+    stop = app_client.post(f"{route}/stop", json={})
+    assert stop.status_code == 200 and engine.calls[-1] == ("stop_rehearsal", {"source": "ops"})
+    # same-site JSON only, like every control
+    evil = app_client.post(
+        route,
+        json={"mode": "golden-hour", "minutes": 2, "confirm": sentence},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert evil.status_code == 403 and engine.calls[-1][0] == "stop_rehearsal"
+
+
+def test_an_engine_without_the_rehearsal_says_so(app_client):
+    _install(app_client, RecordingEngine)
+    response = app_client.post(
+        "/api/canopy/stepped-rehearsal", json={"mode": "golden-hour", "minutes": 2, "confirm": "x"}
+    )
+    assert response.status_code == 409 and response.json()["detail"] == ops_routes.NO_REHEARSAL
+
+
+def test_a_rehearsal_from_ops_on_the_show_engine_writes_its_report_and_leaves_the_look_still(
+    app_client_show, tmp_path
+):
+    from test_stepped_rehearsal import REPORT_FIELDS
+
+    c = app_client_show
+    engine = _services(c).extras["canopy"]
+    deadline = time.monotonic() + 30
+    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    route = "/api/canopy/stepped-rehearsal"
+    preview = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]
+    sentence = preview["confirm"]
+    labels = [e.label for e in _services(c).registry.canopy_modules()]
+    assert "for 2 minutes" in sentence and all(label in sentence for label in labels)
+    assert "(simulator: no real lights)" in sentence
+    started = c.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
+    assert started.status_code == 200, started.text
+    state = c.get("/api/canopy/state").json()
+    assert state["tier"] == "stepped" and state["rehearsal"]["running"]["mode"] == "golden-hour"
+    assert c.post("/api/canopy/mode", json={"mode": "golden-hour"}).status_code == 200  # ops still decides
+    deadline = time.monotonic() + 30
+    while engine.last_rehearsal is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    last = c.get("/api/canopy/state").json()["rehearsal"]["last"]
+    assert last["verdict"] == "fail" and last["ended"] == "ops chose golden-hour"  # not a silent restart
+    report = json.loads((tmp_path / "data" / "bench" / "rehearsals" / f"{last['run_id']}.json").read_text())
+    assert set(report) == REPORT_FIELDS and report["source"] == "ops" and report["simulated"] is True
+    after = c.get("/api/canopy/state").json()
+    assert after["program"] is None and after["rehearsal"]["running"] is None and after["tier"] != "stepped"
+    assert c.post(f"{route}/stop", json={}).status_code == 409  # nothing left to stop
+
+
+def test_the_ops_page_starts_a_rehearsal_only_through_its_confirm_dialog(app_client):
+    page = app_client.get("/ops/").text
+    for element in ('id="rehearsal-mode"', 'id="rehearsal-minutes"', 'max="10"', 'id="rehearsal-dialog"'):
+        assert element in page
+    script = app_client.get("/ops/ops.js").text
+    assert "rehearsalText" in script and 'from "/ops/stepped-model.mjs"' in script
+    # the only POST that starts one carries the sentence the dialog showed
+    assert script.count('"/api/canopy/stepped-rehearsal", pending') == 1
+    assert 'dialog.returnValue === "go") startRehearsal()' in script

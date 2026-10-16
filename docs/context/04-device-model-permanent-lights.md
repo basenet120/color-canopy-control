@@ -74,27 +74,110 @@ Host: semantics2.afero.net      Content-Type: application/json; charset=utf-8
 - A raw Afero attribute write exists (`POST /v1/accounts/{aid}/devices/{deviceId}/actions {"type":"attribute_write","attrId":351,"data":"<hex LE>"}`) — document it, don't build it; use only if the semantic PUT is rejected and only after a bench proof.
 
 ## Canopy control model
-- 9 metadevices on one dedicated canopy account (vignettes on their own accounts). No group/scene/sync call exists, so **every mode compiles to exactly one PUT per module**: a burst of 9 concurrent PUTs over a warm session with a fresh token, then readback, then re-assert any module that differs (≤ 27 requests per change).
-- **Store and select**: the three painted looks (Rainbow Row Sunset, Garden Gathering, Golden Hour — static gradients since D59) are written into slots custom-1..3 at commissioning; at show time the kiosk only selects slots. The reconciler hashes slot contents via REST and rewrites (or alerts) on drift — this also undoes any staff edits made in the app.
-- All animation runs on each controller with no ongoing cloud traffic — but on its **own free-running clock**. Nothing phase-syncs the 9 controllers.
-- **Fallback ladder per mode** (chosen by config/capabilities, not code): **T1** frames written by API + select (proven on Kingston only: Gate C plus a 30-head painted gradient, PHYSICAL; the Studio's paired per-head gradient has been seen only on screen, SCREEN, and never sent to hardware — preflight blocks it until String light 1 is commissioned, D56) → **T2** slots hand-painted in the Hubspace app (≈15–20 min/module) and selected by API (formal Gate B not run) → **T3** whole-strand CCT/RGB/preset, including module-level composition (each module = one coarse pixel). Kiosk copy follows the tier actually in use.
+- 9 metadevices on one dedicated canopy account (vignettes on their own accounts). No group/scene/sync call exists, so **every mode change compiles to exactly one PUT per module**: a burst of 9 concurrent PUTs over a warm session with a fresh token, then readback, then re-assert any module that differs (≤ 27 requests per change). A stepped look (below) is several updates, each one PUT per module, never one update split (`07` §6).
+- **Store and select**: the three painted looks (Rainbow Row Sunset, Garden Gathering, Golden Hour — static 2-D designs since D63) are written into slots custom-1..3 at commissioning; at show time the kiosk only selects slots. The reconciler hashes slot contents via REST and rewrites (or alerts) on drift — this also undoes any staff edits made in the app.
+- On-device animation runs on each controller with no ongoing cloud traffic — but on its **own free-running clock**. Nothing phase-syncs the 9 controllers. No show mode uses it (`effects.enabled` is empty). The motion the show has is the reverse: **stepped looks** (D65), where the Conductor holds the phase and sends every step through the cloud.
+- **Fallback ladder per mode** (chosen by config/capabilities, not code): **T1** frames written by API + select (proven on Kingston only: Gate C plus a 30-head painted gradient, PHYSICAL; the Studio's paired per-head gradient has been seen only on screen, SCREEN, and never sent to hardware — preflight blocks it until String light 1 is commissioned, D56) → **T2** slots hand-painted in the Hubspace app (≈15–20 min/module) and selected by API (formal Gate B not run) → **stepped** module-level colours re-sent a step at a time (D65; simulator only until Gate R) → **T3** whole-strand CCT/RGB/preset, including module-level composition (each module = one coarse pixel). Kiosk copy follows the tier actually in use.
 
-The six modes are the six approved scenes (`config/scenes.yaml`, D59): each mode renders its scene's palette at every
-tier, at the scene's brightness, and every scene is static. Three controller slots hold three painted looks, so three
-modes have a canvas; the other three start at module level. (The original brief's table — white CCT, a holiday preset,
-a warm pathway, an amber band with motion — is in `02` and git history.)
+The six modes are the six approved scenes (`config/scenes.yaml`, D59). Each mode renders its scene's palette at every
+tier, at the scene's brightness. Since D63 the palette is laid out as **one 2-D design over the canopy** (a `field` in
+canopy inches, reflected-ceiling view; `02` "Which way is left"), named once in `config/modes.yaml` with a YAML anchor
+so every tier that draws it uses the same design. Three controller slots hold three painted looks, so three modes have
+a canvas; the other three start at module level. Two scenes move (D65). (The original brief's table — white CCT, a
+holiday preset, a warm pathway, an amber band with motion — is in `02` and git history.)
 
-| Mode | Primary technique | Hubspace feature shown | Calls/change | Fallback |
-|---|---|---|---|---|
-| Lowcountry Calm | module level: the mirrored soft ivory → sea glass → soft ivory gradient, one colour per module column, 70% | colour + dimming | 9 | solid soft ivory (also the safe look) |
-| Rainbow Row Sunset | canvas gradient pastel coral → blush pink → lilac across the canopy (x), stored in custom-1, 85% | per-puck paint + saved patterns | 9 selects | T2 hand-paint → module columns → solid pastel coral |
-| Garden Gathering | canvas gradient sage green → pale lime → ivory across the canopy, custom-2, 75% | per-puck paint + saved patterns | 9 selects | T2 → module columns → solid sage green |
-| Coastal Tides | module level: ocean blue → aqua → seafoam → foam white, one colour per module column, 85% | colour + dimming | 9 | solid aqua |
-| Golden Hour | canvas gradient soft gold → peach → sunset pink → rose → lavender across the canopy, custom-3, 95%, static | per-puck paint + saved patterns | 9 selects | T2 → module columns → solid sunset pink |
-| The Goodnight Glow | module level: periwinkle → lavender → moonlight blue, one colour per module column, 28% | colour + dimming | 9 | solid periwinkle |
+What each tier does with the design:
+- **canvas (T1):** the design at each of the 270 heads, written into the mode's slot at commissioning and only
+  selected at show time. Copy: "Every one of the 270 lights set individually, saved as a Hubspace custom pattern on
+  each of nine strands."
+- **slot (T2):** select the slot, hand-painted in the Hubspace app (the reconciler verifies its hash and never
+  rewrites it). Copy: "A custom pattern painted light by light in the Hubspace app, saved on each strand." A hand
+  painting matches the 2-D design only as well as the painter follows it.
+- **stepped (D65):** the module-level design, shifted along its layout by one sixth of a repeat a step, each module
+  sent its next RGB colour (one full-state PUT per module whose colour changes; never a slot object). Step 0 is the
+  modules rung's still look exactly (the schema and the compiler check it). After a bounded run the still look holds.
+  The moving copy ("… through the Hubspace cloud … sent its next colour every few seconds, so … move diagonally /
+  out from one edge …") shows only while a run moves; otherwise the still sentence shows.
+- **modules (T3):** each module set to the design at its centre ((col + ½)·75, (row + ½)·40 in) as one RGB colour:
+  4–9 module colours per scene. The copy names the layout ("from the centre out", "diagonally", "from one edge",
+  "from one spot"). On a partial canopy (D62) it says instead "two Hubspace strands, each set to a single colour from
+  the scene", which claims no canopy-wide layout.
+- **strand:** the scene's solid colour on every strand ("all nine Hubspace strands set to …", counted on a partial
+  canopy). The safe look is Lowcountry Calm at this tier.
 
-*Since D59 no mode uses on-device motion (the soak still enables a SIMULATED code on Golden Hour to measure the
-all-or-none re-trigger). The rest of this paragraph holds for any later motion look:* Golden Hour only reads as one wash if on-device motion runs the same direction in every module: **ask VWBD to route every module's cable column-wise, starting at the module's canvas-left edge (B modules included), so the index rises with canvas X.** Software can't reverse on-device motion. Only code 1 has been seen moving (bounded, direction unknown) and `effects.enabled` is empty, so the custom-slot motion isn't available to this mode yet (gate 9).
+| Scene | Design (D63) | Ladder | Brightness | Moves? | On live hardware now |
+|---|---|---|---|---|---|
+| Lowcountry Calm (idle, safe look) | radial from the canopy's centre: sea glass in the middle, soft ivory at the corners | modules → strand | 70% | never: the idle look can't step (the show refuses to load otherwise) | modules |
+| Rainbow Row Sunset (custom-1) | linear at 45°, corner to corner: pastel coral → blush pink → lilac | canvas → slot → modules → strand | 85% | no | modules |
+| Garden Gathering (custom-2) | radial from the middle of one long edge (112.5, 120): ivory there, sage green at the far corners | canvas → slot → modules → strand | 75% | no | modules |
+| Coastal Tides | a tilted shoreline, linear at 78°: ocean blue → aqua → seafoam → foam white | **stepped** → modules → strand | 85% | stepped: the tide rolls diagonally (forward: ocean blue moves on toward the foam-white side) | modules (stepped refused: live off) |
+| Golden Hour (custom-3) | a radial sun at the middle of the left edge (0, 60), in the canopy's proportions: soft gold → peach → sunset pink → rose → lavender | canvas → slot → **stepped** → modules → strand | 95% | at T1 and T2 no (a still per-head sun); below them stepped: sun rays move out from the left edge | modules (canvas, slot and stepped all refused) |
+| The Goodnight Glow | a radial moon over r0c2 (187.5, 20): moonlight blue there, periwinkle at the far corner | modules → strand | 28% | never | modules |
+
+"On live hardware now": every scene runs at module level (or strand below it), because no upper rung is open yet.
+On the Mac show box as D62 recorded it (two kits registered, at r0c0 and r0c1) every look drives those two and
+leaves the other seven out. What each upper rung needs before a real runtime uses it:
+- **canvas (T1):** Gate C (`t1_frames`) on every module; on a 60-entry kit, its own proven `framebuffer_mapping`
+  (D54, D57); and a commissioned slot record (origin `api`) for the mode's slot on every registry module. No canopy
+  kit has a recorded map, and no live runtime holds T1 records on a canopy module.
+- **slot (T2):** Gate B (`t2_select`) on every module and a hash recorded as hand-painted in the Hubspace app on
+  every module. Formal Gate B has not been run on any kit.
+- **stepped:** `motion.stepped.live_enabled: true`, which only Alon sets, after a Gate R pass on the show kits.
+  Until then the show's `tier_allowed` refuses the stepped rung on any non-simulated driver and the ladder lands on
+  the next rung (`tests/test_d65_modes.py` proves it through the show's own wiring on a live-named driver). The one
+  exception is the operator-started stepped rehearsal, which opens the rung for its one mode while it runs.
+- A hysteresis downgrade never lands on a stepped rung: from Golden Hour's T1 or T2 it passes over stepped to the
+  still modules rung, and an upgrade lifts back past it, so easing off never starts a run.
+
+In the simulator every tier is allowed (07 §6 "sim runs T1"), so Golden Hour shows its per-head sun and Coastal
+Tides steps whenever it is chosen.
+
+### Stepped looks (D65): cadence, budget, runs
+Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/compile.py`; settings
+`motion.stepped` in `config/conductor.yaml`.
+- **Cadence.** Each scene's design pace is `step_s: 6` with `steps_per_cycle: 6`. The runner uses the longest of:
+  the design's step, `min_step_s` (4 s; a step's verification takes about 2.6 s, D65), the busiest
+  account's modules × 60 / the planned rate, and (with the ripple on) the ripple's span + 4 s. The planned rate is
+  `account_writes_per_min` (90, the cap on writes of any kind in any 60 s on one account) less `budget_reserve`
+  (20%) = 72 a minute. So nine modules on one account step every 7.5 s, and the Mac box's two kits every 6 s. A step
+  longer than `max_step_s` (12 s) isn't run: the still look holds and an alert says why.
+- **The cap.** A step that would take the account past 90 writes in any 60 s (every write on the account, by the
+  executor's own count) is held back: nothing is sent and the next step tries again.
+- **Bounded runs.** A run lasts `run_s` (90 s, at most `kiosk.idle_return_s`) from when the look was chosen; then
+  the still design is sent to the modules that differ and holds. A re-pick of the same look (tier change, new
+  capabilities) keeps the run's phase; it doesn't start a new run. The idle return never moves for a run.
+- **Held, not queued.** During an outage, commissioning, a guest-input pause or while a guest has the canopy off,
+  the step index advances but nothing is sent; a step that comes due late is skipped. A guest brightness change
+  close to the next step goes out with that step (`fold_guest_within_s`).
+- **Throttle governor.** Per account, over 60 s: at ≥ 8 write attempts answered 429/403 that are ≥ 25% of the
+  run's attempts, the run stops, the still look goes out, and stepped looks on that account hold still for 5 min
+  (`governor_cooloff_s`). It never rotates accounts or IPs.
+- **Re-asserts.** The Conductor holds the phase, so re-sending one module the current step is correct; 07 §6's
+  all-or-none re-trigger is for on-device motion only.
+- **Surfaces.** The guest panel draws exactly the frames the engine sends (`state.lit.motion` `{kind: "steps"}`; it
+  switches, it doesn't blend); `/ops` shows a stepped card (step n of N, the step length, writes a minute on the
+  account against the cap).
+- **Verified in the simulator only** (D65): the main soak steps Coastal Tides whenever it is chosen and still passes
+  every pinned row; the stepped scenario ran 124 steps over 12 runs at 7.5 s with at most 72 program PUTs and 89
+  writes of any kind in any 60 s on the account. Each step's landing spread was p95 2.78 s against 05's 2 s: reported,
+  not gating, until Alon signs off a per-step target.
+- **Needs real hardware:** Gate R (below), whether a strand cuts or fades between colours (bench item 6), and the
+  start skew across kits (gate 12).
+
+### The ripple arrival (D64)
+A mood chosen by a guest, by ops or by the idle hold can land in up to three rings, ordered by its design over the
+driven modules (from the centre out, from one edge, corner to corner). Each module still gets exactly one full-state
+PUT for the change, so the ripple costs no writes. Re-asserts, recovery, tier changes, the safe look, guest
+brightness/power and start-up stay one burst. It is **off** (`kiosk.ripple_stagger_s: 0`, one burst) on every runtime,
+simulated or live; there is no separate live gate, so setting it turns it on everywhere. It is off because 05's
+"first to last module within 2 s at p95" fails by design under a ripple and `config/sim/acceptance.yaml` is pinned.
+The soak runs a separate SIMULATED ripple scenario at 1.2 s: settled p95 5.77 s against (3 − 1) × 1.2 + 5 = 7.4 s,
+one PUT per module per change; each ring's own spread p95 2.29 s (reported, not gating). To turn it on, Alon sets
+1.2 s and signs off the per-ring spread target. Needs real hardware: start skew well under the stagger (gate 12), and
+cut vs fade (item 6).
+
+*No mode uses on-device motion (the soak still enables a SIMULATED code on Golden Hour to measure the all-or-none
+re-trigger). The rest of this paragraph holds for any later on-device motion look:* such a look only reads as one wash if on-device motion runs the same direction in every module: **ask VWBD to route every module's cable column-wise, starting at the module's canvas-left edge (B modules included), so the index rises with canvas X.** Software can't reverse on-device motion. Only code 1 has been seen moving (bounded, direction unknown) and `effects.enabled` is empty, so the custom-slot motion isn't available yet (gate 9).
 
 ## Bench gates — one kit, now (don't wait for Prototype 01)
 Status after VWBD (Kingston unless stated) is in bold at the end of each gate.
@@ -111,3 +194,4 @@ Status after VWBD (Kingston unless stated) is in bold at the end of each gate.
 11. Single-device rate: 50 frame writes at 5 s / 2 s / 1 s spacing; compare readback to sent to catch silent drops; stop at first 429/403. **Not done.**
 12. With 2–3 kits: start skew (9-way-style parallel PUTs, 120 fps video, 20 trials) and drift at 10/30/60 min; chaining test (60 pucks on one controller: 60 independent entries or 30 repeated?). **Unresolved: Kingston + String light 1 started Rainbow Road in one paired burst (Oct 2); both were seen running (PHYSICAL), but corresponding-head alignment was "hard to tell from their positions". Host send times 0 ms apart at clock resolution is host-side only, not hardware phase (package `evidence/paired-rainbow-test-2026-10-02.json`, `CHANGELOG.txt`). No video, trials, drift or chaining test.**
 13. On Prototype 01 with Mylar: color recipes (RGB-only vs RGB + warm-white blend) for amber, HD orange, peach, ivory at show brightness; 4 h thermal run; calibration in A and B orientation. **Not done.**
+14. **Gate R — the stepped rehearsal** (D65, `docs/runbooks/stepped-rehearsal.md`): an operator-started, bounded stepped run from `/ops` (never cron, CI or a restart), first on the two VWBD kits on the bench account, then on the nine show kits on the canopy account during install week with the four vignette accounts connected. It passes only if the run went its full length, nothing failed throttled, throttled attempts stayed under 5%, there was no 403, the account saw at most 90 writes in any 60 s, and the vignette accounts stayed clean. The observer also records cut vs fade (item 6), whether the flow reads, and the start skew. A `"simulated": true` report never counts. **No result recorded in these docs yet (Oct 14). Stepped looks stay off live until a pass on the show kits and Alon sets `motion.stepped.live_enabled`.**

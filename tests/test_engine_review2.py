@@ -313,8 +313,18 @@ def _record_writes(services) -> list[str]:
 def test_d62_a_partial_canopy_compiles_every_mode_at_module_level_on_the_registered_modules_only():
     ctx = _partial_ctx()
     for mode_id, mode in MODES.modes.items():
-        plan = compile_first(mode_id, ctx)
+        # live hardware refuses the stepped rung in the show's tier_allowed until Gate R (D65; the compiler doesn't
+        # gate it, tests/test_d65_modes.py), so the ladder lands on module level
+        plan = compile_first(mode_id, ctx, skip=[Tier.STEPPED])
         assert plan.tier is Tier.T3, (mode_id, plan.notes)
+        if (
+            "stepped" in mode.ladder
+        ):  # where it runs (sim, or after Gate R) it holds the same partial sentence
+            stepped = compile_mode(mode_id, Tier.STEPPED, ctx)
+            assert stepped.feature == PARTIAL_T3 and sorted(stepped.modules) == list(LIVE)
+            assert stepped.program.moving_feature.startswith(
+                "Colour and dimming through the Hubspace cloud: both Hubspace strands"
+            )
         assert sorted(plan.modules) == list(LIVE)
         assert sorted(plan.skipped) == OTHERS
         assert all("no Hubspace device registered" in why for why in plan.skipped.values())
@@ -807,6 +817,10 @@ def test_f7_record_a_hand_painted_slot_on_the_module_page_and_t2_selects_it(app_
         body = r.json()
         assert body["slot"]["hash"] == painted[entry.id] and body["slot"]["origin"] == "app"
         assert "Hubspace app" in body["slot"]["message"] and "Nothing was sent" in body["slot"]["message"]
+        assert (
+            "once every canopy module with a Hubspace device registered has it recorded (all nine on the full "
+            in (body["slot"]["message"])
+        )
         client.post(f"/api/module/{entry.id}/close", json={"lease": lease})
     entry = services.registry.get("canopy-r2c2")
     assert entry.slot_hashes["custom-2"] == painted["canopy-r2c2"] and entry.slot_origin["custom-2"] == "app"
@@ -912,8 +926,10 @@ def test_f11_the_soak_runs_the_shows_wiring_and_a_motion_plan(tmp_path):
 
     cfg = soak.SoakConfig(hours=1 / 3, changes=8, seed=5, report_path=tmp_path / "r.md")
     results, verdicts, meta = soak.run_soak(cfg)
-    failed = [v["name"] for v in verdicts if not v["pass"]]
+    # rows the soak reports without gating on (the ripple's and stepped looks' spread, D64/D65) never fail it
+    failed = [v["name"] for v in verdicts if not v["pass"] and v.get("gating", True)]
     assert not failed, failed
+    assert soak.passed(verdicts)
     assert "ShowWiring" in meta["compiler"]
     assert results["wiring"]["show_wiring"] is True
     assert results["wiring"]["motion_plans"] >= 1  # Golden Hour ran as a motion plan (SIMULATED code)

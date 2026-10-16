@@ -175,6 +175,41 @@ test("now showing draws the one colour the strands took when the server says the
   assert.equal(nowShowing(scenes, ready({ look: null })).frame, scenes[0].frame); // engine target: the scene itself
 });
 
+test("now showing draws the canopy's picture when the server sends state.lit, the serpentine when it is null", () => {
+  const scenes = [scene("a"), scene("b")];
+  const modules = ["r0c0", "r0c1"].map((pos) => ({ pos, state: "lit", color: "#ABCDEF", colors: null }));
+  const lit = { level: 70, modules, motion: null };
+  const shown = nowShowing(scenes, ready({ lit }));
+  assert.equal(shown.name, "A");
+  assert.equal(shown.description, "a description");
+  assert.equal(shown.lit, lit);
+  assert.equal(shown.frame, undefined); // no serpentine claim next to the real picture
+  assert.equal(shown.scene, scenes[0]);
+  // the workshop target, an older server, or no look yet: the serpentine of the scene (or grey)
+  for (const st of [ready({ lit: null }), ready()]) {
+    const fallback = nowShowing(scenes, st);
+    assert.equal(fallback.lit, undefined);
+    assert.equal(fallback.frame, scenes[0].frame);
+  }
+  const none = nowShowing(scenes, ready({ scene: null, lit: null }));
+  assert.equal(none.name, COPY.noScene);
+  assert.ok(none.frame.every((c) => c.join() === "211,210,216"));
+  const malformed = nowShowing(scenes, ready({ lit: { level: 70 } })); // no modules: not a picture
+  assert.equal(malformed.frame, scenes[0].frame);
+});
+
+test("now showing with the canopy off: the off copy and the server's (all off) picture", () => {
+  const scenes = [scene("a")];
+  const lit = { level: null, modules: [{ pos: "r0c0", state: "off", color: null, colors: null }], motion: null };
+  const off = nowShowing(scenes, ready({ power: false, lit }));
+  assert.equal(off.name, COPY.lightsOff);
+  assert.equal(off.description, COPY.noSceneHelp);
+  assert.equal(off.lit, lit);
+  const noScene = nowShowing(scenes, ready({ power: false, scene: null, lit }));
+  assert.equal(noScene.name, COPY.lightsOff);
+  assert.equal(noScene.scene, null);
+});
+
 test("the serpentine runs L→R, R→L, L→R over 3 × 10", () => {
   const tiles = snakeLayout();
   assert.equal(tiles.length, 30);
@@ -219,7 +254,7 @@ test("debug is ops-only and needs ?debug=1; the frame preview fits the window", 
 test("the page writes no Hubspace feature claim of its own", () => {
   // The feature sentence is always state.feature; client strings never name Hubspace (index.html holds the
   // neutral kicker/fallback). Comments may.
-  for (const name of ["kiosk.js", "panel-model.mjs"]) {
+  for (const name of ["kiosk.js", "panel-model.mjs", "canopy-preview.mjs"]) {
     const js = readFileSync(new URL(`../web/kiosk/${name}`, import.meta.url), "utf8").replace(/(^|\s)\/\/.*$/gm, "");
     assert.doesNotMatch(js, /['"`][^'"`\n]*Hubspace[^'"`\n]*['"`]/, name);
   }

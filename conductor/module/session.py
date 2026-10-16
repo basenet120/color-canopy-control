@@ -617,8 +617,9 @@ class ModuleSession:
         t1_ok, t1_why = self.t1_status()
         notes: list[str] = []
         # The mode's own ladder order (T1, then the position's module-level look, then the whole strand). T2 is never
-        # previewed: the hand-painted show slot isn't this page's to select for a mode preview.
-        candidates = [t for t in tiers if t is not Tier.T2]
+        # previewed: the hand-painted show slot isn't this page's to select for a mode preview. Nor is a stepped look
+        # (D65): only the canopy engine steps one, so this one-PUT preview shows its still design, the modules rung.
+        candidates = [t for t in tiers if t not in (Tier.T2, Tier.STEPPED)]
         if Tier.T1 in candidates and not t1_ok:
             candidates.remove(Tier.T1)
             notes.append(f"Per-head frames aren't allowed here ({t1_why}) — showing the module-level look.")
@@ -831,7 +832,8 @@ class ModuleSession:
                 if not self.target.simulated
                 else ""
             )
-            + " once all nine modules are recorded; the Conductor never rewrites it, and /ops alerts if it changes."
+            + " once every canopy module with a Hubspace device registered has it recorded (all nine on the full"
+            " canopy); the Conductor never rewrites it, and /ops alerts if it changes."
         )
         if self.target.simulated:
             message += " SIMULATED — the simulator's slot, not a real app painting."

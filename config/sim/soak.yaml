@@ -9,3 +9,38 @@ motion:
   motionEffect: 1
   note: "SIMULATED scroll (soak only; nothing benched)"
   feature: "SIMULATED on-device motion in a saved Hubspace custom pattern (soak only; never shown to guests)."
+
+# The ripple scenario (D64), also soak-only and SIMULATED: a separate, shorter run of the show's own wiring with
+# kiosk.ripple_stagger_s set to `stagger_s` (the show's own setting stays 0 = one burst until Alon flips it), `changes`
+# kiosk mood changes `spacing_s` (+ up to 2 s, seeded) apart under the pinned acceptance conditions. Targets: every
+# module correct within (rings − 1) × stagger + `settle_extra_s` at p95; exactly one PUT per module per change, none
+# before its ring; no downgrades. Each ring's landing spread (05's spread target, per ring: p95 ≤
+# `ring_spread_p95_s`) is reported for D64, not gating, while the show runs one burst.
+ripple:
+  stagger_s: 1.2
+  changes: 60
+  spacing_s: 12
+  ring_spread_p95_s: 2.0
+  settle_extra_s: 5.0
+
+# The stepped scenario (D65), also soak-only and SIMULATED: Coastal Tides and Golden Hour have a stepped rung in
+# config/modes.yaml (the simulator steps them; motion.stepped.live_enabled stays false, so live hardware doesn't), but
+# in sim Golden Hour shows its commissioned canvas first. So a separate, shorter run of the show's own wiring moves the
+# stepped rung first in each of `modes`' ladders, in the soak's config copy only: the mode's own stepped technique, or
+# for a mode without one a SIMULATED rung from its own module-level design (the modules sample's canvas and brightness,
+# so the still look it holds is that rung) with the `technique` fields below and copy naming the design's flow.
+# `runs` kiosk choices `hold_s` (+ up to 2 s, seeded) after the last run ends, alternating the modes; every
+# `interrupt_every`-th run is cut short by a still mood chosen mid-run. Then no input until the idle return. Targets
+# (proposed, not in the pinned acceptance.yaml until Alon signs them off): each step on all its modules before the
+# next, one PUT per changed module per step, ≤ motion.stepped's account_writes_per_min writes in any 60 s on the
+# account, no governor trip and no downgrade at 5% throttling, the still look after each run, the idle return
+# idle_return_s to idle_return_s + `idle_return_slack_s` after the last choice. Each step's landing spread
+# (p95 ≤ `step_spread_p95_s`) is reported, not gating.
+stepped:
+  modes: [golden-hour, coastal-tides]
+  technique: {direction: forward, steps_per_cycle: 6, step_s: 6, run_s: 90}
+  runs: 12
+  hold_s: 20
+  interrupt_every: 4
+  step_spread_p95_s: 2.0
+  idle_return_slack_s: 10

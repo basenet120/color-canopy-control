@@ -105,7 +105,8 @@ def test_every_mode_compiles_at_every_tier_of_its_ladder(mode_id, tier):
 
 
 def test_ladder_is_read_from_the_modes_file():
-    assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.T3, Tier.STRAND]
+    assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.STEPPED, Tier.T3, Tier.STRAND]  # D65
+    assert ladder("coastal-tides") == [Tier.STEPPED, Tier.T3, Tier.STRAND]
     assert ladder("lowcountry-calm") == [Tier.T3, Tier.STRAND]
     assert ladder("lowcountry-calm", TM) == [Tier.STRAND]
     with pytest.raises(PlanError, match="no mode 'disco'"):
@@ -261,6 +262,12 @@ def test_features_differ_per_tier_and_only_motion_copy_mentions_movement():
         for tier in ladder(mode_id):
             plan = compile_mode(mode_id, tier, _ctx(**_painted()))
             assert not MOTION_WORDS.search(plan.feature), (mode_id, tier)
+            if tier is Tier.STEPPED:
+                # D65: a stepped plan's feature is its hold's (the modules rung's: nothing moves until a runner
+                # steps it); only the moving copy, shown while a run moves, says it moves
+                assert plan.feature == compile_mode(mode_id, Tier.T3, _ctx()).feature, mode_id
+                assert MOTION_WORDS.search(plan.program.moving_feature), mode_id
+                continue
             features.append(plan.feature)
         assert len(set(features)) == len(features), mode_id
     moving = compile_mode("golden-hour", Tier.T1, _ctx(modes=_golden_with_code(4), effects_enabled=enabled))
@@ -268,17 +275,18 @@ def test_features_differ_per_tier_and_only_motion_copy_mentions_movement():
 
 
 def test_module_level_looks_follow_canopy_position():
-    # each module = the scene's gradient at its column centre (config/modes.yaml), at the scene's brightness
-    sunset = compile_mode("rainbow-row-sunset", Tier.T3, _ctx())
-    for row in range(3):
-        assert R.color_rgb(255, 175, 175) in sunset.modules[f"canopy-r{row}c0"].rows
-        assert R.color_rgb(255, 210, 224) in sunset.modules[f"canopy-r{row}c1"].rows
-        assert R.color_rgb(216, 189, 232) in sunset.modules[f"canopy-r{row}c2"].rows
+    # each module = the scene's design at its centre (config/modes.yaml, D63), at the scene's brightness
+    sunset = compile_mode("rainbow-row-sunset", Tier.T3, _ctx())  # corner to corner
+    assert R.color_rgb(255, 175, 175) in sunset.modules["canopy-r0c0"].rows
+    for pos in ("r0c2", "r1c1", "r2c0"):  # the middle diagonal is blush pink
+        assert R.color_rgb(255, 210, 224) in sunset.modules[f"canopy-{pos}"].rows
+    assert R.color_rgb(216, 189, 232) in sunset.modules["canopy-r2c2"].rows
+    assert sunset.modules["canopy-r0c1"].rows == sunset.modules["canopy-r1c0"].rows
     assert all(R.brightness(85) in t.rows for t in sunset.modules.values())
-    calm = compile_mode("lowcountry-calm", Tier.T3, _ctx())  # mirrored: the side columns match
+    calm = compile_mode("lowcountry-calm", Tier.T3, _ctx())  # radial: sea glass in the centre
     assert R.color_rgb(209, 234, 227) in calm.modules["canopy-r1c1"].rows
-    assert R.color_rgb(234, 239, 230) in calm.modules["canopy-r0c0"].rows
-    assert R.color_rgb(234, 239, 230) in calm.modules["canopy-r2c2"].rows
+    for corner in ("r0c0", "r0c2", "r2c0", "r2c2"):
+        assert R.color_rgb(234, 239, 230) in calm.modules[f"canopy-{corner}"].rows
 
 
 def test_module_level_rows_and_middle_row_layouts_follow_canopy_position():
@@ -312,7 +320,9 @@ def test_bench_flags_gate_t1_and_t2_on_live_hardware():
     plan = compile_first("rainbow-row-sunset", _ctx(flags=unproven))
     assert plan.tier is Tier.T3 and any("Gate C" in n for n in plan.notes)
     assert available_tiers("rainbow-row-sunset", _ctx(flags=unproven)) == [Tier.T3, Tier.STRAND]
-    assert compile_first("golden-hour", _ctx(), skip=[Tier.T1]).tier is Tier.T3
+    # the compiler doesn't gate the stepped tier (the show's tier_allowed does, tests/test_d65_modes.py)
+    assert compile_first("golden-hour", _ctx(), skip=[Tier.T1]).tier is Tier.STEPPED
+    assert compile_first("golden-hour", _ctx(), skip=[Tier.T1, Tier.STEPPED]).tier is Tier.T3
 
 
 def test_a_wrong_head_count_refuses_t1_but_t3_still_compiles():

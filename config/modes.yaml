@@ -5,17 +5,34 @@
 #
 # The modes ARE the six approved scenes (config/scenes.yaml, D59): each mode's id, label (the scene's name), blurb
 # (its mood) and preview (its palette, in order) match the scene, and every technique renders the scene's palette
-# (tests/test_modes_match_scenes.py checks all of this):
-#   canvas  — T1: a static gradient across the canopy (x = 0 at the left edge, 225 in wide — the Studio's
-#             illustration samples x / 225 the same way), the palette's colours as evenly spaced stops, painted with
-#             `rgb_only` palette recipes (config/recipes.yaml). Lowcountry Calm is mirrored (ivory at both ends, sea
-#             glass in the middle) if it ever gets a slot.
-#   slot    — T2: the same design, hand-painted in the Hubspace app into the mode's slot.
-#   modules — T3: each module set to one colour: the scene's gradient sampled at that module's column centre
-#             (x = 37.5, 112.5, 187.5 in), so the palette steps across the canopy column by column.
+# (tests/test_modes_match_scenes.py checks all of this).
+#
+# Each scene is ONE 2-D design over the canopy (D63, superseding D59's x / 225 gradient): a `field` canvas
+# (conductor/looks/field.py; canopy inches, reflected-ceiling view, x from the left edge, y from the top edge) with
+# the palette's colours as evenly spaced stops, painted with `rgb_only` palette recipes (config/recipes.yaml). A YAML
+# anchor names it once, so the same design drives every tier that draws it:
+#   canvas  — T1: the design at each of the 270 heads.
+#   slot    — T2: a design hand-painted in the Hubspace app into the mode's slot (the reconciler verifies its hash).
+#   modules — T3: each module set to one colour: the design sampled at the module's centre (`at: centre`,
+#             ((col + ½)·75, (row + ½)·40) in), at the scene's brightness. The `feature` names the design's layout
+#             in the words `field.layout_words` requires ("diagonally", "from the centre out", "from one edge", …).
 #   strand  — the scene's solid colour (its `default_solid`) on every strand.
-# Brightness is the scene's `brightness_draft` at every tier (a device setting; colours stay full strength). Every
-# scene is static: no mode has a motion effect (the soak may enable a SIMULATED one, config/sim/soak.yaml).
+# The layouts (D63 drafts, for Paris to review): Lowcountry Calm a radial from the canopy's centre (sea glass in the
+# middle); Rainbow Row Sunset corner to corner; Garden Gathering a radial from the middle of one long edge (ivory
+# there); Coastal Tides a tilted shoreline (linear at 78°); Golden Hour a sun at the middle of the left edge, measured
+# in the canopy's proportions so it arcs at module level too; The Goodnight Glow a moon over r0c2 (moonlight blue
+# there). Changing a design changes the T1 frames, so every recorded slot hash of a painted scene goes stale: freeze
+# the designs before commissioning at install (D63).
+# Brightness is the scene's `brightness_draft` at every tier (a device setting; colours stay full strength). No mode
+# has an on-device motion effect (the soak may enable a SIMULATED one, config/sim/soak.yaml).
+#
+# Which scenes move (D65, superseding D59's "every scene is static" for these two only): Coastal Tides and Golden Hour
+# have a `stepped` rung. The Conductor re-sends the scene's own design (the same `&…` anchor, so the still look it
+# holds is the scene's module-level rung exactly) a step at a time, one colour per strand through the Hubspace cloud
+# every few seconds, for a bounded run (`run_s`), then the static design holds. Live hardware refuses the stepped
+# rung until the stepped rehearsal (Gate R) passes and Alon sets motion.stepped.live_enabled (config/conductor.yaml);
+# until then the ladder lands on the next rung. Lowcountry Calm (the idle look) and The Goodnight Glow stay still;
+# Rainbow Row Sunset and Garden Gathering are unchanged.
 #
 # Only three modes have a canvas: the controller holds three custom slots (custom-1..3) and painted looks are stored
 # at commissioning and only selected at show time (store-and-select, 04), so three slots hold three painted looks.
@@ -27,6 +44,9 @@
 #             at commissioning and only SELECTED at show time (store-and-select, 04)
 #   slot    — T2: select `slot`, hand-painted in the Hubspace app (the reconciler verifies its hash, never rewrites)
 #   modules — T3: module-level composition: each module = one coarse pixel (a strand look per canopy position)
+#   stepped — module level, a step at a time (D65): the modules rung's design shifted along its layout every
+#             `step_s` (more on a busy account: the rate budget, 07 §6), `steps_per_cycle` steps per repeat, for
+#             `run_s`; then the modules rung holds. `moving_feature` is shown only while a run moves.
 #
 # `ladder` is tried in order; the engine uses the first tier the capabilities + bench flags allow, and downgrades
 # with hysteresis (07 §6). Colours name entries in config/recipes.yaml.
@@ -46,11 +66,17 @@ modes:
     ladder: [modules, strand]
     techniques:
       modules:
-        columns:   # canopy module column → the mirrored gradient at x = 37.5, 112.5, 187.5 in
-          - {kind: rgb, rgb: [234, 239, 230], brightness: 70}
-          - {kind: rgb, rgb: [209, 234, 227], brightness: 70}
-          - {kind: rgb, rgb: [234, 239, 230], brightness: 70}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+        sample:
+          canvas:   # sea glass at the canopy's centre, soft ivory toward the corners
+            kind: field
+            field: {kind: radial, centre_in: [112.5, 60], invert: true}
+            stops:
+              - {at: 0.0, color: soft-ivory}
+              - {at: 1.0, color: sea-glass}
+            recipe: rgb_only
+          at: centre
+          brightness: 70
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from the centre out: sea glass in the middle, paling toward soft ivory at the corners."
       strand:
         look: {kind: rgb, rgb: [247, 242, 231], brightness: 70}   # soft ivory
         feature: "Colour and dimming: all nine Hubspace strands set to soft ivory."
@@ -63,9 +89,9 @@ modes:
     slot: custom-1
     techniques:
       canvas:
-        canvas:
-          kind: gradient
-          axis: x            # canopy left (x=0) → right (x=225)
+        canvas: &sunset-design   # corner to corner: pastel coral at the top left, lilac at the bottom right
+          kind: field
+          field: {kind: linear, angle_deg: 45}
           stops:
             - {at: 0.0, color: pastel-coral}
             - {at: 0.5, color: blush-pink}
@@ -77,11 +103,8 @@ modes:
         brightness: 85
         feature: "A custom pattern painted light by light in the Hubspace app, saved on each strand."
       modules:
-        columns:
-          - {kind: rgb, rgb: [255, 175, 175], brightness: 85}
-          - {kind: rgb, rgb: [255, 210, 224], brightness: 85}
-          - {kind: rgb, rgb: [216, 189, 232], brightness: 85}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+        sample: {canvas: *sunset-design, at: centre, brightness: 85}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: pastel coral toward one corner, blush pink across the middle, lilac toward the opposite corner."
       strand:
         look: {kind: rgb, rgb: [255, 158, 150], brightness: 85}   # pastel coral
         feature: "Colour and dimming: all nine Hubspace strands set to pastel coral."
@@ -94,9 +117,9 @@ modes:
     slot: custom-2
     techniques:
       canvas:
-        canvas:
-          kind: gradient
-          axis: x
+        canvas: &garden-design   # ivory at the middle of the bottom long edge, sage green toward the far corners
+          kind: field
+          field: {kind: radial, centre_in: [112.5, 120], invert: true}
           stops:
             - {at: 0.0, color: sage-green}
             - {at: 0.5, color: pale-lime}
@@ -108,11 +131,8 @@ modes:
         brightness: 75
         feature: "A custom pattern painted light by light in the Hubspace app, saved on each strand."
       modules:
-        columns:
-          - {kind: rgb, rgb: [172, 207, 174], brightness: 75}
-          - {kind: rgb, rgb: [230, 238, 209], brightness: 75}
-          - {kind: rgb, rgb: [241, 241, 224], brightness: 75}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+        sample: {canvas: *garden-design, at: centre, brightness: 75}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: ivory at the middle of one long side, through pale lime, to sage green toward the far corners."
       strand:
         look: {kind: rgb, rgb: [143, 191, 157], brightness: 75}   # sage green
         feature: "Colour and dimming: all nine Hubspace strands set to sage green."
@@ -121,14 +141,30 @@ modes:
     label: Coastal Tides
     blurb: Find your coast
     preview: ["#659BD5", "#79CED4", "#B2E8D2", "#E9F3E7"]
-    ladder: [modules, strand]
+    ladder: [stepped, modules, strand]
     techniques:
       modules:
-        columns:
-          - {kind: rgb, rgb: [111, 181, 213], brightness: 85}
-          - {kind: rgb, rgb: [150, 219, 211], brightness: 85}
-          - {kind: rgb, rgb: [206, 238, 221], brightness: 85}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+        sample:
+          canvas: &tides-design   # a tilted shoreline: ocean blue along the top long edge, foam white along the bottom
+            kind: field
+            field: {kind: linear, angle_deg: 78}
+            stops:
+              - {at: 0.0, color: ocean-blue}
+              - {at: 0.3333333333333333, color: aqua}       # 1/3 exactly
+              - {at: 0.6666666666666666, color: seafoam}    # 2/3 exactly
+              - {at: 1.0, color: foam-white}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally like a tilted shoreline: ocean blue and aqua toward one long side, seafoam and foam white toward the other."
+      stepped:   # D65: the tide rolls across the panels, a step every few seconds, then the shoreline above holds
+        canvas: *tides-design
+        direction: forward      # ocean blue moves on toward the foam-white side
+        steps_per_cycle: 6
+        step_s: 6               # design pace; nine strands on one account step every 7.5 s (motion.stepped budget)
+        run_s: 90
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the shoreline's colours move diagonally across the canopy like a tide coming in: ocean blue and aqua, then seafoam and foam white."
       strand:
         look: {kind: rgb, rgb: [121, 206, 212], brightness: 85}   # aqua
         feature: "Colour and dimming: all nine Hubspace strands set to aqua."
@@ -137,13 +173,16 @@ modes:
     label: Golden Hour
     blurb: Let the evening glow
     preview: ["#FFDB9B", "#FFB69D", "#FF9BC4", "#E779B0", "#B59AE2"]
-    ladder: [canvas, slot, modules, strand]
+    ladder: [canvas, slot, stepped, modules, strand]
     slot: custom-3
     techniques:
       canvas:
-        canvas:
-          kind: gradient
-          axis: x
+        canvas: &golden-design   # a sun at the middle of the left edge: soft gold there, lavender toward the far corners
+          kind: field
+          # metric: canopy measures in the canopy's proportions (a ring is an ellipse that fills it), so the sun's arc
+          # shows at module level: in true inches the 40 in between rows barely changes the distance from (0, 60)
+          # and T3 read as D59's three columns.
+          field: {kind: radial, centre_in: [0, 60], metric: canopy}
           stops:
             - {at: 0.0, color: soft-gold}
             - {at: 0.25, color: golden-hour-peach}
@@ -157,11 +196,16 @@ modes:
         brightness: 95
         feature: "A custom pattern painted light by light in the Hubspace app, saved on each strand."
       modules:
-        columns:
-          - {kind: rgb, rgb: [255, 194, 156], brightness: 95}
-          - {kind: rgb, rgb: [255, 155, 196], brightness: 95}
-          - {kind: rgb, rgb: [214, 132, 193], brightness: 95}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+        sample: {canvas: *golden-design, at: centre, brightness: 95}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the far side."
+      stepped:   # D65: where the per-head sun (canvas) isn't available, its rays move out from the left edge
+        canvas: *golden-design
+        direction: forward      # outwards from the sun
+        steps_per_cycle: 6
+        step_s: 6               # design pace; nine strands on one account step every 7.5 s (motion.stepped budget)
+        run_s: 90
+        brightness: 95
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the sunset's colours move out from one edge like rays from a low sun: gold and peach, then sunset pink, rose and lavender."
       strand:
         look: {kind: rgb, rgb: [255, 155, 196], brightness: 95}   # sunset pink
         feature: "Colour and dimming: all nine Hubspace strands set to sunset pink."
@@ -173,11 +217,18 @@ modes:
     ladder: [modules, strand]
     techniques:
       modules:
-        columns:
-          - {kind: rgb, rgb: [156, 149, 216], brightness: 28}
-          - {kind: rgb, rgb: [190, 169, 230], brightness: 28}
-          - {kind: rgb, rgb: [194, 199, 239], brightness: 28}
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps across the canopy column by column."
+        sample:
+          canvas:   # a moon over r0c2: moonlight blue there, periwinkle toward the far corner
+            kind: field
+            field: {kind: radial, centre_in: [187.5, 20], invert: true}
+            stops:
+              - {at: 0.0, color: periwinkle}
+              - {at: 0.5, color: goodnight-glow-lavender}
+              - {at: 1.0, color: moonlight-blue}
+            recipe: rgb_only
+          at: centre
+          brightness: 28
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one spot: moonlight blue on one corner strand, deepening toward periwinkle at the far corner."
       strand:
         look: {kind: rgb, rgb: [139, 139, 209], brightness: 28}   # periwinkle
         feature: "Colour and dimming: all nine Hubspace strands set to periwinkle."

@@ -34,6 +34,7 @@ PROBLEM_LEVELS = ("warn", "warning", "error")
 _SLOT = re.compile(r"pattern in (custom-\d+)")
 _TIER_ALERT = re.compile(r"^[\w-]+: (down|back up) from \w+ to \w+ — ")
 TIER_WORDS = {
+    "stepped": "T3 stepped, one colour per module a step at a time",
     "canvas": "T1, every head painted",
     "slot": "T2, a slot painted in the app",
     "modules": "T3, one colour per module",

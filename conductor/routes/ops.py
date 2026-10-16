@@ -6,11 +6,20 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 
 - `POST /api/canopy/reassert`        re-assert: the engine resends only modules whose readback differs (07 §6)
 - `POST /api/canopy/pause`           `{paused}` pause / resume guest input (the kiosk shows "resting")
-- `POST /api/canopy/safe-look`       Lowcountry Calm at its strand technique, all modules, now
+- `POST /api/canopy/safe-look`       Lowcountry Calm at its strand technique, every registered module, now
 - `POST /api/canopy/guest-reset`     clear the guest panel's brightness / off (D60): on, at the look's designed brightness
 - `POST /api/canopy/commission`      write T1 slot contents and record readback hashes (the engine rate-limits)
 - `POST /api/canopy/mode`            `{mode}` an ops mode change (no guest cooldown)
-- `GET  /api/canopy/state`           CanopyState + the mode list for the picker
+- `GET  /api/canopy/state`           CanopyState + the mode list for the picker + `stepped`, the stepped card's gauge
+                                     (`stepped_gauge`; None unless a stepped run goes or the governor is cooling off)
+                                     + `rehearsal` (the stepped rehearsal running now and the last one's verdict)
+- `GET  /api/canopy/stepped-rehearsal[?mode=&minutes=]`  the rehearsal's status, the looks it can run and, with a
+                                     mode and minutes, the preview: the modules it writes to and the confirm sentence
+- `POST /api/canopy/stepped-rehearsal`  `{mode, minutes (1–10), confirm}` start the stepped rehearsal (Gate R,
+                                     conductor/rehearsal.py). Without `confirm` equal to the preview's sentence (it
+                                     names every module and the minutes) it answers 409 `confirm_required` and sends
+                                     nothing. Operator-started only: nothing else ever starts one.
+- `POST /api/canopy/stepped-rehearsal/stop`  stop it now: the still look holds and the report says it was stopped
 - `GET  /api/canopy/heads`           all 270 heads: position (per-device calibration), desired and reported colour
 - `GET  /api/ops/calibration`        the nine modules' wire-order calibration (the /ops/calibrate/ hub)
 - `GET  /api/ops/checklist[?client_ms=]`  the 7 am checklist, each item pass / warn / fail with a plain fix
@@ -28,7 +37,13 @@ WS topic "ops" so other open dashboards refresh.
 Controls say what actually happened (07 §10: a non-developer at 7 am acts on these). conductor/canopy.py reports a
 refusal as a `CanopyState` with `refused=True`; every control turns that into a 409 with the engine's own sentence,
 and a commissioning run that finished with problems answers `ok: false`. The success message is built from the state
-the engine returned (the look, its tier, how many modules it went to, any held on a test page, an outage).
+the engine returned and the plan it is showing (the look, its tier, how many modules it went to, any held on a test
+page, an outage).
+
+Every count says how many of the nine canopy positions have a Hubspace device registered (D62,
+`conductor.show.split_canopy_positions`): a position without one is never read, driven or timed, gets its own
+clause pointing to /ops/accounts, and keeps the checklist failing. With all nine registered every sentence reads as
+it always did, except that a registered module whose profile hasn't been read (D36) is no longer counted as sent.
 
 "Reported" colours are the cloud's REST readback of each strand rendered per head (`render.head_colors`): they
 prove what Hubspace stores, not what the pucks show (07 §5). The payload says so, and says SIMULATED in sim. A kit
@@ -62,11 +77,13 @@ from conductor.geometry import build_layout, load_canopy_config
 from conductor.logring import installed as installed_logring
 from conductor.module.layout import calibration_for, module_map, shown_corner
 from conductor.redact import redact
+from conductor.rehearsal import MAX_MINUTES as REHEARSAL_MAX_MINUTES
 from conductor.render import head_colors
 from conductor.roles_api import Principal
 from conductor.routes.accounts import same_origin
 from conductor.routes.deps import require_ops, services_of
 from conductor.rows import FRAME_CLASS, SLOTS, slot_hash
+from conductor.show import split_canopy_positions
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +95,12 @@ NO_ENGINE = (
     "this stays, the log tail below says why."
 )
 NO_LOGRING = "The log tail isn't running on this Conductor (it starts with the app)."
+# D62: with no canopy position registered nothing can be planned; registering one brings the canopy out of rest by
+# itself (the show re-reads profiles when /ops/accounts registers a device), so no restart is needed.
+NOTHING_REGISTERED_FIX = (
+    "No canopy position has a Hubspace device registered yet. Register one for each position on /ops/accounts: the "
+    "canopy comes out of rest on its own once one is registered."
+)
 NO_STORE = {"Cache-Control": "no-store"}
 
 MATCH_TOLERANCE = 12  # per channel, 0–255: rendering and rounding differences aren't a mismatch
@@ -129,6 +152,12 @@ class ModeBody(_Body):
 class TestModeBody(_Body):
     mode: str | None = Field(None, max_length=64)
     restore: bool = True
+
+
+class RehearsalBody(_Body):
+    mode: str = Field(min_length=1, max_length=64)
+    minutes: int = Field(ge=1, le=REHEARSAL_MAX_MINUTES)
+    confirm: str | None = Field(None, max_length=2000)
 
 
 # ---- helpers -------------------------------------------------------------------------------------------------
@@ -257,6 +286,7 @@ async def _engine_call(what: str, call: Callable[[], Any]) -> Any:
 
 
 TIER_WORDS = {
+    "stepped": "T3 stepped, one colour per module a step at a time",
     "canvas": "T1, every head painted",
     "slot": "T2, a slot painted in the app",
     "modules": "T3, one colour per module",
@@ -270,24 +300,66 @@ def _refused(state: Any, fallback: str) -> None:
         raise HTTPException(status_code=409, detail=getattr(state, "message", "") or fallback)
 
 
-def _sent_line(engine: Any, state: Any, what: str) -> str:
-    """ "<what>: <look> (<tier>) on N of 9 modules" from the state the engine returned — never a fixed sentence."""
+def _positions(services: Any) -> tuple[list[str], list[str]]:
+    """(registered, unregistered) canopy module ids (D62): every count on /ops says how many of the nine positions
+    have a Hubspace device registered on the engine's driver."""
+    try:
+        return split_canopy_positions(services)
+    except Exception:
+        log.exception("couldn't split the canopy positions by registration")
+        return [e.id for e in services.registry.canopy_modules()], []
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return one if n == 1 else many
+
+
+def _sent_line(services: Any, engine: Any, state: Any, what: str) -> str:
+    """ "<what>: <look> (<tier>) on N of 9 modules" from the plan the engine is showing — never a fixed sentence. N is
+    what the plan drives less any module held on a test page; the positions it left out are named (D62)."""
     label = state.label or state.mode or "the look"
     tier = TIER_WORDS.get(state.tier or "", state.tier or "")
     look = f"{label} ({tier})" if tier else label
+    registered, unregistered = _positions(services)
     if engine_flag(engine, "outage") is not None:
+        if unregistered and registered:
+            n = len(registered)
+            where = f"the {n} {_plural(n, 'module', 'modules')} with a device registered"
+        else:
+            where = "every module"
         return (
-            f"{what}: {look} is set, but Hubspace isn't answering (the canopy is resting), so it goes to every module "
+            f"{what}: {look} is set, but Hubspace isn't answering (the canopy is resting), so it goes to {where} "
             "as soon as Hubspace answers again."
         )
     modules = state.modules or {}
-    total = len(modules)
-    held = sum(1 for m in modules.values() if m.get("locked"))
+    plan = None
+    try:
+        plan = engine.current_plan()
+    except Exception:
+        log.exception("canopy engine current_plan() failed")
+    if plan is None:  # an engine with no plan to read: count the modules its state reports
+        driven = list(modules)
+        total = len(modules)
+        unread: list[str] = []
+    else:
+        driven = [d for d in plan.modules if d in registered]
+        total = len(registered) + len(unregistered)
+        unread = [d for d in registered if d in plan.skipped and d not in plan.modules]
+    held = sum(1 for d in driven if (modules.get(d) or {}).get("locked"))
     if not total:
         return f"{what}: {look}."
-    line = f"{what}: {look} on {total - held} of {total} modules"
+    line = f"{what}: {look} on {len(driven) - held} of {total} modules"
     if held:
         line += f"; {held} held on a test page are left alone until they're released"
+    if plan is not None and unregistered:
+        n = len(unregistered)
+        line += (
+            f"; {n} {_plural(n, 'has', 'have')} no Hubspace device registered, so "
+            f"{_plural(n, 'it was', 'they were')} left out (register {_plural(n, 'it', 'them')} on /ops/accounts)"
+        )
+    if unread:
+        n = len(unread)
+        line += f"; {n} whose profile hasn't been read {_plural(n, 'was', 'were')} left out"
     return line + "."
 
 
@@ -360,7 +432,11 @@ async def safe_look(request: Request, _ops: Ops) -> JSONResponse:
     _refused(state, "The engine refused the safe look.")
     _publish(services, "safe_look")
     return JSONResponse(
-        {"ok": True, "message": _sent_line(engine, state, "Safe look sent"), "state": state.to_json()},
+        {
+            "ok": True,
+            "message": _sent_line(services, engine, state, "Safe look sent"),
+            "state": state.to_json(),
+        },
         headers=NO_STORE,
     )
 
@@ -381,7 +457,9 @@ async def guest_reset(request: Request, _ops: Ops) -> JSONResponse:
     if getattr(before, "guest_power", True) and getattr(before, "guest_brightness", None) is None:
         message = "Nothing to clear: the canopy is on, at its look's designed brightness."
     else:
-        message = _sent_line(engine, state, "Guest settings cleared, back on at the designed brightness")
+        message = _sent_line(
+            services, engine, state, "Guest settings cleared, back on at the designed brightness"
+        )
     return JSONResponse({"ok": True, "message": message, "state": state.to_json()}, headers=NO_STORE)
 
 
@@ -416,7 +494,7 @@ async def change_mode(request: Request, body: ModeBody, _ops: Ops) -> JSONRespon
     _refused(state, f"The engine refused to change to {body.mode}.")
     _publish(services, "mode", mode=body.mode)
     return JSONResponse(
-        {"ok": True, "message": _sent_line(engine, state, "Changing to"), "state": state.to_json()},
+        {"ok": True, "message": _sent_line(services, engine, state, "Changing to"), "state": state.to_json()},
         headers=NO_STORE,
     )
 
@@ -426,7 +504,173 @@ async def canopy_state(request: Request, _ops: Ops) -> JSONResponse:
     services = services_of(request)
     engine = engine_of(services)
     state = await _engine_call("report its state", engine.state)
-    return JSONResponse({**state.to_json(), "modes": mode_list(services)}, headers=NO_STORE)
+    return JSONResponse(
+        {
+            **state.to_json(),
+            "modes": mode_list(services),
+            "stepped": stepped_gauge(services, engine),
+            "rehearsal": _rehearsal_status(engine),
+        },
+        headers=NO_STORE,
+    )
+
+
+# ---- the stepped rehearsal (Gate R; conductor/rehearsal.py, docs/runbooks/stepped-rehearsal.md) ---------------------
+NO_REHEARSAL = "This canopy engine can't run the stepped rehearsal."
+
+
+def _rehearsal_status(engine: Any) -> dict | None:
+    status = getattr(engine, "rehearsal_status", None)
+    if status is None:
+        return None
+    try:
+        return status()
+    except Exception:
+        log.exception("canopy engine rehearsal_status() failed")
+        return None
+
+
+def _rehearsal_modes(services: Any) -> list[dict]:
+    """The looks a rehearsal can run: every mode but the idle one (D65: the resting look never steps)."""
+    idle = services.settings.kiosk.idle_mode
+    return [{"id": m["id"], "label": m["label"]} for m in mode_list(services) if m["id"] != idle]
+
+
+def _rehearsal_engine(services: Any) -> Any:
+    engine = engine_of(services)
+    if getattr(engine, "rehearsal_preview", None) is None:
+        raise HTTPException(status_code=409, detail=NO_REHEARSAL)
+    return engine
+
+
+@router.get("/api/canopy/stepped-rehearsal")
+async def rehearsal_info(
+    request: Request, _ops: Ops, mode: str | None = None, minutes: int | None = None
+) -> JSONResponse:
+    services = services_of(request)
+    engine = _rehearsal_engine(services)
+    body: dict[str, Any] = {
+        "status": _rehearsal_status(engine),
+        "modes": _rehearsal_modes(services),
+        "max_minutes": REHEARSAL_MAX_MINUTES,
+        "preview": None,
+    }
+    if mode is not None:
+        _known_mode(services, mode)
+        if minutes is None or not 1 <= minutes <= REHEARSAL_MAX_MINUTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A stepped rehearsal runs 1 to {REHEARSAL_MAX_MINUTES} whole minutes.",
+            )
+        body["preview"] = await _engine_call(
+            "prepare the stepped rehearsal", lambda: engine.rehearsal_preview(mode, minutes)
+        )
+    return JSONResponse(body, headers=NO_STORE)
+
+
+@router.post("/api/canopy/stepped-rehearsal")
+async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> JSONResponse:
+    services = services_of(request)
+    engine = _rehearsal_engine(services)
+    _known_mode(services, body.mode)
+    preview = await _engine_call(
+        "prepare the stepped rehearsal", lambda: engine.rehearsal_preview(body.mode, body.minutes)
+    )
+    if body.confirm != preview["confirm"]:
+        # Nothing is sent until ops has confirmed this very sentence (the modules or minutes may have changed).
+        return JSONResponse(
+            {
+                "detail": f"Confirm the rehearsal first: {preview['confirm']}",
+                "confirm_required": True,
+                "confirm": preview["confirm"],
+                "preview": preview,
+            },
+            status_code=409,
+            headers=NO_STORE,
+        )
+    result = await _engine_call(
+        "start the stepped rehearsal", lambda: engine.rehearse(body.mode, body.minutes, source="ops")
+    )
+    _publish(services, "rehearsal", mode=body.mode, minutes=body.minutes)
+    return JSONResponse(
+        {
+            "ok": bool(result.get("ok")),
+            "message": result.get("message") or "",
+            "rehearsal": _rehearsal_status(engine),
+            "state": _state_json(engine),
+        },
+        headers=NO_STORE,
+    )
+
+
+@router.post("/api/canopy/stepped-rehearsal/stop")
+async def rehearsal_stop(request: Request, _ops: Ops) -> JSONResponse:
+    services = services_of(request)
+    engine = _rehearsal_engine(services)
+    result = await _engine_call("stop the stepped rehearsal", lambda: engine.stop_rehearsal(source="ops"))
+    _publish(services, "rehearsal_stop")
+    return JSONResponse(
+        {
+            "ok": True,
+            "message": result.get("message") or "",
+            "rehearsal": _rehearsal_status(engine),
+            "state": _state_json(engine),
+        },
+        headers=NO_STORE,
+    )
+
+
+def stepped_gauge(services: Any, engine: Any) -> dict | None:
+    """The /ops stepped card (Tier.STEPPED, conductor/sequence.py): the run's step, its pace against the account cap,
+    when it holds, and the throttle governor's cool-offs. None while no stepped run is going and no account is
+    cooling off. `writes_60s` is the executor's own count of writes sent on the run's busiest account in the last
+    60 s (every write there — steps, re-asserts, retries, other devices on that account), against
+    `motion.stepped.account_writes_per_min`. Wall times (`holds_at`, `until`) are the server's clock."""
+    settings = services.settings.motion.stepped
+    clock = getattr(engine, "clock", None) or services.clock
+    mono, now = clock.monotonic(), clock.now()
+    cooloff = [
+        {"account": account, "until": now + (until - mono)}
+        for account, until in sorted((getattr(engine, "stepped_cooloff", None) or {}).items())
+        if until > mono
+    ]
+    runner = getattr(engine, "runner", None)
+    running = bool(getattr(runner, "running", False))
+    if not running and not cooloff:
+        return None
+    gauge: dict[str, Any] = {
+        "running": running,
+        "cap": settings.account_writes_per_min,
+        "live_enabled": settings.live_enabled,
+        "cooloff": cooloff,
+        "governor_trips": int((getattr(engine, "stats", None) or {}).get("governor_trips", 0)),
+    }
+    if not running:
+        return gauge
+    writes: dict[str, int] = {}
+    budgets: dict[int, dict] = {}  # executor → its budget, read once
+    for device_id in runner.plan.modules:
+        try:
+            target = services.target(device_id, Purpose.ENGINE)
+            account = target.driver.account_of(target.address)
+        except LookupError:
+            continue
+        budget = budgets.setdefault(id(target.executor), target.executor.budget())
+        writes[account] = int(((budget.get("accounts") or {}).get(account) or {}).get("writes_60s", 0))
+    busiest = max(sorted(writes), key=lambda a: writes[a], default=None)
+    gauge.update(
+        mode=runner.plan.mode_id,
+        # moving: steps go out now; held: the run's clock goes on but nothing is sent (paused, resting, set-up, off)
+        moving=bool(getattr(engine, "stepping", False)),
+        step=runner.index,
+        steps=runner.count,
+        step_s=runner.step_s,
+        design_step_s=runner.program.step_s,
+        holds_at=runner.t0_wall + runner.count * runner.step_s,
+        account=busiest,
+        writes_60s=writes.get(busiest, 0) if busiest is not None else None,
+    )
+    return gauge
 
 
 # ---- heads: desired vs reported ------------------------------------------------------------------------------
@@ -459,6 +703,7 @@ def canopy_heads(services: Any) -> dict:
             log.exception("canopy engine current_plan() failed")
     engine_modules = (state or {}).get("modules") or {}
     entries = {e.module: e for e in services.registry.canopy_modules()}
+    registered = set(_positions(services)[0])
     default_heads = build_layout(cfg)
     grid: dict[str, dict] = {}
     for h in default_heads:
@@ -468,9 +713,11 @@ def canopy_heads(services: Any) -> dict:
     modules_out: list[dict] = []
     heads_out: list[dict] = []
     totals = {"match": 0, "mismatch": 0, "unknown": 0}
+    no_device = 0  # heads at positions with no Hubspace device registered (D62): dark, never read back
     for module_id in sorted(grid, key=lambda m: (grid[m]["row"], grid[m]["col"])):
         g = grid[module_id]
         entry = entries.get(module_id)
+        is_registered = entry is not None and entry.id in registered
         ox, oy = g["col"] * mw, g["row"] * mh
         if entry is None:
             positions = [(h.x, h.y) for h in sorted(g["heads"], key=lambda h: h.index)]
@@ -536,12 +783,16 @@ def canopy_heads(services: Any) -> dict:
                     "match": match,
                 }
             )
-        for k, v in m_counts.items():
-            totals[k] += v
+        if is_registered:
+            for k, v in m_counts.items():
+                totals[k] += v
+        else:
+            no_device += len(positions)
         modules_out.append(
             {
                 "id": module_id,
                 **record,
+                "registered": is_registered,
                 "row": g["row"],
                 "col": g["col"],
                 "orientation": orientation,
@@ -574,7 +825,15 @@ def canopy_heads(services: Any) -> dict:
         },
         "readback_note": readback_note(simulated),
         "match_tolerance": MATCH_TOLERANCE,
-        "counts": {"heads": len(heads_out), **totals},
+        "counts": {
+            "heads": len(heads_out),
+            **totals,
+            "no_device": no_device,
+            "modules": {
+                "total": len(modules_out),
+                "registered": sum(1 for m in modules_out if m["registered"]),
+            },
+        },
         "modules": modules_out,
         "heads": heads_out,
     }
@@ -831,9 +1090,13 @@ def _module_names(names: list[str]) -> str:
 def _check_modules(services: Any, state: dict | None) -> dict:
     entries = services.registry.canopy_modules()
     engine_modules = (state or {}).get("modules") or {}
-    offline, attention, waiting, ok = [], [], [], []
+    unregistered_ids = set(_positions(services)[1])
+    offline, attention, waiting, ok, unregistered = [], [], [], [], []
     for entry in entries:
         name = entry.label or entry.id
+        if entry.id in unregistered_ids:  # D62: never read or driven; its own clause and fix below
+            unregistered.append(name)
+            continue
         address, error = _engine_address(services, entry.id)
         if address is None:
             attention.append(f"{name} ({error})")
@@ -861,32 +1124,48 @@ def _check_modules(services: Any, state: dict | None) -> dict:
             "modules",
             f"{len(ok)}/{total} modules online",
             "fail",
-            f"Only {len(entries)} canopy modules are registered.",
+            f"Only {len(entries)} canopy positions are in the registry.",
             "Register the missing modules on /ops/accounts (one device per canopy position).",
         )
+    # A position with no Hubspace device registered (D62) is never online: the item fails until each has one.
+    gap = f" No Hubspace device registered: {_module_names(unregistered)}." if unregistered else ""
+    then_register = (
+        " Then register a device on /ops/accounts for each position that has none." if unregistered else ""
+    )
     if offline:
         return _item(
             "modules",
             f"{len(ok)}/{total} modules online",
             "fail",
-            f"{detail} Offline: {_module_names(offline)}.",
-            "Check those controllers' power and Wi-Fi (the controller's light), then press Re-assert all.",
+            f"{detail} Offline: {_module_names(offline)}.{gap}",
+            "Check those controllers' power and Wi-Fi (the controller's light), then press Re-assert all."
+            + then_register,
         )
     if attention:
         return _item(
             "modules",
             f"{len(ok)}/{total} modules online",
             "fail",
-            f"{detail} Needs attention: {'; '.join(attention)}.",
-            "Open the module page for each one (the canopy grid above), then press Re-assert all.",
+            f"{detail} Needs attention: {'; '.join(attention)}.{gap}",
+            "Open the module page for each one (the canopy grid above), then press Re-assert all."
+            + then_register,
         )
     if waiting:
         return _item(
             "modules",
             f"{len(ok)}/{total} modules online",
-            "warn",
-            f"{detail} No confirmed readback yet: {_module_names(waiting)}.",
-            "Press Re-assert all (or run the test mode change below): that reads every module back.",
+            "fail" if unregistered else "warn",
+            f"{detail} No confirmed readback yet: {_module_names(waiting)}.{gap}",
+            "Press Re-assert all (or run the test mode change below): that reads every module back."
+            + then_register,
+        )
+    if unregistered:
+        return _item(
+            "modules",
+            f"{len(ok)}/{total} modules online",
+            "fail",
+            f"{detail}{gap}",
+            "Register a device for each of those positions on /ops/accounts.",
         )
     return _item("modules", f"{total}/{total} modules online", "pass", detail)
 
@@ -894,8 +1173,11 @@ def _check_modules(services: Any, state: dict | None) -> dict:
 async def _check_heads(services: Any) -> dict:
     from conductor.routes.devices import _capabilities  # cached profile reads (a GET, never a write)
 
-    entries = services.registry.canopy_modules()
-    records = await _capabilities(services, [e.id for e in entries], False)
+    registered, unregistered = _positions(services)
+    reg = set(registered)
+    # D62: only the positions with a Hubspace device registered are read; the others are dark and say so.
+    entries = [e for e in services.registry.canopy_modules() if e.id in reg]
+    records = await _capabilities(services, [e.id for e in entries], False) if entries else {}
     heads = module_heads(services.config_dir)
     problems, kinds, unread, mapped = [], set(), [], []
     for entry in entries:
@@ -911,10 +1193,32 @@ async def _check_heads(services: Any) -> dict:
         elif check.problem:
             problems.append(f"{name}: {check.problem}")
             kinds.add(check.kind)
-    visual = (
-        "Whether a dark string changes what Hubspace reports is unverified, so also look up: all 270 heads "
-        "should light."
-    )
+    if unregistered:
+        n, dark = len(entries), len(unregistered)
+        lit = (
+            f"the {n * heads} heads of the {n} registered {_plural(n, 'module', 'modules')} should light; the other "
+            f"{dark} {_plural(dark, 'position stays', 'positions stay')} dark"
+        )
+        names = _module_names(
+            [(e.label or e.id) for e in services.registry.canopy_modules() if e.id not in reg]
+        )
+        gap = (
+            f" {names} {_plural(dark, 'has', 'have')} no Hubspace device registered, so "
+            f"{_plural(dark, 'it stays', 'they stay')} dark."
+        )
+        register = "Register a device on /ops/accounts for each position that has none."
+    else:
+        lit, gap, register = "all 270 heads should light", "", ""
+    visual = f"Whether a dark string changes what Hubspace reports is unverified, so also look up: {lit}."
+    if not entries:
+        return _item(
+            "heads",
+            "Head counts",
+            "warn",
+            "No canopy position has a Hubspace device registered, so there are no heads to check.",
+            register,
+            "Nothing on the canopy should light.",
+        )
     if problems:
         fixes = []
         if "short" in kinds:
@@ -932,16 +1236,21 @@ async def _check_heads(services: Any) -> dict:
                 "Press Refresh on the device list to read the profile again; if it stays, open that module's page "
                 "and read its slots."
             )
-        return _item("heads", "Head counts", "fail", "; ".join(problems) + ".", " ".join(fixes), visual)
+        if register:
+            fixes.append(register)
+        return _item("heads", "Head counts", "fail", "; ".join(problems) + "." + gap, " ".join(fixes), visual)
     if unread:
         return _item(
             "heads",
             "Head counts",
             "warn",
-            f"Couldn't read the profile of {'; '.join(unread)}.",
-            "Press Refresh on the device list; if it stays, check the account on /ops/accounts.",
+            f"Couldn't read the profile of {'; '.join(unread)}.{gap}",
+            "Press Refresh on the device list; if it stays, check the account on /ops/accounts."
+            + (f" {register}" if register else ""),
             visual,
         )
+    status = "warn" if unregistered else "pass"
+    scope = f"{len(entries)} registered modules" if unregistered else f"{len(entries)} modules"
     if mapped:
         who = "All" if len(mapped) == len(entries) else f"{len(mapped)} of"
         rest = "" if len(mapped) == len(entries) else "; the rest report their expected heads"
@@ -949,16 +1258,20 @@ async def _check_heads(services: Any) -> dict:
         return _item(
             "heads",
             "Head counts",
-            "pass",
-            f"{who} {len(entries)} modules reach their heads through their own proven controller map{rest}. "
-            f"The {lengths}-entry frame is the controller's capacity, not a count of lit heads.",
-            note="So the head check itself is visual: count the lit heads — all 270 should light.",
+            status,
+            f"{who} {scope} reach their heads through their own proven controller map{rest}. "
+            f"The {lengths}-entry frame is the controller's capacity, not a count of lit heads.{gap}",
+            register,
+            note="So the head check itself is visual: count the lit heads — "
+            + (lit if unregistered else "all 270 should light")
+            + ".",
         )
     return _item(
         "heads",
         "Head counts",
-        "pass",
-        f"All {len(entries)} modules report their expected heads.",
+        status,
+        f"All {scope} report their expected heads.{gap}",
+        register,
         note=visual,
     )
 
@@ -970,10 +1283,19 @@ def _needed_slots(services: Any) -> list[str]:
 
 def _check_slots(services: Any) -> dict:
     needed = _needed_slots(services)
-    missing, unread, drifted = [], [], []
+    unregistered_ids = set(_positions(services)[1])
+    missing, unread, drifted, no_device, unchecked = [], [], [], [], []
     for entry in services.registry.canopy_modules():
         name = entry.label or entry.id
         recorded = dict(entry.slot_hashes or {})
+        if entry.id in unregistered_ids:  # D62: nothing can be written or read back there yet
+            # hashes outlive a lost registration: recorded, but nothing to read them back from. Either way an
+            # unregistered position is named, so this item never passes while one exists.
+            if recorded and all(s in recorded for s in needed):
+                unchecked.append(name)
+            else:
+                no_device.append(name)
+            continue
         if any(s not in recorded for s in needed):
             missing.append(name)
         address, _ = _engine_address(services, entry.id)
@@ -999,14 +1321,34 @@ def _check_slots(services: Any) -> dict:
             "Someone may have edited them in the Hubspace app. Press Commission slots (it rewrites a slot at most "
             "once per 10 min); for hand-painted (T2) slots, repaint them in the app and record them again.",
         )
-    if missing:
-        return _item(
-            "slots",
-            title,
-            "warn",
-            f"No recorded slot hash for {_module_names(missing)} ({', '.join(needed)}).",
-            "Press Commission slots. (Fine to skip if Sunset, Garden and Golden Hour run at module level (T3).)",
-        )
+    if missing or no_device or unchecked:
+        detail, fixes = [], []
+        if missing:
+            detail.append(f"No recorded slot hash for {_module_names(missing)} ({', '.join(needed)}).")
+            fixes.append(
+                "Press Commission slots. (Fine to skip if Sunset, Garden and Golden Hour run at module level (T3).)"
+            )
+        if no_device:
+            verb = "has" if len(no_device) == 1 else "have"
+            detail.append(
+                f"{_module_names(no_device)} {verb} no Hubspace device registered, so no slot can be written there "
+                "yet."
+            )
+            fixes.append(
+                "Register a device on /ops/accounts for each position that has none, then commission it: the canvas "
+                "tier (T1) shows only once all nine have their slots recorded."
+            )
+        if unchecked:
+            verb = "has" if len(unchecked) == 1 else "have"
+            detail.append(
+                f"{_module_names(unchecked)} {verb} slot hashes recorded but no Hubspace device registered, so "
+                "they can't be read back."
+            )
+            fixes.append(
+                "Register a device on /ops/accounts for each position that has none, then show each saved scene once "
+                "(or press Re-assert all) so its slots are read back."
+            )
+        return _item("slots", title, "warn", " ".join(detail), " ".join(fixes))
     if unread:
         return _item(
             "slots",
@@ -1069,12 +1411,19 @@ def _check_test_result(services: Any) -> dict:
     last = services.extras.get(TEST_RESULT_KEY)
     title = "Test mode change"
     if not last or services.clock.now() - last["at"] > TEST_FRESH_S:
+        registered, unregistered = _positions(services)
+        scope = (
+            f"every module with a Hubspace device registered ({len(registered)} of "
+            f"{len(registered) + len(unregistered)} now)"
+            if unregistered
+            else "all nine modules"
+        )
         return _item(
             "test_mode_change",
             title,
             "warn",
             "Not run yet today.",
-            "Press Run test mode change: it changes the mode once and times all nine modules to Ready.",
+            f"Press Run test mode change: it changes the mode once and times {scope} to Ready.",
         )
     return _item(
         "test_mode_change",
@@ -1106,7 +1455,9 @@ def _check_guest_input(services: Any, state: dict | None) -> dict:
             title,
             "fail",
             f"Guest input is on, but the canopy is resting, so guests can't change it: {state.get('message')}",
-            "If Hubspace is down, the canopy comes back by itself when it answers (outages.md). Otherwise press "
+            NOTHING_REGISTERED_FIX
+            if not _positions(services)[0]
+            else "If Hubspace is down, the canopy comes back by itself when it answers (outages.md). Otherwise press "
             "Safe look; if that is refused too, restart the Conductor (restart-matrix.md) and read the log tail.",
         )
     if state.get("phase") == "needs_attention":
@@ -1160,6 +1511,7 @@ def _pick_test_mode(services: Any, current: str | None) -> str:
 def _test_refused(services: Any, target: str, state: Any) -> JSONResponse:
     """The engine declined the test mode change: that is a failed test, recorded like one."""
     clock = services.clock
+    registered = set(_positions(services)[0])
     label = next((m["label"] for m in mode_list(services) if m["id"] == target), target)
     message = f"The engine refused the test mode change to {label}: {state.message or 'no reason given'}"
     result = {
@@ -1175,11 +1527,14 @@ def _test_refused(services: Any, target: str, state: Any) -> JSONResponse:
                 "status": (state.modules.get(entry.id) or {}).get("status", "unknown"),
                 "reason": (state.modules.get(entry.id) or {}).get("reason", ""),
                 "ready_after_s": None,
+                "registered": entry.id in registered,
             }
             for entry in services.registry.canopy_modules()
         ],
         "message": message,
-        "fix": "Nothing was sent. Press Safe look; if that is refused too, restart the Conductor "
+        "fix": f"Nothing was sent. {NOTHING_REGISTERED_FIX}"
+        if not registered
+        else "Nothing was sent. Press Safe look; if that is refused too, restart the Conductor "
         "(restart-matrix.md) and read the log tail.",
         "restored_to": None,
         "at": clock.now(),
@@ -1208,9 +1563,11 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
     if getattr(accepted, "refused", False):
         return _test_refused(services, target, accepted)
     ready_after: dict[str, float] = {}
-    ids = [e.id for e in services.registry.canopy_modules()]
+    # Only the modules with a Hubspace device registered are timed (D62): the others can't be driven, so waiting on
+    # them would only burn the window. They still fail the test, by name.
+    ids, unregistered = _positions(services)
     state = engine.state()
-    while True:
+    while ids:
         elapsed = clock.monotonic() - start
         state = engine.state()
         if state.mode == target:
@@ -1218,11 +1575,12 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
                 status = (state.modules.get(device_id) or {}).get("status")
                 if status == "ready" and device_id not in ready_after:
                     ready_after[device_id] = round(elapsed, 2)
-        if (len(ready_after) == len(ids) and ids) or elapsed >= TEST_WINDOW_S:
+        if len(ready_after) == len(ids) or elapsed >= TEST_WINDOW_S:
             break
         await clock.sleep(min(TEST_POLL_S, max(0.0, TEST_WINDOW_S - elapsed)))
     elapsed = round(clock.monotonic() - start, 2)
-    ok = bool(ids) and len(ready_after) == len(ids) and state.mode == target
+    timed_ok = bool(ids) and len(ready_after) == len(ids) and state.mode == target
+    ok = timed_ok and not unregistered
     modules = []
     for entry in services.registry.canopy_modules():
         rec = state.modules.get(entry.id) or {}
@@ -1233,18 +1591,45 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
                 "status": rec.get("status", "unknown"),
                 "reason": rec.get("reason", ""),
                 "ready_after_s": ready_after.get(entry.id),
+                "registered": entry.id not in unregistered,
             }
         )
     label = state.label or target
-    if ok:
+    timed = [m["label"] for m in modules if m["registered"]]
+    if timed_ok and not unregistered:
         slowest = max(ready_after.values())
         message = f"All {len(ids)} modules reached Ready on {label} within {slowest:.1f} s."
+    elif timed_ok:
+        slowest = max(ready_after.values())
+        n = len(ids)
+        message = (
+            f"{_module_names(timed)} (the {n} registered {_plural(n, 'module', 'modules')}) reached Ready on "
+            f"{label} within {slowest:.1f} s."
+        )
+    elif not ids:
+        message = (
+            f"No canopy position has a Hubspace device registered, so nothing could be timed on {label}."
+        )
     else:
-        late = [m["label"] for m in modules if m["ready_after_s"] is None]
+        late = [m["label"] for m in modules if m["registered"] and m["ready_after_s"] is None]
         message = (
             f"{_module_names(late)} didn't reach Ready within {TEST_WINDOW_S:.0f} s of changing to {label}."
             if late
             else f"The canopy didn't settle on {label} within {TEST_WINDOW_S:.0f} s."
+        )
+    fix = None
+    if unregistered:
+        names = [m["label"] for m in modules if not m["registered"]]
+        n = len(names)
+        message += (
+            f" Not timed: {_module_names(names)} {_plural(n, 'has', 'have')} no Hubspace device registered "
+            f"(register {_plural(n, 'it', 'them')} on /ops/accounts)."
+        )
+        fix = (
+            "Register a device for each of those positions on /ops/accounts, then run the test again."
+            if timed_ok
+            else "Open the modules that didn't reach Ready and register a device on /ops/accounts for each position "
+            "that has none, then run the test again."
         )
     restored_to = None
     if body.restore and before.mode and before.mode != target and target != services.settings.kiosk.idle_mode:
@@ -1264,6 +1649,7 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
         "window_s": TEST_WINDOW_S,
         "modules": modules,
         "message": message,
+        **({"fix": fix} if fix else {}),
         "restored_to": restored_to,
         "at": clock.now(),
         "simulated": bool(services.engine_driver.simulated),

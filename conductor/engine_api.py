@@ -24,6 +24,10 @@ class Tier(StrEnum):
     T2 = "slot"  # slots hand-painted in the Hubspace app; selected by API
     T3 = "modules"  # whole-strand looks composed at module level (each module = one coarse pixel)
     STRAND = "strand"  # the mode's primary technique is a whole-strand look (Calm, Holiday, Goodnight)
+    # Module level, stepped (D65): the T3 design re-sent a step at a time, each module one colour per step, at
+    # a few seconds a step through the cloud. Sim-first; the plan's `modules` are the hold (step 0, the static T3
+    # look), the steps are `ModePlan.program`.
+    STEPPED = "stepped"
 
 
 @dataclass
@@ -40,9 +44,58 @@ class ModuleTarget:
     slot_hash: str | None = None  # canonical hash of slot_value (or the recorded hash for T2)
     preview: list[dict] = field(
         default_factory=list
-    )  # per-head {r,g,b} as it should look (visualizer / kiosk)
+    )  # per-head {r,g,b} as it should look at the look's brightness (visualizer, /ops)
+    # Per-head {r,g,b} at full strength (the same rows with brightness 100), in wire order like `preview`: the guest
+    # panel's preview draws these and shows the level separately, so a guest brightness never changes a colour.
+    # Empty when the compiler can't say what the heads show (a T2 slot whose content isn't known).
+    colors: list[dict] = field(default_factory=list)
     # The device's own brightness range: a guest level is clamped to it, as the designed one was (D60).
     brightness_range: tuple[int, int] | None = None
+
+
+@dataclass
+class ProgramStep:
+    """One step of a stepped program: one full state vector per driven module (one PUT each, never a slot object)."""
+
+    index: int
+    rows: dict[str, list[StateRow]]  # logical device id → the full state vector this step sends
+    # canopy position ("r0c0") → "#RRGGBB" at full strength (the level is shown on its own)
+    colours: dict[str, str]
+
+    def to_json(self) -> dict:
+        return {
+            "index": self.index,
+            "rows": {d: [r.to_json() for r in rows] for d, rows in self.rows.items()},
+            "colours": self.colours,
+        }
+
+
+@dataclass
+class Program:
+    """A look the Conductor moves itself, a step at a time (`kind` "stepped"): step n is the mode's design field
+    shifted by n / len(steps) of one repeat, sampled at each module's centre. The Conductor holds the phase, so a
+    single-module re-send of the current step is correct (07 §6's one-burst rule is for on-device motion):
+    `ModePlan.motion` stays False. `moving_feature` is the copy shown only while a run is going; the plan's
+    `feature` is the hold's (the static design), true before and after a run."""
+
+    kind: str
+    field: dict[str, Any]  # the design field spec (conductor/looks/field.py) as data
+    direction: str  # "forward": the palette flows the way the layout words read (from the centre out, …)
+    step_s: float  # the designed seconds per step (the runner may stretch it, never shorten it)
+    run_s: float  # how long one run lasts before the hold is sent again
+    steps: list[ProgramStep]
+    moving_feature: str
+
+    def to_json(self) -> dict:
+        return {
+            "kind": self.kind,
+            "field": self.field,
+            "direction": self.direction,
+            "step_s": self.step_s,
+            "run_s": self.run_s,
+            "moving_feature": self.moving_feature,
+            "steps": [s.to_json() for s in self.steps],
+        }
 
 
 @dataclass
@@ -57,6 +110,13 @@ class ModePlan:
     # Canopy modules left out of this plan and why (e.g. their profile hasn't been read yet): the engine shows them
     # as needing attention and drives the others (07 §6: one module's problem never blocks the rest).
     skipped: dict[str, str] = field(default_factory=dict)
+    # The ripple order (D64): the driven modules' device ids grouped into at most three rings by the mode's design
+    # field at their centres, the ring the design starts from first (`looks.compile._waves`). The engine sends a
+    # kiosk/ops/idle mood ring by ring, `kiosk.ripple_stagger_s` apart; still one PUT per module. None = one burst
+    # (a motion plan, a mode with no design, or modules with no canopy position).
+    waves: list[list[str]] | None = None
+    # A stepped look's steps (Tier.STEPPED); None for every other tier. `modules` is then step 0, the hold.
+    program: Program | None = None
 
     def to_json(self) -> dict:
         return {
@@ -67,6 +127,8 @@ class ModePlan:
             "motion": self.motion,
             "notes": self.notes,
             "skipped": self.skipped,
+            "waves": self.waves,
+            "program": self.program.to_json() if self.program is not None else None,
             "modules": {
                 d: {"slot": t.slot, "slot_hash": t.slot_hash, "rows": [r.to_json() for r in t.rows]}
                 for d, t in self.modules.items()
@@ -138,6 +200,19 @@ class CanopyState:
     guest_power: bool = True
     brightness: int | None = None
     guest_brightness_min: int | None = None
+    # The phase of the look itself, judged over the modules the current plan drives (D62 follow-up): the modules it
+    # left out (`ModePlan.skipped`, e.g. no device registered) keep `phase` at NEEDS_ATTENTION for /ops, but never
+    # hide a change or a finished look from the guest. None = the same as `phase` (an engine that doesn't set it).
+    look_phase: CanopyPhase | None = None
+    # A ripple in progress (D64): {t0: wall time ring 0 was sent, stagger_s, rings: [[position]]} — ring j goes out
+    # at t0 + j × stagger_s. None when no ring is left to send (or the look went out as one burst).
+    ripple: dict[str, Any] | None = None
+    # A stepped run in progress (Tier.STEPPED, conductor/sequence.py): {t0: wall time step 0 was sent, step_s (the
+    # runner's step, which may be longer than the design's), step: the step number showing now, ends_at: wall time
+    # the still look is sent again, frames: [[hex | None] × 9 in grid order r0c0…r2c2] — frame n is step n's colours
+    # at full strength, the last frame the still look; None where no module is driven}. None while nothing steps
+    # (no run, the run is over, or its writes are held: paused, resting, set-up, the guest turned the canopy off).
+    program: dict[str, Any] | None = None
 
     def to_json(self) -> dict:
         return {
@@ -146,6 +221,7 @@ class CanopyState:
             "tier": self.tier,
             "feature": self.feature,
             "phase": str(self.phase),
+            "look_phase": str(self.look_phase) if self.look_phase is not None else None,
             "guest_input": self.guest_input,
             "paused_since": self.paused_since,
             "cooldown_until": self.cooldown_until,
@@ -159,6 +235,8 @@ class CanopyState:
             "guest_power": self.guest_power,
             "brightness": self.brightness,
             "guest_brightness_min": self.guest_brightness_min,
+            "ripple": self.ripple,
+            "program": self.program,
         }
 
 

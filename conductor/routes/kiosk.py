@@ -6,10 +6,12 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
 - `GET  /api/kiosk/modes`   the six modes: `[{id, label, blurb, preview, pattern, feature, tier, module_colours}]`.
                             `preview` is the mode's colour swatch (config/modes.yaml); `pattern` says how the kiosk's
                             illustrated canopy spreads those colours *at the tier the engine would use now* ("modules"
-                            at T3, and for a one-colour whole-strand look: one flat colour per module, from
-                            `module_colours`; a modules-first mode lists its static column colours until a plan says
-                            otherwise); `feature` is the "Hubspace feature" sentence for the tier actually in
-                            use — known only for the mode now showing (from the engine), else null.
+                            at T3 and stepped — a stepped plan's colours are its still design, the hold — and for a
+                            one-colour whole-strand look: one flat colour per module, from `module_colours`; a
+                            modules-first or stepped-first mode lists its design sampled at each module, as the
+                            compiler samples it, until a plan says otherwise; a 2-D `field` canvas is "design");
+                            `feature` is the "Hubspace feature" sentence for the tier actually in use — known only for
+                            the mode now showing (from the engine), else null.
 - `GET  /api/kiosk/state`   the engine's CanopyState JSON, plus `server_now` and `cooldown_remaining_s` so the page
                             counts the cooldown down in server-relative time (the kiosk's own clock may be off), and
                             `module_colours` (nine "#RRGGBB", r0c0…r2c2) when the plan in use shows one flat colour per
@@ -71,6 +73,7 @@ COOLDOWN = "The light is still changing. Choose again in a moment."
 UNKNOWN = "That mood isn't one of the canopy's choices."
 UNAVAILABLE = "That mood isn't available right now. Choose another."
 BEING_SET_UP = "The canopy is being set up. It will be back shortly."
+TESTING = "The canopy is being tested. It will be back shortly."
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]  # the kiosk illustration's module order
 MAX_RETRY_AFTER_S = 60.0  # a guest never waits longer than this, whatever a bad clock says
 
@@ -100,6 +103,10 @@ def _json_same_site(request: Request) -> None:
 router = APIRouter(dependencies=[Depends(require_kiosk), Depends(_json_same_site)])
 
 
+# Module-level tiers: each module one flat colour. A stepped look's plan is its still design (step 0, the hold).
+MODULE_TIERS = (str(Tier.T3), str(Tier.STEPPED))
+
+
 class SelectBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: str = Field(min_length=1, max_length=64)
@@ -112,21 +119,23 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     wash       — one whole-strand look (the colours vary gently, as warm white does across a room)
     scatter    — a preset with mixed colours
     gradient   — a canvas gradient down the canopy (axis y)
-    gradient-x — a canvas gradient across the canopy, left to right (axis x: the scenes, D59)
+    gradient-x — a canvas gradient across the canopy, left to right (axis x: D59's scenes)
+    design     — a 2-D design over the canopy (a `field` canvas: radial, corner to corner, … — the scenes, D63)
     pathway    — a winding bright path over a darker base
     bands      — one soft band per module
-    modules    — one flat colour per module (`module_colours`): module level (T3), and a whole-strand look that
-                 isn't a preset (every module shows one colour)
+    modules    — one flat colour per module (`module_colours`): module level (T3), a stepped look (its still
+                 design, the hold — module level too: the panel's motion shows the steps), and a whole-strand look
+                 that isn't a preset (every module shows one colour)
     A hand-painted slot (T2) copies the canvas picture, so it draws like the canvas technique.
     """
     ladder = spec.get("ladder") or ["strand"]
     techniques = spec.get("techniques") or {}
-    if tier == str(Tier.T3):
+    if tier in MODULE_TIERS:
         return "modules"
     if tier == str(Tier.STRAND):
         look = (techniques.get("strand") or {}).get("look") or {}
         return "scatter" if look.get("kind") == "preset" else "modules"
-    if ladder[0] == "modules":
+    if ladder[0] in MODULE_TIERS:
         return "modules"
     technique = techniques.get(ladder[0]) or {}
     if ladder[0] == "strand":
@@ -136,6 +145,8 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     kind = canvas.get("kind")
     if kind == "gradient":
         return "gradient-x" if canvas.get("axis") == "x" else "gradient"
+    if kind == "field":
+        return "design"
     if kind == "pathway":
         return "pathway"
     if kind == "band_per_module":
@@ -143,16 +154,48 @@ def _pattern(spec: Mapping[str, Any], tier: str | None = None) -> str:
     return "wash"
 
 
-def _column_colours(spec: Mapping[str, Any]) -> list[str] | None:
-    """Nine "#RRGGBB" (r0c0…r2c2) from a modules-first mode's static `techniques.modules.columns`, so its picture
-    steps column by column like the ceiling even before the engine can compile a plan for it; else None."""
-    if (spec.get("ladder") or ["strand"])[0] != "modules":
+def _rgb_hex(rgb: Any) -> str:
+    return "#" + "".join(f"{int(v):02X}" for v in rgb)
+
+
+def _sampled_colours(mode: Any) -> list[str] | None:
+    """Nine "#RRGGBB" (r0c0…r2c2): a validated mode's module-level design at each canopy position, through the
+    compiler's own `module_look` (the same sampling T3 sends), or None when it can't be worked out."""
+    try:
+        from conductor.config import DeviceEntry
+        from conductor.looks import CompileContext, module_look
+
+        ctx = CompileContext(registry=[], capabilities={})
+        return [
+            _rgb_hex(
+                module_look(
+                    mode,
+                    DeviceEntry(id=f"kiosk-{pos}", role="canopy_module", account="kiosk", module=pos),
+                    ctx,
+                ).rgb
+            )
+            for pos in GRID
+        ]
+    except Exception as exc:  # noqa: BLE001 - the tile falls back to the palette; ops sees the log line
+        log.warning("The kiosk couldn't sample a module-level design: %s", exc)
         return None
-    columns = ((spec.get("techniques") or {}).get("modules") or {}).get("columns") or []
+
+
+def _static_module_colours(spec: Mapping[str, Any], mode: Any = None) -> list[str] | None:
+    """Nine "#RRGGBB" (r0c0…r2c2) for a modules-first mode (a stepped-first one too: its still design is the
+    modules rung, D65), so its picture shows what module level puts on the ceiling even before the engine can compile
+    a plan for it: its design (`sample`, from the validated `mode`) sampled at each module, or its literal `columns`;
+    else None."""
+    if (spec.get("ladder") or ["strand"])[0] not in MODULE_TIERS:
+        return None
+    modules = (spec.get("techniques") or {}).get("modules") or {}
+    if modules.get("sample") is not None:
+        return _sampled_colours(mode) if mode is not None else None  # None: the looks loader refused the file
+    columns = modules.get("columns") or []
     if len(columns) != 3 or any((c or {}).get("kind") != "rgb" for c in columns):
         return None
     try:
-        hexes = ["#" + "".join(f"{int(v):02X}" for v in c["rgb"]) for c in columns]
+        hexes = [_rgb_hex(c["rgb"]) for c in columns]
     except (KeyError, TypeError, ValueError):
         return None
     return [hexes[i % 3] for i in range(9)]
@@ -218,7 +261,7 @@ def load_kiosk_modes(path: Path = MODES_FILE) -> list[dict[str, Any]]:
                 "pattern_primary": _pattern(spec),  # the picture above T3 (the kiosk falls back to it)
                 "feature": None,
                 "tier": None,
-                "module_colours": _column_colours(spec),
+                "module_colours": _static_module_colours(spec, loaded),
             }
         )
     return modes
@@ -241,7 +284,8 @@ def _engine_state(engine: Any) -> CanopyState:
 
 
 def _flag(engine: Any, name: str) -> Any:
-    """An optional engine attribute (conductor/canopy.py has `commissioning`, `paused`, `outage`, `stopped`)."""
+    """An optional engine attribute (conductor/canopy.py has `commissioning`, `paused`, `outage`, `stopped`,
+    `rehearsal_active`)."""
     try:
         return getattr(engine, name, None)
     except Exception:  # noqa: BLE001 - a property that fails is just "unknown"
@@ -261,9 +305,10 @@ def _hex(preview: list[dict]) -> str | None:
 
 
 def module_colours(services: Any, plan: ModePlan | None) -> list[str | None] | None:
-    """Nine colours (r0c0…r2c2) when `plan` shows one flat colour per module — module level (T3), or a whole-strand
-    look whose every module previews as one colour — which is what the ceiling shows; else None."""
-    if plan is None or str(plan.tier) not in (str(Tier.T3), str(Tier.STRAND)):
+    """Nine colours (r0c0…r2c2) when `plan` shows one flat colour per module — module level (T3), a stepped look
+    (its still design, the hold it ends on: the panel's `motion` carries the steps), or a whole-strand look whose
+    every module previews as one colour — which is what the ceiling shows; else None."""
+    if plan is None or str(plan.tier) not in (*MODULE_TIERS, str(Tier.STRAND)):
         return None
     if str(plan.tier) == str(Tier.STRAND) and not all(_flat(t.preview) for t in plan.modules.values()):
         return None  # e.g. a preset: its heads differ, so the kiosk keeps the mode's own picture
@@ -297,7 +342,9 @@ def kiosk_view(engine: Any, state: CanopyState) -> CanopyState:
     """The engine's state as the guest should read it: while slots are being commissioned no look is changing, so
     the kiosk rests ("being set up") instead of saying "Changing the light…" for minutes."""
     if _flag(engine, "commissioning") is True and state.phase != CanopyPhase.RESTING:
-        return dataclasses.replace(state, phase=CanopyPhase.RESTING, message=BEING_SET_UP)
+        return dataclasses.replace(
+            state, phase=CanopyPhase.RESTING, look_phase=CanopyPhase.RESTING, message=BEING_SET_UP
+        )
     return state
 
 
@@ -364,6 +411,8 @@ def refusal_for_state(engine: Any, st: CanopyState, now: float) -> Refusal:
         return 503, RESTING, _retry(st.retry_after_s)
     if _flag(engine, "paused") is True or not st.guest_input:
         return 423, PAUSED, {}
+    if _flag(engine, "rehearsal_active") is True:  # staff are running the stepped rehearsal: every mood waits
+        return 503, TESTING, _retry(st.retry_after_s)
     wait = _remaining(st.cooldown_until, now)
     if wait > 0:
         return cooldown_refusal(wait)
@@ -443,7 +492,7 @@ def modes(request: Request) -> JSONResponse:
             mode["pattern"] = (
                 _pattern(specs.get(mode["id"]) or {}, mode["tier"]) if specs else mode["pattern"]
             )
-            static = mode["module_colours"] if mode["tier"] == str(Tier.T3) else None
+            static = mode["module_colours"] if mode["tier"] in MODULE_TIERS else None
             mode["module_colours"] = module_colours(services, plan) or static
     return JSONResponse(listing, headers=NO_STORE)
 

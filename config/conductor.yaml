@@ -29,10 +29,36 @@ kiosk:
   guest_brightness_min: 10       # the guest panel can't dim the canopy below this (D60)
   idle_reset_s: 300              # no guest input this long → guest brightness/off cleared: on, designed brightness
   idle_scene: null               # optionally also return to this mood on that reset (null = stay on the current one)
+  # The guest panel's picture of the 270 lights: the reflected-ceiling view of config/canopy.yaml (looking up, origin
+  # at the canopy's top-left). SET AT INSTALL so the iPad matches what a guest at the stand sees overhead.
+  preview:
+    mirror_x: false              # flip left to right
+    rotate_deg: 0                # 0 | 90 | 180 | 270 (a quarter turn of the ceiling view)
+    dim_floor: 0.35              # the dimmest guest level is drawn at this opacity (full brightness at 1)
+  # The ripple (D64): a mood chosen on the kiosk, by ops or by the idle return lands ring by ring in its design's
+  # order (at most 3 rings; still one PUT per module), this many seconds apart. 0 = one burst. Validated 0–1.5 with
+  # (rings − 1) × stagger ≤ 2.4 s. Off until Alon flips it to 1.2: 05's spread target and the pinned acceptance
+  # file assume one burst; `make soak` measures a 1.2 s ripple separately.
+  ripple_stagger_s: 0
 
 module_page:
   lock_idle_timeout_s: 600
   sweep_step_s: 2.0              # index sweep: one frame write per step, never faster than the rate budget
+
+motion:
+  # Stepped looks (D65, conductor/sequence.py): the Conductor sends a module-level design a step at a time, one
+  # full-state PUT per module whose colour changes, for a bounded run, then holds the still design. Sim-first.
+  stepped:
+    live_enabled: false          # off on live hardware until the stepped rehearsal (Gate R) passes; Alon flips it
+    min_step_s: 4.0              # never step faster than this
+    max_step_s: 12.0             # a step the budget would stretch past this holds the still look instead
+    account_writes_per_min: 90   # the account's cap: writes of any kind in any 60 s (Gate R fails above it)
+    budget_reserve: 0.2          # steps are planned at the cap less this share (retries, re-sends): 9 modules → 7.5 s
+    governor_window_s: 60        # the throttle governor counts a run's write attempts over this window, per account
+    governor_min_throttled: 8    # ... and stops the run at ≥ this many 429/403 attempts
+    governor_throttled_share: 0.25  # ... that are ≥ this share of the attempts
+    governor_cooloff_s: 300      # then stepped runs on that account wait this long (the still look holds)
+    fold_guest_within_s: 2.0     # a guest brightness change this close to the next step goes out with that step
 
 effects:
   # motionEffect / brightnessEffect codes the bench has enabled. Every code starts disabled (06 #4).

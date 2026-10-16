@@ -22,7 +22,9 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
 - **Phase.** RESTING while guest input is paused, during an outage, before the first mode and after stop();
   NEEDS_ATTENTION when a module has needed attention (wrong after re-asserts, offline, signed out) longer than
   `reconciler.downgrade_after_wrong_s`, can't be addressed, or every module is locked; UPDATING while any command is pending, verifying or
-  waiting for a readback; READY when every non-locked module's readback matches (tracker READY).
+  waiting for a readback; READY when every non-locked module's readback matches (tracker READY). `look_phase` is
+  the same judgement over the modules the plan drives (the ones it left out don't count), so a partial canopy stays
+  NEEDS_ATTENTION on /ops while the guest still sees its look change and settle.
 - **Outage.** When `CONNECTION` / `TIMEOUT` / `SERVER_ERROR` outcomes — or THROTTLED with HTTP 503/504, which the
   Afero adapter keeps retryable but counts as an outage signature (D15) — hit at least `min(3, modules)` different
   modules with no success in between, the engine rests ("The canopy is resting…"); the reconciler probes one module every
@@ -64,6 +66,40 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   tier change, new capabilities, recovery) keeps both. The safe look clears both. The reconciler's idle reset clears
   them `kiosk.idle_reset_s` after the last guest input (and optionally shows `kiosk.idle_scene`). Kept in memory
   only: a restart comes back on, at the designed brightness.
+- **The ripple (D64).** A mood chosen on the kiosk, by ops or by the idle return (not a source in
+  `RECOMPILE_SOURCES`) whose plan has `waves` lands ring by ring when `kiosk.ripple_stagger_s` > 0: ring 0 is sent
+  at once, ring k `k × stagger` later on the injected clock — each module still gets exactly one full-state PUT, its
+  rows never split. A ring is sent only while its look is still the current one (the generation), so a newer look
+  drops the rings not yet sent. The tracker's desired state moves with each ring as it is sent, so a module still
+  waiting keeps its old desired state and the reconciler can't send it early; the reconciler also skips a waiting
+  module (`wave_pending`) when it re-asserts, true-ups or sees a lock released. `state()` shows a waiting module as
+  updating ("Waiting for its turn in the ripple"), so the look reads UPDATING until the last ring is out, and
+  `CanopyState.ripple` says when each ring goes (the guest panel draws it ring by ring). Anything that sends every
+  module at once (`send(None)`: a re-assert of all, a guest brightness or power change, recovery) sends the waiting
+  rings with it. The safe look, start-up (the first look, however it is requested: `start()`, or the show's wiring
+  asking for the idle mode once its capability reads are back), re-picks of the look now showing (a tier change,
+  recovery, new slot records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
+- **Stepped looks (Tier.STEPPED, D65).** Installing a plan with a `program` starts a `ProgramRunner`
+  (conductor/sequence.py) on the injected clock; a newer look, or `stop()`, cancels it. While it runs, the desired
+  state of each driven module is the current step's full state vector (`desired_rows` / `_desired_expect` ask the
+  runner), so every re-send — a re-assert, a lock release, recovery, a guest change — sends the current step. The
+  runner's own steps go through `send(…, source="program")`, only to the modules whose rows changed. While the run
+  moves, `feature` is the program's moving sentence and `CanopyState.program` says what each step shows; the phase
+  judges each module by whether the writes sent to it verify (`ProgramRunner.status`), not by the step in flight.
+  A guest brightness change just before a step goes out with that step. After the run, the plan's own sentence and
+  the still design (the hold) are back.
+- **The stepped rehearsal (Gate R, conductor/rehearsal.py).** `rehearse(mode, minutes, source)` — operator-started
+  only, from the ops route behind `rehearsal_preview`'s confirm sentence — runs one stepped look of `mode` whose run
+  lasts `minutes` (1–10; `_install` gives the program that run_s), from the mode's own stepped design or its
+  module-level design stepped (`EngineDeps.rehearsal_compile`). While it runs `rehearsal_mode` names the mode, and
+  the show's tier rule opens the stepped tier on live hardware for that mode only. Kiosk requests are refused
+  (`REHEARSAL_MESSAGE`) and the idle hold waits. It ends when the run does, at the first 403, when the governor
+  trips, when ops stops it or pauses guest input, when another look replaces it (ops, a downgrade) and on stop();
+  after a run that ended on its own (or was stopped) the mode's still look stays at its usual tier (`_settle`, sent
+  only where the rows differ, after the report), and the idle hold counts from the end. A 403 (`_rehearsal_403`)
+  sends nothing more: no hold burst, the step the canopy was sent installed as a still T3 plan, no stepped look or
+  re-run on that account for `governor_cooloff_s`, then `_settle`. Its report goes to telemetry ("rehearsal") and
+  `<data>/bench/rehearsals/*.json`.
 
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
@@ -77,7 +113,7 @@ import json
 import logging
 import math
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -92,6 +128,8 @@ from conductor.executor_api import Command, CommandResult, CommandStatus, Device
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
+from conductor.rehearsal import MAX_MINUTES, REHEARSAL_DIR, Rehearsal, RehearsalRefused, confirm_sentence
+from conductor.sequence import ProgramRunner, planned_writes_per_min
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
 from conductor.tokens import atomic_write
@@ -105,6 +143,7 @@ PAUSED_MESSAGE = "Guest input is paused by staff. The canopy is resting."
 COMMISSIONING_MESSAGE = "The canopy is being set up. Try again in a minute."
 STOPPED_MESSAGE = "The canopy engine is stopped."
 STARTING_MESSAGE = "The canopy is getting ready."
+REHEARSAL_MESSAGE = "Staff are testing the canopy's lights. Try again in a few minutes."
 OUTAGE_OUTCOMES = frozenset({str(Outcome.CONNECTION), str(Outcome.TIMEOUT), str(Outcome.SERVER_ERROR)})
 # 503/504 come back THROTTLED (retryable, D15) but are an outage signature, not rate limiting: they rest the canopy
 # like SERVER_ERROR and never count toward the throttle downgrade. Only 429/403 are throttling.
@@ -169,6 +208,11 @@ class EngineDeps:
     record_slot: SlotRecorder | None = None
     # <data>/state: where the guest-input pause is kept across restarts (None = memory only: tests, the bare soak)
     state_dir: Path | None = None
+    # The stepped rehearsal (Gate R, conductor/rehearsal.py): the stepped plan a rehearsal of a mode runs (the show:
+    # its own stepped technique or its module-level design stepped; None = `compile(mode, Tier.STEPPED)`), and
+    # <data>/bench/rehearsals, where its reports go (None = telemetry only).
+    rehearsal_compile: Callable[[str], ModePlan] | None = None
+    rehearsal_dir: Path | None = None
 
 
 @dataclass
@@ -207,6 +251,8 @@ class CanopyEngine:
         self._started = False
         self._last_kiosk_mono: float | None = None
         self.last_change_mono: float = self.clock.monotonic()  # any accepted change (idle hold)
+        # the last look chosen (not a re-pick, not a guest setting): a stepped look's run counts from it
+        self._chosen_mono: float = self.last_change_mono
         # Guest overrides (D60): a brightness for every module (None = designed) and on/off. Desired state, not saved.
         self._guest_brightness: int | None = None
         self._guest_power = True
@@ -237,6 +283,24 @@ class CanopyEngine:
         self._slot_locks: dict[str, asyncio.Lock] = {}
         self.recovery_listeners: list[Callable[[], Any]] = []  # called when an outage ends (ShowWiring)
         self.stats: dict[str, Any] = {"outages": [], "tier_changes": [], "early_reasserts": 0}
+        # The ripple in progress (D64): {t0 (wall), stagger_s, rings: [[device id]]}, and device id → the
+        # ring each module still waiting for its turn is in. Both empty when no ring is left to send.
+        self._ripple: dict[str, Any] | None = None
+        self._pending: dict[str, int] = {}
+        # Stepped looks: the runner of the plan showing (None for any other tier); device id → the rows last sent to
+        # it (a step re-sends only the modules whose rows changed); account → monotonic time the throttle governor's
+        # cool-off ends; and the stepped rehearsal running now (Gate R: one bounded, operator-started run), with the
+        # summary of the last one that ended.
+        self._runner: ProgramRunner | None = None
+        self.sent_rows: dict[str, list[StateRow]] = {}
+        self.stepped_cooloff: dict[str, float] = {}
+        self._settle_task: asyncio.Task | None = (
+            None  # a still look due after a 403's cool-off (`_settle_later`)
+        )
+        self._rehearsal: Rehearsal | None = None
+        self._rehearsals: list[Rehearsal] = []  # ended, report still being written (stop() waits for them)
+        self.last_rehearsal: dict | None = None
+        self.stats["governor_trips"] = 0
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
         self._restore_pause()
 
@@ -315,19 +379,30 @@ class CanopyEngine:
         for device_id in self._module_ids():
             self._resolve(device_id)
         self.reconciler.start()
-        if apply_initial:
-            await self.request_mode(self.deps.settings.kiosk.idle_mode, source="idle")
+        if apply_initial:  # start-up is one burst, never a ripple
+            await self._request(self.deps.settings.kiosk.idle_mode, source="idle", ripple=False)
         self._publish_soon()
 
     async def stop(self) -> None:
         """Stop the reconciler and wait for the engine's own background tasks. Call before closing executors."""
         self._stopped = True
+        if self._rehearsal is not None:
+            self._end_rehearsal("the canopy engine stopped", rehearsal=self._rehearsal, settle=False)
+        if self._runner is not None:
+            self._runner.cancel()
+        if self._settle_task is not None:
+            self._settle_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._settle_task
+            self._settle_task = None
         await self.reconciler.stop()
         for task in list(self._tasks):
             task.cancel()
         for task in list(self._tasks):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
+        for rehearsal in list(self._rehearsals):
+            await rehearsal.wait()  # its report is written (the writes it waited for were cancelled above)
         for unsubscribe in self._unsubscribe:
             unsubscribe()
         self._unsubscribe.clear()
@@ -370,23 +445,68 @@ class CanopyEngine:
     def stopped(self) -> bool:
         return self._stopped
 
+    @property
+    def guest_power(self) -> bool:
+        return self._guest_power
+
+    @property
+    def runner(self) -> ProgramRunner | None:
+        """The stepped look's runner (None unless the plan showing is a stepped one)."""
+        return self._runner
+
+    @property
+    def stepping(self) -> bool:
+        """Is a stepped look moving now (its run going, its writes not held, the canopy on)?"""
+        return self._runner is not None and self._runner.moving
+
+    def program_unsent(self, device_id: str) -> bool:
+        """A stepped plan whose desired rows for this module weren't sent (its run ended while nothing could be)."""
+        return self._runner is not None and self.desired_rows(device_id) != self.sent_rows.get(device_id)
+
+    def device_of(self, address: str) -> str | None:
+        return self._by_address.get(address)
+
+    @property
+    def rehearsal_mode(self) -> str | None:
+        """The mode the stepped rehearsal is running (None when none runs): the show opens the stepped tier on live
+        hardware for that mode only, for as long as this is set."""
+        return self._rehearsal.mode if self._rehearsal is not None else None
+
+    @property
+    def rehearsal_active(self) -> bool:
+        return self._rehearsal is not None
+
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
-        """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state."""
+        """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state. A mood
+        chosen (any source but a re-pick, `RECOMPILE_SOURCES`) lands as a ripple when one is configured (D64); the
+        first look, with nothing showing yet, is one burst."""
+        return await self._request(mode_id, source=source, ripple=source not in RECOMPILE_SOURCES)
+
+    async def _request(self, mode_id: str, *, source: str, ripple: bool) -> CanopyState:
         now = self.clock.monotonic()
         refused = self._refusal(source, now)
         if refused is not None:
             return refused
+        rehearsal = self._rehearsal if source not in RECOMPILE_SOURCES else None
+        # A look chosen (by ops) ends the stepped rehearsal before the tier is picked, so its gate is closed.
+        if rehearsal is not None:
+            self._end_rehearsal(f"{source} chose {mode_id}", rehearsal=rehearsal, settle=False)
         plan, why = self.compile_best(mode_id)
         if plan is None:
+            if rehearsal is not None and self._runner is not None and self._runner.running:
+                self._runner.finish("the stepped rehearsal ended")  # never step on without it
             return self._refused(why, None)
         if source == "kiosk":
             self._last_kiosk_mono = now
             self.last_guest_input_mono = now
         if source not in ("reconciler", "recovery"):
             self.last_change_mono = now
+            self._chosen_mono = now  # a stepped look's run counts from here (guest dimming doesn't move it)
         if source not in RECOMPILE_SOURCES:  # a mood was chosen: its designed brightness, and on (D60)
             self._guest_brightness, self._guest_power = None, True
-        self._show(plan, source)
+        # The first look (start-up: `start()`, or the show's wiring once its capability reads are back) has no
+        # picture to ripple from, so it is one burst whatever its source.
+        self._show(plan, source, ripple=ripple and self._plan is not None)
         return self.state()
 
     def _refusal(self, source: str, now: float) -> CanopyState | None:
@@ -399,6 +519,8 @@ class CanopyEngine:
         if source == "kiosk":
             if self._paused:
                 return self._refused(PAUSED_MESSAGE, None)
+            if self._rehearsal is not None:  # guests wait for the stepped rehearsal (Gate R) to finish
+                return self._refused(REHEARSAL_MESSAGE, self._rehearsal_left())
             if self._outage is not None:
                 return self._refused(RESTING_MESSAGE, self.deps.settings.reconciler.outage_probe_interval_s)
             remaining = self._cooldown_remaining(now)
@@ -482,8 +604,13 @@ class CanopyEngine:
             source=source,
         )
         if plan is not None and self._outage is None:
-            self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
-            self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")
+            # A stepped look whose next step is due within moments carries a new level itself, one PUT per module.
+            # (Back on: the runner kept its step current while the canopy was off, so this sends that step.)
+            runner = self._runner
+            folded = runner is not None and action == "brightness" and runner.fold_guest()
+            if not folded:
+                self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
+                self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")
         self._publish_soon()
 
     def desired_rows(self, device_id: str) -> list[StateRow]:
@@ -493,7 +620,8 @@ class CanopyEngine:
         if plan is None:
             return []
         mt = plan.modules[device_id]
-        return self._guest_rows(list(mt.rows), mt)
+        step = self._runner.rows_for(device_id) if self._runner is not None else None
+        return self._guest_rows(list(step if step is not None else mt.rows), mt)
 
     def _guest_rows(self, rows: list[StateRow], mt: ModuleTarget) -> list[StateRow]:
         if not self._guest_power:
@@ -507,6 +635,9 @@ class CanopyEngine:
         return [level if r.key == BRIGHTNESS_KEY else r for r in rows]
 
     def _desired_expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
+        step = self._runner.rows_for(device_id) if self._runner is not None and plan is self._plan else None
+        if step is not None:  # a stepped look's step: a full state vector, read back as sent
+            return self._guest_rows(list(step), mt)
         return self._guest_rows(self._expect(device_id, mt, plan), mt)
 
     def _desired_label(self, plan: ModePlan) -> str:
@@ -541,6 +672,8 @@ class CanopyEngine:
         return self.state()
 
     def pause_guest_input(self, paused: bool, *, source: str) -> CanopyState:
+        if paused and self._rehearsal is not None:  # a pause would hold every step: the rehearsal ends here
+            self._stop_rehearsal(f"guest input was paused ({source}), which holds every step")
         if paused != self._paused:
             self._paused = paused
             self._paused_since = self.clock.now() if paused else None
@@ -563,7 +696,7 @@ class CanopyEngine:
             plan, why = self.compile_best(SAFE_MODE)
             if plan is None:
                 return self._refused(f"The safe look can't be compiled: {e}; {why}", None)
-        self.last_change_mono = self.clock.monotonic()
+        self.last_change_mono = self._chosen_mono = self.clock.monotonic()
         self._guest_brightness, self._guest_power = None, True
         self._show(plan, source)
         return self.state()
@@ -624,6 +757,7 @@ class CanopyEngine:
                 if "skipped" in statuses
                 else ""
             )
+            + self._left_out_line(report["modes"])
             + "."
         )
         self.telemetry.record(
@@ -634,6 +768,35 @@ class CanopyEngine:
         self._publish_soon()
         return report
 
+    def _left_out_line(self, commissioned: dict[str, Any]) -> str:
+        """The commission report's account of the modules its plans left out (D62): nothing was written there."""
+        left_out: list[str] = []
+        for mode_id in commissioned:
+            plan = self._t1_plans.get(mode_id)
+            left_out += [d for d in (plan.skipped if plan is not None else {}) if d not in left_out]
+        unregistered, unread = [], []
+        for device_id in left_out:
+            try:
+                self.deps.target(device_id, Purpose.ENGINE)
+            except (LookupError, KeyError):
+                unregistered.append(device_id)  # no address on the engine's driver (services.target)
+            else:
+                unread.append(device_id)  # registered, but its profile hasn't been read (D36)
+
+        def names(ids: list[str]) -> str:
+            return ", ".join(((e.label if (e := self._entry(d)) else "") or d) for d in ids)
+
+        line = ""
+        if unregistered:
+            verb = "has" if len(unregistered) == 1 else "have"
+            line += (
+                f"; {names(unregistered)} {verb} no Hubspace device registered, so nothing was written there"
+            )
+        if unread:
+            verb = "has" if len(unread) == 1 else "have"
+            line += f"; {names(unread)} {verb} no profile read yet, so nothing was written there"
+        return line
+
     # ---- state ------------------------------------------------------------------------------------------------
     def state(self) -> CanopyState:
         plan = self._plan
@@ -643,6 +806,7 @@ class CanopyEngine:
         unresolved = []
         locked_count = 0
         skipped = plan.skipped if plan is not None else {}
+        runner = self._runner if self.stepping else None
         for device_id in self._module_ids():
             entry = self._entry(device_id)
             record: dict[str, Any] = {
@@ -650,6 +814,9 @@ class CanopyEngine:
                 "module": entry.module if entry else None,
                 "locked": False,
                 "simulated": simulated,
+                # presentation only (the kiosk preview): left out of the look; driven but wrong past the window
+                "left_out": device_id in skipped,
+                "stuck": False,
             }
             target = self._targets.get(device_id)
             if device_id in skipped:  # left out of the look (e.g. its profile hasn't been read yet)
@@ -674,6 +841,19 @@ class CanopyEngine:
                     locked=True,
                     reason=f"In use by {holder.owner}; the show engine leaves it alone until it's released.",
                 )
+            elif device_id in self._pending:
+                # its ring hasn't been sent yet (D64): the look is still on its way to it
+                record.update(status=str(DeviceStatus.UPDATING), reason="Waiting for its turn in the ripple.")
+                active_statuses.append((device_id, DeviceStatus.UPDATING))
+            elif runner is not None and plan is not None and device_id in plan.modules:
+                # a stepped look in motion: judged by whether the writes sent to it verify, not by the step in flight
+                status = runner.status(device_id)
+                record.update(
+                    status=str(status),
+                    reason=runner.status_reason(device_id, status),
+                    stuck=self._stuck(device_id, status),
+                )
+                active_statuses.append((device_id, status))
             else:
                 status = self.tracker.status(target.address)
                 reason = (
@@ -681,17 +861,22 @@ class CanopyEngine:
                     if status is DeviceStatus.READY
                     else self.tracker.snapshot(target.address)["reason"]
                 )
-                record.update(status=str(status), reason=reason)
+                record.update(status=str(status), reason=reason, stuck=self._stuck(device_id, status))
                 active_statuses.append((device_id, status))
             modules[device_id] = record
 
         phase, message = self._phase(plan, modules, active_statuses, unresolved, locked_count)
+        # The guest's phase judges the look over the modules it drives: the ones the plan left out keep /ops at
+        # needs attention (D62) but never hide a change in flight or a finished look from the kiosk.
+        driven_unresolved = [d for d in unresolved if d not in skipped]
+        look_phase, _ = self._phase(plan, modules, active_statuses, driven_unresolved, locked_count)
         remaining = self._cooldown_remaining(self.clock.monotonic())
         return CanopyState(
             mode=plan.mode_id if plan else None,
             label=plan.label if plan else None,
             tier=str(plan.tier) if plan else None,
-            feature=plan.feature if plan else None,
+            # while a stepped look moves, the sentence that says so; the still design's before and after
+            feature=(runner.program.moving_feature if runner is not None else plan.feature) if plan else None,
             phase=phase,
             guest_input=not self._paused,
             paused_since=self._paused_since if self._paused else None,
@@ -700,11 +885,31 @@ class CanopyEngine:
             modules=modules,
             simulated=simulated,
             message=message,
+            look_phase=look_phase,
             guest_brightness=self._guest_brightness,
             guest_power=self._guest_power,
             brightness=self._brightness_now(plan),
             guest_brightness_min=self.deps.settings.kiosk.guest_brightness_min,
+            ripple=self._ripple_json(),
+            program=runner.to_state() if runner is not None else None,
         )
+
+    def _ripple_json(self) -> dict | None:
+        """The ripple in progress as positions: {t0 (wall), stagger_s, rings: [[position]]}, ring j sent at
+        t0 + j × stagger_s. None when no ring is left to send."""
+        ripple = self._ripple
+        if ripple is None:
+            return None
+
+        def position(device_id: str) -> str:
+            entry = self._entry(device_id)
+            return str(entry.module) if entry is not None and entry.module else device_id
+
+        return {
+            "t0": ripple["t0"],
+            "stagger_s": ripple["stagger_s"],
+            "rings": [[position(d) for d in ring] for ring in ripple["rings"]],
+        }
 
     def _phase(
         self,
@@ -723,12 +928,8 @@ class CanopyEngine:
         if plan is None:
             return CanopyPhase.RESTING, STARTING_MESSAGE
         if self._commissioning:
-            return CanopyPhase.UPDATING, "Writing the saved patterns to every strand…"
-        stuck = [
-            d
-            for d, s in active
-            if s is DeviceStatus.NEEDS_ATTENTION and self.reconciler.wrong_too_long(self._targets[d].address)
-        ]
+            return CanopyPhase.UPDATING, "Writing the saved patterns to every registered strand…"
+        stuck = [d for d, s in active if self._stuck(d, s)]
         if stuck or unresolved:
             names = [modules[d]["label"] for d in [*stuck, *unresolved]]
             first = modules[(stuck or unresolved)[0]]["reason"]
@@ -743,6 +944,15 @@ class CanopyEngine:
         suffix = f" ({locked_count} module(s) in use on a test page)" if locked_count else ""
         return CanopyPhase.READY, "Ready" + suffix
 
+    def _stuck(self, device_id: str, status: DeviceStatus) -> bool:
+        """A driven module that has needed attention longer than `reconciler.downgrade_after_wrong_s` — or, while a
+        stepped look moves, one whose write has gone unverified for max(2 steps, 10 s) (`ProgramRunner.status`)."""
+        if self.stepping:
+            return status is DeviceStatus.NEEDS_ATTENTION
+        return status is DeviceStatus.NEEDS_ATTENTION and self.reconciler.wrong_too_long(
+            self._targets[device_id].address
+        )
+
     def _refused(self, message: str, retry_after_s: float | None) -> CanopyState:
         state = self.state()
         state.refused = True
@@ -755,9 +965,275 @@ class CanopyEngine:
             return 0.0
         return max(0.0, self._last_kiosk_mono + self.deps.settings.kiosk.cooldown_s - now)
 
+    # ---- the stepped rehearsal (Gate R, conductor/rehearsal.py) ----------------------------------------------------
+    def _rehearsal_plan(self, mode_id: str) -> ModePlan:
+        """The stepped plan a rehearsal of `mode_id` runs (not installed). RehearsalRefused when there's none."""
+        try:
+            if self.deps.rehearsal_compile is not None:
+                plan = self.deps.rehearsal_compile(mode_id)
+            else:
+                plan = self.deps.compile(mode_id, Tier.STEPPED)
+        except (PlanError, KeyError, LookupError, ValueError) as e:
+            raise RehearsalRefused(f"{mode_id} can't be rehearsed stepped: {e}") from None
+        if plan.program is None or plan.tier is not Tier.STEPPED or not plan.modules:
+            raise RehearsalRefused(
+                f"{plan.label} has no stepped design to rehearse on the modules it can drive."
+            )
+        return plan
+
+    def _rehearsal_checks(self, mode_id: str, minutes: int) -> None:
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= MAX_MINUTES:
+            raise RehearsalRefused(f"A stepped rehearsal runs 1 to {MAX_MINUTES} whole minutes.")
+        if self._stopped:
+            raise RehearsalRefused(STOPPED_MESSAGE)
+        if self._rehearsal is not None:
+            raise RehearsalRefused(
+                f"A stepped rehearsal of {self._rehearsal.label} is already running; stop it first."
+            )
+        if self._commissioning:
+            raise RehearsalRefused(
+                "Commissioning is writing the saved patterns; rehearse once it has finished."
+            )
+        if self._outage is not None:
+            raise RehearsalRefused(
+                "Hubspace isn't answering (the canopy is resting), so there's no rate to measure; rehearse once "
+                "it answers again."
+            )
+        if self._paused:
+            raise RehearsalRefused(
+                "Guest input is paused, which holds every step. Resume guest input first: the rehearsal keeps the "
+                "kiosk out by itself while it runs."
+            )
+        if mode_id == self.deps.settings.kiosk.idle_mode:
+            raise RehearsalRefused(
+                f"{mode_id} is the idle mode, which never steps (D65); rehearse one of the other looks."
+            )
+
+    def rehearsal_preview(self, mode_id: str, minutes: int) -> dict:
+        """What a rehearsal of `mode_id` for `minutes` would do, and the sentence ops confirms before it starts (it
+        names every module written to). RehearsalRefused (a plain sentence) when it can't run now."""
+        self._rehearsal_checks(mode_id, minutes)
+        plan = self._rehearsal_plan(mode_id)
+        modules, accounts = {}, set()
+        for device_id in plan.modules:
+            entry = self._entry(device_id)
+            modules[device_id] = (entry.label if entry else "") or device_id
+            target = self._targets.get(device_id) or self._resolve(device_id)
+            if target is not None:
+                accounts.add(self._account_of(target.address))
+        accounts_sorted = sorted(accounts)
+        mono = self.clock.monotonic()
+        cooling = sorted(a for a in accounts_sorted if self.stepped_cooloff.get(a, float("-inf")) > mono)
+        if cooling:
+            left = max(self.stepped_cooloff[a] for a in cooling) - mono
+            raise RehearsalRefused(
+                f"Hubspace throttled (429/403) a stepped run on account {', '.join(cooling)}; stepped looks there "
+                f"hold still for another {math.ceil(left)} s. Rehearse after that."
+            )
+        simulated = self._simulated()
+        stepped = self.deps.settings.motion.stepped
+        return {
+            "mode": mode_id,
+            "label": plan.label,
+            "minutes": minutes,
+            "modules": list(modules.values()),
+            "module_ids": list(modules),
+            "accounts": accounts_sorted,
+            "simulated": simulated,
+            "confirm": confirm_sentence(
+                label=plan.label,
+                minutes=minutes,
+                modules=list(modules.values()),
+                accounts=accounts_sorted,
+                simulated=simulated,
+                cap=stepped.account_writes_per_min,
+                planned=planned_writes_per_min(stepped),
+            ),
+        }
+
+    async def rehearse(self, mode_id: str, minutes: int, *, source: str) -> dict:
+        """Start the stepped rehearsal: one stepped run of `mode_id` lasting `minutes`, then the still look. Only an
+        operator starts it (the ops route, behind `rehearsal_preview`'s confirm sentence). Returns
+        {ok, message, rehearsal}; RehearsalRefused (a plain sentence) when it can't start."""
+        preview = self.rehearsal_preview(mode_id, minutes)
+        rehearsal = Rehearsal(
+            self,
+            mode=mode_id,
+            label=preview["label"],
+            minutes=minutes,
+            modules=dict(zip(preview["module_ids"], preview["modules"], strict=True)),
+            accounts=preview["accounts"],
+            source=source,
+            report_dir=self.deps.rehearsal_dir,
+        )
+        # A hysteresis floor indexes the mode's own ladder; the rehearsal's has the stepped rung in front of it.
+        rehearsal.saved_floor = self.floors.pop(mode_id, None)
+        self._rehearsal = rehearsal  # from here the show opens the stepped tier for this mode
+        plan, why = self.compile_best(mode_id, floor=0)
+        if plan is None or plan.program is None:
+            self._rehearsal = None
+            self._restore_floor(rehearsal)
+            raise RehearsalRefused(
+                why
+                or f"{preview['label']} would show {plan.tier if plan else 'nothing'}, not a stepped look."
+            )
+        rehearsal.start()
+        now = self.clock.monotonic()
+        self.last_change_mono = self._chosen_mono = now  # its run counts from here
+        self._guest_brightness, self._guest_power = None, True  # a mood chosen: designed brightness, on (D60)
+        self._show(plan, source)  # one burst: the hold (step 0); never a ripple
+        if self._rehearsal is not rehearsal:  # it couldn't step: ended at once, the still look holds
+            return {
+                "ok": False,
+                "message": f"The rehearsal didn't start: {rehearsal.ended}.",
+                "rehearsal": None,
+            }
+        runner = self._runner
+        assert runner is not None
+        return {
+            "ok": True,
+            "message": (
+                f"Stepped rehearsal of {rehearsal.label} started: {runner.count} steps of {runner.step_s:g} s on "
+                f"{len(rehearsal.modules)} modules. The report is written when it ends."
+            ),
+            "rehearsal": rehearsal.status(),
+        }
+
+    def stop_rehearsal(self, *, source: str) -> dict:
+        """Ops stops the rehearsal now: the still look is sent, and the report says it was stopped."""
+        rehearsal = self._rehearsal
+        if rehearsal is None:
+            raise RehearsalRefused("No stepped rehearsal is running.")
+        self._stop_rehearsal(f"stopped by {source}")
+        return {
+            "ok": True,
+            "message": f"Stepped rehearsal of {rehearsal.label} stopped; the still look holds.",
+        }
+
+    def _stop_rehearsal(self, why: str, *, alert: str | None = None) -> None:
+        rehearsal = self._rehearsal
+        if rehearsal is None:
+            return
+        runner = self._runner
+        if runner is not None and runner.running and runner is rehearsal.runner:
+            runner.finish(why, alert=alert)  # the hold goes out; its "program end" event ends the rehearsal
+            if self._rehearsal is rehearsal:
+                self._end_rehearsal(why, rehearsal=rehearsal)
+        else:
+            if alert:
+                self.telemetry.record("alert", level="warn", message=alert, source="rehearsal")
+            self._end_rehearsal(why, rehearsal=rehearsal)
+
+    def _rehearsal_403(self, rehearsal: Rehearsal, account: str) -> None:
+        """The first 403 anywhere: Hubspace's throttling signature (the venue IP may be blocked), so the rehearsal
+        stops and nothing more goes out for it: no hold burst (the canopy keeps the step it was sent, a still look
+        of one colour per module, installed as the current plan so the kiosk draws what is there), no re-run and no
+        stepped look on that account for `governor_cooloff_s`, and the mode's still look only after that cool-off
+        (`_settle`, sent where the rows differ). Never retried around."""
+        if self._rehearsal is not rehearsal:
+            return
+        cooloff = self.deps.settings.motion.stepped.governor_cooloff_s
+        now = self.clock.monotonic()
+        self.stepped_cooloff[account] = max(self.stepped_cooloff.get(account, now), now + cooloff)
+        why = f"Hubspace answered 403 on account {account}"
+        alert = (
+            f"Stepped rehearsal stopped: Hubspace answered 403 (forbidden) on account {account}. Nothing more was "
+            f"sent for it: the canopy holds the step it was on, and the look's still design goes out after "
+            f"{cooloff / 60:g} min. Stepped motion stays off; check the accounts on /ops/accounts and the vignettes "
+            "before anything else."
+        )
+        runner = self._runner
+        if runner is not None and runner.running and runner is rehearsal.runner:
+            runner.finish(why, alert=alert, send=False)
+        else:
+            self.telemetry.record("alert", level="warn", message=alert, source="rehearsal")
+        self._end_rehearsal(why, rehearsal=rehearsal, settle=False)
+        held = runner.held_plan() if runner is not None and runner is self._runner else None
+        if held is not None:
+            self._install(held, "reconciler")
+        self._settle_later(rehearsal.mode, self._plan, cooloff)
+        self._publish_soon()
+
+    def _settle_later(self, mode_id: str, plan: ModePlan | None, delay: float) -> None:
+        """`_settle` after `delay` (a 403's cool-off), while `plan` is still the one showing. Not one of the engine's
+        burst tasks (`wait_idle` doesn't wait for it); `stop()` cancels it."""
+        if self._settle_task is not None:
+            self._settle_task.cancel()
+
+        async def later() -> None:
+            await self.clock.sleep(delay)
+            self._settle_task = None
+            self._settle(mode_id, plan)
+
+        self._settle_task = asyncio.get_running_loop().create_task(later(), name=f"canopy:settle:{mode_id}")
+
+    def _end_rehearsal(self, why: str, *, rehearsal: Rehearsal, settle: bool = True) -> None:
+        """The rehearsal is over: the gate closes, guests are back, the report is written once the writes in flight
+        have their results. With `settle` the mode's still look stays, at its usual tier (`_settle`)."""
+        if self._rehearsal is not rehearsal:
+            return
+        self._rehearsal = None
+        self._restore_floor(rehearsal)
+        # Whatever shows next holds for kiosk.idle_return_s from here, not from the rehearsal's start.
+        self.last_change_mono = self.clock.monotonic()
+        plan = self._plan
+        self._rehearsals.append(rehearsal)
+        rehearsal.end(
+            why,
+            waiting=list(self._tasks),
+            then=(lambda: self._settle(rehearsal.mode, plan)) if settle else None,
+        )
+        self._publish_soon()
+
+    def _restore_floor(self, rehearsal: Rehearsal) -> None:
+        self.floors.pop(rehearsal.mode, None)  # a floor set during it indexes the rehearsal's ladder
+        if rehearsal.saved_floor is not None:
+            self.floors[rehearsal.mode] = rehearsal.saved_floor
+
+    def _settle(self, mode_id: str, plan: ModePlan | None) -> None:
+        """After a rehearsal (once its report is written): while its plan is still the one showing, the mode at the
+        best tier of its own ladder that isn't stepped (`compile_best`: from its floor, allowed, compiling), sent
+        only to the modules whose rows differ from what was last sent (the run's hold is the module-level design
+        already, so on hardware at T3 nothing goes out)."""
+        if plan is None or self._plan is not plan or self._stopped:
+            return
+        still, _ = self.compile_best(mode_id, skip=frozenset({Tier.STEPPED}))  # its floor, if any, holds
+        if still is None:
+            return  # the run's own hold stays
+        self._install(still, "reconciler")
+        if self._outage is None and not self._commissioning:
+            changed = [d for d in still.modules if self.desired_rows(d) != self.sent_rows.get(d)]
+            if changed:
+                self.send(changed, source="reconciler", label=f"after the stepped rehearsal: {mode_id}")
+        self._publish_soon()
+
+    def _rehearsal_left(self) -> float | None:
+        runner = self._runner
+        if runner is None or not runner.running:
+            return None
+        return round(max(0.0, runner.t0 + runner.count * runner.step_s - self.clock.monotonic()), 2)
+
+    def _rehearsal_reported(self, rehearsal: Rehearsal) -> None:
+        """Called by the rehearsal once its report is written."""
+        with contextlib.suppress(ValueError):
+            self._rehearsals.remove(rehearsal)
+        self.last_rehearsal = rehearsal.summary()
+        self._publish_soon()
+
+    def rehearsal_status(self) -> dict:
+        """/ops: the rehearsal running now (or None) and the last one's summary (verdict, report file)."""
+        return {
+            "running": self._rehearsal.status() if self._rehearsal is not None else None,
+            "last": self.last_rehearsal,
+            "max_minutes": MAX_MINUTES,
+        }
+
     # ---- compiling --------------------------------------------------------------------------------------------
-    def compile_best(self, mode_id: str, *, floor: int | None = None) -> tuple[ModePlan | None, str]:
-        """The best plan for `mode_id`: the first allowed tier that compiles, from the floor down, then above it."""
+    def compile_best(
+        self, mode_id: str, *, floor: int | None = None, skip: frozenset[Tier] = frozenset()
+    ) -> tuple[ModePlan | None, str]:
+        """The best plan for `mode_id`: the first allowed tier that compiles, from the floor down, then above it
+        (never a tier in `skip`)."""
         try:
             ladder = list(self.deps.ladder(mode_id))
         except (KeyError, LookupError, PlanError, ValueError):
@@ -770,6 +1246,8 @@ class CanopyEngine:
         reasons = []
         for i in order:
             tier = ladder[i]
+            if tier in skip:
+                continue
             allowed, why = self.deps.tier_allowed(mode_id, tier)
             if not allowed:
                 reasons.append(f"{tier}: {why or 'not allowed'}")
@@ -781,14 +1259,79 @@ class CanopyEngine:
         return None, f"{mode_id} can't be shown right now ({'; '.join(reasons)})."
 
     # ---- applying ---------------------------------------------------------------------------------------------
-    def _show(self, plan: ModePlan, source: str) -> None:
-        """Make `plan` the current look and (unless resting) send it to every module."""
-        self._install(plan, source)
+    def _show(self, plan: ModePlan, source: str, *, ripple: bool = False) -> None:
+        """Make `plan` the current look and (unless resting) send it to every module: one burst, or with `ripple`
+        ring by ring when the plan has rings and a stagger is configured (D64)."""
+        plan = self._install(plan, source)
         if self._outage is None:
-            self.send(None, source=source, label=f"mode: {plan.mode_id}")
+            rings = self._rings(plan) if ripple else None
+            if rings is None:
+                self.send(None, source=source, label=f"mode: {plan.mode_id}")
+            else:
+                self._start_ripple(plan, source, rings)
         self._publish_soon()
 
-    def _install(self, plan: ModePlan, source: str) -> None:
+    def _rings(self, plan: ModePlan) -> list[list[str]] | None:
+        """The plan's rings to send one after another, or None for one burst (no stagger, a motion plan, no rings,
+        or only one)."""
+        stagger = self.deps.settings.kiosk.ripple_stagger_s
+        if stagger <= 0 or plan.motion or not plan.waves:
+            return None
+        rings = [[d for d in wave if d in plan.modules] for wave in plan.waves]
+        placed = {d for ring in rings for d in ring}
+        rings[0] += [d for d in plan.modules if d not in placed]  # never leave a module out of the look
+        rings = [ring for ring in rings if ring]
+        return rings if len(rings) > 1 else None
+
+    def _start_ripple(self, plan: ModePlan, source: str, rings: list[list[str]]) -> None:
+        stagger = self.deps.settings.kiosk.ripple_stagger_s
+        generation, start = self._generation, self.clock.monotonic()
+        self._ripple = {"t0": self.clock.now(), "stagger_s": stagger, "rings": rings}
+        self._pending = {d: k for k, ring in enumerate(rings) for d in ring if k > 0}
+        self.send(rings[0], source=source, label=f"mode: {plan.mode_id} (ring 1 of {len(rings)})")
+        for k in range(1, len(rings)):
+            self._spawn(
+                self._send_ring(plan, source, generation, k, start + k * stagger, len(rings)),
+                name=f"canopy:ripple:{plan.mode_id}:{k}",
+            )
+
+    async def _send_ring(
+        self, plan: ModePlan, source: str, generation: int, k: int, at: float, count: int
+    ) -> None:
+        """Ring k of a ripple, at its time — only while its look is still the current one."""
+        delay = at - self.clock.monotonic()
+        if delay > 0:
+            await self.clock.sleep(delay)
+        if self._generation != generation or self._outage is not None:
+            return  # a newer look replaced it; while resting, recovery sends the whole look at once
+        ids = [d for d, ring in self._pending.items() if ring == k]
+        for device_id in ids:
+            del self._pending[device_id]
+        if not self._pending:
+            self._ripple = None
+        if ids:
+            self.send(ids, source=source, label=f"mode: {plan.mode_id} (ring {k + 1} of {count})")
+        self._publish_soon()
+
+    def _end_ripple(self) -> None:
+        self._ripple = None
+        self._pending.clear()
+
+    def wave_pending(self, address: str) -> bool:
+        """Is the module at `address` still waiting for its ring of the ripple (nothing of the look sent yet)?"""
+        device_id = self._by_address.get(address)
+        return device_id is not None and device_id in self._pending
+
+    def _install(self, plan: ModePlan, source: str) -> ModePlan:
+        """Make `plan` the current look (the plan installed is returned: a rehearsal's run is its minutes long)."""
+        rehearsal = self._rehearsal
+        ending = None
+        if rehearsal is not None:
+            if plan.mode_id == rehearsal.mode and plan.program is not None:
+                plan = replace(plan, program=replace(plan.program, run_s=rehearsal.run_s))
+            else:  # another look replaced the rehearsal's (ops, a downgrade): it ends with what it measured
+                ending = f"{plan.label} ({plan.tier}) replaced it ({source})"
+        self._end_ripple()  # the old look's rings not sent yet are dropped
         self._generation += 1
         self._plan = plan
         self._source = source
@@ -797,8 +1340,25 @@ class CanopyEngine:
         self.last_status.clear()
         for device_id in plan.modules:
             self._resolve(device_id)
+        if self._runner is not None:
+            self._runner.cancel()  # the old look's steps stop here
+            self._runner = None
+        if plan.program is not None:
+            # t0 = when the look was last chosen: a mood just chosen starts a run; a re-pick of the look now showing
+            # (a tier change, new capabilities) keeps the run's phase, or only holds once the run is over. A guest's
+            # brightness or on/off (which does count as a change for the idle hold) never restarts a run.
+            self._runner = ProgramRunner(self, plan, t0=self._chosen_mono)
+            self._runner.start()
+        if ending is not None and rehearsal is not None:
+            self._end_rehearsal(ending, rehearsal=rehearsal, settle=False)
+        elif rehearsal is not None:
+            rehearsal.runner = self._runner
+            if self._runner is None or not self._runner.running:  # it can't step (or its run is already over)
+                why = self._runner.ended if self._runner is not None else "it has no steps"
+                self._end_rehearsal(f"the look holds still: {why}", rehearsal=rehearsal, settle=False)
         self.reconciler.on_new_plan()
         self.telemetry.record("mode", mode=plan.mode_id, tier=str(plan.tier), source=source)
+        return plan
 
     def send(self, device_ids: Iterable[str] | None, *, source: str, label: str) -> list[str]:
         """Send the current plan's full state vector to `device_ids` (None = every module) as one burst.
@@ -808,6 +1368,8 @@ class CanopyEngine:
         plan = self._plan
         if plan is None:
             return []
+        if device_ids is None:
+            self._end_ripple()  # every module now: the rings still waiting go with this burst
         wanted = list(plan.modules) if device_ids is None else [d for d in device_ids if d in plan.modules]
         groups: dict[int, tuple[CommandExecutor, list[Command]]] = {}
         sent = []
@@ -820,6 +1382,7 @@ class CanopyEngine:
                 continue
             mt = plan.modules[device_id]
             expect = self._desired_expect(device_id, mt, plan)
+            rows = self.desired_rows(device_id)
             self.tracker.set_desired(
                 target.address,
                 expect,
@@ -829,7 +1392,7 @@ class CanopyEngine:
             )
             cmd = Command(
                 target.address,
-                self.desired_rows(device_id),
+                rows,
                 Purpose.ENGINE,
                 label=label,
                 verify=True,
@@ -841,7 +1404,10 @@ class CanopyEngine:
             self.dirty.add(target.address)
             self.last_status.pop(target.address, None)
             groups.setdefault(id(target.executor), (target.executor, []))[1].append(cmd)
+            self.sent_rows[device_id] = rows
             sent.append(device_id)
+        if self._runner is not None and sent:
+            self._runner.note_sent(sent)
         for executor, cmds in groups.values():
             self._spawn(self._burst(executor, cmds), name=f"canopy:{label}")
         if sent:
@@ -953,6 +1519,18 @@ class CanopyEngine:
             elif result.status in _RESEND_STATUSES:
                 self.reconciler.schedule_reassert()
             target = self._targets.get(record.device_id)
+            runner = self._runner
+            if runner is not None and result.status is CommandStatus.APPLIED:
+                runner.note_verified(record.device_id)
+                # A moving stepped look skips the rolling true-up reads (each step is verified): its slot patterns
+                # are checked from these verification readbacks instead, at most once a minute per module.
+                if (
+                    runner.moving
+                    and target is not None
+                    and result.readback is not None
+                    and result.readback.ok
+                ):
+                    self.reconciler.note_verification(record.device_id, target, result.readback.rows)
             if result.status is CommandStatus.MISMATCH and target is not None:
                 # If a slot's pattern is what differs, that's drift, not something a re-send fixes: check now.
                 if result.readback is not None and result.readback.ok:
@@ -1048,9 +1626,11 @@ class CanopyEngine:
             "alert",
             level="info",
             message=f"Hubspace is answering again ({why}); re-applying "
-            f"{self._plan.label if self._plan else 'nothing'} to every module.",
+            f"{self._plan.label if self._plan else 'nothing'} to every driven module.",
         )
         self.reconciler.on_recovery()
+        if self._runner is not None:
+            self._runner.sync()  # a stepped look comes back at the step its run is at now
         if self._plan is not None:
             self.send(None, source="recovery", label=f"recovery: {self._plan.mode_id}")
         for listener in list(self.recovery_listeners):
@@ -1065,7 +1645,11 @@ class CanopyEngine:
 
     # ---- hysteresis (called by the reconciler) -----------------------------------------------------------------
     def downgrade(self, reason: str) -> bool:
-        """Move the current mode one allowed, compilable rung down its ladder. False when there's none."""
+        """Move the current mode one allowed, compilable rung down its ladder. False when there's none.
+
+        A stepped rung is never a step down: it writes far more often than any still rung (one PUT per module per
+        step), so easing off from a better rung (e.g. Golden Hour's per-head sun) passes over it to the next still
+        rung (D65)."""
         plan = self._plan
         if plan is None:
             return False
@@ -1077,7 +1661,7 @@ class CanopyEngine:
             return False
         for index in range(ladder.index(plan.tier) + 1, len(ladder)):
             tier = ladder[index]
-            if not self.deps.tier_allowed(plan.mode_id, tier)[0]:
+            if tier is Tier.STEPPED or not self.deps.tier_allowed(plan.mode_id, tier)[0]:
                 continue
             try:
                 lower = self.deps.compile(plan.mode_id, tier)
@@ -1099,8 +1683,12 @@ class CanopyEngine:
             except (KeyError, LookupError, PlanError, ValueError):
                 ladder = []
             # A rung that isn't allowed or doesn't compile right now can't be shown, so lifting the floor onto it
-            # would change nothing and cost another clean interval (F8): lift past it to the next usable rung.
-            while 0 < floor < len(ladder) and not self._usable(mode_id, ladder[floor]):
+            # would change nothing and cost another clean interval (F8): lift past it to the next usable rung. A
+            # stepped rung between the floor and the top is passed over too, as downgrade() does (D65): easing back
+            # up after throttling never lands on the rung that writes most.
+            while 0 < floor < len(ladder) and (
+                ladder[floor] is Tier.STEPPED or not self._usable(mode_id, ladder[floor])
+            ):
                 floor -= 1
             if floor <= 0:
                 del self.floors[mode_id]
@@ -1587,9 +2175,11 @@ def engine_from_services(
     ladder: Ladder,
     modes: Callable[[], list[str]],
     tier_allowed: TierAllowed | None = None,
+    rehearsal_compile: Callable[[str], ModePlan] | None = None,
 ) -> CanopyEngine:
     """The engine wired to the Services container (the lead's one-liner). Slot hashes are saved to the registry
-    overlay (`slot_hashes` per device, merged), which needs CONDUCTOR_DATA_DIR."""
+    overlay (`slot_hashes` per device, merged), which needs CONDUCTOR_DATA_DIR; stepped rehearsal reports go to
+    <data>/bench/rehearsals."""
 
     def record_slot_hash(device_id: str, slot: str, digest: str) -> None:
         record_slot(device_id, slot, {"hash": digest, "origin": "api", "effects": None})
@@ -1619,5 +2209,9 @@ def engine_from_services(
             simulated=lambda: bool(services.engine_driver.simulated),
             record_slot=record_slot,
             state_dir=Path(services.data) / "state" if getattr(services, "data", None) else None,
+            rehearsal_compile=rehearsal_compile,
+            rehearsal_dir=(Path(services.data) / "bench" / REHEARSAL_DIR)
+            if getattr(services, "data", None)
+            else None,
         )
     )

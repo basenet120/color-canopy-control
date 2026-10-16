@@ -1,23 +1,31 @@
 # Status
 
-_Last updated: 2026-10-13 (evening). **The show box is the Mac mini** (D61, PR #18, merged), running live.
-**Temporarily, canopy Modules 1–2 are VWBD's two test kits** (Kingston test, String light 1) on the bench account, for
-client demos from the iPad guest panel — **undo by Oct 19** (below). `claude/partial-canopy` (D62) makes a partial
-canopy's copy true. Before that (Oct 7): Paris's VWBD field work (Sep 28 – Oct 7, on two real kits) is merged into
-`main` as canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; the show engine reads each kit's
-own map (D57) and `/ops/bench` can record a kit's map from its own bench evidence (D58)._
+_Last updated: 2026-10-14. **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
+Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
+test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
+adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
+across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
+canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
 ## PR stack (merge order — merge commits, not squash)
-0. **`claude/partial-canopy` → `main` (based on `9c4c7aa`)**: D62. A canopy position with no Hubspace device
-   registered is left out of every look, the safe look included; a partial canopy's guest copy counts the strands that
-   are lit ("both Hubspace strands…", "The Color Canopy (2 of 9 strands)") and stops claiming the palette steps across
-   the whole canopy; with nothing registered the canopy rests instead of "showing" a look that lights nothing. A
-   registered module is never dropped: tier failures still move the whole canopy down the ladder, and /ops stays at
-   Needs attention. **Verified (sim, macOS, Oct 13):** 1200 passed (13 new tests, each guard mutation-checked by a
-   reviewer and by the fixer), `make lint` clean, JS 35/35, soak 9/9 PASS (`docs/reports/sim-acceptance.md` not
-   regenerated). Three adversarial reviews (contracts, copy truth, mutation) found 7 issues, all fixed. Deploying it
-   to the show box needs a restart (Alon, between demos).
-- **Merged:** PR #18, `claude/mac-show-box` (D61, the Mac show box), as `9c4c7aa` on Oct 13.
+0a. **#19 `claude/partial-canopy` → `main`** (D62): unregistered canopy positions are left out of every look; partial
+    copy counts the lit strands; nothing registered → the canopy rests. Verified (sim): 1200 passed, lint, JS 35/35,
+    soak 9/9.
+0b. **#20 `claude/partial-truth` → after #19** (P1, P2): the iPad's Changing/Ready and feature line follow the driven
+    strands (`look_phase`); every /ops count says registered of nine; the 7 am test stays Fail while a position is
+    unregistered. Verified (sim): 1228 passed, lint, JS 39/39, soak 9/9.
+0c. **#21 `claude/canopy-field` → after #20** (P3–P7, D63, D64): one 2-D design field over canopy inches drives T1 and
+    T3; the six scenes as 2-D designs (drafts for Paris); the iPad's Now showing draws the true 3×3 canopy of 270
+    lights from what was sent; the ripple arrival (off). Verified (sim): 1395 passed, lint, JS 51/51, soak 9/9 +
+    ripple scenario; checked in the browser on port 8200.
+0d. **#22 `claude/studio-design` → after #21** (P12): the Studio paints the show's 2-D design (ops-only
+    `/api/canopy/design`). Verified (sim): 1408 passed, lint, JS 62/62.
+0e. **#23 `claude/stepped-motion` → after #22** (P8–P11, P8b, P13, D65): stepped waves through the cloud at module
+    level — compiler, runner with budget reserve and throttle governor, kiosk/ops surfaces, soak scenario, the
+    operator-started Gate R rehearsal; Coastal Tides and Golden Hour get a stepped rung; context docs 02/04/06. Live
+    off (`motion.stepped.live_enabled: false`). Verified: see the PR.
+- **Merged:** PR #18, `claude/mac-show-box` (D61), as `9c4c7aa` on Oct 13.
+- **Items 1–6 below are older and all merged** (#11–#16); kept for their notes.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
      (`1eb8551`);
@@ -77,6 +85,35 @@ own map (D57) and `/ops/bench` can record a kit's map from its own bench evidenc
    It also adds `POST /api/canopy/guest-reset` and a "Clear guest brightness / off" button on `/ops`. No kiosk routes:
    the guest panel branch calls the engine methods.
 
+## Canopy-wide designs, the ripple and stepped waves (D63–D65) — 2026-10-13/14
+Alon asked for looks laid out on the grid of all 270 lights across the nine panels — radial patterns, vertical and
+horizontal waves — instead of along each strand's wire (the "snake"). Built as #21–#23 by workflows (read-only design
+with a judge, then one implementer per package, two adversarial reviewers, a fixer; every finding fixed with a test
+that fails before it). Sim only; nothing new has reached a light.
+- **Static 2-D designs (D63).** The compiler was already (x, y)-aware; the data was x-only. Each scene is now one
+  design over canopy inches (radial, linear at any angle, several centres, sweep) driving the per-head frames (T1) and
+  the one-colour-per-strand look (T3, sampled at each panel's centre by row and column): Calm radial, Sunset corner to
+  corner, Garden from the bottom edge, Coastal a tilted shoreline, Golden Hour a sun at the left edge, Goodnight a
+  moon over a corner. Palettes, names, brightness and slots unchanged; drafts for Paris.
+- **What motion the cloud allows (and what it doesn't).** Per-head animation across 270 lights is impossible through
+  Afero: each per-head frame is a 3–5 KB slot rewrite (07 §6 forbids looping them), a controller stores only three
+  looks, and on-device effects run along each wire on unsynced clocks. Built instead: (1) the **ripple** (D64): a new
+  mood lands ring by ring in its design's order, one PUT per module, off (`kiosk.ripple_stagger_s: 0`); (2) **stepped
+  waves** (D65): the module-level design moves one step every few seconds across the 3×3 panels — 6 s designed, 7.5 s
+  effective on nine modules (20% budget reserve under the 90 writes/min account cap), 90 s runs then the still look,
+  governor holds the look on throttling. Coastal Tides steps first; Golden Hour steps only where its per-head sun
+  isn't available; Calm (idle) and Goodnight never move.
+- **Sim results (soak):** all 9 pinned rows PASS. Ripple at 1.2 s: settled p95 5.1 s (target 7.4), one PUT per module
+  per change. Stepped: ≤ 72 step writes and ≤ 89 writes of any kind per account per 60 s (cap 90), one write per
+  changed module per step, 0 governor trips and 0 downgrades at 5% throttling; each step's landing spread p95 2.78 s
+  against 05's 2 s (reported, not gating) — waves read as coarse steps.
+- **Live today:** unchanged. The Mac's two kits run T3; the stepped tier is refused on a non-sim driver
+  (`STEPPED_LIVE_OFF`), proven through the show's own tier rules; downgrades skip the stepped rung.
+- **Hardware still needed:** Gate R rehearsal on the two test kits (before the Oct 19 undo) and on the nine show kits
+  during install week (`docs/runbooks/stepped-rehearsal.md`); cut-vs-fade of a strand colour change (bench item 6) and
+  start skew across kits (gate 12); Gate C + map + commissioning per kit before any per-head design shows; the iPad
+  preview's orientation at the venue (`kiosk.preview`). Freeze the designs before install commissioning.
+
 ## Two test kits as canopy Modules 1–2 (temporary, live) — 2026-10-13
 Alon's call, for client demos: the iPad guest panel drives VWBD's two shop kits as the canopy's first two modules.
 Done on the Mac show box (Alon ran the commands; the auto-mode check kept Claude from changing the live box):
@@ -95,6 +132,9 @@ Done on the Mac show box (Alon ran the commands; the auto-mode check kept Claude
   column" and the ops Safe look still says "all nine" — avoid the Safe look button in front of guests. Nobody may
   drive these two kits from the Hubspace app, the Studio or another Conductor meanwhile: the reconciler puts the Mac's
   look back within seconds.
+- **Held since Oct 13 evening:** at Alon's request the Conductor was stopped (`canopy-mac stop --yes`) so Paris could
+  show the Hubspace app driving the kits; the hold survives a reboot; `canopy-mac start` hands back (it puts
+  Lowcountry Calm back on both strands).
 - **UNDO by Oct 19, before any real canopy kit is registered on Oct 20** (otherwise registering a real Module 1 or 2
   from the canopy account fails with 409 "belongs to the bench account", and slot records or calibration taken on the
   shop kits could follow the real modules): tell VWBD; `canopy-mac backup`; `canopy-mac stop --yes`; `cp -p
@@ -313,12 +353,12 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-0. **The Mac show box, Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge
-   `claude/partial-canopy` (D62), then between demos point `~/canopy-show` at `main` (`git -C ~/canopy-show switch
-   main && git -C ~/canopy-show pull`) and run `canopy-mac install` (restarts the Conductor; the sign-in survives).
-   (c) Then a release tag for the freeze. (d) On the Mac: add the show accounts when they exist (`canopy-mac install
-   --accounts …` replaces the list, so include VWBD's if it should stay), turn on automatic login (FileVault is off),
-   wire it to the show router with a reserved address, restart it and pull the plug once (`mac-show-box.md` §1–§2).
+0. **Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge the stack in order
+   #19 → #20 → #21 → #22 → #23 (merge commits); then between demos `git -C ~/canopy-show switch main && git -C
+   ~/canopy-show pull --ff-only && ~/canopy-show/deploy/mac/canopy-mac install` (restarts; the sign-in survives). (c)
+   Decide D63 (layouts, with Paris), D64 (ripple on: `kiosk.ripple_stagger_s: 1.2`) and D65 (which scenes move); run
+   Gate R on the two test kits before the undo. (d) Release tag for the freeze. (e) On the Mac: show accounts when
+   they exist, automatic login, wired + reserved address, restart and pull the plug once (`mac-show-box.md` §1–§2).
    Signing in a show account waits for Home Depot's authorization (06 #20).
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
@@ -368,6 +408,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
   custom-1..3, and Lowcountry Calm (the idle look), Coastal Tides and The Goodnight Glow run at module level. Swapping
   is a config change. Also the scenes' brightness drafts, at the physical mood approval. (Golden Hour's technique,
   06 #12, is settled by D59: static.)
+- **D63 scene layouts** (with Paris): the six 2-D drafts in #21, viewable in the Studio and the iPad preview in sim.
+- **D64 ripple on or off**, and the per-ring reading of 05's spread target (p95 2.00 s per ring in the soak).
+- **D65 which scenes move**, the cadence (6 s designed / 7.5 s effective), and turning `motion.stepped.live_enabled`
+  on only after Gate R passes; also the stepped step-spread target (p95 2.78 s in sim).
 - **Kiosk look** (06 #13, was due Oct 5): client copy and brand sign-off.
 - **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback
   criteria are in D26.
@@ -376,6 +420,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - Skim D51–D58 in `docs/DECISIONS.md` (D58 is the map proof rule as built).
 
 ## Top risks
+0. **Cloud motion is coarse and unmeasured on hardware.** Stepped waves step every ~7.5 s with up to ~2.8 s between
+   panels in sim; real latency, throttling (per account or per IP) and cut-vs-fade are unknown until Gate R. Live
+   stays off until then.
 1. **Every canopy kit needs its own Gate C and map** before painted looks can use per-head frames (D57). Recording a map
    is now an Apply map tap on `/ops/bench` (D58), but that has never been used on a real kit. Show-engine T1 through a
    map is proven in the simulator only.
