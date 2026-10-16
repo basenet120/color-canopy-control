@@ -1,15 +1,17 @@
 import {api} from '/static/app.js';
-import {matchingStaticFrames} from './demo-model.mjs';
+import {matchingStaticFrames} from './demo-model.mjs?v=show-design-2';
 import {previewFrame,previewKey} from '/ops/module/preset-preview.js?v=preview-motion-2';
-import {LOOKS,EFFECT_PARAMS,buildLook,validateKingston,motionReady,currentLookId,progressForRun,MODULES,validateTarget,customColor,whiteLook,effectLook,gradientColors,rgbFromHex,PAIR_IDS,matchingWholeSettings,sharedCapabilities,SCENES,sceneLook,sceneFrame,sceneColorAt,buildCanopy,paintCanopy,CANOPY} from './demo-model.mjs';
+import {LOOKS,EFFECT_PARAMS,buildLook,validateKingston,motionReady,currentLookId,progressForRun,MODULES,validateTarget,customColor,whiteLook,effectLook,gradientColors,rgbFromHex,PAIR_IDS,matchingWholeSettings,sharedCapabilities,SCENES,sceneLook,sceneFrame,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-2';
 
 
 const $=id=>document.getElementById(id);
 const previewOnly=new URLSearchParams(location.search).get('preview')==='1';
-const S={scene:'coastal-tides',sceneColor:1,scenePreview:true,angle:'perspective',tour:null,device:'both',pair:null,lease:null,session:null,state:null,busy:false,refreshing:false,run:null,runId:null,
+const S={scene:'coastal-tides',sceneColor:1,scenePreview:true,level:null,angle:'perspective',tour:null,device:'both',pair:null,lease:null,session:null,state:null,busy:false,refreshing:false,run:null,runId:null,
   previewOnly,paused:matchMedia('(prefers-reduced-motion: reduce)').matches,previewStart:performance.now(),
   previewKey:null,pausedAt:0,previewPausedTotal:0,raf:null,brightnessDirty:false,cancelPreview:false};
 let canopyView=null,canopyKey=null,lastScenePaint=null,gradientBackup={pending:false};
+// The show's design per scene id (GET /api/canopy/design): the design, or {error} when it couldn't be loaded.
+const designs=new Map();
 const moduleName=()=>S.device==='both'?'both modules':MODULES[S.device];
 const modulePath=(suffix='')=>'/api/module/'+S.device+suffix;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -215,6 +217,33 @@ async function refresh(){
   finally{S.refreshing=false;}
 }
 function selectedScene(){return SCENES.find(x=>x.id===S.scene);}
+// What the scene illustration paints: the show's design at the chosen level (S.level, once someone picks one; until
+// then the level the show tries first for the scene), or why it falls back to the palette left to right.
+function sceneView(){return sceneDesignView(designs.get(S.scene),S.level);}
+const designLoads=new Set();
+async function loadDesign(id){
+  if((designs.has(id)&&!designs.get(id).error)||designLoads.has(id))return;
+  designLoads.add(id);
+  try{designs.set(id,await api('/api/canopy/design?mode='+encodeURIComponent(id)));}
+  catch(e){designs.set(id,{error:e.message||'the Conductor did not answer'});}
+  finally{designLoads.delete(id);}
+  if(id===S.scene){lastScenePaint=null;updateScenePresentation();}
+}
+function sceneNote(view){
+  const tail=' Live palette controls below affect only the selected shop modules.';
+  if(view.state==='loading')return 'Loading the show’s design for this scene…';
+  if(view.state==='error')return 'The show’s design couldn’t be loaded ('+view.error+'), so this shows the palette left to right instead.'+tail;
+  if(view.state==='none')return 'This scene has no design over the canopy (one look on every strand), so this shows the palette left to right.'+tail;
+  if(view.state==='mismatch')return 'The show’s design doesn’t cover the saved 270-light geometry, so this shows the palette left to right instead.'+tail;
+  const d=view.design,ladder=d.ladder||[];
+  if(view.level==='modules'){
+    const where=d.sample_at==='mean'?'the mean of its 30 lights':'its centre';
+    const step=ladder[0]==='modules'?'the way the show sets this scene first':ladder.includes('modules')?'a later step of the show’s ladder for this scene':'not a step of this scene’s ladder';
+    return 'Module level · one colour per panel, the design sampled at '+where+': '+step+'.'+tail;
+  }
+  if(d.design==='canvas')return 'The show’s design, head by head: what the canopy shows when this scene runs with every light painted on its own.'+tail;
+  return 'The scene’s design over all 270 lights. The show sets this scene one colour per panel: choose Module level to see what the canopy shows.'+tail;
+}
 function stopTour(){if(S.tour)clearInterval(S.tour);S.tour=null;$('scene-tour').textContent='Play all scenes';$('scene-tour').setAttribute('aria-pressed','false');}
 function renderCanopy(colors,elapsed){
   const scope=S.scenePreview?'canopy':'shop',maps={};
@@ -222,8 +251,14 @@ function renderCanopy(colors,elapsed){
   const key=JSON.stringify([scope,S.device,S.angle,maps]);
   if(canopyKey!==key){canopyView=buildCanopy($('canopy-view'),{scope,device:S.device,maps,angle:S.angle});canopyKey=key;lastScenePaint=null;}
   if(S.scenePreview){
-    const brightness=Number($('brightness').value),paintKey=S.scene+':'+brightness;
-    if(lastScenePaint!==paintKey){paintCanopy(canopyView,h=>sceneColorAt(S.scene,h.x/CANOPY.width),p=>sceneColorAt(S.scene,p),brightness);lastScenePaint=paintKey;canopyView.svg.setAttribute('aria-label',selectedScene().name+' · full canopy, nine panels, 270 lights');}
+    const brightness=Number($('brightness').value),view=sceneView(),paintKey=[S.scene,brightness,view.level,view.state].join(':');
+    if(lastScenePaint!==paintKey&&view.state!=='loading'){
+      // the show's design head for head (or module by module); only if it can't be had, the palette left to right
+      const painters=scenePainters(view,S.scene,canopyView.layout.width);
+      paintCanopy(canopyView,painters.head,painters.spill,brightness);
+      lastScenePaint=paintKey;
+      canopyView.svg.setAttribute('aria-label',selectedScene().name+' · full canopy, nine panels, 270 lights'+(view.level==='modules'?' · module level, one colour per panel':''));
+    }
   }else{
     lastScenePaint=null;
     const perDevice={};
@@ -238,8 +273,10 @@ function updateScenePresentation(){
   $('scene-title').textContent=S.scenePreview?scene.name:$('current-look').textContent;
   $('scene-kicker').textContent=S.scenePreview?'THE FULL CANOPY / '+scene.mood.toUpperCase():previewOnly?'SCREEN-ONLY SHOP SETTINGS':'SHOP LIGHT SETTINGS';
   $('scene-description').textContent=S.scenePreview?scene.description:'The selected shop modules, drawn from their latest reported settings.';
-  $('scene-preview-note').textContent=S.scenePreview?'Scene design preview · saved 225″ × 120″ canopy geometry. Live palette controls below affect only the selected shop modules.':'Saved panel geometry · color and motion are illustrations of readback. Watch the real lights for brightness and timing.';
-  $('geometry-label').textContent=S.scenePreview?'9 panels × 30 lights · 270 total · 18′ 9″ × 10′':(S.device==='both'?'2 modules × 30 lights · 60 total':'1 module × 30 lights')+' · shop view';
+  const view=sceneView(),levels=view.design?designLevels(view.design):[];
+  $('scene-preview-note').textContent=S.scenePreview?sceneNote(view):'Saved panel geometry · color and motion are illustrations of readback. Watch the real lights for brightness and timing.';
+  $('geometry-label').textContent=S.scenePreview?(view.level==='modules'?'9 panels × 1 colour':'9 panels × 30 lights')+' · 270 total · 18′ 9″ × 10′':(S.device==='both'?'2 modules × 30 lights · 60 total':'1 module × 30 lights')+' · shop view';
+  $('design-level').hidden=!S.scenePreview||view.state!=='design'||levels.length<2;$('design-level').setAttribute('aria-pressed',String(view.level==='modules'));
   $('look-caption').textContent=S.scenePreview?'SCENE DESIGN':previewOnly?'SCREEN PREVIEW':'REPORTED SETTINGS';
   $('preview-pause').hidden=S.scenePreview;
   $('show-scene-preview').setAttribute('aria-pressed',String(S.scenePreview));$('show-light-readback').setAttribute('aria-pressed',String(!S.scenePreview));
@@ -250,7 +287,7 @@ function updateScenePresentation(){
 }
 function selectScene(id,fromTour=false){
   const scene=SCENES.find(x=>x.id===id);if(!scene)return;if(!fromTour)stopTour();
-  S.scene=id;S.sceneColor=scene.defaultColor||0;S.scenePreview=true;S.brightnessDirty=true;
+  S.scene=id;S.sceneColor=scene.defaultColor||0;S.scenePreview=true;S.brightnessDirty=true;loadDesign(id);
   $('brightness').value=scene.brightness;$('brightness-value').textContent=scene.brightness+'% · draft';
   $('scene-colors').replaceChildren();
   scene.palette.forEach((color,index)=>{const b=document.createElement('button');b.className='scene-color';b.dataset.color=index;b.setAttribute('aria-label',color.name);b.setAttribute('aria-pressed',String(index===S.sceneColor));const swatch=document.createElement('i');swatch.style.background=color.hex;const label=document.createElement('span');label.textContent=color.name;b.append(swatch,label);b.addEventListener('click',()=>{stopTour();S.sceneColor=index;updateScenePresentation();});$('scene-colors').append(b);});
@@ -269,6 +306,7 @@ function buildScenes(){
   $('scene-tour').addEventListener('click',()=>{if(S.tour){stopTour();return;}S.scenePreview=true;updateScenePresentation();$('scene-tour').textContent='Pause scene tour';$('scene-tour').setAttribute('aria-pressed','true');S.tour=setInterval(()=>{if(!document.hidden&&!S.busy)selectScene(SCENES[(SCENES.findIndex(s=>s.id===S.scene)+1)%SCENES.length].id,true);},6000);notify('Screen-only scene tour · lights are unchanged.');});
   $('view-angle').addEventListener('click',()=>{S.angle=S.angle==='perspective'?'plan':'perspective';$('view-angle').textContent=S.angle==='plan'?'Perspective':'Ceiling plan';$('view-angle').setAttribute('aria-pressed',String(S.angle==='plan'));});
   $('show-scene-preview').addEventListener('click',()=>{S.scenePreview=true;updateScenePresentation();});
+  $('design-level').addEventListener('click',()=>{S.level=nextDesignLevel(sceneView());lastScenePaint=null;updateScenePresentation();});
   $('show-light-readback').addEventListener('click',()=>{stopTour();S.scenePreview=false;updateScenePresentation();});
   $('scene-apply').addEventListener('click',async()=>{
     if(S.busy||!active())return;stopTour();

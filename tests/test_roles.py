@@ -193,6 +193,7 @@ def test_tester_reaches_its_module_page(method, path):
         ("GET", "/ops/module/.."),
         ("GET", "/ops/module\\..\\accounts"),
         ("GET", "/visualizer/"),
+        ("GET", "/api/canopy/design"),  # the Studio's scene designs: ops only (P12)
         ("GET", "/"),
         ("GET", "relative/path"),
     ],
@@ -223,6 +224,7 @@ def test_kiosk_paths():
         ("GET", "/kiosk/../ops/accounts"),
         ("GET", "/kiosks"),
         ("GET", "/vignette/kitchen/"),
+        ("GET", "/api/canopy/design"),
     ]:
         assert not path_allowed(KIOSK, method, path), path
 
@@ -235,6 +237,7 @@ def test_vignette_paths():
     assert not path_allowed(VIGNETTE, "POST", "/api/vignette/porch/scene")
     assert not path_allowed(VIGNETTE, "GET", "/kiosk/")
     assert not path_allowed(VIGNETTE, "GET", "/ops/module")
+    assert not path_allowed(VIGNETTE, "GET", "/api/canopy/design")
 
 
 def test_ops_reaches_everything_and_homes_are_per_role():
