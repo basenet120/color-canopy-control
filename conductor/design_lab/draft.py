@@ -22,17 +22,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
 
-from conductor.config import ConductorSettings, RecipesFile, load_recipes
+from conductor.config import ConductorSettings, ConfigError, RecipesFile, _explain, load_recipes
 from conductor.looks import field as F
+from conductor.looks import scene_rules
 from conductor.looks.schema import (
     MOTION_PHRASES,
     MOTION_WORDS,
     STEPPED_FALSE_CLAIMS,
+    FieldCanvas,
     Mode,
     ModesFile,
+    ModuleSample,
+    _colour_refs,
     load_modes,
+    motion_words,
+    parse_modes,
 )
 from conductor.scenes import HEX, SceneCatalog, load_scenes
 
@@ -203,39 +209,203 @@ def load_trio(config_dir: Path) -> ConfigTrio:
 
 
 # ---- seed and equality (S1) ------------------------------------------------------------------------------------------
+MODULE_PAGE = "the module page"  # the owner of recipe keys no mode names (the colour-study colours, §3.2.1)
+LOCKED_CYCLES = (
+    "cycles is locked to 1 in v1 (D63: one static design, no repeats); unlocking it is a D63 change for Alon"
+)
+LOCKED_SAMPLE = (
+    "the module sample is locked to the module centre in v1 (D63: every sample at: centre); at: mean is a D63 "
+    "change for Alon"
+)
+
+
+def _design_sample(mode: Mode, scene_id: str) -> ModuleSample:
+    """The mode's module-level sample of a 2-D field: the one design every rung of the scene draws."""
+    mods = mode.techniques.modules
+    sample = mods.sample if mods is not None else None
+    if sample is None or not isinstance(sample.canvas, FieldCanvas):
+        raise DraftError(
+            [
+                Problem(
+                    f"mode {scene_id!r} → techniques → modules → sample",
+                    "draft",
+                    "this scene has no 2-D design at module level (a modules sample of a field canvas), so the "
+                    "Lab can't draft it",
+                )
+            ]
+        )
+    return sample
+
+
 def seed_draft(trio: ConfigTrio, scene_id: str) -> SceneDraft:
     """The draft that reproduces the approved scene exactly: Scene (name, mood, description, palette,
     brightness_draft, default_solid), the mode's design (modules.sample.canvas.field, .at), its stepped technique (if
     any); copy "auto"/"auto". KeyError for an unknown scene."""
-    raise NotImplementedError("S1: seed_draft")
+    scene = trio.scenes.get(scene_id)
+    mode = trio.modes.mode(scene_id)
+    sample = _design_sample(mode, scene_id)
+    stepped = mode.techniques.stepped
+    return SceneDraft.model_validate(
+        {
+            "scene_id": scene.id,
+            "name": scene.name,
+            "mood": scene.mood,
+            "description": scene.description,
+            "palette": [{"name": c.name, "hex": c.hex} for c in scene.palette],
+            "layout": sample.canvas.field.model_dump(),
+            "sample_at": sample.at,
+            "brightness": scene.brightness_draft,
+            "solid": scene.default_solid,
+            "stepped": (
+                {
+                    "direction": stepped.direction,
+                    "steps_per_cycle": stepped.steps_per_cycle,
+                    "step_s": stepped.step_s,
+                    "run_s": stepped.run_s,
+                }
+                if stepped is not None
+                else None
+            ),
+        }
+    )
 
 
 def is_approved(trio: ConfigTrio, draft: SceneDraft) -> bool:
-    """draft == seed_draft(trio, draft.scene_id)."""
-    raise NotImplementedError("S1: is_approved")
+    """draft == seed_draft(trio, draft.scene_id) (compared as dumps: numbers numerically, hexes upper-cased)."""
+    return draft.model_dump() == seed_draft(trio, draft.scene_id).model_dump()
 
 
-# ---- the patch (S1) --------------------------------------------------------------------------------------------------
-def apply_draft(
-    trio: ConfigTrio, draft: SceneDraft, *, canopy: dict, settings: ConductorSettings
-) -> ConfigTrio:
-    """= apply_drafts(trio, {draft.scene_id: draft}, …)."""
-    return apply_drafts(trio, {draft.scene_id: draft}, canopy=canopy, settings=settings)
+def _same_layout(a: SceneDraft, b: SceneDraft) -> bool:
+    """Model equality of the 2-D field (not equal layout words: §3.3)."""
+    return a.layout.model_dump() == b.layout.model_dump()
 
 
-def apply_drafts(
-    trio: ConfigTrio, drafts: Mapping[str, SceneDraft], *, canopy: dict, settings: ConductorSettings
-) -> ConfigTrio:
-    """The patched trio, scenes processed in catalog order and validated once at the end (§3.2.2, §3.2.3). Raises
-    DraftError with every problem (an unknown scene → field "scene_id"; an explicit "approved" copy that is no longer
-    true → field "copy.modules"/"copy.stepped")."""
-    raise NotImplementedError("S1: apply_drafts")
+def _names(draft: SceneDraft) -> list[str]:
+    return [c.name.casefold() for c in draft.palette]
 
 
-def draft_changes(approved: ConfigTrio, draft: SceneDraft, *, canopy: dict) -> dict:
-    """What the draft changes against the approved scene (§3.2.5): approved_colours, name, mood, description, layout,
-    brightness, solid, sample_at, stepped, copy, and the flags needs_d59 / needs_d63 / needs_slot_repaint."""
-    raise NotImplementedError("S1: draft_changes")
+# ---- copy (§3.3) -----------------------------------------------------------------------------------------------------
+T3_TEMPLATE = (
+    "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out "
+    "{words}: {colours}."
+)
+STEPPED_TEMPLATE = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and "
+    "sent its next colour every few seconds, so the palette's colours move {flow} across the "
+    "canopy: {colours}."
+)
+STRAND_TEMPLATE = "Colour and dimming: all nine Hubspace strands set to {solid}."
+APPROVED_WHY = "approved wording: the design and its colour names are as approved"
+
+
+def colour_phrase(names: list[str], *, invert: bool, transform: str) -> str:
+    """Lower-cased names in the order they sit from where the layout starts: reversed when invert; with transform
+    "mirror" → "<first> at both ends through <last> in the middle"; otherwise "<a>, then <b>, <c> and <d>" (two
+    colours: "<a>, then <b>")."""
+    ordered = [n.lower() for n in names]
+    if invert:
+        ordered.reverse()
+    if not ordered:
+        return ""
+    if transform == "mirror" and len(ordered) > 1:
+        return f"{ordered[0]} at both ends through {ordered[-1]} in the middle"
+    if len(ordered) == 1:
+        return ordered[0]
+    first, rest = ordered[0], ordered[1:]
+    if len(rest) == 1:
+        return f"{first}, then {rest[0]}"
+    return f"{first}, then {', '.join(rest[:-1])} and {rest[-1]}"
+
+
+def _canvas_of(layout: F.FieldSpec, keys: list[str] | None = None) -> FieldCanvas:
+    """The design as a field canvas: the layout with evenly spaced stops at i / (n − 1) (placeholder colours
+    without keys: for layout and flow words only)."""
+    keys = keys or ["colour-0", "colour-1"]
+    return FieldCanvas.model_validate(
+        {
+            "kind": "field",
+            "field": layout.model_dump(),
+            "stops": [{"at": i / (len(keys) - 1), "color": k} for i, k in enumerate(keys)],
+            "recipe": "rgb_only",
+        }
+    )
+
+
+def generated_copy(mode: Mode, draft: SceneDraft, canopy: dict) -> dict[str, str]:
+    """{"modules": T3_TEMPLATE(...), "strand": STRAND_TEMPLATE(...), "stepped": STEPPED_TEMPLATE(...)} — the stepped
+    sentence only when the mode has a stepped rung and the draft its timing."""
+    layout = draft.layout
+    colours = colour_phrase([c.name for c in draft.palette], invert=layout.invert, transform=layout.transform)
+    out = {
+        "modules": T3_TEMPLATE.format(words=F.layout_words(layout, canopy), colours=colours),
+        "strand": STRAND_TEMPLATE.format(solid=draft.palette[draft.solid].name.lower()),
+    }
+    if mode.techniques.stepped is not None and draft.stepped is not None:
+        flow = motion_words(_canvas_of(layout), canopy, draft.stepped.direction)
+        out["stepped"] = STEPPED_TEMPLATE.format(flow=flow, colours=colours)
+    return out
+
+
+@dataclass(frozen=True)
+class CopyChoice:
+    """One rung's resolved sentence: the approved one while it is still true, else the generated one."""
+
+    chosen: Literal["approved", "generated"]
+    why: str
+    sentence: str
+    refused: str | None = None  # an explicit "approved" that no longer holds: why (a save refuses it, §3.3)
+
+    def to_json(self) -> dict:
+        return {"chosen": self.chosen, "why": self.why, "sentence": self.sentence}
+
+
+def _choose(asked: str, approved: str, generated: str, reasons: list[str]) -> CopyChoice:
+    because = " and ".join(reasons)
+    if asked == "generated":
+        return CopyChoice("generated", "generated on request", generated)
+    if not reasons:
+        return CopyChoice("approved", APPROVED_WHY, approved)
+    if asked == "approved":
+        refused = f"the approved sentence no longer describes this design ({because})"
+        return CopyChoice("generated", f"{refused}, so the generated one is shown", generated, refused)
+    return CopyChoice("generated", because, generated)
+
+
+def resolve_copy(approved: ConfigTrio, draft: SceneDraft, canopy: dict) -> dict[str, CopyChoice | None]:
+    """{"modules", "stepped" (None without a stepped rung), "strand"}: each rung's sentence by the rules of §3.3. T3
+    keeps the approved sentence only while the layout is model-equal and the colour names and their order are
+    unchanged; stepped also needs the direction unchanged; strand only needs the solid colour's name unchanged."""
+    seed = seed_draft(approved, draft.scene_id)
+    mode = approved.modes.mode(draft.scene_id)
+    generated = generated_copy(mode, draft, canopy)
+    reasons = []
+    if not _same_layout(draft, seed):
+        reasons.append("the layout changed")
+    if _names(draft) != _names(seed):
+        reasons.append("the colour names or their order changed")
+    tech = mode.techniques
+    assert tech.modules is not None
+    out: dict[str, CopyChoice | None] = {
+        "modules": _choose(draft.copy.modules, tech.modules.feature, generated["modules"], reasons),
+        "stepped": None,
+        "strand": None,
+    }
+    if tech.stepped is not None and "stepped" in generated:
+        moving = list(reasons)
+        if seed.stepped is None or draft.stepped is None or draft.stepped.direction != seed.stepped.direction:
+            moving.append("the stepped direction changed")
+        out["stepped"] = _choose(
+            draft.copy.stepped, tech.stepped.moving_feature, generated["stepped"], moving
+        )
+    if tech.strand is not None:
+        solid_same = draft.palette[draft.solid].name.casefold() == seed.palette[seed.solid].name.casefold()
+        out["strand"] = _choose(
+            "auto",
+            tech.strand.feature,
+            generated["strand"],
+            [] if solid_same else ["the solid colour changed"],
+        )
+    return out
 
 
 # ---- recipe keys (§3.2.1) --------------------------------------------------------------------------------------------
@@ -244,12 +414,403 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "colour"
 
 
+def owners_of(modes: ModesFile, recipes: RecipesFile) -> dict[str, str]:
+    """Recipe key → the mode whose design names it (first one); keys no mode names belong to the module page."""
+    owners: dict[str, str] = {}
+    for mode_id, mode in modes.modes.items():
+        for _where, key in _colour_refs(mode):
+            owners.setdefault(key, mode_id)
+    for key in recipes.colors:
+        owners.setdefault(key, MODULE_PAGE)
+    return owners
+
+
+def _palette_path(scene_id: str, i: int, what: str = "name") -> str:
+    return f"the draft of {scene_id} → palette → [{i}] → {what}"
+
+
 def recipe_keys(
     approved_mode: Mode, draft: SceneDraft, recipes: RecipesFile, owners: Mapping[str, str]
 ) -> list[str]:
     """One recipe key per draft colour, by the exact allocation of §3.2.1 (stable keys first, then the name, then
-    `<scene id>-<name>`); a key nobody can have → DraftError on `palette.<i>.name`."""
-    raise NotImplementedError("S1: recipe_keys")
+    `<scene id>-<name>`); a key nobody can have → DraftError on `palette.<i>.name`. `owners` is every taken key →
+    its owner (this scene's own keys are free to reuse; keys other drafts of the same apply took count as theirs)."""
+    sid = draft.scene_id
+    names = [c.name for c in draft.palette]
+    slugs = [slug(n) for n in names]
+    old_keys = [s.color for s in _design_sample(approved_mode, sid).canvas.stops]
+    old_names = [recipes.colors[k].label.casefold() if k in recipes.colors else None for k in old_keys]
+
+    def kept(i: int) -> bool:  # the approved colour at this place, name unchanged
+        return i < len(old_names) and old_names[i] == names[i].casefold()
+
+    problems: list[Problem] = []
+    first: dict[str, int] = {}
+    for i, s in enumerate(slugs):  # 1. unique within the draft
+        if s not in first:
+            first[s] = i
+            continue
+        j = first[s]
+        blame, other = (j, i) if kept(i) and not kept(j) else (i, j)  # point at the colour that was edited
+        problems.append(
+            Problem(
+                _palette_path(sid, blame),
+                f"palette.{blame}.name",
+                f"{names[blame]!r} and {names[other]!r} would share one recipe key ({s!r}); give it a more "
+                "distinct name",
+            )
+        )
+    if problems:
+        raise DraftError(problems)
+    keys: list[str | None] = [None] * len(names)
+    assigned: set[str] = set()
+    for i, name in enumerate(names):  # 2. stable keys: the same name in the same place ...
+        if i < len(old_names) and old_names[i] == name.casefold():
+            keys[i] = old_keys[i]
+            assigned.add(old_keys[i])
+    for i, name in enumerate(names):  # ... and a colour moved elsewhere keeps its key (a reorder)
+        if keys[i] is None and name.casefold() in old_names:
+            j = old_names.index(name.casefold())
+            if old_keys[j] not in assigned:
+                keys[i] = old_keys[j]
+                assigned.add(old_keys[j])
+    others = {k: o for k, o in owners.items() if o != sid}
+    for i, name in enumerate(names):  # 3. the name, else <scene id>-<name>
+        if keys[i] is not None:
+            continue
+        candidates = (slugs[i], f"{sid}-{slugs[i]}")
+        free = next((c for c in candidates if c not in others and c not in assigned), None)
+        if free is not None:
+            keys[i] = free
+            assigned.add(free)
+            continue
+        holder = others.get(slugs[i])
+        who = holder if holder is not None else "another colour of this draft"
+        problems.append(
+            Problem(
+                _palette_path(sid, i),
+                f"palette.{i}.name",
+                f"the colour name {name!r} is already used by another scene's colour ({who}) and "
+                f"{candidates[1]!r} is taken too; choose another name",
+            )
+        )
+    if problems:
+        raise DraftError(problems)
+    return [k for k in keys if k is not None]
+
+
+def _rgb(hex_: str) -> list[int]:
+    return [int(hex_[i : i + 2], 16) for i in (1, 3, 5)]
+
+
+def _recipe(colour: DraftColour) -> dict:
+    """A palette colour's recipe entry in the house style (recipes.yaml): the hex at full strength, RGB only (per-puck
+    white is unverified, gate 6), `blend` the same, the strand fallback the same RGB."""
+    r, g, b = _rgb(colour.hex)
+    entry = {"r": r, "g": g, "b": b, "colorBrightness": 100}
+    return {
+        "label": colour.name,
+        "hex": colour.hex,
+        "rgb_only": dict(entry),
+        "blend": dict(entry),
+        "strand": {"rgb": [r, g, b]},
+    }
+
+
+# ---- the patch (S1) --------------------------------------------------------------------------------------------------
+def _lock_problems(mode: Mode, draft: SceneDraft) -> list[Problem]:
+    """The D63 locks and the stepped rung's presence: a draft can't repeat the design, sample at the mean, or add or
+    drop a stepped rung."""
+    sid = draft.scene_id
+    out = []
+    if draft.layout.cycles != 1:
+        out.append(Problem(f"the draft of {sid} → layout → cycles", "layout.cycles", LOCKED_CYCLES))
+    if draft.sample_at != "centre":
+        out.append(Problem(f"the draft of {sid} → sample_at", "sample_at", LOCKED_SAMPLE))
+    has = mode.techniques.stepped is not None
+    if has and draft.stepped is None:
+        out.append(
+            Problem(
+                f"the draft of {sid} → stepped",
+                "stepped",
+                f"{mode.label} has a stepped rung, so its draft needs the stepped timing (direction, "
+                "steps_per_cycle, step_s, run_s)",
+            )
+        )
+    if not has and draft.stepped is not None:
+        out.append(
+            Problem(
+                f"the draft of {sid} → stepped",
+                "stepped",
+                f"{mode.label} has no stepped rung, and a draft can't add one",
+            )
+        )
+    return out
+
+
+def _patched_mode(
+    mode: Mode, draft: SceneDraft, keys: list[str], copy: Mapping[str, CopyChoice | None]
+) -> dict:
+    """The mode as a dict with every rung moved in lockstep (§3.2.2); its ladder, slot and motion untouched."""
+    data = mode.model_dump()
+    b = draft.brightness
+    design = _canvas_of(draft.layout, keys).model_dump()
+    t = data["techniques"]
+    if t.get("canvas") is not None:
+        t["canvas"]["canvas"] = design
+        t["canvas"]["brightness"] = b
+    if t.get("slot") is not None:
+        t["slot"]["brightness"] = b
+    modules = copy["modules"]
+    assert modules is not None
+    t["modules"]["sample"] = {"canvas": design, "at": draft.sample_at, "brightness": b}
+    t["modules"]["feature"] = modules.sentence
+    moving = copy["stepped"]
+    if t.get("stepped") is not None and draft.stepped is not None and moving is not None:
+        t["stepped"].update(
+            canvas=design,
+            direction=draft.stepped.direction,
+            steps_per_cycle=draft.stepped.steps_per_cycle,
+            step_s=draft.stepped.step_s,
+            run_s=draft.stepped.run_s,
+            brightness=b,
+            moving_feature=moving.sentence,
+        )
+    strand = copy["strand"]
+    if t.get("strand") is not None and strand is not None:
+        t["strand"]["look"] = {"kind": "rgb", "rgb": _rgb(draft.palette[draft.solid].hex), "brightness": b}
+        t["strand"]["fallback_look"] = None
+        t["strand"]["feature"] = strand.sentence
+    data["label"] = draft.name
+    data["blurb"] = draft.mood
+    data["preview"] = [c.hex for c in draft.palette]
+    return data
+
+
+def _patch_scene(scenes: dict, draft: SceneDraft) -> None:
+    """In the catalog dump (the Lab's own dict, never a model): the scene's client copy, palette, brightness, solid."""
+    for scene in scenes["scenes"]:
+        if scene["id"] == draft.scene_id:
+            scene.update(
+                name=draft.name,
+                mood=draft.mood,
+                description=draft.description,
+                brightness_draft=draft.brightness,
+                default_solid=draft.solid,
+                palette=[{"name": c.name, "hex": c.hex} for c in draft.palette],
+            )
+
+
+# What a scene_rules problem points at when its path doesn't say (the rule's own subject).
+RULE_FIELD = {
+    "catalog": "draft",
+    "brightness": "brightness",
+    "static": "layout",
+    "ladder-end": "solid",
+    "slots": "draft",
+    "one-design": "palette",
+    "recipes": "palette",
+    "stepped": "stepped",
+    "two-d": "layout",
+    "kits-differ": "layout",
+}
+
+
+def problem_of(found: scene_rules.SceneProblem) -> Problem:
+    """A scene_rules problem as a draft Problem (its field from the path, else the rule's subject; the D63
+    design-quality rules are always the layout)."""
+    path = f"mode {found.mode!r} → {found.path}"
+    field = field_for(path)
+    if field == "draft" or found.rule in scene_rules.WARNINGS:
+        field = RULE_FIELD.get(found.rule, "draft")
+    return Problem(path, field, found.message)
+
+
+def _shape_problems(approved: ConfigTrio, scenes: SceneCatalog, modes: ModesFile) -> list[Problem]:
+    """Belt and braces (§3.2.4): ids, ladders and slots never move."""
+    out = []
+    if [s.id for s in scenes.scenes] != [s.id for s in approved.scenes.scenes]:
+        out.append(Problem("scenes", "scene_id", "the draft would change the scene ids"))
+    if list(modes.modes) != list(approved.modes.modes):
+        out.append(Problem("modes", "scene_id", "the draft would change the mode ids"))
+    for mode_id, mode in approved.modes.modes.items():
+        patched = modes.modes.get(mode_id)
+        if patched is not None and (list(patched.ladder) != list(mode.ladder) or patched.slot != mode.slot):
+            out.append(
+                Problem(
+                    f"mode {mode_id!r} → ladder",
+                    "draft",
+                    "the draft would move a rung or a slot; ladders and slots never move",
+                )
+            )
+    return out
+
+
+def apply_drafts(
+    trio: ConfigTrio, drafts: Mapping[str, SceneDraft], *, canopy: dict, settings: ConductorSettings
+) -> ConfigTrio:
+    """The patched trio, scenes processed in catalog order and validated once at the end (§3.2.2, §3.2.3). Raises
+    DraftError with every problem (an unknown scene → field "scene_id"; an explicit "approved" copy that is no longer
+    true → field "copy.modules"/"copy.stepped")."""
+    from conductor.show import _check_idle_scene, _check_stepped  # the show's own load checks (not edited)
+
+    order = [s.id for s in trio.scenes.scenes]
+    problems: list[Problem] = []
+    for key, draft in drafts.items():
+        if draft.scene_id != key:
+            problems.append(
+                Problem(
+                    f"the draft of {key} → scene_id",
+                    "scene_id",
+                    f"the draft is for {draft.scene_id!r}, not {key!r}",
+                )
+            )
+        elif key not in order or key not in trio.modes.modes:
+            problems.append(
+                Problem(
+                    f"the draft of {key}",
+                    "scene_id",
+                    f"there is no scene called {key!r}; a draft only changes one of the {len(order)} scenes",
+                )
+            )
+    if problems:
+        raise DraftError(problems)
+    ids = [sid for sid in order if sid in drafts]
+    where = "the draft of " + (", ".join(ids) or "nothing")
+    # The purity rule (§3.0): edit dumps, never the models.
+    scenes_dump = trio.scenes.model_dump()
+    modes_dump = trio.modes.model_dump()
+    recipes_dump = trio.recipes.model_dump()
+    owners = owners_of(trio.modes, trio.recipes)
+    claimed: dict[str, str] = {}  # keys given out in this apply → the scene that has them now
+    choices: dict[str, dict[str, CopyChoice | None]] = {}
+    for sid in ids:
+        draft = drafts[sid]
+        mode = trio.modes.mode(sid)
+        found = _lock_problems(mode, draft)
+        try:
+            keys = recipe_keys(mode, draft, trio.recipes, {**owners, **claimed})
+        except DraftError as exc:
+            found += exc.problems
+            keys = []
+        if found:
+            problems += found
+            continue
+        claimed.update(dict.fromkeys(keys, sid))
+        copy = resolve_copy(trio, draft, canopy)
+        choices[sid] = copy
+        modes_dump["modes"][sid] = _patched_mode(mode, draft, keys, copy)
+        _patch_scene(scenes_dump, draft)
+        for key, colour in zip(keys, draft.palette, strict=True):
+            recipes_dump["colors"][key] = _recipe(colour)
+    if problems:
+        raise DraftError(problems)
+    # Keys a drafted scene owned that no mode names any more go (the colour-study colours are nobody's to drop).
+    named = set(claimed)
+    for mode_id, mode in trio.modes.modes.items():
+        if mode_id not in drafts:
+            named |= {k for _w, k in _colour_refs(mode)}
+    for sid in ids:
+        for _w, key in _colour_refs(trio.modes.mode(sid)):
+            if key not in named:
+                recipes_dump["colors"].pop(key, None)
+
+    # 1–2. scenes.yaml and recipes.yaml
+    try:
+        scenes = SceneCatalog.model_validate(scenes_dump)
+    except ValidationError as exc:
+        raise DraftError(problems_from_config_error(_explain(where, exc))) from None
+    try:
+        recipes = RecipesFile.model_validate(recipes_dump)
+    except ValidationError as exc:
+        raise DraftError(problems_from_config_error(_explain(where, exc))) from None
+    # 3. the real schema + cross_check (copy honesty, layout words, one colour, sweep centre, slots)
+    try:
+        modes = parse_modes(modes_dump, recipes=recipes, canopy=canopy, path=where)
+    except ConfigError as exc:
+        raise DraftError(problems_from_config_error(str(exc))) from None
+    # 4. the show's own load checks: no run outlasts idle_return_s, the idle mode never steps, idle_scene is a mode
+    try:
+        _check_stepped(settings, modes)
+        _check_idle_scene(settings.kiosk.idle_scene, list(modes.modes))
+    except ConfigError as exc:
+        raise DraftError(problems_from_config_error(str(exc))) from None
+    if shape := _shape_problems(trio, scenes, modes):
+        raise DraftError(shape)
+    # 5. the scene ↔ mode invariants that refuse a draft (D63's design-quality rules only warn: preview reports them)
+    blocking = scene_rules.scene_mode_problems(
+        scenes, modes, recipes, canopy, approved=trio.modes, rules=scene_rules.BLOCKING
+    )
+    if blocking:
+        raise DraftError([problem_of(p) for p in blocking])
+    # 6. copy: an explicit "approved" sentence that is no longer true
+    for sid, copy in choices.items():
+        for rung, at in (("modules", "modules → feature"), ("stepped", "stepped → moving_feature")):
+            choice = copy[rung]
+            if choice is not None and choice.refused:
+                problems.append(Problem(f"mode {sid!r} → techniques → {at}", f"copy.{rung}", choice.refused))
+    if problems:
+        raise DraftError(problems)
+    return ConfigTrio(scenes=scenes, modes=modes, recipes=recipes)
+
+
+def apply_draft(
+    trio: ConfigTrio, draft: SceneDraft, *, canopy: dict, settings: ConductorSettings
+) -> ConfigTrio:
+    """= apply_drafts(trio, {draft.scene_id: draft}, …)."""
+    return apply_drafts(trio, {draft.scene_id: draft}, canopy=canopy, settings=settings)
+
+
+def draft_changes(approved: ConfigTrio, draft: SceneDraft, *, canopy: dict) -> dict:
+    """What the draft changes against the approved scene (§3.2.5): approved_colours, name, mood, description, layout,
+    brightness, solid, sample_at, stepped, copy, and the flags needs_d59 / needs_d63 / needs_slot_repaint.
+
+    `needs_slot_repaint` follows the painted design's frames: the hexes in stop order (a hex edit, a reorder, an added
+    or removed colour) or the layout. A rename alone gives a new recipe key but the same frames, so the same slot
+    hash: no repaint."""
+    seed = seed_draft(approved, draft.scene_id)
+    mode = approved.modes.mode(draft.scene_id)
+
+    def pair(a: object, b: object) -> dict | None:
+        return None if a == b else {"from": a, "to": b}
+
+    colours = []
+    for i in range(max(len(seed.palette), len(draft.palette))):
+        a = seed.palette[i].model_dump() if i < len(seed.palette) else None
+        b = draft.palette[i].model_dump() if i < len(draft.palette) else None
+        if a != b:
+            colours.append({"index": i, "from": a, "to": b})
+    layout = None
+    if not _same_layout(draft, seed):
+        layout = {
+            "from": seed.layout.model_dump(mode="json"),
+            "to": draft.layout.model_dump(mode="json"),
+            "words_from": F.layout_words(seed.layout, canopy),
+            "words_to": F.layout_words(draft.layout, canopy),
+        }
+    solid_from = {"index": seed.solid, **seed.palette[seed.solid].model_dump()}
+    solid_to = {"index": draft.solid, **draft.palette[draft.solid].model_dump()}
+    copy = resolve_copy(approved, draft, canopy)
+    name = pair(seed.name, draft.name)
+    frames_differ = [c.hex for c in seed.palette] != [c.hex for c in draft.palette] or layout is not None
+    return {
+        "approved_colours": colours,
+        "name": name,
+        "mood": pair(seed.mood, draft.mood),
+        "description": pair(seed.description, draft.description),
+        "layout": layout,
+        "brightness": pair(seed.brightness, draft.brightness),
+        "solid": pair(solid_from, solid_to),
+        "sample_at": pair(seed.sample_at, draft.sample_at),
+        "stepped": pair(
+            seed.stepped.model_dump() if seed.stepped else None,
+            draft.stepped.model_dump() if draft.stepped else None,
+        ),
+        "copy": [rung for rung, c in copy.items() if c is not None and c.chosen == "generated"],
+        "needs_d59": bool(colours) or name is not None,
+        "needs_d63": layout is not None,
+        "needs_slot_repaint": mode.slot is not None and frames_differ,
+    }
 
 
 # ---- ConfigError text → problems (§3.2.3) ----------------------------------------------------------------------------
@@ -267,42 +828,54 @@ FIELD_FOR: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"→ stepped → (direction|steps_per_cycle|step_s|run_s)\b"), "stepped"),  # stepped.<that>
     (re.compile(r"→ strand\b"), "solid"),
 )
+_PALETTE_INDEX = re.compile(r"→ (?:palette|stops|preview) → \[?(\d+)\]?(?: → (name|hex)\b)?")
+_STEPPED_FIELD = re.compile(r"→ stepped → (direction|steps_per_cycle|step_s|run_s)\b")
+_LAYOUT_FIELD = re.compile(r"→ field → ([a-z_]+)\s*$")
+_BULLET = re.compile(r"^\s*•\s*(.*\S)\s*$")
+# Paths FIELD_FOR leaves at "draft" that do name a field: the sampled design itself (one colour at every module, a
+# sweep on a module centre) is the layout; the stepped technique's own checks are its timing; a recipe is a colour.
+_DRAFT_REFINED = (
+    (re.compile(r"→ modules → sample\s*$"), "layout"),
+    (re.compile(r"→ stepped\s*$"), "stepped"),
+    (re.compile(r"^colors → "), "palette"),  # recipes.yaml's own paths (a recipe is a palette colour)
+)
+
+
+def field_for(path: str) -> str:
+    """The SceneDraft field a config path names (FIELD_FOR, refined: `palette.<i>[.name|.hex]`, `stepped.<name>`,
+    `layout.<name>`)."""
+    field = next((f for pattern, f in FIELD_FOR if pattern.search(path)), "draft")
+    if field == "palette" and (m := _PALETTE_INDEX.search(path)):
+        field = f"palette.{m.group(1)}" + (f".{m.group(2)}" if m.group(2) else "")
+    elif field == "stepped" and (m := _STEPPED_FIELD.search(path)):
+        field = f"stepped.{m.group(1)}"
+    elif field == "layout" and (m := _LAYOUT_FIELD.search(path)):
+        field = f"layout.{m.group(1)}"
+    elif field == "draft":
+        field = next((f for pattern, f in _DRAFT_REFINED if pattern.search(path)), "draft")
+    return field
 
 
 def problems_from_config_error(text: str) -> list[Problem]:
     """Each `  • <path>: <message>` bullet of a ConfigError becomes one Problem; `field` from FIELD_FOR ("draft"
-    when nothing matches; `palette.<i>` and `stepped.<name>` when the path says which)."""
-    raise NotImplementedError("S1: problems_from_config_error")
-
-
-# ---- copy (§3.3) -----------------------------------------------------------------------------------------------------
-T3_TEMPLATE = (
-    "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out "
-    "{words}: {colours}."
-)
-STEPPED_TEMPLATE = (
-    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and "
-    "sent its next colour every few seconds, so the palette's colours move {flow} across the "
-    "canopy: {colours}."
-)
-STRAND_TEMPLATE = "Colour and dimming: all nine Hubspace strands set to {solid}."
-
-
-def colour_phrase(names: list[str], *, invert: bool, transform: str) -> str:
-    """Lower-cased names in the order they sit from where the layout starts: reversed when invert; with transform
-    "mirror" → "<first> at both ends through <last> in the middle"; otherwise "<a>, then <b>, <c> and <d>" (two
-    colours: "<a>, then <b>")."""
-    raise NotImplementedError("S1: colour_phrase")
-
-
-def generated_copy(mode: Mode, draft: SceneDraft, canopy: dict) -> dict[str, str]:
-    """{"modules": T3_TEMPLATE(...), "strand": STRAND_TEMPLATE(...), "stepped": STEPPED_TEMPLATE(...)}."""
-    raise NotImplementedError("S1: generated_copy")
+    when nothing matches; `palette.<i>` and `stepped.<name>` when the path says which). A message with no bullets
+    (the show's `_check_stepped`) is one problem."""
+    lines = [m.group(1) for line in text.splitlines() if (m := _BULLET.match(line))]
+    if not lines:
+        lines = [text.strip()]
+    out = []
+    for line in lines:
+        path, sep, message = line.partition(": ")
+        if not sep:
+            path, message = "", line
+        out.append(Problem(path, field_for(path), message.removeprefix("Value error, ")))
+    return out
 
 
 __all__ = [
     "FIELD_FOR",
     "GRID",
+    "MODULE_PAGE",
     "NUMBER_NAMES",
     "PALETTE_MAX",
     "PALETTE_MIN",
@@ -310,6 +883,7 @@ __all__ = [
     "STRAND_TEMPLATE",
     "T3_TEMPLATE",
     "ConfigTrio",
+    "CopyChoice",
     "DraftColour",
     "DraftCopy",
     "DraftError",
@@ -320,11 +894,15 @@ __all__ = [
     "apply_drafts",
     "colour_phrase",
     "draft_changes",
+    "field_for",
     "generated_copy",
     "is_approved",
     "load_trio",
+    "owners_of",
+    "problem_of",
     "problems_from_config_error",
     "recipe_keys",
+    "resolve_copy",
     "seed_draft",
     "slug",
 ]
