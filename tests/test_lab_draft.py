@@ -9,6 +9,7 @@ Pure: no I/O beyond reading config/ once, no clock, no engine. Settings come fro
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 
 import pytest
 from fake_compiler import settings_with
@@ -29,7 +30,10 @@ from conductor.looks.schema import (
 )
 from conductor.scenes import load_scenes
 
-TRIO = D.load_trio(CONFIG_DIR)
+# The approved config of 2026-10-16, frozen (tests/fixtures_lab_baseline/): these tests pin its values, so they keep
+# passing after a Lab export changes config/ (make lab-roundtrip). The live config is checked where it matters.
+BASELINE = Path(__file__).resolve().parent / "fixtures_lab_baseline"
+TRIO = D.load_trio(BASELINE)
 CANOPY = load_canopy_config(CONFIG_DIR / "canopy.yaml")
 SETTINGS = ConductorSettings()
 IDS = [s.id for s in TRIO.scenes.scenes]
@@ -97,7 +101,12 @@ def test_the_seed_of_every_scene_applies_to_the_approved_trio_exactly(scene_id):
 def test_all_six_seeds_at_once_reproduce_the_approved_trio_and_the_shows_own_loaders():
     patched = apply(*(D.seed_draft(TRIO, s) for s in IDS))
     assert patched.dump() == TRIO.dump()
-    # ... which is exactly what the show compiles (load_trio reads through the show's own loaders)
+    # the live config too, which is exactly what the show compiles (load_trio reads through the show's own loaders)
+    live = D.load_trio(CONFIG_DIR)
+    seeds = {s.id: D.seed_draft(live, s.id) for s in live.scenes.scenes}
+    assert all(D.is_approved(live, d) for d in seeds.values())
+    patched = D.apply_drafts(live, seeds, canopy=CANOPY, settings=SETTINGS)
+    assert patched.dump() == live.dump()
     assert patched.modes.model_dump() == load_modes(CONFIG_DIR).model_dump()
     assert patched.scenes.model_dump() == load_scenes(CONFIG_DIR).model_dump()
     assert patched.recipes.model_dump() == load_recipes(CONFIG_DIR).model_dump()

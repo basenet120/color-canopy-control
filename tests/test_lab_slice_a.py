@@ -9,9 +9,13 @@ Lab's approved trio, the cached catalog and modes the guest panel serves, and co
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import time
+from pathlib import Path
 
 import pytest
+from lab_edits import done_means
 
 from conductor.config import CONFIG_DIR
 from conductor.design_lab import draft as D
@@ -21,27 +25,47 @@ from conductor.looks import load_modes
 from conductor.scenes import load_scenes
 
 ORIGIN = {"Origin": "http://testserver"}
-NEW_PINK = "#FF8FBF"
 
 
 def _config_bytes() -> dict[str, bytes]:
     return {p.name: p.read_bytes() for p in sorted(CONFIG_DIR.glob("*.yaml"))}
 
 
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+
+
+def _applied_to_live(tmp: Path, patch: str) -> dict[str, str]:
+    """`git apply` the patch to a committed copy of the live config/ and fixture (what a reviewer applies it to); the
+    export's four files afterwards."""
+    repo = tmp / "repo"
+    shutil.copytree(CONFIG_DIR, repo / "config")
+    (repo / "tests").mkdir()
+    shutil.copy(CONFIG_DIR.parent / X.FIXTURE_FILE, repo / X.FIXTURE_FILE)
+    assert _git(repo, "init", "-q").returncode == 0 and _git(repo, "add", "-A").returncode == 0
+    commit = _git(repo, "-c", "user.name=lab", "-c", "user.email=lab@localhost", "commit", "-qm", "base")
+    assert commit.returncode == 0, commit.stderr
+    (tmp / "lab.patch").write_text(patch, encoding="utf-8")
+    applied = _git(repo, "apply", str(tmp / "lab.patch"))
+    assert applied.returncode == 0, applied.stderr
+    return {path: (repo / path).read_text(encoding="utf-8") for path in X.EXPORT_FILES}
+
+
 def _done_means_draft(seed: dict) -> dict:
+    """The Done-means edit of the live Golden Hour (one colour, the angle, the brightness), each value different from
+    what config/ approves today (tests/lab_edits.py), so this holds after an export changes config/."""
     draft = {**seed, "palette": [dict(c) for c in seed["palette"]]}
-    (pink,) = [c for c in draft["palette"] if c["name"] == "Sunset pink"]
-    assert pink["hex"] != NEW_PINK
-    pink["hex"] = NEW_PINK
-    draft["layout"] = {"kind": "linear", "angle_deg": 30}
-    draft["brightness"] = 90
+    for key, value in done_means(seed).items():
+        if key.startswith("palette."):
+            _, index, field = key.split(".")
+            draft["palette"][int(index)][field] = value
+        else:
+            draft[key] = value
     return draft
 
 
 @pytest.mark.parametrize("client", ["app_client", "app_client_show"])
 def test_the_client_workflow_end_to_end_and_pure(client, request, tmp_path):
-    from test_lab_export import scratch_repo  # the reviewer's copy of config/, as S3's export tests use it
-
     c = request.getfixturevalue(client)
     config_before = _config_bytes()
     cached = load_scenes(CONFIG_DIR)
@@ -59,7 +83,8 @@ def test_the_client_workflow_end_to_end_and_pure(client, request, tmp_path):
     assert r.status_code == 200, r.text
     assert time.perf_counter() - started < 1.0  # "sees ... update in under a second"
     preview = r.json()
-    assert preview["approved"] is False and preview["warnings"] == [] and preview["brightness"] == 90
+    assert preview["approved"] is False and preview["warnings"] == []
+    assert preview["brightness"] == draft["brightness"]
     assert len(preview["design"]["heads"]) == 270 and len(preview["design"]["modules"]) == 9
     assert [t["tier"] for t in preview["tiers"]] == golden["ladder"]
     assert all(t["feature"] for t in preview["tiers"])
@@ -92,15 +117,14 @@ def test_the_client_workflow_end_to_end_and_pure(client, request, tmp_path):
     exported = r.json()
     assert exported["problem"] == "" and exported["scenes"] == ["golden-hour"]
     assert X.SCENES_FILE in exported["files"] and X.MODES_FILE in exported["files"]
-    assert any(NEW_PINK in line for line in exported["approved_changes"])
+    new_hex = draft["palette"][2]["hex"]
+    assert any(new_hex in line for line in exported["approved_changes"])
     assert exported["filename"].startswith(f"design-lab-{saved['id']}-")
     patch = c.get(f"/api/lab/export?version={saved['id']}&format=patch")
     assert patch.status_code == 200 and patch.text == exported["patch"]
 
     # the patch applies to config/ and re-reads as the saved drafts applied to approved
-    from test_lab_export import applied
-
-    texts = applied(scratch_repo(tmp_path), exported["patch"])
+    texts = _applied_to_live(tmp_path, exported["patch"])
     saved_drafts = {k: D.SceneDraft.model_validate(v) for k, v in opened["drafts"].items()}
     patched = D.apply_drafts(lab.approved, saved_drafts, canopy=lab.canopy, settings=lab.settings)
     assert X.reread(texts, lab.canopy).dump() == patched.dump()

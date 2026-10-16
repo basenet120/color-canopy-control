@@ -14,18 +14,20 @@ import ast
 from pathlib import Path
 
 import pytest
-from test_lab_store import FakeS1, install_fakes, pink
+from lab_edits import recoloured
+from test_lab_store import FakeS1, install_fakes, seed
 
 from conductor.config import CONFIG_DIR
 from conductor.design_lab import export as X
 from conductor.design_lab import preview as P
-from conductor.design_lab.draft import SceneDraft
+from conductor.design_lab.draft import SceneDraft, load_trio
 from conductor.looks import scene_rules as R
 from conductor.routes.deps import OPS_ONLY
 
 ROOT = Path(__file__).resolve().parent.parent
 OPS = ("crew", "canopy")
-DRAFT = pink().model_dump(mode="json")
+# live: the app's Lab reads config/, so the edit is made against it (a colour it doesn't already approve)
+DRAFT = recoloured(seed(load_trio(CONFIG_DIR), "golden-hour").model_dump(mode="json"))
 # Every Slice A route, as (method, the route's path, a concrete URL, a valid body).
 LAB_REQUESTS = [
     ("GET", "/api/lab/catalog", "/api/lab/catalog", None),

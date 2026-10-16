@@ -26,7 +26,9 @@ from conductor.design_lab.draft import ConfigTrio, DraftError, Problem, SceneDra
 from conductor.design_lab.store import LookStore, StoreReadOnly
 from conductor.telemetry import Telemetry
 
-TRIO: ConfigTrio = load_trio(CONFIG_DIR)
+# the approved config of 2026-10-16, frozen: the pinks below are its values, so these pass after an export (make
+# lab-roundtrip); the app-level tests use the live config
+TRIO: ConfigTrio = load_trio(Path(__file__).resolve().parent / "fixtures_lab_baseline")
 SETTINGS = ConductorSettings()
 CANOPY: dict = {"width_in": 225, "height_in": 120}
 SHA = "3f9a1c0e2b7d"

@@ -33,7 +33,11 @@ from conductor.sim.settings import SimSettings
 REGISTRY = load_registry()
 MODULES = REGISTRY.canopy_modules()
 CAPS = P.design_caps()
-TRIO = D.load_trio(CONFIG_DIR)
+# The Lab's approved config is the one of 2026-10-16, frozen (tests/fixtures_lab_baseline/: scenes, modes, recipes,
+# canopy): the edits below are written against its values, so these pass after an export changes config/
+# (make lab-roundtrip). The show's own wiring still reads config/.
+BASELINE = Path(__file__).resolve().parent / "fixtures_lab_baseline"
+TRIO = D.load_trio(BASELINE)
 IDS = [s.id for s in TRIO.scenes.scenes]
 LIVE = ("r0c0", "r0c1")
 D62_TWO = "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
@@ -61,7 +65,7 @@ def services(tmp: Path, *, simulated: bool = True, registry=REGISTRY, settings=N
     if engine is not None:
         extras["canopy"] = engine
     return SimpleNamespace(
-        config_dir=CONFIG_DIR,
+        config_dir=BASELINE,
         data=tmp,
         clock=VirtualClock(),
         telemetry=SimpleNamespace(record=lambda *a, **k: None),
@@ -350,9 +354,15 @@ async def _show():
     from conductor.services import build_services
 
     data = Path(tempfile.mkdtemp(prefix="lab-preview-"))
+    # config/ with the frozen baseline's scenes, modes and recipes: the show and the Lab read the same approved trio
+    # as the edits above are written against, whatever an export has done to config/
+    config = data / "config"
+    shutil.copytree(CONFIG_DIR, config)
+    for name in ("scenes.yaml", "modes.yaml", "recipes.yaml"):
+        shutil.copy(BASELINE / name, config / name)
     sim = SimSettings.from_acceptance().with_(throttle_429_rate=0.0, silent_drop_rate=0.0)
     services = build_services(
-        {"CONDUCTOR_DATA_DIR": str(data)}, clock=VirtualClock(), config_dir=CONFIG_DIR, sim_settings=sim
+        {"CONDUCTOR_DATA_DIR": str(data / "data")}, clock=VirtualClock(), config_dir=config, sim_settings=sim
     )
     services.telemetry.dir = None
     await services.start()

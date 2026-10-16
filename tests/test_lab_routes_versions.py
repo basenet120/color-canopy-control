@@ -14,12 +14,23 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_lab_store import REFUSE, TRIO, FakeS1, install_fakes, pink, seed
+from lab_edits import other_hex, recoloured
+from test_lab_store import REFUSE, FakeS1, install_fakes, seed
 
+from conductor.config import CONFIG_DIR
 from conductor.design_lab import preview as P
+from conductor.design_lab.draft import SceneDraft, load_trio
 
+TRIO = load_trio(CONFIG_DIR)  # live: the app's Lab reads config/, so the edits are made against it
 SCENES = [s.id for s in TRIO.scenes.scenes]
+APPROVED_PINK = seed(TRIO, "golden-hour").palette[2].hex
+SECOND_PINK = other_hex(APPROVED_PINK, "#FF80B0", "#FF70A0")
 LAB_ALERT = "Design Lab: overrides/looks.yaml couldn't be read ("
+
+
+def pink(hex_: str | None = None) -> SceneDraft:
+    """Golden Hour with one colour edited (Sunset pink today), against the live config: a hex it doesn't approve."""
+    return SceneDraft.model_validate(recoloured(seed(TRIO, "golden-hour").model_dump(mode="json"), hex_))
 
 
 @pytest.fixture
@@ -64,7 +75,7 @@ def test_save_list_open_restore_and_delete(app_client, fakes):
     assert v1["needs_d59"] is True and v1["stale"] is False and v1["older_config"] is False
     assert stat.S_IMODE(looks(app_client).stat().st_mode) == 0o600
 
-    r = save(app_client, {"golden-hour": pink("#FF80B0")}, parent="v0001", name="Paris's pick")
+    r = save(app_client, {"golden-hour": pink(SECOND_PINK)}, parent="v0001", name="Paris's pick")
     v2 = r.json()
     assert r.status_code == 201 and v2["parent"] == "v0001" and v2["name"] == "Paris's pick"
 

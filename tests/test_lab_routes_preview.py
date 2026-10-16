@@ -8,15 +8,17 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from lab_edits import done_means, rgb
 
 from conductor.config import CONFIG_DIR
 from conductor.design_lab import draft as D
 from conductor.design_lab import preview as P
 from conductor.design_lab import service as SVC
 
-TRIO = D.load_trio(CONFIG_DIR)
+TRIO = D.load_trio(CONFIG_DIR)  # live: the app's Lab reads config/, so the edits below are made against it
 IDS = [s.id for s in TRIO.scenes.scenes]
-DONE_MEANS = {"palette.2.hex": "#FF8FBF", "layout": {"kind": "linear", "angle_deg": 30}, "brightness": 90}
+DONE_MEANS = done_means(D.seed_draft(TRIO, "golden-hour").model_dump(mode="json"))
+NEW_PINK = DONE_MEANS["palette.2.hex"]
 
 
 def draft_json(scene_id: str, **changes) -> dict:
@@ -53,7 +55,7 @@ def test_the_done_means_edit_previews_with_its_changes_and_its_time(app_client):
     r = post(app_client, "golden-hour", draft_json("golden-hour", **DONE_MEANS))
     assert r.status_code == 200, r.text[:400]
     body = r.json()
-    assert body["approved"] is False and body["brightness"] == 90
+    assert body["approved"] is False and body["brightness"] == DONE_MEANS["brightness"]
     assert (
         body["changes"]["needs_d59"]
         and body["changes"]["needs_d63"]
@@ -61,7 +63,8 @@ def test_the_done_means_edit_previews_with_its_changes_and_its_time(app_client):
     )
     assert body["copy"]["modules"]["chosen"] == "generated"
     strand = next(t for t in body["tiers"] if t["tier"] == "strand")
-    assert strand["solid"] == [255, 143, 191]
+    draft = draft_json("golden-hour", **DONE_MEANS)
+    assert strand["solid"] == rgb(draft["palette"][draft["solid"]]["hex"])  # today: the edited Sunset pink
     assert 0 < body["elapsed_ms"] < 1000
     assert body["t1_lock"]["simulated"] is True and body["t1_lock"]["locked"] is False
 
@@ -102,7 +105,7 @@ def test_the_t1_lock_is_a_409_naming_the_field(app_client, monkeypatch):
         }
 
     monkeypatch.setattr(P, "t1_lock", locked)
-    r = post(app_client, "golden-hour", draft_json("golden-hour", **{"palette.2.hex": "#FF8FBF"}))
+    r = post(app_client, "golden-hour", draft_json("golden-hour", **{"palette.2.hex": NEW_PINK}))
     assert r.status_code == 409
     assert r.json() == {"detail": f"Golden Hour: {P.T1_LOCKED}.", "field": "palette"}
     assert r.headers["cache-control"] == "no-store"
