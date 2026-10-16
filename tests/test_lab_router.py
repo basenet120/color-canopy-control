@@ -1,8 +1,8 @@
 """The Design Lab's router (conductor/routes/design_lab.py) is mounted, guarded and answers every Slice A route.
 
-The contracts commit lands the routes before the streams fill the modules in, so a route whose stream hasn't landed
-answers a readable 501 ("Not built yet: …") instead of a 500, and the Lab page degrades with a sentence. These tests
-hold whichever way each stream stands: each route's allowed answers include both its built and its not-built status.
+The contracts commit landed the routes before the streams filled the modules in, so a stub (`NotImplementedError`)
+answers a readable 501 ("Not built yet: …") instead of a 500, and the Lab page degrades with a sentence. Slice A is
+now built, so every route must give its built answer; the 501 path is pinned by a stub stood in on purpose.
 """
 
 from __future__ import annotations
@@ -93,20 +93,22 @@ def test_the_router_is_mounted_with_every_slice_a_route_behind_ops_and_the_same_
 def _requests():
     draft = draft_json("golden-hour")
     return [
-        ("GET", "/api/lab/catalog", None, {200, 501}),
+        ("GET", "/api/lab/catalog", None, {200}),
         ("GET", "/api/lab/state", None, {200}),
-        ("POST", "/api/lab/preview", {"scene_id": "golden-hour", "draft": draft}, {200, 501}),
-        ("GET", "/api/lab/versions", None, {200, 501}),
-        ("GET", "/api/lab/versions/v0001", None, {404, 501}),
+        ("POST", "/api/lab/preview", {"scene_id": "golden-hour", "draft": draft}, {200}),
+        ("GET", "/api/lab/versions", None, {200}),
+        ("GET", "/api/lab/versions/v0001", None, {404}),
         (
             "POST",
             "/api/lab/versions",
             {"drafts": {"golden-hour": draft}, "note": "warmer sunset"},
-            {201, 501},
+            {201},
         ),
-        ("DELETE", "/api/lab/versions/v0001", {}, {404, 501}),
-        ("POST", "/api/lab/restore", {"version": "approved"}, {200, 501}),
-        ("GET", "/api/lab/export?version=v0001", None, {404, 501}),
+        ("GET", "/api/lab/versions/v0001", None, {200}),
+        ("POST", "/api/lab/restore", {"version": "approved"}, {200}),
+        ("GET", "/api/lab/export?version=v0001", None, {200}),
+        ("DELETE", "/api/lab/versions/v0001", {}, {200}),
+        ("GET", "/api/lab/export?version=v0001", None, {404}),
     ]
 
 
@@ -119,10 +121,6 @@ def test_every_slice_a_route_answers(app_client):
         )
         assert r.status_code in allowed, (method, path, r.status_code, r.text[:300])
         assert r.headers["cache-control"] == "no-store", (method, path)
-        if r.status_code == 501:
-            answer = r.json()
-            assert answer["not_built"] is True
-            assert answer["detail"].startswith("Not built yet: S"), answer
 
 
 def test_the_state_says_the_store_is_fine_and_nothing_is_on_trial(app_client):

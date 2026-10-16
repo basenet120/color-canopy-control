@@ -225,7 +225,7 @@ def test_no_lab_route_changes_live_enabled_or_ripple(app_client, fakes):
     conductor_yaml = (CONFIG_DIR / "conductor.yaml").read_bytes()
     app_client.post("/api/lab/versions", json={"drafts": {"golden-hour": DRAFT}})
     for method, _, url, payload in LAB_REQUESTS:
-        assert send(app_client, method, url, payload).status_code in {200, 201, 404, 409, 501}, (method, url)
+        assert send(app_client, method, url, payload).status_code in {200, 201, 404, 409}, (method, url)
     assert services.settings.model_dump() == settings
     assert services.settings.motion.stepped.live_enabled is False
     assert services.settings.kiosk.ripple_stagger_s == settings["kiosk"]["ripple_stagger_s"]

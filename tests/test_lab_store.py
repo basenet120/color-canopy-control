@@ -612,11 +612,6 @@ def test_load_never_raises(tmp_path, fake_s1, monkeypatch):
 
 # ---- with S1's real draft functions ----------------------------------------------------------------------------------
 def test_the_real_drafts_round_trip(tmp_path):
-    try:
-        D.seed_draft(TRIO, "golden-hour")
-        D.apply_drafts(TRIO, {}, canopy=real_canopy(), settings=SETTINGS)
-    except NotImplementedError as exc:
-        pytest.skip(f"S1 isn't built yet ({exc})")
     canopy = real_canopy()
     store, _, _ = make_store(tmp_path)
     drafts = {sid: D.seed_draft(TRIO, sid) for sid in (s.id for s in TRIO.scenes.scenes)}

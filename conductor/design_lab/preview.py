@@ -35,6 +35,7 @@ from conductor.design_lab import draft as D
 from conductor.design_lab.draft import GRID, ConfigTrio, SceneDraft
 from conductor.engine_api import ModePlan, PlanError, Tier
 from conductor.looks import CompileContext, compile_mode, ladder, scene_rules
+from conductor.looks import field as F
 from conductor.routes.design import mode_design
 from conductor.sim.profiles import profile_parts
 
@@ -386,6 +387,7 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
         "approved": D.is_approved(approved, draft),
         "design": design,
         "brightness": draft.brightness,
+        "layout_words": F.layout_words(draft.layout, canopy),  # the "Reads as:" line (S4), edited or not
         "tiers": tiers_json(patched, scene_id, canopy),
         "today": today_view(lab, patched, scene_id),
         "show_box_today": show_box_today(lab, patched, scene_id),

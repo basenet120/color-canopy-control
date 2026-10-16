@@ -466,7 +466,7 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
         out.add(
             "stepped",
             scene.id,
-            "techniques → stepped → steps_per_cycle",
+            f"{_DESIGN} → field",  # a flat step is the design's doing (its layout), not the run's timing
             f"step {flat[0]} shows {len(set(pictures[flat[0]]))} colour(s) across the canopy; each step shows more than two",
         )
     words = motion_words(tech.canvas, dict(canopy), tech.direction)

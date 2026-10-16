@@ -242,30 +242,29 @@ def test_the_changes_are_the_drafts(tmp_path):
     assert P.preview(lab, D.seed_draft(TRIO, "golden-hour"))["approved"] is True
 
 
-def test_golden_hour_at_linear_0_is_a_200_with_a_two_d_warning(tmp_path, monkeypatch):
-    """D63's design-quality rules warn in the preview and never refuse it (§3.4). The rules themselves are S3's
-    (scene_rules); here they are stood in so the wiring is pinned whichever way S3 stands."""
-    real = scene_rules.scene_mode_problems
-
-    def rules(scenes, modes, recipes, canopy, *, approved=None, rules=scene_rules.RULES):
-        rules = tuple(rules)
-        found = list(real(scenes, modes, recipes, canopy, approved=approved, rules=rules))
-        field = modes.mode("golden-hour").techniques.modules.sample.canvas.field
-        if "two-d" in rules and field.kind == "linear" and field.angle_deg == 0:
-            found.append(
-                scene_rules.SceneProblem(
-                    "two-d", "golden-hour", "techniques → modules", "Reads as stripes at module level (D63)"
-                )
-            )
-        return found
-
-    monkeypatch.setattr(scene_rules, "scene_mode_problems", rules)
+def test_golden_hour_at_linear_0_is_a_200_with_a_two_d_warning(tmp_path):
+    """D63's design-quality rules warn in the preview and never refuse it (§3.4); S3's real rules, no stand-in:
+    linear 0° reads as stripes at module level, the Done-means edit (linear 30°) doesn't."""
     lab = make_lab(tmp_path)
     answer = P.preview(lab, edit("golden-hour", layout={"kind": "linear", "angle_deg": 0}))
-    assert answer["warnings"] == [
-        {"rule": "two-d", "field": "layout", "message": "Reads as stripes at module level (D63)"}
-    ]
+    assert [(w["rule"], w["field"]) for w in answer["warnings"]] == [("two-d", "layout")]
+    assert answer["warnings"][0]["message"].startswith(scene_rules.STRIPES)
     assert P.preview(lab, edit("golden-hour", **DONE_MEANS))["warnings"] == []
+
+
+def test_the_layout_words_are_the_drafts_own_edited_or_not(tmp_path):
+    from conductor.looks import field as F
+
+    lab = make_lab(tmp_path)
+    seed = D.seed_draft(TRIO, "golden-hour")
+    assert P.preview(lab, seed)["layout_words"] == F.layout_words(seed.layout, lab.canopy)
+    edited = edit("golden-hour", **DONE_MEANS)
+    words = P.preview(lab, edited)["layout_words"]
+    assert (
+        words
+        == F.layout_words(edited.layout, lab.canopy)
+        == D.draft_changes(TRIO, edited, canopy=lab.canopy)["layout"]["words_to"]
+    )
 
 
 def test_brightness_is_a_level_never_multiplied_into_colours(tmp_path):

@@ -814,7 +814,7 @@ def _changes(
         # a painted scene's T1 design: its canvas and the colours its stops name
         if am.slot is not None and am.techniques.canvas is not None and pm.techniques.canvas is not None:
             a_canvas, p_canvas = am.techniques.canvas.canvas, pm.techniques.canvas.canvas
-            if a_canvas != p_canvas or _stop_hexes(approved, a_canvas) != _stop_hexes(patched, p_canvas):
+            if _painted(approved, a_canvas) != _painted(patched, p_canvas):
                 ch.slot_repaint.append(f"{name}: " + SLOT_REPAINT.format(slot=am.slot))
         changed_hexes = [
             c.hex for i, c in enumerate(a.palette) if i >= len(p.palette) or p.palette[i].hex != c.hex
@@ -830,6 +830,17 @@ def _stop_hexes(trio: ConfigTrio, canvas: Any) -> list[str | None]:
     return [
         colours[s.color].hex.upper() if s.color in colours else None for s in getattr(canvas, "stops", [])
     ]
+
+
+def _painted(trio: ConfigTrio, canvas: Any) -> dict:
+    """What a painted slot holds: the canvas with each stop's colour key resolved to its hex. A rename changes only
+    the keys, so the frames, the slot hash and the slot stay as they are (draft_changes' `needs_slot_repaint` agrees)."""
+    dumped = canvas.model_dump(mode="json")
+    if "stops" in dumped:
+        dumped["stops"] = [
+            {**stop, "color": hex_} for stop, hex_ in zip(dumped["stops"], _stop_hexes(trio, canvas))
+        ]
+    return dumped
 
 
 def _next_decision(root: Path) -> str:

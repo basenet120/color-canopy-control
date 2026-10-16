@@ -779,3 +779,14 @@ def test_apply_never_mutates_its_inputs_or_the_show():
     # load_trio hands out copies, never the cached objects themselves
     fresh = D.load_trio(CONFIG_DIR)
     assert fresh.scenes is not cached and fresh.scenes.scenes[0] is not cached.scenes[0]
+
+
+def test_a_flat_stepped_frame_is_blamed_on_the_layout_not_the_read_only_run():
+    """S3's real stepped rule: an axis-aligned mirror leaves a stepped scene's frames with two colours. The run's
+    timing is read-only in Slice A, so the problem names the layout the client just changed."""
+    draft = edit("golden-hour", layout={"kind": "linear", "angle_deg": 0, "transform": "mirror"})
+    with pytest.raises(D.DraftError) as caught:
+        apply(draft)
+    assert [(p.field, "each step shows more than two" in p.message) for p in caught.value.problems] == [
+        ("layout", True)
+    ]

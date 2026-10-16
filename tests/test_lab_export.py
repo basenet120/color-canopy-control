@@ -593,6 +593,28 @@ def test_a_painted_layout_change_carries_the_slot_repaint_sentence():
     )
 
 
+def test_the_export_and_draft_changes_agree_on_a_slot_repaint():
+    """A rename changes only recipe keys, so the painted frames, the slot hash and the slot stay as they are: neither
+    the preview's badge (draft_changes) nor the export asks for a commissioning window. A hex edit asks in both."""
+    from conductor.config import ConductorSettings
+    from conductor.design_lab import draft as D
+
+    def both(changes: dict) -> tuple[bool, bool]:
+        data = D.seed_draft(APPROVED, "golden-hour").model_dump()
+        for colour in data["palette"]:
+            if colour["name"] == "Sunset pink":
+                colour.update(changes)
+        draft = D.SceneDraft.model_validate(data)
+        patched = D.apply_drafts(
+            APPROVED, {"golden-hour": draft}, canopy=CANOPY, settings=ConductorSettings()
+        )
+        flagged = D.draft_changes(APPROVED, draft, canopy=CANOPY)["needs_slot_repaint"]
+        return flagged, any("commissioning window" in n for n in export(patched).review_notes)
+
+    assert both({"name": "Sunset rose"}) == (False, False)
+    assert both({"hex": "#FF8FBF"}) == (True, True)
+
+
 def test_the_file_header_lines_naming_a_rewritten_scene_are_listed_for_review():
     notes = export(golden_edit()).review_notes
     headers = [n for n in notes if "(file header)" in n]
@@ -740,10 +762,7 @@ def test_an_export_of_applied_drafts_rereads_as_the_patched_trio(tmp_path):
             "run_s": stepped.run_s,
         },
     )
-    try:
-        patched = apply_drafts(APPROVED, {"golden-hour": draft}, canopy=CANOPY, settings=ConductorSettings())
-    except NotImplementedError:
-        pytest.skip("S1's apply_drafts isn't built yet")
+    patched = apply_drafts(APPROVED, {"golden-hour": draft}, canopy=CANOPY, settings=ConductorSettings())
     result = export(patched, version=_version())
     assert result.problem == ""
     assert X.reread(after_texts(result, tmp_path), CANOPY).dump() == patched.dump()
