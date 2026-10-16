@@ -224,3 +224,23 @@ def test_the_studio_and_ops_link_to_the_lab(app_client):
         assert app_client.get(f"/ops/showcase/{asset}").status_code == 200, asset
     ops = app_client.get("/ops/").text
     assert '<a class="btn secondary" href="/ops/showcase/#lab">Design Lab</a>' in ops
+
+
+def test_a_layout_error_names_the_draft_field_not_the_union_tag():
+    from conductor.routes.design_lab import _validation_problems
+
+    errors = [
+        {"loc": ("body", "draft", "layout", "linear", "angle_deg"), "msg": "Input should be a valid number"}
+    ]
+    assert _validation_problems(errors)[0]["field"] == "layout.angle_deg"
+
+
+def test_a_long_note_never_makes_a_name_the_store_refuses():
+    from datetime import UTC, datetime
+
+    from conductor.design_lab.store import default_name
+
+    now = datetime(2026, 10, 16, 16, 0, tzinfo=UTC).timestamp()  # Oct 16 in any US time zone
+    name = default_name("n" * 60, now, [f"Client Oct 16 v{n}" for n in range(1, 100)])
+    assert "v100" in name
+    assert len(name) <= 80

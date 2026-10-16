@@ -170,7 +170,8 @@ def default_name(note: str, now: float, existing: Iterable[str]) -> str:
         if (m := _NAME_N.match(name)) is not None and m["mon"] == mon and m["day"] == day
     ]
     base = f"Client {mon} {day} v{max(used, default=0) + 1}"
-    return f"{base} – {note}" if note else base
+    room = 80 - len(base) - 3  # Version.name is at most 80 characters
+    return f"{base} – {note[:room]}" if note else base
 
 
 def config_sha(config_dir: Path) -> str:

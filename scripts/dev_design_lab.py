@@ -64,9 +64,11 @@ def refusal(*, port: int, host: str, data: Path | None, home: Path | None = None
     if host not in LOOPBACK:
         return HOST_REFUSED
     if data is not None:
-        resolved = data.expanduser().resolve()
+        # macOS volumes are case-insensitive: compare case-folded paths
+        resolved = Path(str(data.expanduser().resolve()).casefold())
         for show in show_box_dirs(home):
-            if resolved == show.resolve() or resolved.is_relative_to(show.resolve()):
+            shown = Path(str(show.resolve()).casefold())
+            if resolved == shown or resolved.is_relative_to(shown):
                 return DATA_REFUSED.format(data=data)
     return None
 

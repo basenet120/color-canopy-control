@@ -86,6 +86,8 @@ def _validation_problems(errors: list[dict]) -> list[dict]:
             rest = rest[1:]
         elif rest[:1] == ["drafts"] and len(rest) >= 2:
             rest = rest[2:]
+        if rest[:1] == ["layout"] and len(rest) >= 2 and rest[1] in ("linear", "radial", "sweep"):
+            rest = [rest[0], *rest[2:]]  # the union's `kind` tag isn't a SceneDraft field
         field = ".".join(rest) or "draft"
         message = str(e.get("msg", "invalid")).removeprefix("Value error, ")
         out.append({"path": " → ".join(loc) or "(body)", "field": field, "message": message})
@@ -401,6 +403,11 @@ async def save(body: SaveBody, lab: Lab) -> JSONResponse:
     for scene_id, draft in body.drafts.items():
         _known_scene(lab, scene_id)
         _draft_matches(scene_id, draft, f"drafts → {scene_id} → scene_id")
+    if body.parent is not None:
+        try:
+            lab.store.get(body.parent)
+        except KeyError:
+            raise _no_version(body.parent) from None
 
     def work() -> dict:
         for draft in body.drafts.values():
@@ -422,8 +429,6 @@ async def save(body: SaveBody, lab: Lab) -> JSONResponse:
         raise LabAnswer(409, exc.detail, field=exc.field) from None
     except S.StoreReadOnly as exc:
         raise _read_only(exc) from None
-    except KeyError:
-        raise _no_version(str(body.parent)) from None
     _record(
         lab,
         "save",
@@ -452,12 +457,17 @@ async def delete(version_id: str, lab: Lab, _body: EmptyBody | None = None) -> J
 async def restore(body: RestoreBody, lab: Lab) -> JSONResponse:
     _writable(lab)
     approved = lab.approved
+    saved = None
+    if body.version != "approved":
+        try:
+            saved = lab.store.get(body.version)
+        except KeyError:
+            raise _no_version(body.version) from None
 
     def work() -> dict:
         drafts: dict[str, D.SceneDraft] = {}
         current: str | None = None
-        if body.version != "approved":
-            saved = lab.store.get(body.version)  # KeyError → 404
+        if saved is not None:
             try:
                 D.apply_drafts(approved, saved.drafts, canopy=lab.canopy, settings=lab.settings)
             except D.DraftError as exc:
@@ -474,8 +484,6 @@ async def restore(body: RestoreBody, lab: Lab) -> JSONResponse:
 
     try:
         answer = await run_in_threadpool(work)
-    except KeyError:
-        raise _no_version(body.version) from None
     except S.StoreReadOnly as exc:
         raise _read_only(exc) from None
     _record(lab, "restore", version=body.version)

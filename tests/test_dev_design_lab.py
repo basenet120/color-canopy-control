@@ -128,6 +128,9 @@ def test_the_data_dir_is_never_the_show_box(monkeypatch, capsys, tmp_path):
         for data in (show, show / "data", show / "a" / ".." / "b"):
             assert "show box's data" in lab.refusal(port=8200, host="127.0.0.1", data=data, home=home)
     assert lab.refusal(port=8200, host="127.0.0.1", data=tmp_path / "scratch", home=home) is None
+    # macOS volumes are case-insensitive: a differently-cased path to the show box is still the show box.
+    shouted = home / "Canopy-Show" / "lab"
+    assert "show box's data" in lab.refusal(port=8200, host="127.0.0.1", data=shouted, home=home)
     # Through main(), with HOME pointed at the fake home (the real show box's dirs are never touched).
     monkeypatch.setenv("HOME", str(home))
     with pytest.raises(SystemExit):
