@@ -920,7 +920,7 @@ test("rippleSchedule: ring i lands at i × stagger, clamped to 0–1.2 s; screen
   assert.equal(M.rippleLanded(s, 0.7).size, 6);
   assert.equal(M.rippleLanded(s, 1.2).size, 9);
   assert.equal(M.rippleLine(s), "Three rings, 0.6 s apart: the last lands 1.2 s after the first.");
-  assert.match(M.rippleLine(M.rippleSchedule(RINGS, 0)), /0 s apart: every module lands at once, as the canopy does today/);
+  assert.match(M.rippleLine(M.rippleSchedule(RINGS, 0), 0), /0 s apart: every module lands at once, as the canopy does today/);
   assert.equal(M.rippleLine(null), M.MOTION_COPY.noRings);
   // the masked picture: modules not landed yet are UNLIT, the landed ones are the view's own colours
   const p = preview({ rings: RINGS });
@@ -976,12 +976,12 @@ test("the live line, the run line and the effects card: the Lab says where each 
   assert.equal(M.steppedLiveLine(live, M.steppedOf(preview({ stepped: steppedJSON({ live_note: "Alon sets motion.stepped.live_enabled after Gate R" }) }))), off, "the server's STEPPED_LIVE_OFF and note, word for word");
   assert.equal(M.steppedLiveLine({ ...live, stepped_live_note: "Alon sets motion.stepped.live_enabled after Gate R" }, st), off, "the catalog's note when the preview has none");
   assert.equal(M.steppedLiveLine(null), M.MOTION_COPY.live);
-  assert.equal(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, M.steppedOf(preview({ stepped: steppedJSON({ live_sentence: null }) }))), M.MOTION_COPY.liveOn);
+  assert.equal(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, M.steppedOf(preview({ stepped: steppedJSON({ live_sentence: null }) }))), M.MOTION_COPY.liveOn, "a server that sent no note");
   assert.match(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, st), /^Stepped looks are off on live hardware/, "the server's own live sentence wins");
   assert.equal(M.rippleLabel({ ripple_stagger_s: 0, ripple_note: "the server's note" }), "the server's note", "the server's ripple note, word for word");
   // a pace the server says holds still (ProgramRunner: past max_step_s) can't be played, and says why
-  const held = M.steppedOf(preview({ stepped: steppedJSON({ runs: { nine: { still: "stepping 9 modules … the still design holds instead" }, today: { still: null } } }) }));
-  assert.equal(M.stepTimeline(held, "nine").error, "Stepping 9 modules … the still design holds instead.");
+  const held = M.steppedOf(preview({ stepped: steppedJSON({ runs: { nine: { still: "stepping 9 modules … longer than motion.stepped.max_step_s (12 s)" }, today: { still: null } } }) }));
+  assert.equal(M.stepTimeline(held, "nine").error, "Stepping 9 modules … longer than motion.stepped.max_step_s (12 s): the still design holds instead.");
   assert.ok(!M.stepTimeline(held, "today").error);
   assert.equal(M.effectsLine(live), "Effects — not enabled: no code has passed the bench (06 #4)");
   assert.notEqual(M.effectsLine({ effects_enabled: true }), M.MOTION_COPY.effects);
@@ -992,4 +992,116 @@ test("the live line, the run line and the effects card: the Lab says where each 
   assert.equal(M.fmtS(6.0), "6");
   // nothing in the page model offers a control for either switch: no setter names them
   for (const name of Object.keys(M)) assert.ok(!/^(set|toggle|enable).*(live|ripple)/i.test(name), name);
+});
+
+// ---- Slice C review fixes ---------------------------------------------------------------------------------------------
+const STEPPED_LIVE_ON = "Stepped looks are on for live hardware (motion.stepped.live_enabled).";
+const LIVE_ON_PREVIEW = { live_enabled: true, live_sentence: null, live_note: STEPPED_LIVE_ON };
+
+test("with stepped live, the show box's pace note doesn't say stepped is off", () => {
+  const on = M.stepPositions(preview({ stepped: steppedJSON(LIVE_ON_PREVIEW) }), "today");
+  assert.deepEqual(on.positions, ["r0c0", "r0c1"]);
+  assert.match(on.note, /Modules 1–2 step, the rest stay dark/);
+  assert.doesNotMatch(on.note, /off/);
+  const off = M.stepPositions(preview({ stepped: steppedJSON({ live_enabled: false }) }), "today");
+  assert.match(off.note, /\(stepped stays off on the real lights\)/);
+});
+
+test("the live line is the server's words when stepped is live, with one final period", () => {
+  const live = { stepped_live_enabled: true, stepped_live_note: STEPPED_LIVE_ON };
+  const st = M.steppedOf(preview({ stepped: steppedJSON(LIVE_ON_PREVIEW) }));
+  const line = M.steppedLiveLine(live, st);
+  assert.equal(M.sentence(line), STEPPED_LIVE_ON, "the server's STEPPED_LIVE_ON, word for word");
+  // before the preview answers: the catalog's note
+  assert.equal(M.sentence(M.steppedLiveLine(live, null)), STEPPED_LIVE_ON);
+  // the client's own copy only when the server said nothing
+  assert.equal(M.sentence(M.steppedLiveLine({ stepped_live_enabled: true }, null)), `${M.MOTION_COPY.liveOn}.`);
+  const offLive = { stepped_live_enabled: false, stepped_live_note: "Alon sets motion.stepped.live_enabled after Gate R" };
+  for (const [l, s] of [[live, st], [live, null], [{ stepped_live_enabled: true }, null], [offLive, M.steppedOf(preview({ stepped: steppedJSON() }))], [offLive, null], [null, null]]) {
+    assert.doesNotMatch(M.sentence(M.steppedLiveLine(l, s)), /\.\.$/);
+    assert.match(M.sentence(M.steppedLiveLine(l, s)), /[^.]\.$/);
+  }
+});
+
+test("the ripple line says 'as the canopy does today' only at the canopy's own stagger", () => {
+  const zero = M.rippleSchedule(RINGS, 0);
+  assert.match(M.rippleLine(zero, 0), /every module lands at once, as the canopy does today/);
+  const differs = M.rippleLine(zero, 0.8);
+  assert.doesNotMatch(differs, /as the canopy does today/);
+  assert.match(differs, /the canopy's own ripple is 0\.8 s apart/);
+  assert.doesNotMatch(M.rippleLine(zero), /canopy does today/, "no live value: no claim about the canopy");
+  const same = M.rippleLine(M.rippleSchedule(RINGS, 0.8), 0.8);
+  assert.match(same, /as the canopy lands a new mood today/);
+  assert.doesNotMatch(M.rippleLine(M.rippleSchedule(RINGS, 0.6), 0), /today/);
+});
+
+test("the D65 export line says where the live gate stands", () => {
+  assert.equal(M.steppedSectionClause({ stepped_live_clause: "live on (motion.stepped.live_enabled)" }, {}), "live on (motion.stepped.live_enabled)");
+  assert.equal(M.steppedSectionClause({}, { stepped_live_enabled: true }), "live on (motion.stepped.live_enabled)");
+  assert.equal(M.steppedSectionClause({}, { stepped_live_enabled: false }), "live off until Gate R");
+  assert.equal(M.steppedSectionClause(null, null), "live off until Gate R");
+});
+
+test("in A/B the run ends when the longest side's run ends; each side lands on its own hold", () => {
+  const long = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ run_s: 90 }) })), "nine");
+  const short = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ run_s: 30 }) })), "nine");
+  assert.deepEqual([long.totalS, short.totalS], [90, 30]);
+  const at30 = M.runsAt([long, short], 30);
+  assert.equal(at30.done, false, "the 90 s side is still stepping");
+  assert.equal(M.stepCounter(short, M.stepAt(short, 30), { state: "playing" }), "Run over after 4 steps (30 s): the still look holds");
+  const end = M.runsAt([long, short], 90);
+  assert.deepEqual([end.done, end.totalS], [true, 90]);
+  for (const tl of [long, short]) assert.match(M.stepCounter(tl, M.stepAt(tl, end.totalS), { state: "done" }), /^Run over after/);
+  // the repaint key changes when either side steps, also on a different pace
+  const slow = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ pace: { nine: 9 } }) })), "nine");
+  assert.notEqual(M.runsAt([long, slow], 8.9).key, M.runsAt([long, slow], 9.1).key);
+  // errored sides are left out; no side at all is done at once
+  assert.equal(M.runsAt([{ error: "x" }], 1).done, true);
+});
+
+test("a run that fits only the still step (step 0) can't be played: no colour would change", () => {
+  const one = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ run_s: 10 }) })), "nine");
+  assert.match(one.error, /fits only the first step, which is the still design/);
+  const two = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ run_s: 15 }) })), "nine");
+  assert.ok(!two.error && two.count === 2);
+  // the server's own still reason gets its consequence once
+  const held = M.steppedOf(preview({ stepped: steppedJSON({ runs: { nine: { still: "its run (5 s) is shorter than one 7.5 s step" }, today: { still: null } } }) }));
+  assert.equal(M.stepTimeline(held, "nine").error, "Its run (5 s) is shorter than one 7.5 s step: the still design holds instead.");
+  // step 1 of a run is the still look itself: the counter says so
+  const tl = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON() })), "nine");
+  assert.equal(M.stepCounter(tl, M.stepAt(tl, 1), { state: "playing" }), "Step 1 of 12 (the still look) · every 7.5 s");
+  assert.equal(M.stepCounter(tl, M.stepAt(tl, 16), { state: "playing" }), "Step 3 of 12 · every 7.5 s");
+});
+
+test("setStepped snaps only the field being edited: an approved 6.25 s survives a direction change", () => {
+  const a = golden({ stepped: { direction: "forward", steps_per_cycle: 6, step_s: 6.25, run_s: 90.25 } });
+  const turned = M.setStepped(a, { direction: "reverse" }, CATALOG_LIMITS);
+  assert.deepEqual([turned.stepped.step_s, turned.stepped.run_s, turned.stepped.direction], [6.25, 90.25, "reverse"]);
+  assert.equal(M.setStepped(a, { steps_per_cycle: 8 }, CATALOG_LIMITS).stepped.step_s, 6.25);
+  assert.equal(M.setStepped(a, { step_s: 6.3 }, CATALOG_LIMITS).stepped.step_s, 6.5, "an edited step time snaps");
+  assert.equal(M.setStepped(a, { step_s: 6.3 }, CATALOG_LIMITS).stepped.run_s, 90.25, "the run isn't edited");
+  assert.equal(M.setStepped(a, { run_s: 60.2 }, CATALOG_LIMITS).stepped.run_s, 60);
+  // a step time raised past the run still takes the run with it
+  assert.equal(M.setStepped(golden({ stepped: { direction: "forward", steps_per_cycle: 6, step_s: 6.25, run_s: 7.25 } }), { step_s: 8 }, CATALOG_LIMITS).stepped.run_s, 8);
+});
+
+test("a stepped rung under painted rungs says it steps only where they can't run (the server's words)", () => {
+  const when = "Golden Hour steps only where its higher rungs (Painted (all 270 lights), Painted in the app) can't run; where one of them runs, that look shows instead and nothing steps";
+  assert.equal(M.steppedOf(preview({ stepped: steppedJSON({ steps_when: when }) })).stepsWhen, when);
+  assert.equal(M.steppedOf(preview({ stepped: steppedJSON({ steps_when: null }) })).stepsWhen, null, "Coastal Tides: stepped is its first rung");
+});
+
+test("the tier list's moving line at the show box's pace names whose sentence it is", () => {
+  const st = M.steppedOf(preview({ stepped: steppedJSON({ today_moving_feature: "… both Hubspace strands …" }) }));
+  const tl = M.stepTimeline(st, "today");
+  const at = M.stepAt(tl, 7);
+  const tier = { tier: "stepped", moving_feature: "… across the canopy …" };
+  assert.deepEqual(M.tierMovingLines(tier, st, "playing", at, "nine"), ["While it moves: … across the canopy …"]);
+  assert.deepEqual(M.tierMovingLines(tier, st, "playing", at, "today"), [
+    "While it moves on all nine modules: … across the canopy …",
+    "While it moves on the show box today: … both Hubspace strands …",
+  ]);
+  for (const state of ["idle", "paused", "done"]) assert.deepEqual(M.tierMovingLines(tier, st, state, at, "today"), [], state);
+  assert.deepEqual(M.tierMovingLines(tier, st, "playing", M.stepAt(tl, 999), "today"), [], "the run is over");
+  assert.deepEqual(M.tierMovingLines({ tier: "modules" }, st, "playing", at, "today"), []);
 });

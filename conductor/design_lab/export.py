@@ -66,8 +66,14 @@ STUDIO_SCENES_OPENS = (
 STEPPED_PACE = (
     "nine strands on one account step every {nine:g} s ({hold_at} steps, then the still design holds)"
 )
-STEPPED_STILL = "nine strands on one account would hold the still design instead: {why}"
-_STEP_COMMENT = re.compile(r"step every [0-9.]+ s")
+STEPPED_STILL = "nine strands on one account would hold the still design: {why}"
+# the modes.yaml step_s comment's pace clause: the runner's step, or the still design when the runner wouldn't step
+_STEP_COMMENT = re.compile(r"step every [0-9.]+ s|hold the still design \([^)]*\)")
+STEP_COMMENT_STEP = "step every {step:g} s"
+STEP_COMMENT_STILL = "hold the still design ({why})"
+# the D65 section's live state (the Lab never sets motion.stepped.live_enabled; it says where it stands)
+STEPPED_SECTION_OFF = "live off until Gate R"
+STEPPED_SECTION_ON = "live on (motion.stepped.live_enabled)"
 FIXTURE_STALE = (
     "tests/fixtures_scene_frames.json isn't what the approved config gives; run make scene-pins first"
 )
@@ -83,9 +89,8 @@ class LabExport:
     layout_changes: list[str]  # D63 sentences
     review_notes: list[str]  # e.g. comments kept in a rewritten block that may now be stale
     problem: str = ""  # set when the edited files didn't re-read as the patched trio: then patch == ""
-    stepped_changes: list[str] = field(
-        default_factory=list
-    )  # D65 sentences (stepped timing; live off until Gate R)
+    stepped_changes: list[str] = field(default_factory=list)  # D65 sentences (stepped timing)
+    stepped_live_clause: str = STEPPED_SECTION_OFF  # the D65 section's live state, from the settings
 
 
 class LocateError(ValueError):
@@ -432,6 +437,33 @@ def _flow_sub(rest: str, key: str, value: str) -> str:
     return pattern.sub(lambda m: m.group(1) + value + m.group(3), rest, count=1)
 
 
+def _nine_pace(
+    trio: ConfigTrio, scene_id: str, canopy: Mapping[str, Any] | None, settings: ConductorSettings
+) -> dict:
+    """The nine-strand pace of the scene's stepped run: `canopy_pace` (the ripple's rings and max_step_s counted, as
+    the D65 line has it); without a canopy, `run_pace` with no ripple."""
+    if canopy is not None:
+        run = ST.canopy_pace(trio, scene_id, dict(canopy), settings)
+        if run is not None:
+            return run
+    tech = trio.modes.mode(scene_id).techniques.stepped
+    assert tech is not None
+    return ST.run_pace(tech.step_s, tech.run_s, len(D.GRID), settings)
+
+
+def _comment_clause(run: dict, run_s: float, settings: ConductorSettings) -> str:
+    """ "step every 7.5 s", or "hold the still design (<why, short>)" when the runner wouldn't step (the D65 line
+    gives the whole reason)."""
+    if run["still"] is None:
+        return STEP_COMMENT_STEP.format(step=run["step_s"])
+    step = run["step_s"]
+    if step > settings.motion.stepped.max_step_s:
+        why = f"{step:g} s steps, past motion.stepped.max_step_s"
+    else:
+        why = f"a {run_s:g} s run is under two {step:g} s steps"
+    return STEP_COMMENT_STILL.format(why=why)
+
+
 def rewrite_modes_yaml(
     text: str,
     approved: ConfigTrio,
@@ -442,9 +474,9 @@ def rewrite_modes_yaml(
     version_name: str = "",
     settings: ConductorSettings | None = None,
 ) -> tuple[str, list[str]]:
-    """modes.yaml with each listed scene's mode block rewritten line by line; returns (text, review notes). A
-    changed `step_s` whose comment gives the nine-strand pace gets the new pace (`settings`' budget; the shipped
-    defaults without)."""
+    """modes.yaml with each listed scene's mode block rewritten line by line; returns (text, review notes). When an
+    edit moves the nine-strand pace (`stepped.canopy_pace` at `settings`' budget and ripple; the shipped defaults
+    without), the `step_s` comment that gives it says the new pace, or that the still design holds."""
     pace_settings = settings if settings is not None else ConductorSettings()
     lines, newline = _split_lines(text)
     notes: list[str] = []
@@ -467,6 +499,15 @@ def rewrite_modes_yaml(
             a_mode.techniques.stepped is not None and p_mode.techniques.stepped is not None
         ) and (a_mode.techniques.stepped.direction != p_mode.techniques.stepped.direction)
         solid_changed = a_scene.solid.model_dump() != p_scene.solid.model_dump()
+        # the step_s comment's pace clause, when the timing or the nine-strand pace moved (the D65 line's own
+        # `canopy_pace`, at these settings)
+        pace_moved = ""
+        a_st, p_st = a_mode.techniques.stepped, p_mode.techniques.stepped
+        if a_st is not None and p_st is not None:
+            pace_after = _nine_pace(patched, scene_id, canopy, pace_settings)
+            timing = (a_st.step_s, a_st.run_s) != (p_st.step_s, p_st.run_s)
+            if timing or pace_after != _nine_pace(approved, scene_id, canopy, pace_settings):
+                pace_moved = _comment_clause(pace_after, p_st.run_s, pace_settings)
         edits: dict[int, list[str]] = {}
         walked = list(_walk(lines, start + 1, end))
         anchors: list[_Line] = []
@@ -525,13 +566,12 @@ def rewrite_modes_yaml(
                     f"{MODES_FILE}:{ln.index + 1}: no {'/'.join(path)} in mode {scene_id!r}"
                 ) from None
             comment = ln.comment
+            if path == ("techniques", "stepped", "step_s") and pace_moved and _STEP_COMMENT.search(comment):
+                # "nine strands on one account step every 7.5 s" was the runner's pace for the OLD timing
+                comment = _STEP_COMMENT.sub(lambda _m, clause=pace_moved: clause, comment, count=1)
             stepped_comment = path in (("techniques", "stepped"), ("techniques", "stepped", "direction"))
             if stepped_comment and (field_changed or direction_changed):
                 comment = ""  # "rays move out from the left edge" no longer describes the run
-            if path == ("techniques", "stepped", "step_s") and old != new and _STEP_COMMENT.search(comment):
-                # "nine strands on one account step every 7.5 s" is the runner's pace for the OLD step_s
-                nine = ST.effective_step_s(float(new), len(D.GRID), pace_settings)
-                comment = _STEP_COMMENT.sub(f"step every {nine:g} s", comment)
             if path == ("techniques", "strand", "look"):
                 if old != new or solid_changed:
                     comment = f"   # {p_scene.solid.name.lower()}" if ln.comment or solid_changed else ""
@@ -948,6 +988,7 @@ def decision_draft(
     root: Path,
     version: Version | None,
     now: float,
+    live_clause: str = STEPPED_SECTION_OFF,
 ) -> str:
     names = ", ".join(approved.scenes.get(s).name for s in scene_ids) or "no scene"
     when = datetime.fromtimestamp(now, UTC).astimezone()  # the box's local date, as version names use
@@ -964,7 +1005,7 @@ def decision_draft(
     if changes.layout:
         parts.append("Layout changes (D63; Paris reviews): " + "; ".join(changes.layout) + ".")
     if changes.stepped:
-        parts.append("Stepped timing (D65; live off until Gate R): " + "; ".join(changes.stepped) + ".")
+        parts.append(f"Stepped timing (D65; {live_clause}): " + "; ".join(changes.stepped) + ".")
     if changes.brightness:
         parts.append("Brightness (drafts): " + "; ".join(changes.brightness) + ".")
     if changes.client_copy:
@@ -1012,6 +1053,8 @@ def export_patch(
     gives the stepped pace the D65 lines and the step_s comment state; the shipped defaults without."""
     root = Path(root)
     scene_ids = changed_scenes(approved, patched)
+    live = bool((settings or ConductorSettings()).motion.stepped.live_enabled)
+    live_clause = STEPPED_SECTION_ON if live else STEPPED_SECTION_OFF
     try:
         changes = _changes(approved, patched, scene_ids, canopy, settings)
     except (KeyError, ValueError) as e:  # a trio whose ids or ladders moved: never a patch
@@ -1022,7 +1065,16 @@ def export_patch(
 
     def refused(problem: str) -> LabExport:
         return LabExport(
-            "", [], scene_ids, "", changes.approved, changes.layout, review_notes, problem, changes.stepped
+            "",
+            [],
+            scene_ids,
+            "",
+            changes.approved,
+            changes.layout,
+            review_notes,
+            problem,
+            changes.stepped,
+            live_clause,
         )
 
     before: dict[str, str] = {}
@@ -1081,7 +1133,16 @@ def export_patch(
     files = [path for path in EXPORT_FILES if before[path] != after[path]]
     patch = "".join(unified_diff(path, before[path], after[path]) for path in EXPORT_FILES)
     decision = (
-        decision_draft(approved, patched, scene_ids, changes, root=root, version=version, now=now)
+        decision_draft(
+            approved,
+            patched,
+            scene_ids,
+            changes,
+            root=root,
+            version=version,
+            now=now,
+            live_clause=live_clause,
+        )
         if files
         else ""
     )
@@ -1094,6 +1155,7 @@ def export_patch(
         layout_changes=changes.layout,
         review_notes=review_notes,
         stepped_changes=changes.stepped,
+        stepped_live_clause=live_clause,
     )
 
 

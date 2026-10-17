@@ -340,7 +340,8 @@ def catalog_json(lab: LabService) -> dict:
         },
         "live": {
             "stepped_live_enabled": bool(settings.motion.stepped.live_enabled),
-            "stepped_live_sentence": STEPPED_LIVE_OFF,
+            # None once Alon has set it (STEPPED_LIVE_OFF would be false; the note says it is on)
+            "stepped_live_sentence": None if settings.motion.stepped.live_enabled else STEPPED_LIVE_OFF,
             "ripple_stagger_s": settings.kiosk.ripple_stagger_s,
             "effects_enabled": any(bool(codes) for codes in settings.effects.enabled.values()),
             # Slice C: the editor's live lines (shown, never controls: no Lab route changes either setting)

@@ -75,9 +75,9 @@ def patched_of(draft: D.SceneDraft, settings: ConductorSettings = SHIPPED) -> D.
     return D.apply_draft(TRIO, draft, canopy=CANOPY, settings=settings)
 
 
-def make_lab(settings: ConductorSettings = SHIPPED) -> LabService:
+def make_lab(settings: ConductorSettings = SHIPPED, config_dir: Path = BASELINE) -> LabService:
     services = SimpleNamespace(
-        config_dir=BASELINE,
+        config_dir=config_dir,
         data=Path(tempfile.mkdtemp()),
         clock=VirtualClock(),
         telemetry=SimpleNamespace(record=lambda *a, **k: None),
@@ -155,6 +155,10 @@ BUDGETS = {
         kiosk={"ripple_stagger_s": 1.2},
         motion={"stepped": {"account_writes_per_min": 120, "budget_reserve": 0.25}},
     ),
+    # 70 planned: nine modules need 7.714285… s, which the runner rounds UP to whole ms (7.715)
+    "100 less 30 %": settings_with(
+        motion={"stepped": {"account_writes_per_min": 100, "budget_reserve": 0.3}}
+    ),
 }
 
 
@@ -169,11 +173,11 @@ def test_effective_step_matches_the_program_runner_for_nine_and_two(scene_id, mo
     step, count, running = runner_step(scene_id, draft, positions, settings)
     patched = patched_of(draft, settings)
     pace = ST.canopy_pace(patched, scene_id, CANOPY, settings, positions)
-    assert pace["step_s"] == step  # exactly: the same ms rounding
+    assert pace["step_s"] == step  # exactly (the "100 less 30 %" budget exercises the whole-ms ceil)
     if pace["still"] is None:
         assert running and pace["hold_at"] == count
-    else:  # longer than max_step_s: the runner holds the still design too
-        assert not running
+    else:  # longer than max_step_s: the runner holds the still design too (a one-step run: see the runner-gap test)
+        assert not running or count == 1
     if "ripple" not in budget:
         assert ST.effective_step_s(step_s, len(positions), settings) == step
     # the preview's own numbers are these (today = the show box's two kits)
@@ -213,7 +217,29 @@ def test_a_pace_past_max_step_s_or_a_run_shorter_than_a_step_holds_still():
     assert run["step_s"] == 16.875 and run["hold_at"] == 0 and "max_step_s" in run["still"]
     short = ST.run_pace(6.0, 7.0, 9, SHIPPED)  # a 7 s run at 7.5 s steps never moves
     assert short["hold_at"] == 0 and "shorter than one 7.5 s step" in short["still"]
-    assert ST.run_pace(6.0, 7.0, 2, SHIPPED)["still"] is None  # ... but the two kits step at 6 s
+    # ... and a run that fits only step 0 (the still design itself) never changes colour either
+    one = ST.run_pace(6.0, 7.0, 2, SHIPPED)
+    assert one["hold_at"] == 0 and "fits only the first step" in one["still"]
+    assert ST.run_pace(6.0, 12.0, 2, SHIPPED)["still"] is None  # two steps: one colour change at 6 s
+
+
+def test_the_lab_rounds_the_pace_up_to_whole_ms_as_the_runner_does():
+    budget = BUDGETS["100 less 30 %"]
+    assert ST.effective_step_s(6.0, 9, budget) == 7.715  # 9 × 60 / 70 = 7.714285… s
+    assert ST.run_pace(6.0, 90.0, 9, budget)["moves_s"] == round(11 * 7.715, 3)
+
+
+def test_a_one_step_run_is_still_in_the_lab_and_the_runners_gap_is_pinned():
+    """A run that fits one step sends nothing but the hold: the Lab says it holds still. The runner (a show-path
+    file this slice doesn't edit) still counts it as running, so the iPad would show the moving copy for one step
+    while nothing moves; this pins that gap until Alon decides on the show-path fix (STATUS)."""
+    draft = edit("golden-hour", **{"stepped.run_s": 7.0})
+    step, count, running = runner_step("golden-hour", draft, KITS, SHIPPED)
+    assert (step, count, running) == (6.0, 1, True)
+    pace = ST.canopy_pace(patched_of(draft), "golden-hour", CANOPY, SHIPPED, KITS)
+    assert pace["step_s"] == 6.0 and pace["hold_at"] == 0 and "fits only the first step" in pace["still"]
+    shown = P.preview(make_lab(), draft)["stepped"]["runs"]
+    assert shown["today"]["still"] and shown["nine"]["still"]
 
 
 # ---- the preview's steps are the compiled plan's -----------------------------------------------------------------------
@@ -276,6 +302,7 @@ def test_scenes_without_a_stepped_rung_have_no_stepped_preview_and_refuse_steppe
     assert problem.field == "stepped"
     if scene_id == SHIPPED.kiosk.idle_mode:  # the idle look never steps (D65; the show refuses one that does)
         assert problem.message == D.IDLE_NEVER_STEPS.format(label=TRIO.modes.mode(scene_id).label)
+        assert "the idle look never steps (D65)" in problem.message
     else:
         assert "has no stepped rung" in problem.message
 
@@ -287,13 +314,14 @@ REFUSED = [
     ("steps_per_cycle", 6.5),
     ("step_s", 3.5),
     ("step_s", 12.5),
-    ("step_s", 6.25),
-    ("step_s", 7.3),
     ("direction", "sideways"),
     ("run_s", 0),
     ("run_s", 181),
     ("run_s", 5.5),  # shorter than one 6 s step
 ]
+# SteppedTechnique takes any step_s in [4, 12]; the Lab's editor moves it in half seconds, so an EDIT off the
+# increment is refused when the draft applies (an approved value off it is kept as it is)
+OFF_INCREMENT = [("step_s", 6.25), ("step_s", 7.3)]
 
 
 @pytest.mark.parametrize(("name", "value"), REFUSED)
@@ -303,13 +331,22 @@ def test_stepped_bounds_are_refused_with_their_field_path(name, value):
     assert {".".join(str(p) for p in e["loc"]) for e in refused.value.errors()} == {f"stepped.{name}"}
 
 
+@pytest.mark.parametrize(("name", "value"), OFF_INCREMENT)
+def test_an_edit_off_the_half_second_increment_is_refused_with_its_field_path(name, value):
+    draft = edit("golden-hour", **{f"stepped.{name}": value})  # the model keeps SteppedTechnique's bounds
+    with pytest.raises(D.DraftError) as refused:
+        patched_of(draft)
+    [problem] = refused.value.problems
+    assert problem.field == f"stepped.{name}" and "0.5 s steps" in problem.message
+
+
 @pytest.mark.parametrize("step_s", [4.0, 4.5, 6.0, 7.5, 11.5, 12.0])
 def test_step_s_goes_in_half_seconds_from_4_to_12(step_s):
     draft = edit("coastal-tides", **{"stepped.step_s": step_s, "stepped.run_s": 90})
     assert patched_of(draft).modes.mode("coastal-tides").techniques.stepped.step_s == step_s
 
 
-@pytest.mark.parametrize(("name", "value"), REFUSED)
+@pytest.mark.parametrize(("name", "value"), REFUSED + OFF_INCREMENT)
 def test_the_route_refuses_stepped_bounds_with_field_paths(app_client, name, value):
     scene_id = LIVE_STEPPED[0]
     r = app_client.post(
@@ -351,6 +388,78 @@ def test_the_catalog_offers_the_editor_its_limits_and_live_lines(app_client):
     assert live["effects_note"] == "Effects — not enabled: no code has passed the bench (06 #4)"
     assert live["effects_enabled"] is False
     assert {s["id"] for s in body["scenes"] if s["stepped"]} == set(LIVE_STEPPED)
+
+
+def test_the_catalog_says_stepped_is_on_once_alon_sets_it():
+    from conductor.routes.design_lab import catalog_json
+
+    live = catalog_json(make_lab(settings_with(motion={"stepped": {"live_enabled": True}})))["live"]
+    assert live["stepped_live_enabled"] is True
+    assert live["stepped_live_note"] == ST.STEPPED_LIVE_ON
+    assert live["stepped_live_sentence"] is None  # STEPPED_LIVE_OFF would be false now
+    off = catalog_json(make_lab())["live"]
+    assert (
+        off["stepped_live_note"] == ST.STEPPED_LIVE_NOTE and off["stepped_live_sentence"] == STEPPED_LIVE_OFF
+    )
+
+
+# ---- an approved step_s off the Lab's half-second increment (SteppedTechnique accepts any in [4, 12]) ----------------
+def _off_increment_config() -> Path:
+    """The baseline with Coastal Tides at step_s 6.25 and run_s 90.25: valid for the schema and the show."""
+    root = Path(tempfile.mkdtemp(prefix="lab-off-increment-"))
+    cfg = root / "config"
+    import shutil
+
+    shutil.copytree(BASELINE, cfg)
+    modes = cfg / "modes.yaml"
+    text = modes.read_text(encoding="utf-8")
+    block = text.index("coastal-tides:", text.index("\nmodes:"))
+    head, tail = text[:block], text[block:]
+    tail = tail.replace("        step_s: 6 ", "        step_s: 6.25 ", 1).replace(
+        "run_s: 90\n", "run_s: 90.25\n", 1
+    )
+    modes.write_text(head + tail, encoding="utf-8")
+    return cfg
+
+
+def test_an_approved_step_s_off_the_increment_loads_the_whole_lab():
+    from conductor.routes.design_lab import catalog_json
+    from conductor.show import _check_stepped
+
+    cfg = _off_increment_config()
+    trio = D.load_trio(cfg)
+    tech = trio.modes.mode("coastal-tides").techniques.stepped
+    assert (tech.step_s, tech.run_s) == (6.25, 90.25)
+    _check_stepped(SHIPPED, trio.modes)  # the show takes it
+    seed = D.seed_draft(trio, "coastal-tides")
+    assert (seed.stepped.step_s, seed.stepped.run_s) == (6.25, 90.25)
+    lab = make_lab(config_dir=cfg)
+    body = catalog_json(lab)  # every scene seeds: the whole Lab loads
+    scene = next(s for s in body["scenes"] if s["id"] == "coastal-tides")
+    assert scene["approved"]["stepped"]["step_s"] == 6.25 and scene["state"] == "approved"
+    canopy = load_canopy_config(cfg / "canopy.yaml")
+    # unchanged, it previews and applies (a colour edit keeps the approved timing)
+    assert P.preview(lab, seed)["stepped"]["design_step_s"] == 6.25
+    recoloured = D.SceneDraft.model_validate(
+        {**seed.model_dump(mode="json"), "brightness": max(1, seed.brightness - 5)}
+    )
+    D.apply_draft(trio, recoloured, canopy=canopy, settings=SHIPPED)
+    # an edit to another value off the increment is refused at its field; onto the increment is fine
+    off = D.SceneDraft.model_validate(
+        {**seed.model_dump(mode="json"), "stepped": {**seed.stepped.model_dump(), "step_s": 6.75}}
+    )
+    with pytest.raises(D.DraftError) as refused:
+        D.apply_draft(trio, off, canopy=canopy, settings=SHIPPED)
+    assert [p.field for p in refused.value.problems] == ["stepped.step_s"]
+    on = D.SceneDraft.model_validate(
+        {**seed.model_dump(mode="json"), "stepped": {**seed.stepped.model_dump(), "step_s": 6.5}}
+    )
+    assert (
+        D.apply_draft(trio, on, canopy=canopy, settings=SHIPPED)
+        .modes.mode("coastal-tides")
+        .techniques.stepped.step_s
+        == 6.5
+    )
 
 
 def test_the_route_previews_a_stepped_edit(app_client):
@@ -598,3 +707,133 @@ def test_an_exported_stepped_timing_says_its_pace_and_keeps_the_comment_true():
 def test_a_direction_only_change_has_no_pace_clause():
     result = _export("golden-hour", **{"stepped.direction": "reverse"})
     assert result.stepped_changes == ["Golden Hour: stepped run direction forward → reverse"]
+
+
+# ---- the export's pace follows the Conductor's settings, and the comment says what the D65 line says ----------------
+def _export_with(scene_id: str, settings: ConductorSettings, **changes) -> X.LabExport:
+    from test_lab_export import ROOT as EXPORT_ROOT
+
+    patched = patched_of(edit(scene_id, **changes), settings)
+    return X.export_patch(
+        TRIO, patched, root=EXPORT_ROOT, canopy=CANOPY, version=None, now=1792270800.0, settings=settings
+    )
+
+
+def _step_comment(result: X.LabExport) -> str:
+    [line] = [x for x in result.patch.splitlines() if x.startswith("+") and "step_s:" in x]
+    return line
+
+
+FAST_BUDGET = settings_with(motion={"stepped": {"account_writes_per_min": 120, "budget_reserve": 0.25}})
+
+
+def test_an_overlay_budget_reaches_both_the_d65_line_and_the_comment():
+    result = _export_with("coastal-tides", FAST_BUDGET, **{"stepped.step_s": 5.0})
+    assert result.problem == ""
+    assert result.stepped_changes == [
+        (
+            "Coastal Tides: stepped run step_s 6.0 → 5.0 (nine strands on one account step every 6 s (15 steps, "
+            "then the still design holds))"
+        )
+    ]
+    assert "step every 6 s (motion.stepped budget)" in _step_comment(result)
+
+
+def test_with_a_ripple_the_comment_counts_its_rings_as_the_d65_line_does():
+    rippled = settings_with(
+        kiosk={"ripple_stagger_s": 1.2},
+        motion={"stepped": {"account_writes_per_min": 120, "budget_reserve": 0.25}},
+    )
+    result = _export_with("coastal-tides", rippled, **{"stepped.step_s": 4.0})
+    assert result.problem == ""
+    [line] = result.stepped_changes
+    pace = ST.canopy_pace(
+        patched_of(edit("coastal-tides", **{"stepped.step_s": 4.0}), rippled),
+        "coastal-tides",
+        CANOPY,
+        rippled,
+    )
+    assert pace["step_s"] > 6.0  # the ripple's span is the longest term here
+    assert f"step every {pace['step_s']:g} s (" in line
+    assert f"step every {pace['step_s']:g} s (motion.stepped budget)" in _step_comment(result)
+
+
+def test_a_budget_past_max_step_s_says_the_still_design_holds_in_the_comment_too():
+    tight = settings_with(motion={"stepped": {"account_writes_per_min": 40}})
+    result = _export_with("coastal-tides", tight, **{"stepped.step_s": 4.0})
+    assert result.problem == ""
+    [line] = result.stepped_changes
+    assert "hold the still design" in line and "16.875 s steps" in line
+    comment = _step_comment(result)
+    assert "hold the still design" in comment and "step every" not in comment
+
+
+def test_a_run_shorter_than_a_nine_module_step_says_still_in_the_line_and_the_comment():
+    result = _export_with("golden-hour", SHIPPED, **{"stepped.step_s": 4.0, "stepped.run_s": 5.0})
+    assert result.problem == ""
+    [line] = result.stepped_changes
+    assert line == (
+        "Golden Hour: stepped run step_s 6.0 → 4.0, run_s 90.0 → 5.0 (nine strands on one account would hold the "
+        "still design: its run (5 s) is shorter than one 7.5 s step)"
+    )
+    assert "0 steps" not in line and line.count("instead") == 0
+    comment = _step_comment(result)
+    assert "hold the still design" in comment and "step every 7.5 s" not in comment
+
+
+def test_a_run_length_edit_alone_rewrites_the_step_s_comment():
+    result = _export_with("golden-hour", SHIPPED, **{"stepped.run_s": 7.0})
+    assert result.problem == ""
+    comment = _step_comment(result)  # step_s itself is unchanged (6), but its pace comment is no longer true
+    assert comment.startswith("+        step_s: 6 ") and "hold the still design" in comment
+
+
+def test_a_colour_only_edit_leaves_the_step_s_comment_alone():
+    result = _export_with("coastal-tides", SHIPPED, **{"palette.1.hex": "#5FB8C8"})
+    assert result.problem == "" and not [
+        x for x in result.patch.splitlines() if x.startswith("+") and "step_s:" in x
+    ]
+
+
+def test_the_export_route_passes_the_conductors_settings(app_client, monkeypatch):
+    seen = {}
+    real = X.export_patch
+
+    def spy(*a, **k):
+        seen["settings"] = k.get("settings")
+        return real(*a, **k)
+
+    monkeypatch.setattr(X, "export_patch", spy)
+    scene_id = LIVE_STEPPED[0]
+    saved = app_client.post(
+        "/api/lab/versions",
+        json={"drafts": {scene_id: edited_json(scene_id, LIVE, **{"stepped.step_s": 10.0})}, "note": "pace"},
+    )
+    assert saved.status_code == 201, saved.text[:300]
+    r = app_client.get(f"/api/lab/export?version={saved.json()['id']}&format=json")
+    assert r.status_code == 200, r.text[:300]
+    assert seen["settings"] is app_client.app.state.services.settings
+    assert "step every 10 s" in " ".join(r.json()["stepped_changes"])
+
+
+def test_the_d65_section_says_where_the_live_gate_stands():
+    off = _export_with("golden-hour", SHIPPED, **{"stepped.step_s": 10.0})
+    assert off.stepped_live_clause == X.STEPPED_SECTION_OFF == "live off until Gate R"
+    assert "Stepped timing (D65; live off until Gate R): " in off.decision
+    on_settings = settings_with(motion={"stepped": {"live_enabled": True}})
+    on = _export_with("golden-hour", on_settings, **{"stepped.step_s": 10.0})
+    assert on.problem == "" and on.stepped_live_clause == X.STEPPED_SECTION_ON
+    section = next(x for x in on.decision.splitlines() if x.startswith("Stepped timing (D65"))
+    assert section.startswith("Stepped timing (D65; live on (motion.stepped.live_enabled)): ")
+    assert "Gate R" not in section
+
+
+# ---- a scene whose stepped rung sits under painted rungs says when it steps ---------------------------------------------
+def test_a_stepped_rung_under_higher_rungs_says_it_steps_only_where_they_cant_run():
+    golden = P.preview(make_lab(), D.seed_draft(TRIO, "golden-hour"))["stepped"]
+    assert golden["steps_when"] == (
+        "Golden Hour steps only where its higher rungs (Painted (all 270 lights), Painted in the app) can't run; "
+        "where one of them runs, that look shows instead and nothing steps"
+    )
+    tides = P.preview(make_lab(), D.seed_draft(TRIO, "coastal-tides"))["stepped"]
+    assert TRIO.modes.mode("coastal-tides").ladder[0] == "stepped" and tides["steps_when"] is None

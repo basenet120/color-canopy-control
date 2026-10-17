@@ -81,7 +81,9 @@ def run_pace(
     design_step_s: float, run_s: float, n_modules: int, settings: ConductorSettings, *, rings: int = 1
 ) -> dict:
     """One pace: the step, the step number the hold goes out at (`ProgramRunner.count_for`), and why the look would
-    hold still instead of stepping (the runner's own two set-up reasons; a throttle cool-off is runtime only)."""
+    hold still instead of stepping: the runner's own two set-up reasons (a throttle cool-off is runtime only), and a
+    run that fits only step 0, which IS the still design (the mode change sends it as the hold, and the runner sends
+    steps 1 … count − 1 only), so no colour would ever change."""
     s = settings.motion.stepped
     step = effective_step_s(design_step_s, n_modules, settings, rings=rings)
     hold_at = int(run_s / step + _EPS)
@@ -90,10 +92,15 @@ def run_pace(
         planned = planned_writes_per_min(s)
         still = (
             f"stepping {n_modules} modules on one account at {planned:g} writes a minute needs {step:g} s steps, "
-            f"longer than motion.stepped.max_step_s ({s.max_step_s:g} s): the still design holds instead"
+            f"longer than motion.stepped.max_step_s ({s.max_step_s:g} s)"
         )
     elif hold_at < 1:
-        still = f"its run ({run_s:g} s) is shorter than one {step:g} s step: the still design holds instead"
+        still = f"its run ({run_s:g} s) is shorter than one {step:g} s step"
+    elif hold_at < 2:
+        still = (
+            f"its run ({run_s:g} s) fits only the first step, which is the still design ({step:g} s steps), so no "
+            "colour would change"
+        )
     return {
         "modules": n_modules,
         "step_s": step,
@@ -144,6 +151,22 @@ def canopy_pace(
         return None
     rings = _stepped_rings(patched, scene_id, canopy, positions)
     return run_pace(tech.step_s, tech.run_s, len(positions), settings, rings=rings)
+
+
+def steps_when(patched: ConfigTrio, scene_id: str) -> str | None:
+    """When a scene whose stepped rung sits under higher rungs (Golden Hour: canvas, slot) actually steps: only where
+    none of those can run (D65: a downgrade passes over the stepped rung). None when stepped is the ladder's first."""
+    from conductor.design_lab.preview import TIERS  # (preview imports this module)
+
+    mode = patched.modes.mode(scene_id)
+    ladder = [str(t) for t in mode.ladder]
+    if "stepped" not in ladder or ladder.index("stepped") == 0:
+        return None
+    above = ", ".join(TIERS[t][0] if t in TIERS else t for t in ladder[: ladder.index("stepped")])
+    return (
+        f"{mode.label} steps only where its higher rungs ({above}) can't run; where one of them runs, that look "
+        "shows instead and nothing steps"
+    )
 
 
 def ripple_note(settings: ConductorSettings) -> str:
@@ -200,6 +223,7 @@ def stepped_preview(
         "live_sentence": None if live else STEPPED_LIVE_OFF,
         "live_note": STEPPED_LIVE_ON if live else STEPPED_LIVE_NOTE,
         "trial_note": TRIAL_NEVER_STEPS,
+        "steps_when": steps_when(patched, scene_id),
         "error": None,
     }
     try:
@@ -253,4 +277,5 @@ __all__ = [
     "run_pace",
     "run_s_max",
     "stepped_preview",
+    "steps_when",
 ]

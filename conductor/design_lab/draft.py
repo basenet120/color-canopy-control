@@ -84,22 +84,22 @@ class DraftColour(_Strict):
         return v
 
 
-STEP_S_INCREMENT = 0.5  # the Lab's step_s goes in half seconds (Slice C, PLAN §7)
+STEP_S_INCREMENT = 0.5  # the Lab's editor moves step_s in half seconds (Slice C, PLAN §7)
+STEP_S_OFF_INCREMENT = "step_s goes in {inc:g} s steps (4, 4.5, … 12); {v:g} s isn't one (the approved {approved:g} s is kept as it is)"
 
 
-class DraftStepped(_Strict):  # = SteppedTechnique's bounds (schema.py)
+def on_step_increment(v: float) -> bool:
+    steps = v / STEP_S_INCREMENT
+    return abs(steps - round(steps)) <= 1e-9
+
+
+class DraftStepped(_Strict):  # = SteppedTechnique's bounds (schema.py), exactly
     direction: Literal["forward", "reverse"]
     steps_per_cycle: int = Field(ge=3, le=12)
-    step_s: float = Field(ge=4.0, le=12.0)  # in STEP_S_INCREMENT steps
+    # any value SteppedTechnique takes, so an approved modes.yaml always seeds; an EDIT moves in STEP_S_INCREMENT
+    # steps (`_lock_problems`)
+    step_s: float = Field(ge=4.0, le=12.0)
     run_s: float = Field(gt=0, le=180.0)  # ≥ step_s here; ≤ kiosk.idle_return_s in apply (`_check_stepped`)
-
-    @field_validator("step_s")
-    @classmethod
-    def _half_seconds(cls, v: float) -> float:
-        steps = v / STEP_S_INCREMENT
-        if abs(steps - round(steps)) > 1e-9:
-            raise ValueError(f"step_s goes in {STEP_S_INCREMENT:g} s steps (4, 4.5, … 12); {v:g} s isn't one")
-        return v
 
     @field_validator("run_s")
     @classmethod
@@ -617,7 +617,8 @@ IDLE_NEVER_STEPS = (
 
 def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list[Problem]:
     """The D63 locks and the stepped rung's presence: a draft can't repeat the design, sample at the mean, or add or
-    drop a stepped rung (the idle look, `idle`, says why it has none)."""
+    drop a stepped rung (the idle look, `idle`, says why it has none); an edited step_s moves in half seconds (an
+    approved one off the increment, which SteppedTechnique allows, is kept)."""
     sid = draft.scene_id
     out = []
     if draft.layout.cycles != 1:
@@ -634,6 +635,17 @@ def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list
                 "steps_per_cycle, step_s, run_s)",
             )
         )
+    if has and draft.stepped is not None:
+        approved_step = mode.techniques.stepped.step_s
+        step_s = draft.stepped.step_s
+        if step_s != approved_step and not on_step_increment(step_s):
+            out.append(
+                Problem(
+                    f"the draft of {sid} → stepped → step_s",
+                    "stepped.step_s",
+                    STEP_S_OFF_INCREMENT.format(inc=STEP_S_INCREMENT, v=step_s, approved=approved_step),
+                )
+            )
     if not has and draft.stepped is not None:
         out.append(
             Problem(

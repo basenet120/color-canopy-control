@@ -13,7 +13,7 @@
 
 import { api as baseApi, connectLive, copyJSON } from "/static/app.js";
 import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-3";
-import * as M from "./lab-model.mjs?v=lab-4";
+import * as M from "./lab-model.mjs?v=lab-5";
 
 const API = "/api/lab";
 const UI_KEY = "lab-ui"; // remembered scene / view / angle (not a draft key: staleDraftKeys never matches it)
@@ -607,7 +607,7 @@ function renderExport(x) {
   const warn = [
     ...(x.approved_changes || []).map((t) => `D59 — needs the client's sign-off and a D59 update: ${t}`),
     ...(x.layout_changes || []).map((t) => `D63 — Paris reviews: ${t}`),
-    ...(x.stepped_changes || []).map((t) => `D65 — stepped timing, live off until Gate R: ${t}`),
+    ...(x.stepped_changes || []).map((t) => `D65 — stepped timing, ${M.steppedSectionClause(x, L.catalog.live)}: ${t}`),
   ];
   if (warn.length) parts.push(h("ul", { class: "lab-export-warnings" }, warn.map((t) => h("li", { text: t }))));
   if ((x.review_notes || []).length) parts.push(h("h3", { text: "Review notes" }), h("ul", {}, x.review_notes.map((t) => h("li", { text: t }))));
@@ -993,8 +993,11 @@ function renderTiers(preview, view) {
   const t0 = trial();
   const trying = !!(t0 && t0.scene_id === L.scene && t0.tier);
   const running = trying ? t0.tier : preview && preview.today ? preview.today.tier : null;
-  // the moving sentence shows only while the steps play, as on the iPad (it is shown only while a run is going)
+  // the moving sentence shows only while the steps play, as on the iPad (it is shown only while a run is going); at
+  // the show box's pace each line says whose sentence it is (the row is the nine-module tier's, D62)
   const playing = L.motion.state === "playing" && !L.present;
+  const motion = motionTimeline(preview);
+  const at = playing && !motion.tl.error ? M.stepAt(motion.tl, motionElapsed()) : null;
   for (const t of (preview && preview.tiers) || []) {
     const isRunning = running && running === t.tier;
     items.push(
@@ -1003,7 +1006,7 @@ function renderTiers(preview, view) {
         { class: isRunning ? "running" : null },
         h("span", { class: "lab-tier-label" }, t.label || t.tier, isRunning ? h("span", { class: "lab-tag", text: trying ? "Try-on running" : "Running here" }) : null),
         h("span", { class: "lab-tier-feature", text: t.feature || "" }),
-        t.moving_feature && playing ? h("span", { class: "lab-tier-feature moving", text: `While it moves: ${t.moving_feature}` }) : null,
+        ...M.tierMovingLines(t, motion.st, L.motion.state, at, motion.tl.pace).map((text) => h("span", { class: "lab-tier-feature moving", text })),
         t.moving_feature && !playing ? h("small", { text: "Its moving sentence shows while the steps play (Motion preview below the picture)." }) : null,
         t.note ? h("small", { text: t.note }) : null,
       ),
@@ -1360,7 +1363,7 @@ function motionSection(scene, d) {
       h("p", { id: "lab-stepped-run", class: "lab-words" }),
     );
   }
-  if (scene && scene.stepped) parts.push(h("p", { id: "lab-stepped-live", class: "lab-live-line" }));
+  if (scene && scene.stepped) parts.push(h("p", { id: "lab-stepped-when", class: "lab-muted lab-tight", hidden: true }), h("p", { id: "lab-stepped-live", class: "lab-live-line" }));
   parts.push(
     h("p", { class: "lab-problem", dataset: { for: "stepped" } }),
     h("div", { class: "lab-effects", role: "note", "aria-disabled": "true" }, h("strong", { text: M.effectsLine(L.catalog.live) }), h("small", { text: M.MOTION_COPY.effectsNote })),
@@ -1383,8 +1386,13 @@ function syncMotionEditor(scene, d, preview) {
     $("#lab-stepped-words").textContent = M.layoutWords(preview);
     $("#lab-stepped-run").textContent = M.steppedRunLine(d.stepped, st);
   }
+  const when = $("#lab-stepped-when");
+  if (when) {
+    when.textContent = st.error ? "" : M.sentence(st.stepsWhen);
+    when.hidden = !when.textContent;
+  }
   const live = $("#lab-stepped-live");
-  if (live) live.textContent = `${M.steppedLiveLine(L.catalog.live, st)}.`;
+  if (live) live.textContent = M.sentence(M.steppedLiveLine(L.catalog.live, st));
 }
 
 /** The stage column's motion card: play the steps (pace, fast preview, counter, the moving sentence while it plays)
@@ -1399,6 +1407,7 @@ function motionPanel() {
       { id: "lab-motion-stepped", class: "lab-motion-block" },
       h("h3", { class: "lab-motion-title", text: "Stepped waves" }),
       h("p", { class: "lab-motion-how", text: "“Play the steps” under the picture plays the server’s compiled steps at the Conductor’s real pace." }),
+      h("p", { id: "lab-steps-when", class: "lab-motion-note", hidden: true }),
       h("p", { id: "lab-step-counter", class: "lab-step-counter", role: "status", "aria-live": "polite" }),
       h("span", { class: "lab-label-text", text: "Pace (the Conductor's own step for that many modules on one account)" }),
       h("div", { id: "lab-pace", class: "lab-seg dark", role: "group", "aria-label": "Pace" }),
@@ -1447,6 +1456,17 @@ function motionElapsed() {
 function rippleElapsed() {
   const r = L.motion.ripple;
   return r.since === null ? null : (perfNow() - r.since) / 1000;
+}
+
+/** The previews on screen (A/B: both sides; Present: its sides), from the cache only (no request from the clock). */
+function motionSidePreviews() {
+  const cached = (entry, sceneId) => {
+    const draft = draftFor(entry, sceneId);
+    return (draft && L.cache.get(M.previewKey(draft))) || null;
+  };
+  const P = L.present;
+  if (P) return (P.ab ? [M.APPROVED, P.version] : [P.version]).map((e) => cached(e, P.scene));
+  return sideEntries().map(([, entry]) => (entry === M.WORKING ? workingPreview().preview : cached(entry, L.scene)));
 }
 
 /** The preview the motion controls play: Present's shown scene and version while presenting, else the working draft's. */
@@ -1595,19 +1615,21 @@ function motionTick() {
     key = `ripple|${M.rippleLanded(schedule, re).size}`;
   } else if (m.state === "playing") {
     const { tl } = motionTimeline();
-    const at = M.stepAt(tl, motionElapsed());
-    if (!at) {
+    if (tl.error) {
       motionStop();
       return;
     }
-    if (at.done) {
+    // A/B: every side on screen runs its own timeline; the run is over when the longest one is, so no side is left
+    // frozen on a mid-run step (each lands on its own hold, as the Conductor sends it)
+    const runs = M.runsAt([tl, ...motionSidePreviews().map((p) => motionTimeline(p).tl)], motionElapsed());
+    if (runs.done) {
       m.state = "done";
-      m.elapsed = tl.totalS;
+      m.elapsed = runs.totalS;
       stopMotionClock();
       renderMotionAll();
       return;
     }
-    key = `step|${tl.pace}|${at.n}`;
+    key = `step|${runs.key}`;
   } else {
     stopMotionClock();
     return;
@@ -1672,14 +1694,19 @@ function renderMotion() {
     $("#lab-fast").checked = m.fast;
     $("#lab-fast").disabled = !!tl.error;
     $("#lab-motion-note").textContent = m.fast ? `${M.MOTION_COPY.fast}.` : "";
-    $("#lab-motion-live").textContent = `${M.steppedLiveLine(L.catalog.live, st)}.`;
+    $("#lab-motion-live").textContent = M.sentence(M.steppedLiveLine(L.catalog.live, st));
+    const when = $("#lab-steps-when");
+    when.textContent = st.error ? "" : M.sentence(st.stepsWhen);
+    when.hidden = !when.textContent;
   }
   const schedule = M.rippleSchedule(preview && preview.rings, m.ripple.stagger);
   $("#lab-ripple-label").textContent = M.rippleLabel(L.catalog.live);
   const r = $("#lab-ripple-r");
   if (document.activeElement !== r) r.value = String(m.ripple.stagger);
   $("#lab-ripple-v").textContent = `${M.fmtS(m.ripple.stagger)} s`;
-  $("#lab-ripple-line").textContent = M.rippleLine(schedule);
+  const ripple = preview && preview.ripple;
+  const liveStagger = ripple && ripple.live_stagger_s !== undefined ? ripple.live_stagger_s : L.catalog.live && L.catalog.live.ripple_stagger_s;
+  $("#lab-ripple-line").textContent = M.rippleLine(schedule, liveStagger);
   const rp = $("#lab-ripple-play");
   rp.disabled = !schedule;
   rp.textContent = m.ripple.since !== null ? "Playing the ripple…" : "Play the ripple";
@@ -2173,7 +2200,7 @@ function renderPresent() {
   moving.textContent = (shownMotion && shownMotion.moving) || "";
   moving.hidden = !moving.textContent;
   const stepped = !!(scene && scene.stepped);
-  const { tl } = motionTimeline(shownPreview);
+  const { st: shownSt, tl } = motionTimeline(shownPreview);
   $("#lab-present-motion").hidden = !stepped;
   $("#lab-present").classList.toggle("has-motion", stepped);
   const play = $("#lab-present-play");
@@ -2181,7 +2208,7 @@ function renderPresent() {
   play.disabled = !!tl.error;
   play.textContent = m.state === "playing" ? "❚❚ Pause" : m.state === "paused" ? "▶ Resume" : m.state === "done" ? "▶ Play again" : "▶ Play the steps";
   play.setAttribute("aria-pressed", String(m.state === "playing"));
-  $("#lab-present-pace").textContent = tl.error ? tl.error : [tl.label, m.fast ? `sped up ${M.FAST_FACTOR}×, not the real pace` : ""].filter(Boolean).join(" · ");
+  $("#lab-present-pace").textContent = tl.error ? tl.error : [tl.label, m.fast ? `sped up ${M.FAST_FACTOR}×, not the real pace` : "", shownSt.error ? "" : M.sentence(shownSt.stepsWhen)].filter(Boolean).join(" · ");
   const state = M.stageState(shownView, shownPreview, shownDraft ? M.draftState(L.approved[P.scene], shownDraft, trial()) : "approved");
   const badge = $("#lab-present-badge");
   badge.className = `lab-badge ${state.replace(/\s/g, "-")}`;

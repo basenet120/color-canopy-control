@@ -1019,7 +1019,7 @@ export const RIPPLE_HOLD_S = 1.5; // the landed look stays this long, then the s
 export const STEPPED_DEFAULT_LIMITS = Object.freeze({ steps_per_cycle: [3, 12], step_s: [4, 12], run_s_max: 180 });
 export const MOTION_COPY = Object.freeze({
   live: "Stepped motion is off on the real lights until Gate R passes; Alon sets motion.stepped.live_enabled",
-  liveOn: "Stepped motion is on for the real lights (motion.stepped.live_enabled is set); only Alon changes that, never the Lab.",
+  liveOn: "Stepped motion is on for the real lights (motion.stepped.live_enabled is set); only Alon changes that, never the Lab",
   ripple: "Screen preview only — the canopy's ripple is off (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)",
   effects: "Effects — not enabled: no code has passed the bench (06 #4)",
   effectsOn: "Effects — the Lab doesn't offer Hubspace's on-device effects; enabling a benched code is Alon's call (06 #4)",
@@ -1052,6 +1052,14 @@ const snap = (v, step) => Math.round(Number(v) / step) * step;
 const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** A line as a sentence: one final full stop, never two (the server's STEPPED_LIVE_ON ends in one already). */
+export function sentence(t) {
+  const text = String(t || "").trim();
+  if (!text) return "";
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+const unstop = (t) => String(t).replace(/\.$/, "");
+
 /** CatalogJSON.limits.stepped with the schema's defaults where it says nothing: {steps_per_cycle, step_s, run_s_max}. */
 export function steppedLimits(limits) {
   const s = (limits && limits.stepped) || {};
@@ -1081,17 +1089,21 @@ export function steppedControls(scene, draft, limits) {
   };
 }
 
-/** A new draft with its stepped timing patched and held inside the bounds: whole steps, half-second times, and a run
- * never shorter than one step (raising the step time past the run raises the run with it). */
+/** A new draft with its stepped timing patched and held inside the bounds: whole steps, half-second times for the
+ * field being edited (an approved time off the half second, which SteppedTechnique allows, is kept until it is
+ * edited), and a run never shorter than one step (raising the step time past the run raises the run with it). */
 export function setStepped(draft, patch, limits) {
   if (!draft || !draft.stepped) return draft;
   const d = clone(draft);
   const b = steppedLimits(limits);
   const s = { ...d.stepped, ...patch };
+  const edited = (k) => patch && Object.prototype.hasOwnProperty.call(patch, k);
   s.direction = s.direction === "reverse" ? "reverse" : "forward";
   s.steps_per_cycle = clampTo(Math.round(Number(s.steps_per_cycle) || b.steps_per_cycle[0]), ...b.steps_per_cycle);
-  s.step_s = clampTo(snap(Number(s.step_s) || b.step_s[0], STEP_S_STEP), ...b.step_s);
-  s.run_s = clampTo(snap(Number(s.run_s) || s.step_s, STEP_S_STEP), s.step_s, Math.max(s.step_s, b.run_s_max));
+  const stepS = Number(s.step_s) || b.step_s[0];
+  s.step_s = clampTo(edited("step_s") ? snap(stepS, STEP_S_STEP) : stepS, ...b.step_s);
+  const runS = Number(s.run_s) || s.step_s;
+  s.run_s = clampTo(edited("run_s") ? snap(runS, STEP_S_STEP) : runS, s.step_s, Math.max(s.step_s, b.run_s_max));
   d.stepped = s;
   return d;
 }
@@ -1121,8 +1133,12 @@ export function steppedOf(preview) {
     pace: { nine: positive(pace.nine), today: positive(pace.today), todayModules: positive(pace.today_modules) },
     // the server's own reason a pace holds still (ProgramRunner: a step past max_step_s, or a run shorter than a step)
     still: { nine: stillOf("nine"), today: stillOf("today") },
+    liveEnabled: s.live_enabled === true,
     liveSentence: typeof s.live_sentence === "string" && s.live_sentence ? s.live_sentence : null,
     liveNote: typeof s.live_note === "string" && s.live_note ? s.live_note : null,
+    // when a scene whose stepped rung sits under higher rungs actually steps (the server's sentence; null for a
+    // scene whose first rung is stepped)
+    stepsWhen: typeof s.steps_when === "string" && s.steps_when ? s.steps_when : null,
   };
 }
 
@@ -1148,10 +1164,14 @@ export function stepTimeline(st, paceKey) {
   if (!opt) return { error: "The server sent no pace for these steps, so they can't be played at the real pace." };
   if (!st.runS) return { pace: opt.key, error: "The server sent no run length for these steps, so they can't be played." };
   const still = st.still && st.still[opt.key];
-  if (still) return { pace: opt.key, error: `${capital(still)}.` };
+  if (still) return { pace: opt.key, error: `${capital(still)}: the still design holds instead.` };
   const count = Math.floor(st.runS / opt.stepS + EPS);
   if (count < 1) {
     return { pace: opt.key, error: `Its run (${fmtS(st.runS)} s) is shorter than one ${fmtS(opt.stepS)} s step, so the lights would hold still.` };
+  }
+  if (count < 2) {
+    // step 0 IS the still design (the mode change sends it as the hold); the runner sends steps 1 … count − 1 only
+    return { pace: opt.key, error: `Its run (${fmtS(st.runS)} s) fits only the first step, which is the still design (${fmtS(opt.stepS)} s steps), so no colour would change.` };
   }
   return { pace: opt.key, label: opt.label, stepS: opt.stepS, count, cycle: st.cycle, runS: st.runS, totalS: count * opt.stepS };
 }
@@ -1173,10 +1193,34 @@ export function stepCounter(tl, at, { state = "idle", fast = false } = {}) {
   if (tl.error) return tl.error;
   if (state === "idle" || !at) return `${plural(tl.count, "step")} of ${fmtS(tl.stepS)} s (${fmtS(tl.totalS)} s), then the still look holds`;
   if (at.done) return `Run over after ${plural(tl.count, "step")} (${fmtS(tl.totalS)} s): the still look holds`;
-  const parts = [`Step ${at.n + 1} of ${tl.count}`, `every ${fmtS(tl.stepS)} s`];
+  // step 1 (n = 0) is the still look the run starts from: the colours change from step 2
+  const parts = [`Step ${at.n + 1} of ${tl.count}${at.n === 0 ? " (the still look)" : ""}`, `every ${fmtS(tl.stepS)} s`];
   if (state === "paused") parts.push("paused");
   if (fast) parts.push(`sped up ${FAST_FACTOR}×`);
   return parts.join(" · ");
+}
+
+/** Where every shown side's run stands `elapsedS` in (A/B: each side has its own timeline): {done, totalS, key}. The
+ * run is over only when the longest side's is; `key` changes whenever any side steps (a repaint). Sides with an
+ * error play nothing and are left out. */
+export function runsAt(timelines, elapsedS) {
+  const live = (timelines || []).filter((tl) => tl && !tl.error);
+  const ats = live.map((tl) => stepAt(tl, elapsedS));
+  return {
+    done: ats.every((a) => a && a.done),
+    totalS: live.reduce((m, tl) => Math.max(m, tl.totalS), 0),
+    key: live.map((tl, i) => `${tl.pace}|${ats[i] ? ats[i].n : "-"}`).join(","),
+  };
+}
+
+/** The tier list's moving line(s) for a tier, only while the steps play: the tier's own (nine-module) sentence and, at
+ * the show box's pace, the partial canopy's too, each saying whose it is (D62). */
+export function tierMovingLines(tier, st, state, at, paceKey = "nine") {
+  if (!tier || !tier.moving_feature || state !== "playing" || !at || at.done) return [];
+  if (paceKey === "today" && st && !st.error && st.todayMoving) {
+    return [`While it moves on all nine modules: ${tier.moving_feature}`, `While it moves on the show box today: ${st.todayMoving}`];
+  }
+  return [`While it moves: ${tier.moving_feature}`];
 }
 
 /** The moving sentence, only while the steps play (the schema-checked moving_feature; at the `today` pace the
@@ -1194,7 +1238,10 @@ export function stepPositions(preview, paceKey) {
   const box = preview && preview.show_box_today;
   const driven = box && box.positions && Array.isArray(box.positions.driven) ? box.positions.driven : null;
   if (!driven) return { positions: null, note: "Which modules the show box drives isn't in this preview, so every module is drawn." };
-  return { positions: driven, note: `Paced as the show box today: ${moduleList(driven)} step, the rest stay dark (stepped stays off on the real lights).` };
+  // the live clause follows the server's gate (motion.stepped.live_enabled): never "off" once Alon has set it
+  const live = !!(preview && preview.stepped && preview.stepped.live_enabled === true);
+  const off = live ? "" : " (stepped stays off on the real lights)";
+  return { positions: driven, note: `Paced as the show box today: ${moduleList(driven)} step, the rest stay dark${off}.` };
 }
 
 /** One line on what the draft's timing comes to at each pace, once the server has answered for exactly this timing. */
@@ -1209,15 +1256,27 @@ export function steppedRunLine(draftStepped, st) {
   return parts.length ? `A ${fmtS(st.runS)} s run — ${parts.join(" · ")}; then the still look holds.` : "";
 }
 
-/** The live line: the Lab never flips motion.stepped.live_enabled, it only says where it stands. */
+/** The live line, without its final full stop (callers end it with `sentence`): the Lab never flips
+ * motion.stepped.live_enabled, it only says where it stands. */
 export function steppedLiveLine(live, st = null) {
+  const catalogNote = live && typeof live.stepped_live_note === "string" && live.stepped_live_note ? live.stepped_live_note : "";
+  const answered = st && !st.error;
   // the server's own sentence (show.STEPPED_LIVE_OFF) and note win, word for word (PLAN §7)
-  if (st && !st.error && st.liveSentence) {
-    const note = st.liveNote || (live && typeof live.stepped_live_note === "string" && live.stepped_live_note) || "";
-    return note ? `${capital(st.liveSentence)}. ${note}` : capital(st.liveSentence);
+  if (answered && st.liveSentence) {
+    const note = st.liveNote || catalogNote;
+    return note ? `${capital(st.liveSentence)}. ${unstop(note)}` : capital(st.liveSentence);
   }
+  // live: the server sends no off sentence, and its note (STEPPED_LIVE_ON) is the whole line
+  if (answered && st.liveEnabled && st.liveNote) return unstop(st.liveNote);
   const on = !!(live && live.stepped_live_enabled === true);
+  if (on && catalogNote) return unstop(catalogNote);
   return on ? MOTION_COPY.liveOn : MOTION_COPY.live;
+}
+
+/** The export's D65 line: where the live gate stands (the server's clause; the catalog's gate before it answers). */
+export function steppedSectionClause(exported, live) {
+  if (exported && typeof exported.stepped_live_clause === "string" && exported.stepped_live_clause) return exported.stepped_live_clause;
+  return live && live.stepped_live_enabled === true ? "live on (motion.stepped.live_enabled)" : "live off until Gate R";
 }
 
 /** The ripple preview's label: screen only, with the canopy's own setting (the Lab never changes it). */
@@ -1258,12 +1317,22 @@ export function rippleLanded(schedule, elapsedS) {
   return out;
 }
 
-/** "Three rings, 0.6 s apart: the last lands 1.2 s after the first" (0 s: all at once, as the canopy does today). */
-export function rippleLine(schedule) {
+/** "Three rings, 0.6 s apart: the last lands 1.2 s after the first". It says what the canopy does today only against
+ * `liveStaggerS` (kiosk.ripple_stagger_s, from the server): "as the canopy does today" only at that stagger, and with
+ * no live value no claim about the canopy at all. */
+export function rippleLine(schedule, liveStaggerS = null) {
   if (!schedule) return MOTION_COPY.noRings;
   const n = schedule.rings.length;
   if (n === 1) return "One ring: every module lands together.";
   const rings = `${capital(countWord(n))} rings`;
-  if (schedule.stagger === 0) return `${rings}, 0 s apart: every module lands at once, as the canopy does today.`;
-  return `${rings}, ${fmtS(schedule.stagger)} s apart: the last lands ${fmtS(schedule.spanS)} s after the first.`;
+  const lv = liveStaggerS === null || liveStaggerS === undefined || liveStaggerS === "" ? NaN : Number(liveStaggerS);
+  const known = Number.isFinite(lv) && lv >= 0;
+  const same = known && Math.abs(schedule.stagger - lv) < EPS;
+  if (schedule.stagger === 0) {
+    if (same) return `${rings}, 0 s apart: every module lands at once, as the canopy does today.`;
+    if (known) return `${rings}, 0 s apart: every module lands at once (the canopy's own ripple is ${fmtS(lv)} s apart).`;
+    return `${rings}, 0 s apart: every module lands at once.`;
+  }
+  const line = `${rings}, ${fmtS(schedule.stagger)} s apart: the last lands ${fmtS(schedule.spanS)} s after the first`;
+  return same ? `${line}, as the canopy lands a new mood today.` : `${line}.`;
 }
