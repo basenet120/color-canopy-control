@@ -28,6 +28,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import anyio.to_thread
 import httpx
 import pytest
 from fake_compiler import MODULES, make_world, settings_with
@@ -1080,23 +1081,38 @@ def lab_app(services):
 
 
 def client_of(w: Show) -> httpx.AsyncClient:
+    assert getattr(anyio.to_thread.run_sync, "inline", False), "a route test on virtual time needs no_threads"
     transport = httpx.ASGITransport(app=lab_app(w.services))
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
 
 @pytest.fixture
 def no_threads(monkeypatch):
-    """The Lab's threadpool calls run inline (after one yield): the virtual loop would otherwise jump its clock while a
-    worker thread computes. One yield is NOT enough for a second request to reach the route meanwhile; a test that
-    needs two requests to overlap gives the build virtual time (test_two_concurrent_starts_give_one_200_and_one_409)."""
-    from conductor.routes import design_lab as routes
+    """Every threadpool hop of a request runs inline on the loop (after one yield), and no real thread may start.
 
-    async def inline(fn, *args, **kwargs):
+    The virtual loop jumps its clock to the next timer whenever nothing is ready, so while a worker thread computes,
+    virtual time runs on for as long as the thread takes in REAL time: on a slow machine a request then costs virtual
+    seconds. FastAPI runs every sync dependency (`require_ops`, `_no_cross_site`, `require_kiosk`, …) in the
+    threadpool, as starlette's `run_in_threadpool` does the Lab's CPU work; both go through
+    `anyio.to_thread.run_sync`, which is patched here (patching only the Lab's own `run_in_threadpool` left two hops
+    per request on real threads). `threading.Thread.start` refuses, so a hop that bypasses anyio fails loudly here
+    instead of drifting the clock on CI. With no thread, a request costs exactly the virtual time its own awaits take.
+
+    One yield is NOT enough for a second request to reach the route meanwhile; a test that needs two requests to
+    overlap gives the build virtual time (test_two_concurrent_starts_give_one_200_and_one_409)."""
+    import threading
+
+    async def inline(fn, *args, **_options):
         await asyncio.sleep(0)
-        return fn(*args, **kwargs)
+        return fn(*args)
 
-    monkeypatch.setattr(routes, "run_in_threadpool", inline)
-    monkeypatch.setattr(SVC, "run_in_threadpool", inline)
+    inline.inline = True  # type: ignore[attr-defined]
+
+    def no_start(thread):
+        raise AssertionError(f"a real thread ({thread.name}) under virtual time would drift the clock")
+
+    monkeypatch.setattr(anyio.to_thread, "run_sync", inline)
+    monkeypatch.setattr(threading.Thread, "start", no_start)
     monkeypatch.delenv("CONDUCTOR_BASIC_AUTH", raising=False)
 
 
@@ -1119,19 +1135,26 @@ def test_the_server_side_apply_gap_holds(no_threads):
         async with client_of(w) as c:
             asked = await c.post("/api/lab/trial/start", json=start_body(golden_pink()))
             sentence = asked.json()["confirm"]
+            first_sent = w.clock.monotonic()
             first = await c.post("/api/lab/trial/start", json=start_body(golden_pink(), sentence))
+            first_back = w.clock.monotonic()
             await w.run_for(3)
             # a re-apply is confirmed against the running session's time left (B-TRUTH-1), then the gap holds
             again = (await c.post("/api/lab/trial/start", json=start_body(golden_both()))).json()["confirm"]
+            second_sent = w.clock.monotonic()
             second = await c.post("/api/lab/trial/start", json=start_body(golden_both(), again))
+            second_back = w.clock.monotonic()
             await w.run_for(5.01)
             third = await c.post("/api/lab/trial/start", json=start_body(golden_both(), again))
             got = await c.get("/api/lab/trial")
         out = (asked, first, second, third, got, w.events("lab"))
+        out += ((first_sent, first_back, second_sent, second_back),)
         await w.close()
         return out
 
-    asked, first, second, third, got, lab = run_virtual(main)
+    asked, first, second, third, got, lab, (first_sent, first_back, second_sent, second_back) = run_virtual(
+        main
+    )
     body = asked.json()
     assert (
         body["detail"] == body["confirm"]
@@ -1146,9 +1169,12 @@ def test_the_server_side_apply_gap_holds(no_threads):
     trial = first.json()["trial"]
     assert trial["tier"] == "modules" and trial["applies"] == 1 and trial["next_apply_in_s"] == 8
     assert first.json()["state"]["mode"] == GOLDEN
-    # ≈ 8 − 3 (the request round trips themselves take a little virtual time: the re-apply's ask is one more)
+    # the gap was stamped during the first start and checked during the second: 8 − 3 is what's left, give or take
+    # only the virtual time those two requests took themselves (none today: they await no timer), rounded to 0.01
     left = second.json()["retry_after_s"]
-    assert second.status_code == 409 and 3.5 < left <= 5
+    assert second.status_code == 409, second.text
+    assert 8 - (second_back - first_sent) - 0.005 <= left <= 8 - (second_sent - first_back) + 0.005
+    assert second_sent - first_back >= 3
     assert second.headers["retry-after"] == str(math.ceil(left))
     assert third.status_code == 200, third.text
     assert third.json()["trial"]["applies"] == 2 and got.json()["applies"] == 2
@@ -1186,7 +1212,8 @@ def test_two_concurrent_starts_give_one_200_and_one_409(no_threads, monkeypatch)
     a, b, trial = run_virtual(main)
     assert sorted([a.status_code, b.status_code]) == [200, 409]
     refused = a if a.status_code == 409 else b
-    assert refused.json()["retry_after_s"] > 7 and refused.headers["retry-after"] == "8"
+    # the refused request reached the gate while the other was inside its 0.05 s build: at most that much is gone
+    assert 7.95 <= refused.json()["retry_after_s"] <= 8 and refused.headers["retry-after"] == "8"
     assert trial is not None and trial.applies == 1
 
 
@@ -1683,16 +1710,18 @@ def test_a_reapply_near_the_bound_is_refused_and_never_uses_up_the_gap(no_thread
             await w.run_for(trial.ends_mono - 5 - w.clock.monotonic())
             sent = lab_sends(w)
             sentence = T.confirm_sentence(w.lab, golden_both(), T.driven_modules(w.lab), 150.0)
+            near_sent = w.clock.monotonic()
             near = await c.post("/api/lab/trial/start", json=start_body(golden_both(), sentence))
+            near_left = (trial.ends_mono - w.clock.monotonic(), trial.ends_mono - near_sent)
             during = (w.engine.trial, lab_sends(w) - sent, gate._last == stamped)
             await w.run_for(10)
             await w.engine.wait_idle()
             again = await confirmed(c, golden_both())
-            out = (first, trial, near, during, again, w.engine.trial, w.events("lab"))
+            out = (first, trial, near, during, again, w.engine.trial, w.events("lab"), near_left)
         await w.close()
         return out
 
-    first, trial, near, (still, more, unstamped), again, fresh, lab = run_virtual(main)
+    first, trial, near, (still, more, unstamped), again, fresh, lab, (least, most) = run_virtual(main)
     assert first.status_code == 200
     assert near.status_code == 409, near.text
     body = near.json()
@@ -1700,9 +1729,9 @@ def test_a_reapply_near_the_bound_is_refused_and_never_uses_up_the_gap(no_thread
     assert (
         body["detail"].startswith("This try-on ends in ") and "too soon for another apply" in body["detail"]
     )
-    assert 0 < body["retry_after_s"] <= 5 and near.headers["retry-after"] == str(
-        math.ceil(body["retry_after_s"])
-    )
+    # the time left when the route read the clock, which is 5 s less only the virtual time the request took (none)
+    assert most == pytest.approx(5) and least - 0.005 <= body["retry_after_s"] <= most + 0.005
+    assert near.headers["retry-after"] == str(math.ceil(body["retry_after_s"]))
     assert still is trial and more == 0 and unstamped
     assert again.status_code == 200, again.text
     assert fresh.session == trial.session + 1 and fresh.applies == 1
@@ -1725,20 +1754,28 @@ def test_a_reapplys_confirm_and_cost_name_the_time_left(no_threads):
             ).status_code == 200
             trial = w.engine.trial
             await w.run_for(trial.started_mono + 40 - w.clock.monotonic())
+            stale_sent = w.clock.monotonic()
             stale = await c.post("/api/lab/trial/start", json=start_body(golden_both(), first_sentence))
+            stale_left = (trial.ends_mono - w.clock.monotonic(), trial.ends_mono - stale_sent)
             other = await c.post("/api/lab/trial/start", json=start_body(calm_solid()))
             await w.run_for(3)
             ok = await c.post("/api/lab/trial/start", json=start_body(golden_both(), stale.json()["confirm"]))
-            out = (first_sentence, trial, stale, other, ok, w.engine.trial)
+            out = (first_sentence, trial, stale, other, ok, w.engine.trial, stale_left)
         await w.close()
         return out
 
-    first_sentence, trial, stale, other, ok, after = run_virtual(main)
+    first_sentence, trial, stale, other, ok, after, (least, most) = run_virtual(main)
     assert first_sentence.endswith("for up to 150 s. The painted design isn't on the lights.")
     assert stale.status_code == 409 and stale.json()["confirm_required"], stale.text
     sentence, cost = stale.json()["confirm"], stale.json()["cost"]
     left = re.search(r"for the (\d+) s left of the running try-on", sentence)
-    assert left is not None and 108 <= int(left.group(1)) <= 111, sentence
+    # 150 − 40 = 110 s left as the request was sent, less only the virtual time the request took before the route
+    # read the clock (none: it awaits no timer), named rounded up
+    assert (
+        most == pytest.approx(110)
+        and left is not None
+        and math.ceil(least) <= int(left.group(1)) <= math.ceil(most)
+    ), sentence
     assert "150 s" not in sentence and "(a re-apply never extends it)" in sentence
     assert sentence.startswith("Try on your draft of Golden Hour at module level on 9 modules (Module 1,")
     assert (
