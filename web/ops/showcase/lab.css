@@ -134,6 +134,36 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-trial-badge { min-height: var(--lab-tap); padding: 0 14px; border-radius: 999px; background: var(--orange); border: 0; color: #fff; font-size: 13px; font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .lab-trial-badge[hidden] { display: none; }
 
+/* the motion preview (Slice C): a card on the dark stage column; it paints the stage, never the lights */
+.lab-motion { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: #243f33; border: 1px solid #4b6a5b; display: grid; gap: 12px; }
+.lab-motion [hidden] { display: none !important; }
+.lab-motion p { margin: 0; font-size: 13px; line-height: 1.45; }
+.lab-motion-block { display: grid; gap: 8px; }
+.lab-motion-block + .lab-motion-block, .lab-motion-note + .lab-motion-block { border-top: 1px solid #9cab9330; padding-top: 10px; }
+.lab-motion .lab-motion-title { font-size: 17px; margin: 0; color: #f4f2eb; }
+.lab-motion .lab-label-text { font-size: 12px; color: #adbeb1; }
+.lab-motion .lab-pair { grid-template-columns: 1fr 64px; margin-bottom: 0; }
+.lab-motion .lab-pair .lab-label-text { color: #adbeb1; font-size: 12px; }
+.lab-motion .lab-switch { color: #e6ecdc; font-size: 13px; }
+.lab-motion .lab-motion-how { color: #adbeb1; font-size: 12px; }
+.lab-chip.play { background: #e8eedf; color: #20382e; border-color: #e8eedf; font-weight: 600; min-width: 150px; }
+.lab-chip.play[aria-pressed="true"] { background: #f6e7c8; border-color: #f6e7c8; }
+.lab-chip:disabled { opacity: .45; }
+.lab-chip[hidden] { display: none; }
+.lab-stage-moving { margin: 8px 0 0; font-size: 13px; line-height: 1.45; color: #f6e7c8; font-style: italic; }
+.lab-stage-moving[hidden] { display: none; }
+.lab-step-counter { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lab-seg.dark { border-color: #4b6a5b; margin-bottom: 0; flex-wrap: wrap; justify-self: start; }
+.lab-seg.dark .lab-seg-btn { color: #c9d6c8; min-height: var(--lab-tap); }
+.lab-seg.dark .lab-seg-btn[aria-pressed="true"] { background: #e8eedf; color: #20382e; }
+.lab-motion-note { color: #f0c9a8; }
+.lab-motion-reason { color: #e6ecdc; }
+.lab-motion-reason + .lab-motion-block { border-top: 1px solid #9cab9330; padding-top: 10px; }
+.lab-motion-note:empty, .lab-motion-live:empty { display: none; }
+.lab-motion-live, .lab-ripple-label { color: #c9d6c8; font-size: 12px !important; }
+.lab-ripple-label { font-weight: 600; color: #f6e7c8; }
+.lab-ripple-v { font-size: 14px; color: #fff; font-variant-numeric: tabular-nums; text-align: right; }
+
 /* the editor */
 .lab-editor { background: var(--lab-card); border: 1px solid var(--lab-line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
 .lab-editor-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
@@ -186,6 +216,14 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-copy { background: #f3f5ee; border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
 .lab-copy p { font-size: 13px; line-height: 1.45; margin: 4px 0; }
 .lab-copy small { font-size: 12px; color: var(--muted); }
+/* the Motion section */
+.lab-section .lab-label-text { display: block; font-size: 13px; color: #4f604f; margin: 4px 0; }
+.lab-tight { margin-top: -2px; }
+.lab-readonly { font-size: 13px; line-height: 1.45; padding: 8px 10px; border-radius: 6px; background: #eef1e8; color: #4f604f; margin: 6px 0; }
+.lab-live-line { font-size: 13px; line-height: 1.45; padding: 8px 10px; border-radius: 6px; background: #f6ebd5; color: #695931; margin: 8px 0; }
+.lab-effects { display: grid; gap: 4px; margin: 10px 0 4px; padding: 10px 12px; border: 1px dashed #c9d1c1; border-radius: 8px; background: #f1f2ee; color: #8b928a; cursor: not-allowed; }
+.lab-effects strong { font-size: 13px; font-weight: 600; }
+.lab-effects small { font-size: 12px; line-height: 1.45; }
 
 /* export */
 .lab-dialog { width: min(960px, 94vw); max-width: min(960px, 94vw); max-height: 90vh; border: 1px solid var(--lab-line); border-radius: 10px; padding: 18px; background: var(--paper); color: var(--ink); }
@@ -215,6 +253,15 @@ html.lab-presenting, html.lab-presenting body { overflow: hidden; overscroll-beh
 .lab-present-exit.shown, .lab-present-exit:focus-visible { opacity: 1; }
 .lab-present-hint { position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); left: 0; right: 0; text-align: center; font-size: 14px; color: #8fa097; margin: 0; transition: opacity 1s; }
 .lab-present-hint.fade { opacity: 0; }
+.lab-present.has-motion .lab-present-stages { width: min(94vw, calc((100vh - 400px) * 16 / 9)); }
+.lab-present.has-motion .lab-present-stages.two { width: min(96vw, calc((100vh - 400px) * 32 / 9)); }
+.lab-present.has-motion .lab-present-text h2 { font-size: clamp(40px, 5.5vw, 80px); }
+.lab-present-moving { max-width: 900px; margin: 8px auto 0; font-size: 15px; line-height: 1.4; color: #f6e7c8; font-style: italic; }
+.lab-present-moving[hidden], .lab-present-motion[hidden] { display: none !important; }
+.lab-present-motion { display: flex; gap: 14px; justify-content: center; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.lab-present-play { min-height: 52px; min-width: 52px; padding: 0 20px; border-radius: 999px; background: #e8eedf; color: #20382e; font-size: 16px; font-weight: 600; border: 0; }
+.lab-present-play:disabled { opacity: .4; }
+.lab-present-pace { font-size: 14px; color: #adbeb1; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 1279px) {
   body.lab-open main { padding: 0 20px 40px; }
