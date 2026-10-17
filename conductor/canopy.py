@@ -245,9 +245,8 @@ class Trial:
     mode_id: str
     label: str  # the draft's name (telemetry, the Lab)
     modes: Any  # the patched ModesFile: opaque to the engine; the show compiles T3/strand with it
-    recipes: (
-        Any  # the patched RecipesFile: T3/strand colours come from recipes (a hex edit, a renamed colour)
-    )
+    # the patched RecipesFile: T3/strand colours come from recipes (a hex edit, a renamed colour)
+    recipes: Any
     started_mono: float
     ends_mono: float
     started_at: float
@@ -433,9 +432,8 @@ class CanopyEngine:
         """Stop the reconciler and wait for the engine's own background tasks. Call before closing executors."""
         self._stopped = True
         trial_task = self._trial_task
-        self._clear_trial(
-            "the canopy engine stopped"
-        )  # the try-on ends here (memory only: a restart has none)
+        # the try-on ends here (memory only: a restart has none)
+        self._clear_trial("the canopy engine stopped")
         if self._rehearsal is not None:
             self._end_rehearsal("the canopy engine stopped", rehearsal=self._rehearsal, settle=False)
         if self._runner is not None:
@@ -1350,14 +1348,13 @@ class CanopyEngine:
         st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
         if st.refused:
             if previous is not None:
-                self._trial = (
-                    previous  # the running try-on stays as it was (nothing of this one was installed)
-                )
+                # the running try-on stays as it was (nothing of this one was installed)
+                self._trial = previous
             else:
                 cleared = self._clear_trial(f"it couldn't start: {st.message}")
-                if (
-                    self._plan is not before
-                ):  # (never: a refused request installs nothing) but never leave it up
+                # A refused request installs nothing, so the approved look is still up; should that ever change,
+                # never leave a trial plan up without its override.
+                if self._plan is not before:
                     self._restore_approved(cleared)
             return st
         if previous is None:

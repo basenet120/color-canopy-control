@@ -38,9 +38,8 @@ MODULES_MESSAGE = "Trying on at module level."
 STRAND_MESSAGE = "Trying on as one colour on every strand (module level couldn't be compiled: {why})."
 NO_ENGINE = "The canopy engine isn't running here, so nothing can be tried on the lights."
 GAP_MESSAGE = "One apply every {gap:g} s: the lights are still taking the last one. Apply again in {left} s."
-REASSERT_WINDOW_S = (
-    10  # what the cost line's "over the next 10 s" covers: the re-assert and the early re-sends
-)
+# what the cost line's "over the next 10 s" covers: the re-assert and the early re-sends
+REASSERT_WINDOW_S = 10
 
 
 # ---- the trial -------------------------------------------------------------------------------------------------------

@@ -629,9 +629,8 @@ async def trial_start(body: TrialStartBody, lab: Lab) -> JSONResponse:
         raise LabAnswer(409, sentence, confirm_required=True, confirm=sentence, cost=cost)
     refused: dict[str, Any] = {"scene": body.scene_id, "modules": [m.id for m in modules], "bound_s": bound}
     gate = T.apply_gate(lab)
-    left = gate.reserve(
-        clock.monotonic()
-    )  # on the loop thread, before any await: a double tap is refused here
+    # on the loop thread, before any await: a double tap is refused here
+    left = gate.reserve(clock.monotonic())
     if left > 0:
         _record(lab, "trial_refused", why="apply gap", **refused)
         return JSONResponse(

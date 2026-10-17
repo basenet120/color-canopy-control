@@ -211,14 +211,16 @@ def test_start_is_refused_in_outage_pause_commissioning_stopped_and_rehearsal(st
         before = (len(commands(w)), engine.current_plan())
         st = await engine.start_trial(trial_of("sunset", w.clock.monotonic()))
         after = (len(commands(w)), engine.current_plan(), engine.trial)
+        lab = w.events("lab")
         if task is not None:
             await task
         await w.close()
-        return st, before, after
+        return st, before, after, lab
 
-    st, before, after = run_virtual(main)
+    st, before, after, lab = run_virtual(main)
     assert st.refused and (st.message, st.retry_after_s) == expected
     assert after == (*before, None)  # nothing installed, nothing sent, no trial
+    assert lab == []  # refused up front: no try-on was ever set (and cleared)
 
 
 # ---- the engine: one burst, the bound, re-applies ----------------------------------------------------------------
@@ -250,13 +252,20 @@ def test_a_trial_lands_as_one_burst_with_the_ripple_at_1_2_s():
         await w.run_for(3)  # past every ring's time
         await w.engine.wait_idle()
         lab = [e for e in commands(w)[n:] if e.get("source") == "lab"]
+        # "Back to approved" is a lab-source request too, and so is any request_mode with source "lab"
+        await w.engine.end_trial(source="ops")
+        back = (w.engine._ripple, dict(w.engine._pending))
+        await w.run_for(3)
+        await w.engine.request_mode("holiday", source="lab")
+        direct = (w.engine._ripple, dict(w.engine._pending))
         await w.close()
-        return rippled, st, one_burst, sends, lab
+        return rippled, st, one_burst, sends, lab, back, direct
 
-    rippled, st, one_burst, sends, lab = run_virtual(main)
+    rippled, st, one_burst, sends, lab, back, direct = run_virtual(main)
     assert rippled, "the control: the ripple is on, and the plans have rings"
-    assert not st.refused and one_burst == (None, {})
-    assert [s for s in sends if s[1] == "lab"] == [(None, "lab")]  # one send to every module: one burst
+    assert not st.refused and one_burst == back == direct == (None, {})
+    # the try-on, "Back to approved" and the direct request: each one send to every module (one burst)
+    assert [s for s in sends if s[1] == "lab"] == [(None, "lab")] * 3
     assert sorted(e["device_id"] for e in lab) == sorted(f"sim-{d}" for d in MODULES)  # every module, once
 
 
