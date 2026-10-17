@@ -150,4 +150,5 @@ def test_the_page_model_under_node():
         cwd=ROOT,
     )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
-    assert re.search(r"(?m)^ℹ fail 0$", result.stdout), result.stdout[-2000:]
+    # Node's summary line is "ℹ fail 0" with the spec reporter (newer Node, macOS) and "# fail 0" in TAP (CI's runner)
+    assert re.search(r"(?m)^(?:ℹ|#) fail 0$", result.stdout), result.stdout[-2000:]

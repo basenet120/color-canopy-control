@@ -497,14 +497,13 @@ def test_an_engine_that_cant_report_state_is_resting(app_client, engine):
 # ---- the stepped rehearsal (Gate R) ------------------------------------------------------------------------------
 def _rehearsing(c) -> str:
     """Start a 2-minute stepped rehearsal from /ops on the show engine (as an operator does); returns the route."""
-    import time
+    from show_started import past_startup
 
-    engine = c.app.state.services.extras["canopy"]
-    deadline = time.monotonic() + 30
-    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    past_startup(c)  # past startup commissioning, which would refuse the rehearsal or land in it
     route = "/api/canopy/stepped-rehearsal"
-    sentence = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]["confirm"]
+    asked = c.get(route, params={"mode": "golden-hour", "minutes": 2})
+    assert asked.status_code == 200, asked.text
+    sentence = asked.json()["preview"]["confirm"]
     started = c.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
     assert started.status_code == 200, started.text
     return route

@@ -6,6 +6,7 @@ YAML is parsed on the engine's event loop."""
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from lab_edits import done_means, rgb
@@ -52,7 +53,10 @@ def test_every_approved_scene_previews_as_approved(app_client, scene_id):
 
 
 def test_the_done_means_edit_previews_with_its_changes_and_its_time(app_client):
+    # the app runs on the TestClient's own thread, so its CPU is the process's
+    started, cpu = time.perf_counter(), time.process_time()
     r = post(app_client, "golden-hour", draft_json("golden-hour", **DONE_MEANS))
+    wall_ms, cpu_ms = (time.perf_counter() - started) * 1000, (time.process_time() - cpu) * 1000
     assert r.status_code == 200, r.text[:400]
     body = r.json()
     assert body["approved"] is False and body["brightness"] == DONE_MEANS["brightness"]
@@ -65,7 +69,9 @@ def test_the_done_means_edit_previews_with_its_changes_and_its_time(app_client):
     strand = next(t for t in body["tiers"] if t["tier"] == "strand")
     draft = draft_json("golden-hour", **DONE_MEANS)
     assert strand["solid"] == rgb(draft["palette"][draft["solid"]]["hex"])  # today: the edited Sunset pink
-    assert 0 < body["elapsed_ms"] < 1000
+    # its time is the call's own (inside the request's), and the preview costs well under a second of CPU (a
+    # loaded CI box stretches the wall time, not the work)
+    assert 0 < body["elapsed_ms"] <= wall_ms + 1 and cpu_ms < 1000, (body["elapsed_ms"], wall_ms, cpu_ms)
     assert body["t1_lock"]["simulated"] is True and body["t1_lock"]["locked"] is False
 
 

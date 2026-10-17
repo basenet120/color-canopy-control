@@ -20,6 +20,7 @@ from conftest import _env
 from fake_engine import RecordingEngine
 from fastapi.testclient import TestClient
 from partial_canopy import LIVE, partial_show, showing
+from show_started import wait_until
 
 from conductor import logring, redact
 from conductor.engine_api import CanopyPhase, CanopyState, PlanError, Tier
@@ -45,11 +46,13 @@ def _engine(client):
 
 def _settled(client, mode: str | None = CALM, timeout: float = 30.0):
     """Wait until startup commissioning is over and the canopy is ready (on `mode`, when given)."""
-    engine = _engine(client)
+    engine, wiring = _engine(client), client.app.state.services.extras["show"]
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         st = engine.state()
-        if not engine.commissioning and st.phase == CanopyPhase.READY and (mode is None or st.mode == mode):
+        # `started`, not just "not commissioning": the first look is READY before commissioning begins (show_started.py)
+        ready = st.phase == CanopyPhase.READY and (mode is None or st.mode == mode)
+        if wiring.started and not engine.commissioning and ready:
             engine._last_kiosk_mono = None  # no guest cooldown left over from another step
             return engine
         time.sleep(0.05)
@@ -75,10 +78,8 @@ def stuck_show(monkeypatch, tmp_path):
     monkeypatch.setattr(ShowWiring, "compile", refuse)
     _env(monkeypatch, tmp_path, engine=True, CONDUCTOR_AUTH="off")
     with TestClient(app) as client:
-        engine = _engine(client)
-        deadline = time.monotonic() + 30
-        while engine.commissioning and time.monotonic() < deadline:
-            time.sleep(0.05)
+        wiring = client.app.state.services.extras["show"]
+        wait_until("the stuck show's startup", lambda: wiring.started and not _engine(client).commissioning)
         yield client
 
 
