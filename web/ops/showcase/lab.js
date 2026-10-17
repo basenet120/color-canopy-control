@@ -1491,7 +1491,7 @@ function motionPaint(preview, view) {
     paint: { step: { colours: st.steps[at.index].colours, positions: where.positions } },
     notes: [m.fast ? `${M.MOTION_COPY.fast}.` : "", where.note],
     label: M.stepCounter(tl, at, { state: m.state, fast: m.fast }),
-    moving: M.movingLine(st, m.state, at),
+    moving: M.movingLine(st, m.state, at, tl.pace),
   };
 }
 
@@ -1656,7 +1656,7 @@ function renderMotion() {
     play.textContent = m.state === "playing" ? "❚❚ Pause" : m.state === "paused" ? "▶ Resume" : m.state === "done" ? "▶ Play again" : "▶ Play the steps";
     play.setAttribute("aria-pressed", String(m.state === "playing"));
     $("#lab-step-counter").textContent = M.stepCounter(tl, at, { state: m.state, fast: m.fast });
-    const movingNow = M.movingLine(st, m.state, at);
+    const movingNow = M.movingLine(st, m.state, at, tl.pace);
     stageMoving.textContent = movingNow ? `While it moves, the iPad says: ${movingNow}` : "";
     stageMoving.hidden = !movingNow;
     const options = M.paceOptions(st);

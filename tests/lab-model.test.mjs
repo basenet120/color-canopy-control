@@ -856,6 +856,11 @@ test("the step counter, and the moving sentence only while it plays", () => {
   assert.equal(M.movingLine(st, "playing", M.stepAt(tl, 16)), steppedJSON().moving_feature);
   for (const state of ["idle", "paused", "done"]) assert.equal(M.movingLine(st, state, M.stepAt(tl, 16)), "", state);
   assert.equal(M.movingLine(st, "playing", M.stepAt(tl, 95)), "", "the run is over: the still look's copy");
+  // at the show box's pace, the partial canopy's moving copy (D62) when the server sent it
+  const partial = M.steppedOf(preview({ stepped: steppedJSON({ today_moving_feature: "… each of the two Hubspace strands …" }) }));
+  assert.equal(M.movingLine(partial, "playing", M.stepAt(tl, 16), "today"), "… each of the two Hubspace strands …");
+  assert.equal(M.movingLine(partial, "playing", M.stepAt(tl, 16), "nine"), steppedJSON().moving_feature);
+  assert.equal(M.movingLine(st, "playing", M.stepAt(tl, 16), "today"), steppedJSON().moving_feature, "no partial copy: the full one");
   assert.match(M.MOTION_COPY.fast, /faster than the lights would step — not the real pace/);
 });
 

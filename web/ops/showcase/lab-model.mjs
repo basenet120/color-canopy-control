@@ -1116,6 +1116,8 @@ export function steppedOf(preview) {
     runS: positive(s.run_s),
     direction: s.direction === "reverse" ? "reverse" : "forward",
     moving: typeof s.moving_feature === "string" && s.moving_feature ? s.moving_feature : null,
+    // the partial canopy's moving copy (D62: counts rewritten for the show box's driven kits)
+    todayMoving: typeof s.today_moving_feature === "string" && s.today_moving_feature ? s.today_moving_feature : null,
     pace: { nine: positive(pace.nine), today: positive(pace.today), todayModules: positive(pace.today_modules) },
     // the server's own reason a pace holds still (ProgramRunner: a step past max_step_s, or a run shorter than a step)
     still: { nine: stillOf("nine"), today: stillOf("today") },
@@ -1177,9 +1179,11 @@ export function stepCounter(tl, at, { state = "idle", fast = false } = {}) {
   return parts.join(" · ");
 }
 
-/** The moving sentence, only while the steps play (the schema-checked moving_feature); "" otherwise. */
-export function movingLine(st, state, at) {
+/** The moving sentence, only while the steps play (the schema-checked moving_feature; at the `today` pace the
+ * partial canopy's, D62, when the server sent it); "" otherwise. */
+export function movingLine(st, state, at, paceKey = "nine") {
   if (!st || st.error || state !== "playing" || !at || at.done) return "";
+  if (paceKey === "today" && st.todayMoving) return st.todayMoving;
   return st.moving || "";
 }
 
