@@ -276,7 +276,7 @@ class SceneDraft(_Strict):
     solid: int = Field(ge=0)  # index into palette (default_solid)
     stepped: DraftStepped | None = None  # present iff the approved ladder has "stepped"
     copy: DraftCopy = Field(default_factory=DraftCopy)
-    # model validators: solid < len(palette); palette names unique (case-insensitive); mood has no MOTION_WORDS
+    # model validators: solid < len(palette); palette names unique (case-insensitive); name, mood and description (client copy, shown at every tier) have no MOTION_WORDS and no "270"/"nine" (scene_rules.copy_problem, also checked by the catalog rule; review 2026-10-16)
     # (it is the blurb, shown at every tier: schema.py Mode._ladder).
 ```
 Ids, ladders and slots are **not** fields: a draft can't create a scene, rename an id, add/drop a rung or move a slot.
@@ -406,7 +406,7 @@ any result where `list(modes.modes) != list(approved.modes.modes)`, a ladder or 
 "mood", "description", "layout": {"from": field_json, "to": field_json, "words_from", "words_to"} | None,
 "brightness": {from,to} | None, "solid", "sample_at", "stepped", "copy": [rungs regenerated]}`. Any entry in
 `approved_colours` or `name` sets `"needs_d59": true`; a `layout` entry sets `"needs_d63": true`. For a painted
-scene (approved mode has a `slot`), any change to its T1 design (palette hex, stop keys, layout) sets
+scene (approved mode has a `slot`), any change to its T1 frames (the palette's hexes in stop order — a hex edit, a reorder, an added or removed colour — or the layout; not a rename, which keeps the slot hash: `draft.painted_change`) sets
 `"needs_slot_repaint": true`: deployed, the restart makes `stale_slot`/`check_slots` rewrite `custom-N` on every
 module (canopy.py:1962, reconciler.py:615), so the export says so (§3.6) wherever it was made (sim or show).
 
@@ -427,6 +427,9 @@ def colour_phrase(names: list[str], *, invert: bool, transform: str) -> str
 def generated_copy(mode: Mode, draft: SceneDraft, canopy: dict) -> dict[str, str]
     # {"modules": T3_TEMPLATE(words=layout_words(design, canopy)), "strand": STRAND_TEMPLATE(...),
     #  "stepped": STEPPED_TEMPLATE(flow=motion_words(design, canopy, direction))}  (schema.py:447, :468)
+    # The T3 sentence names only the stops the module level reaches (`reached_stops`: t at some module centre
+    # within half a stop spacing), so an edge or corner sweep never names a colour no strand shows; the moving
+    # sentence names every colour (each strand steps through the whole palette over a run). Review 2026-10-16.
 ```
 Rules:
 - **Strand:** approved sentence if the solid colour's name is unchanged, else `STRAND_TEMPLATE` (keeps "nine", so
@@ -649,12 +652,17 @@ def reread(texts: Mapping[str, str], canopy: dict) -> ConfigTrio
 - **Slot repaint:** when `needs_slot_repaint`, the decision draft, `review_notes` and the PR text say "Deploy only in
   a commissioning window: on restart the reconciler rewrites custom-N on every module (stale slot)." (test: an
   exported Golden Hour layout change carries the flag and the sentence).
-- **The Studio's own `SCENES`:** for each scene whose palette changed, `review_notes` and the decision draft say
-  "demo-model.mjs SCENES still has <old hex> for <Scene>; the Studio's shop-kit Apply buttons (studio.js:314, :340)
-  send it until SCENES is updated by hand."
+- **The Studio's own `SCENES`:** for each scene whose palette changed (hexes, names, order or length), `review_notes` and
+  the decision draft say "demo-model.mjs SCENES still has <old hex> for <Scene>; the Studio's shop-kit Apply buttons
+  (studio.js:314, :340) send it until SCENES is updated by hand." (or, with no approved hex changed, that SCENES still
+  has the approved N-colour palette); and when the name, solid or brightness changed, that SCENES still opens the
+  scene on the old ones (review 2026-10-16).
 - **Decision draft** (`decision`): "**D<next> — <scene names>: Design Lab version "<name>" (<date>).** Approved
-  colour changes (D59; needs the client's sign-off and a D59 update): … Layout changes (D63; Paris reviews): … Brightness
-  (drafts): … Copy regenerated: … Exported from the Design Lab (D66); verified: re-read equal, suite to run in the PR."
+  colour changes (D59; needs the client's sign-off and a D59 update): … Strand solid (a draft default, not a D59
+  colour): … Layout changes (D63; Paris reviews): … Stepped timing (D65; live off until Gate R): … Brightness
+  (drafts): … Client copy edited (check it is true at every tier): … Copy regenerated: … Exported from the Design Lab
+  (D66); verified: re-read equal, suite to run in the PR." The D59 list is exactly what sets `needs_d59` (a scene's
+  name, its palette colours); stepped changes are `stepped_changes`, never `layout_changes` (review 2026-10-16).
 - Only those four files; `demo-model.mjs` is untouched (its `SCENES` stay Paris's handoff; the Lab never reads them).
 
 ### 3.7 Pins: making edited exports pass the suite
@@ -730,7 +738,9 @@ def t1_lock(lab: LabService, scene_id: str) -> dict
   commissioned automatically at start-up (show.py `_sim_commission`), so the lock would always be on; there the
   answer is `{"locked": false, "simulated": true, "sentence": "In the simulator the slots are commissioned at
   start-up; on the show box this scene's painted design is read-only once commissioned."}`.
-- When locked, a draft that changes the **design** of that scene (palette hexes/names, layout, sample_at) is refused
+- When locked, a draft that changes the **frames** of that scene (palette hexes, their order and count, layout,
+  sample_at: `draft.painted_change`, the same predicate as `needs_slot_repaint`; a colour rename keeps the slot hash,
+  so it stays editable — review 2026-10-16) is refused
   by preview and save with **409** `{detail: "<Scene>: " + T1_LOCKED + ".", field: "palette"|"layout"}`; brightness
   (a control row, not slot content), the strand solid, client copy and stepped timing stay editable. The UI disables
   the locked controls and shows the sentence.
@@ -916,8 +926,9 @@ export function draftEquals(a, b)                // upper-cases hexes (<input ty
 export function controlsFor(layout)              // which layout controls show: linear → angle; radial → centre
                                                  //   (step 2.5), metric, invert; sweep → centre, start; all → transform, invert
 export function withLayoutKind(layout, kind)     // switch kind keeping invert/transform; linear defaults to 45°
-                                                 //   (0° stripes, D63 warning); sweep centre_in [0, 60] (never a
-                                                 //   module centre: schema.py:544 refuses those while at: centre)
+                                                 //   (0° stripes, D63 warning); sweep centre_in [75, 60] (inside, so
+                                                 //   the sweep goes all the way round; never a module centre:
+                                                 //   schema.py:544 refuses those while at: centre)
 export function problemsByField(problems)        // {field: [message]}
 export function nextPreviewAt(lastSentMs, nowMs, minGapMs = 150)   // debounce: latest-wins, ≥150 ms apart
 export function presentStep(state, input)        // {scene, version} after ArrowLeft/Right/Up/Down, swipe L/R/U/D;
@@ -961,7 +972,7 @@ line under the palette, never a dialog. `REALITY_LINE` always shows once in the 
   - Layout: kind (Linear | Radial | Sweep); Linear: angle slider 0–359 + number (default 45° on switching); Radial:
     centre x 0–225 / y 0–120 sliders at **`step="2.5"`** (every approved centre — 112.5, 187.5 — module centre, edge
     mid and corner is a multiple of 2.5; HTML's default step 1 can't land on them) each paired with a number input at
-    step 0.5, metric (inches | canopy proportions), radius auto; Sweep: centre (default [0, 60]) + start angle 0–359;
+    step 0.5, metric (inches | canopy proportions), radius auto; Sweep: centre (default [75, 60]) + start angle 0–359;
     all: Mirror (transform) and Invert switches; the live `layout_words` beside the controls; **Cycles: 1 (locked,
     D63)** and **Sample at: centre (locked, D63)** read-only with their reason. A D63 warning (§3.4) shows as one line
     under the layout, the stage still draws the draft. (Tap-to-place on the Ceiling plan moves to Slice C:
@@ -1481,7 +1492,7 @@ Hubspace app or on `/ops/module`, and the Lab stays screen-only until after the 
 - [minor] Scalar quoting unspecified → **accepted**: `json.dumps` scalars, `_flow` collections, specials test (§3.6).
 - [minor] Stale comments survive → **accepted**: the comment rules + test (§3.6).
 - [minor] `list(modes)` in the idle check → **accepted**: verified, `list()` of a pydantic model gives field tuples; `list(patched.modes.modes)` + test (§3.2.3).
-- [minor] Sweep at a module centre refused → **accepted**: sweep default [0, 60]; "around the centre" needs `at: mean`, a D66 option (§5.2, D66).
+- [minor] Sweep at a module centre refused → **accepted**: sweep default [0, 60] (moved to [75, 60] on review 2026-10-16: an edge sweep reaches only half the palette); "around the centre" needs `at: mean`, a D66 option (§5.2, D66).
 - [minor] Purity of the cached catalog → **accepted** (merged with contracts-engine's purity finding, §3.0).
 - [minor] No pin regeneration path → **accepted**: `scripts/regen_scene_pins.py`, `make scene-pins`, byte-equal test (§3.7).
 
