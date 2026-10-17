@@ -24,6 +24,7 @@ import {
   POWER_HOLD_MS,
   SAME_CARD_DEBOUNCE_MS,
   attractDue,
+  cardsKey,
   cardState,
   cardTap,
   clampLevel,
@@ -40,12 +41,14 @@ import {
   nowShowing,
   phaseOf,
   reconcile,
+  isWaitRefusal,
   refusalToast,
   rgb,
   sceneLabel,
   snakeLayout,
   stripGradient,
   switchView,
+  waitToastOver,
 } from "/kiosk/panel-model.mjs";
 import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs";
 
@@ -76,6 +79,7 @@ const ui = {
   stopped: false, // the iPad frame preview took over the page
   writeSeq: 0, // bumped when a write is sent and when its answer lands: a poll that spans either is stale
   serverClock: null, // {serverNow, at}: the server's wall clock (s) as last read, and the local ms it was read at
+  waitToast: null, // {at}: the toast up is a "wait for staff" refusal (a try-on, the rehearsal) that landed at `at`
 };
 
 /** The server's wall clock now, estimated: server_now + the local time since it was read (motion is phase-synced). */
@@ -157,6 +161,7 @@ let toastTimer = null;
 let toastTick = null;
 function toast(text, { retryAfterS = 0, sticky = false, spinner = false } = {}) {
   const box = $("toast");
+  ui.waitToast = null; // refused() marks its own after this
   clearTimeout(toastTimer);
   clearInterval(toastTick);
   box.classList.remove("is-leaving", "is-multiline");
@@ -185,6 +190,7 @@ function toast(text, { retryAfterS = 0, sticky = false, spinner = false } = {}) 
 
 function hideToast() {
   const box = $("toast");
+  ui.waitToast = null;
   clearTimeout(toastTimer);
   clearInterval(toastTick);
   if (box.hidden) return;
@@ -198,7 +204,7 @@ function hideToast() {
 // ---- building ----------------------------------------------------------------------------------------------------
 let builtFor = "";
 function buildCards(scenes) {
-  const key = scenes.map((s) => s.id).join(",");
+  const key = cardsKey(scenes); // contents, not only ids: a changed catalog redraws its cards
   if (key === builtFor) return;
   builtFor = key;
   const grid = $("grid");
@@ -493,13 +499,20 @@ function settlePending(state) {
   if (phaseOf(state) !== "changing" || Date.now() - ui.pendingPosted > 30000) ui.pendingId = null;
 }
 
-function applyState(state, serverNow) {
+/** A waiting toast's countdown is only the server's upper bound: once a state read begun after it says nothing
+ * waits (the try-on or rehearsal ended), drop it, so the guest is never told to wait for a canopy that is free. */
+function dropWaitToast(state, readStartedAt) {
+  if (waitToastOver(ui.waitToast, state, readStartedAt)) hideToast();
+}
+
+function applyState(state, serverNow, sentAt = 0) {
   ui.writeSeq += 1;
   if (!ui.panel || !state) return;
   readServerClock(serverNow);
   ui.panel.state = state;
   ui.readAt = Date.now();
   settlePending(state);
+  dropWaitToast(state, sentAt);
   render();
 }
 
@@ -507,6 +520,7 @@ let pollTimer = null;
 async function poll() {
   clearTimeout(pollTimer);
   const started = performance.now();
+  const startedAt = Date.now();
   const seq = ui.writeSeq;
   try {
     const panel = await api("/api/kiosk/panel");
@@ -523,6 +537,7 @@ async function poll() {
     settlePending(panel.state);
     buildCards(panel.scenes || []);
     if (ui.failures >= LOST_AFTER_FAILURES || ui.lost) hideToast();
+    if (!stale) dropWaitToast(panel.state, startedAt);
     ui.failures = 0;
     ui.lost = false;
     if (first && onFirstPanel(panel) === "frame") {
@@ -564,6 +579,7 @@ async function post(path, body) {
 function refused(err) {
   const t = refusalToast(err);
   toast(t.text, { retryAfterS: t.retryAfterS });
+  if (isWaitRefusal(err)) ui.waitToast = { at: Date.now() };
 }
 
 // ---- actions ------------------------------------------------------------------------------------------------------
@@ -585,10 +601,11 @@ async function chooseScene(id) {
   ui.pendingPosted = 0;
   render();
   try {
+    const sentAt = Date.now();
     const res = await post("/api/kiosk/scene", { scene: id });
     ui.pendingPosted = Date.now();
     ui.powerHold = null; // a scene turns the lights on; follow the server
-    applyState(res.state, res.server_now);
+    applyState(res.state, res.server_now, sentAt);
   } catch (err) {
     ui.pendingId = null;
     render();
@@ -605,8 +622,9 @@ async function togglePower() {
   ui.powerHold = { value: on, until: Date.now() + POWER_HOLD_MS };
   render();
   try {
+    const sentAt = Date.now();
     const res = await post("/api/kiosk/power", { on });
-    applyState(res.state, res.server_now);
+    applyState(res.state, res.server_now, sentAt);
   } catch (err) {
     ui.powerHold = null;
     render();
@@ -617,9 +635,10 @@ async function togglePower() {
 const pacer = createPacer();
 async function sendBrightness(level) {
   try {
+    const sentAt = Date.now();
     const res = await post("/api/kiosk/brightness", { level });
     if (ui.brightHold && ui.brightHold.value === level) ui.brightHold.until = Date.now() + BRIGHTNESS_HOLD_MS;
-    applyState(res.state, res.server_now);
+    applyState(res.state, res.server_now, sentAt);
   } catch (err) {
     ui.brightHold = null;
     pacer.reset();

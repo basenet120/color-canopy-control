@@ -200,6 +200,28 @@ def test_compile_orders_the_driven_modules_into_rings_by_the_design():
     assert set(partial.modules) == set(LIVE) and partial.waves == [["canopy-r0c1"], ["canopy-r0c0"]]
 
 
+# D63's draft layouts, which the ring order below describes (the approved ones are pinned in the fixture the Design
+# Lab's export regenerates, PLAN §3.7)
+D63_LAYOUTS = {
+    "lowcountry-calm": {"kind": "radial", "centre_in": (112.5, 60), "invert": True},
+    "rainbow-row-sunset": {"kind": "linear", "angle_deg": 45},
+    "garden-gathering": {"kind": "radial", "centre_in": (112.5, 120), "invert": True},
+    "coastal-tides": {"kind": "linear", "angle_deg": 78},
+    "golden-hour": {"kind": "radial", "centre_in": (0, 60), "metric": "canopy"},
+    "goodnight-glow": {"kind": "radial", "centre_in": (187.5, 20), "invert": True},
+}
+
+
+def _still_d63(mode_id: str) -> bool:
+    from pydantic import TypeAdapter
+
+    from conductor.looks import field as F
+
+    pins = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+    fields = TypeAdapter(F.FieldSpec)
+    return fields.validate_python(pins[mode_id]["layout"]) == fields.validate_python(D63_LAYOUTS[mode_id])
+
+
 def test_the_show_modes_get_rings_and_a_motion_plan_gets_none():
     from conductor.config import load_registry
 
@@ -213,7 +235,8 @@ def test_the_show_modes_get_rings_and_a_motion_plan_gets_none():
             plan = compile_mode(mode_id, tier, ctx)
             assert plan.waves is not None and len(plan.waves) <= 3, (mode_id, tier)
             assert sorted(d for ring in plan.waves for d in ring) == sorted(plan.modules)
-    # D63 × D64: each scene's rings start where its 2-D design starts and spread from there
+    # D63 × D64: each scene's rings start where its 2-D design starts and spread from there. These describe D63's
+    # layouts, so each runs while the approved (pinned) layout is still D63's: a Design Lab redesign skips it.
     first = {
         "lowcountry-calm": "canopy-r1c1",  # radial: the centre (with the middle column) first …
         "rainbow-row-sunset": "canopy-r0c0",  # corner to corner: the top-left corner
@@ -222,14 +245,17 @@ def test_the_show_modes_get_rings_and_a_motion_plan_gets_none():
         "goodnight-glow": "canopy-r0c2",  # the moon's corner
     }
     for mode_id, origin in first.items():
-        assert origin in compile_mode(mode_id, Tier.T3, ctx).waves[0], mode_id
+        if _still_d63(mode_id):
+            assert origin in compile_mode(mode_id, Tier.T3, ctx).waves[0], mode_id
     calm = compile_mode("lowcountry-calm", Tier.T3, ctx)
     corners = {"canopy-r0c0", "canopy-r0c2", "canopy-r2c0", "canopy-r2c2"}
-    assert set(calm.waves[-1]) == corners  # … and the corners last
+    if _still_d63("lowcountry-calm"):
+        assert set(calm.waves[-1]) == corners  # … and the corners last
     coastal = compile_mode("coastal-tides", Tier.T3, ctx)  # the shoreline lands row by row from the top
-    assert [sorted(ring) for ring in coastal.waves] == [
-        sorted(f"canopy-r{r}c{c}" for c in range(3)) for r in range(3)
-    ]
+    if _still_d63("coastal-tides"):
+        assert [sorted(ring) for ring in coastal.waves] == [
+            sorted(f"canopy-r{r}c{c}" for c in range(3)) for r in range(3)
+        ]
     # the soak's SIMULATED motion code on Golden Hour's painted slot (config/sim/soak.yaml) makes a motion plan
     from conductor import soak
 

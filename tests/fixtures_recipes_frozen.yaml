@@ -1,0 +1,134 @@
+# Today's scene-palette recipes, frozen (Design Lab PLAN §3.7): the 20 entries of config/recipes.yaml's scene palette
+# section as approved on 2026-10-16, verbatim. The compiler tests' fixtures (tests/fixtures_modes_field.yaml,
+# fixtures_modes_stepped.yaml, fixtures_modes_techniques.yaml) name these keys; those tests compile against config's
+# recipes with these entries laid over them, so a Design Lab export that renames, adds or removes a scene colour (and so
+# drops or adds a key in config/recipes.yaml) can't break them. Never regenerated: edit by hand only if a fixture needs
+# a new colour.
+colors:
+  # ---- scene palette colours (D59) ----------------------------------------------------------------------------
+  # Rainbow Row Sunset
+  pastel-coral:
+    label: Pastel coral
+    hex: "#FF9E96"
+    rgb_only: {r: 255, g: 158, b: 150, colorBrightness: 100}
+    blend: {r: 255, g: 158, b: 150, colorBrightness: 100}
+    strand: {rgb: [255, 158, 150]}
+  blush-pink:
+    label: Blush pink
+    hex: "#FFD2E0"
+    rgb_only: {r: 255, g: 210, b: 224, colorBrightness: 100}
+    blend: {r: 255, g: 210, b: 224, colorBrightness: 100}
+    strand: {rgb: [255, 210, 224]}
+  lilac:
+    label: Lilac
+    hex: "#C4B3EC"
+    rgb_only: {r: 196, g: 179, b: 236, colorBrightness: 100}
+    blend: {r: 196, g: 179, b: 236, colorBrightness: 100}
+    strand: {rgb: [196, 179, 236]}
+  # Garden Gathering
+  sage-green:
+    label: Sage green
+    hex: "#8FBF9D"
+    rgb_only: {r: 143, g: 191, b: 157, colorBrightness: 100}
+    blend: {r: 143, g: 191, b: 157, colorBrightness: 100}
+    strand: {rgb: [143, 191, 157]}
+  pale-lime:
+    label: Pale lime
+    hex: "#E6EED1"
+    rgb_only: {r: 230, g: 238, b: 209, colorBrightness: 100}
+    blend: {r: 230, g: 238, b: 209, colorBrightness: 100}
+    strand: {rgb: [230, 238, 209]}
+  ivory:
+    label: Ivory
+    hex: "#F7F2E7"
+    rgb_only: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    blend: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    strand: {rgb: [247, 242, 231]}
+  # Golden Hour
+  soft-gold:
+    label: Soft gold
+    hex: "#FFDB9B"
+    rgb_only: {r: 255, g: 219, b: 155, colorBrightness: 100}
+    blend: {r: 255, g: 219, b: 155, colorBrightness: 100}
+    strand: {rgb: [255, 219, 155]}
+  golden-hour-peach:
+    label: Peach
+    hex: "#FFB69D"
+    rgb_only: {r: 255, g: 182, b: 157, colorBrightness: 100}
+    blend: {r: 255, g: 182, b: 157, colorBrightness: 100}
+    strand: {rgb: [255, 182, 157]}
+  sunset-pink:
+    label: Sunset pink
+    hex: "#FF9BC4"
+    rgb_only: {r: 255, g: 155, b: 196, colorBrightness: 100}
+    blend: {r: 255, g: 155, b: 196, colorBrightness: 100}
+    strand: {rgb: [255, 155, 196]}
+  rose:
+    label: Rose
+    hex: "#E779B0"
+    rgb_only: {r: 231, g: 121, b: 176, colorBrightness: 100}
+    blend: {r: 231, g: 121, b: 176, colorBrightness: 100}
+    strand: {rgb: [231, 121, 176]}
+  lavender:
+    label: Lavender
+    hex: "#B59AE2"
+    rgb_only: {r: 181, g: 154, b: 226, colorBrightness: 100}
+    blend: {r: 181, g: 154, b: 226, colorBrightness: 100}
+    strand: {rgb: [181, 154, 226]}
+  # Lowcountry Calm (T3 only)
+  soft-ivory:
+    label: Soft ivory
+    hex: "#F7F2E7"
+    rgb_only: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    blend: {r: 247, g: 242, b: 231, colorBrightness: 100}
+    strand: {rgb: [247, 242, 231]}
+  sea-glass:
+    label: Sea glass
+    hex: "#D1EAE3"
+    rgb_only: {r: 209, g: 234, b: 227, colorBrightness: 100}
+    blend: {r: 209, g: 234, b: 227, colorBrightness: 100}
+    strand: {rgb: [209, 234, 227]}
+  # Coastal Tides (T3 only)
+  ocean-blue:
+    label: Ocean blue
+    hex: "#659BD5"
+    rgb_only: {r: 101, g: 155, b: 213, colorBrightness: 100}
+    blend: {r: 101, g: 155, b: 213, colorBrightness: 100}
+    strand: {rgb: [101, 155, 213]}
+  aqua:
+    label: Aqua
+    hex: "#79CED4"
+    rgb_only: {r: 121, g: 206, b: 212, colorBrightness: 100}
+    blend: {r: 121, g: 206, b: 212, colorBrightness: 100}
+    strand: {rgb: [121, 206, 212]}
+  seafoam:
+    label: Seafoam
+    hex: "#B2E8D2"
+    rgb_only: {r: 178, g: 232, b: 210, colorBrightness: 100}
+    blend: {r: 178, g: 232, b: 210, colorBrightness: 100}
+    strand: {rgb: [178, 232, 210]}
+  foam-white:
+    label: Foam white
+    hex: "#E9F3E7"
+    rgb_only: {r: 233, g: 243, b: 231, colorBrightness: 100}
+    blend: {r: 233, g: 243, b: 231, colorBrightness: 100}
+    strand: {rgb: [233, 243, 231]}
+  # The Goodnight Glow (T3 only)
+  periwinkle:
+    label: Periwinkle
+    hex: "#8B8BD1"
+    rgb_only: {r: 139, g: 139, b: 209, colorBrightness: 100}
+    blend: {r: 139, g: 139, b: 209, colorBrightness: 100}
+    strand: {rgb: [139, 139, 209]}
+  goodnight-glow-lavender:
+    label: Lavender
+    hex: "#BEA9E6"
+    rgb_only: {r: 190, g: 169, b: 230, colorBrightness: 100}
+    blend: {r: 190, g: 169, b: 230, colorBrightness: 100}
+    strand: {rgb: [190, 169, 230]}
+  moonlight-blue:
+    label: Moonlight blue
+    hex: "#C4D6F3"
+    rgb_only: {r: 196, g: 214, b: 243, colorBrightness: 100}
+    blend: {r: 196, g: 214, b: 243, colorBrightness: 100}
+    strand: {rgb: [196, 214, 243]}
