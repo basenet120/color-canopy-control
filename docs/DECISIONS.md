@@ -746,7 +746,15 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
   sentence is true only while the try-on runs: the guest panel's state carries `waiting: "try-on" | "testing" | null`,
   a lane refusal under the title is dropped once its flag lifts (and on an accepted scene), and the iPad drops a
   waiting toast at the first read after it that says nothing waits (review fix, Oct 17). A re-pick (the reconciler
-  after new capabilities) keeps the try-on. The confirm sentence names the draft only when it renames the scene
+  after new capabilities) keeps the try-on, unless it would ADD a module to the try-on's plan (one registered, or
+  newly read, mid-try-on: the confirm never named it): then the try-on ends and every module gets the approved look
+  (second review fix, Oct 17). A re-apply keeps the running session's bound, so it is confirmed against the time left
+  ("… for the 110 s left of the running try-on (a re-apply never extends it)"; a sentence shown up to 30 s earlier
+  still matches; the cost line adds "the running try-on still ends in N s"), and it is refused (409, `retry_after_s`
+  = the time left, nothing sent, the gap not used up) with less than `kiosk.cooldown_s` of the bound left, or when
+  the session it was confirmed against ended or another began while it was built. An exception (not a refusal)
+  while a try-on starts or ends clears the override and its bound task, puts the approved look back (the safe look
+  if that raises too), raises an alert, and the route answers a plain 500. The confirm sentence names the draft only when it renames the scene
   ("Try on your draft of Golden Hour …"); TrialJSON's `label` is the approved scene's name and `draft_name` the
   draft's. The Lab's preview "today" shows the try-on's installed plan while it runs. Every write goes through the engine and the
   executor; `reconciler.py`, `executor.py` and the drivers are unchanged, and the Lab never flips

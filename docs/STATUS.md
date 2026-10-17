@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-17 (Design Lab Slice B review fixes on #26; see the PR stack). Before that 2026-10-16.
+_Last updated: 2026-10-17 (Design Lab Slice B review fixes, two rounds, on #26; see the PR stack). Before that 2026-10-16.
 **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
 Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
 test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
@@ -107,7 +107,21 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     Browser (own dev server on 8205): during a try-on the iPad toast counts down; after Back to approved it is gone
     within one poll and the header reads "Choose a scene below."; a renamed draft shows "On the lights now: Pinker
     Hour (Golden Hour)" and Back to approved says "the lights show Golden Hour's approved look". **Needs a real
-    iPad:** the Try-on panel's tap targets and the confirm block's scroll position. **Open for Alon:** the try-on
+    iPad:** the Try-on panel's tap targets and the confirm block's scroll position. **Second review fixes (Oct 17, 3
+    confirmed findings, each with a virtual-clock test that fails without its fix):** (1) a re-apply keeps the
+    running session's bound, so its confirm now names the time left ("… for the 110 s left of the running try-on (a
+    re-apply never extends it)"; one shown up to 30 s earlier still matches; the cost adds "the running try-on still
+    ends in N s"), the first start's "for up to 150 s" no longer confirms it, and with less than `kiosk.cooldown_s`
+    of the bound left it is refused (409 "This try-on ends in 6 s, too soon for another apply; …", Retry-After,
+    nothing sent, gap not used up); the engine also refuses an apply whose session ended or changed while it was
+    built (`expect_session`, `min_left_s`); (2) a capability re-pick that would ADD a module to the try-on's plan (one
+    registered, or newly read, mid-try-on) ends the try-on so every module gets the approved look; same-set and
+    shrinking re-picks keep it (`ShowWiring._joining_trial`); (3) an exception (not a PlanError) while a try-on
+    starts, re-applies or ends no longer strands the override or its plan: override and bound task cleared, the
+    approved look back (the safe look if that raises too), an alert, the route answers a plain 500, the bound task
+    ends cleanly. The Lab's JS is unchanged (it already re-asks on a 409 confirm and counts a plain 409 down).
+    **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2120 passed, 5 skipped, 136 subtests; `make lint`; node 116/116; soak exit 0, only
+    the non-gating "(reported)" D65 row FAILs, as before; `tests/test_lab_trial.py` 74 tests. **Open for Alon:** the try-on
     doesn't apply the T1 lock (it never writes a slot), so a locked painted design can be tried on at module level;
     say if it should.
     **Deploy block (§11; Alon runs it, coordinated with Paris; this ends Paris's break-glass hold):**
