@@ -139,7 +139,8 @@ def test_preview_heads_are_mode_design_of_the_patched_modes(tmp_path):
     assert answer["design"]["heads"] != mode_design("golden-hour", approved)["heads"]
     assert answer["scene_id"] == "golden-hour" and answer["label"] == "Golden Hour"
     assert answer["approved"] is False and answer["brightness"] == 90
-    assert answer["stepped"] is None and answer["rings"] is None
+    # Slice C fills these (tests/test_lab_stepped.py): Golden Hour has a stepped rung and a design with a direction
+    assert answer["stepped"] is not None and answer["rings"] == answer["ripple"]["rings"] is not None
 
 
 def _design_heads(answer: dict) -> dict[tuple[float, float], list[int]]:

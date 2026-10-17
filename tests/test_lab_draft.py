@@ -267,7 +267,8 @@ def test_a_stepped_rung_is_neither_added_nor_dropped():
     no_steps = D.SceneDraft.model_validate(
         {**D.seed_draft(TRIO, "coastal-tides").model_dump(), "stepped": None}
     )
-    assert [p.field for p in problems(no_steps)] == ["stepped"]
+    [missing] = problems(no_steps)
+    assert missing.field == "stepped" and "needs the stepped timing" in missing.message
     steps = {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 90}
     calm = D.SceneDraft.model_validate(
         {**D.seed_draft(TRIO, "lowcountry-calm").model_dump(), "stepped": steps}

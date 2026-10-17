@@ -53,10 +53,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from conductor.config import trial_bound_s
+from conductor.config import RIPPLE_MAX_WAVES, trial_bound_s
 from conductor.design_lab import draft as D
 from conductor.design_lab import export as X
 from conductor.design_lab import preview as P
+from conductor.design_lab import stepped as ST
 from conductor.design_lab import store as S
 from conductor.design_lab import trial as T
 from conductor.design_lab.service import KEY, LabService, lab_of
@@ -329,15 +330,26 @@ def catalog_json(lab: LabService) -> dict:
             "stepped": {
                 "steps_per_cycle": [3, 12],
                 "step_s": [4, 12],
-                "run_s_max": min(180.0, float(settings.kiosk.idle_return_s)),
+                "step_s_increment": D.STEP_S_INCREMENT,  # Slice C: half seconds
+                "run_s_min": "step_s",  # a run is at least one step (SteppedTechnique)
+                "run_s_max": ST.run_s_max(settings),
+                "directions": ["forward", "reverse"],
             },
+            "ripple": {"stagger_s": [0.0, ST.RIPPLE_STAGGER_MAX_S], "max_rings": RIPPLE_MAX_WAVES},
             "canopy": {"width_in": lab.canopy["width_in"], "height_in": lab.canopy["height_in"]},
         },
         "live": {
             "stepped_live_enabled": bool(settings.motion.stepped.live_enabled),
-            "stepped_live_sentence": STEPPED_LIVE_OFF,
+            # None once Alon has set it (STEPPED_LIVE_OFF would be false; the note says it is on)
+            "stepped_live_sentence": None if settings.motion.stepped.live_enabled else STEPPED_LIVE_OFF,
             "ripple_stagger_s": settings.kiosk.ripple_stagger_s,
             "effects_enabled": any(bool(codes) for codes in settings.effects.enabled.values()),
+            # Slice C: the editor's live lines (shown, never controls: no Lab route changes either setting)
+            "stepped_live_note": (
+                ST.STEPPED_LIVE_ON if settings.motion.stepped.live_enabled else ST.STEPPED_LIVE_NOTE
+            ),
+            "ripple_note": ST.ripple_note(settings),
+            "effects_note": ST.EFFECTS_OFF,
         },
         "scenes": scenes,
     }
@@ -560,7 +572,9 @@ async def export(
                 "; ".join(_warning_sentence(w, patched) for w in warnings),
                 warnings=[w.to_json() for w in warnings],
             )
-        result = X.export_patch(approved, patched, root=root, canopy=canopy, version=saved, now=now)
+        result = X.export_patch(
+            approved, patched, root=root, canopy=canopy, version=saved, now=now, settings=lab.settings
+        )
         changes = [D.draft_changes(approved, d, canopy=canopy) for d in saved.drafts.values()]
         return result, changes
 
