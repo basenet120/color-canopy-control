@@ -33,6 +33,15 @@ def _services(client):
     return client.app.state.services
 
 
+def _module_look(mode_id: str, position: str):
+    """The live mode's module-level (T3) look at a canopy position: what the module page sends for that position."""
+    from conductor.config import DeviceEntry
+    from conductor.looks import CompileContext, load_modes, module_look
+
+    entry = DeviceEntry(id="module-look", role="canopy_module", account="test", module=position)
+    return module_look(load_modes().mode(mode_id), entry, CompileContext(registry=[entry], capabilities={}))
+
+
 @pytest.fixture
 def fast(app_client):
     """Shorter readback waits and rate budget for tests that aren't about timing (the sweep test keeps the
@@ -371,10 +380,17 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     ).json()
     assert night["result"]["tier"] == "modules" and night["result"]["status"] == "applied"
 
+    # the live mode's module-level look at r1c1 ({191, 178, 233} at 28 % as approved): plumbing, not a pin
+    night_look = _module_look("goodnight-glow", "r1c1")
+
     def night_lavender():
         view = {row.key: row.value for row in _services(app_client).sim.device_view(f"sim-{BENCH}")}
         rgb = view.get(("color-rgb", None)) or {}
-        return rgb.get("color-rgb") == {"r": 191, "g": 178, "b": 233} and view[("brightness", None)] == 28
+        r, g, b = night_look.rgb
+        return (
+            rgb.get("color-rgb") == {"r": r, "g": g, "b": b}
+            and view[("brightness", None)] == night_look.brightness
+        )
 
     _wait(night_lavender)
 
@@ -390,11 +406,17 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     ).json()
     assert golden["result"]["tier"] == "modules" and golden["result"]["status"] == "applied"
     assert any("Gate C" in n for n in golden["result"]["notes"])
-    assert golden["state"]["heads"][4]["reported"] == {
-        "r": 219,
-        "g": 116,
-        "b": 167,
-    }  # the design's colour at r1c2, the far side from the sun (231, 122, 176: rose), at Golden Hour's 95 %
+    # the design's colour at r1c2, the far side from the sun (approved: 231, 122, 176, rose), at Golden Hour's 95 %
+    # ({219, 116, 167} as approved): the live mode's module-level look there, as a strand shows it
+    look = _module_look("golden-hour", "r1c2")
+    r, g, b = look.rgb
+    shown = {
+        ("power", None): "on",
+        ("color-mode", None): "color",
+        ("color-rgb", None): {"color-rgb": {"r": r, "g": g, "b": b}},
+        ("brightness", None): look.brightness,
+    }
+    assert golden["state"]["heads"][4]["reported"] == render.head_colors(shown, 1)[0]
 
     bad = _post(
         app_client,

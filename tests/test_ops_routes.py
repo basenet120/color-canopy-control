@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 from fake_engine import FakeEngine, RecordingEngine
 from partial_canopy import LIVE, partial_show, showing
+from show_started import past_startup, wait_until
 
 from conductor import logring, redact
 from conductor.engine_api import PlanError
@@ -177,11 +178,11 @@ def test_heads_show_desired_from_the_plan_and_reported_from_readback(app_client)
     _wait_ready(app_client, "golden-hour")
     body = app_client.get("/api/canopy/heads").json()
     assert body["engine"] is True and body["mode"] == "golden-hour" and body["tier"] == "modules"
-    assert body["feature"] == (  # the T3 sentence names the design's layout (D63: a sun at one edge)
-        "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: "
-        "gold and peach at the middle of one short side, pinker toward its corners, through sunset pink to rose at the "
-        "far side."
-    )
+    from conductor.looks import load_modes
+
+    # the T3 sentence names the design's layout (D63: a sun at one edge, "… laid out from one edge: gold and peach at
+    # the middle of one short side, …"), read from the live mode so a Design Lab export can't strand a literal here
+    assert body["feature"] == load_modes().mode("golden-hour").techniques.modules.feature
     assert len(body["heads"]) == 270 and body["counts"]["match"] == 270
     plan = engine.current_plan()
     by_module = {m["id"]: m for m in body["modules"]}
@@ -978,12 +979,11 @@ def test_a_rehearsal_from_ops_on_the_show_engine_writes_its_report_and_leaves_th
     from test_stepped_rehearsal import REPORT_FIELDS
 
     c = app_client_show
-    engine = _services(c).extras["canopy"]
-    deadline = time.monotonic() + 30
-    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    engine = past_startup(c)  # past startup commissioning, which would refuse the rehearsal or land in it
     route = "/api/canopy/stepped-rehearsal"
-    preview = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]
+    asked = c.get(route, params={"mode": "golden-hour", "minutes": 2})
+    assert asked.status_code == 200, asked.text
+    preview = asked.json()["preview"]
     sentence = preview["confirm"]
     labels = [e.label for e in _services(c).registry.canopy_modules()]
     assert "for 2 minutes" in sentence and all(label in sentence for label in labels)
@@ -993,9 +993,9 @@ def test_a_rehearsal_from_ops_on_the_show_engine_writes_its_report_and_leaves_th
     state = c.get("/api/canopy/state").json()
     assert state["tier"] == "stepped" and state["rehearsal"]["running"]["mode"] == "golden-hour"
     assert c.post("/api/canopy/mode", json={"mode": "golden-hour"}).status_code == 200  # ops still decides
-    deadline = time.monotonic() + 30
-    while engine.last_rehearsal is None and time.monotonic() < deadline:
-        time.sleep(0.05)
+    wait_until(
+        "the rehearsal's report", lambda: engine.last_rehearsal, describe=lambda: engine.rehearsal_status()
+    )
     last = c.get("/api/canopy/state").json()["rehearsal"]["last"]
     assert last["verdict"] == "fail" and last["ended"] == "ops chose golden-hour"  # not a silent restart
     report = json.loads((tmp_path / "data" / "bench" / "rehearsals" / f"{last['run_id']}.json").read_text())

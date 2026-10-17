@@ -9,6 +9,7 @@ for touch and never writes its own Hubspace feature copy.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -173,10 +174,15 @@ def test_module_level_modes_picture_their_designs_without_a_plan(app_client, eng
         assert by_id[mode_id]["pattern"] == "modules"
         assert by_id[mode_id]["module_colours"] == expected
         assert len(set(expected)) >= 4  # a 2-D design, not three columns
-    # radial: sea glass in the centre, the four corners alike
+    # radial: sea glass in the centre (#D1EAE3, the pinned approved value: Design Lab PLAN §3.7), corners alike
+    pins = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+    calm_pin = pins["lowcountry-calm"]
     calm = by_id["lowcountry-calm"]["module_colours"]
-    assert calm[0] == calm[2] == calm[6] == calm[8] != calm[4] == "#D1EAE3"
-    assert calm[1] == calm[7] and calm[3] == calm[5] and calm[1] != calm[3]
+    centre = "#" + "".join(f"{v:02X}" for v in calm_pin["t3"]["r1c1"])
+    assert calm[4] == centre, "approved value changed: run make scene-pins and review the fixture diff"
+    if calm_pin["layout_words"] == "from the centre out":  # D63's radial from the canopy's centre
+        assert calm[0] == calm[2] == calm[6] == calm[8] != calm[4] == centre
+        assert calm[1] == calm[7] and calm[3] == calm[5] and calm[1] != calm[3]
     assert all(by_id[m]["module_colours"] is None for m in (SUNSET, "garden-gathering", "golden-hour"))
 
 
@@ -491,14 +497,13 @@ def test_an_engine_that_cant_report_state_is_resting(app_client, engine):
 # ---- the stepped rehearsal (Gate R) ------------------------------------------------------------------------------
 def _rehearsing(c) -> str:
     """Start a 2-minute stepped rehearsal from /ops on the show engine (as an operator does); returns the route."""
-    import time
+    from show_started import past_startup
 
-    engine = c.app.state.services.extras["canopy"]
-    deadline = time.monotonic() + 30
-    while (engine.current_plan() is None or engine.commissioning) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    past_startup(c)  # past startup commissioning, which would refuse the rehearsal or land in it
     route = "/api/canopy/stepped-rehearsal"
-    sentence = c.get(route, params={"mode": "golden-hour", "minutes": 2}).json()["preview"]["confirm"]
+    asked = c.get(route, params={"mode": "golden-hour", "minutes": 2})
+    assert asked.status_code == 200, asked.text
+    sentence = asked.json()["preview"]["confirm"]
     started = c.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})
     assert started.status_code == 200, started.text
     return route

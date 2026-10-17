@@ -8,6 +8,8 @@ rung until Gate R (motion.stepped.live_enabled), so the ladder lands on the next
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,9 +22,12 @@ from conductor.config import CONFIG_DIR, load_recipes, load_registry
 from conductor.engine_api import Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, load_modes
+from conductor.looks import field as F
 from conductor.looks.compile import EngineCompiler
+from conductor.looks.scene_rules import scene_mode_problems
 from conductor.looks.schema import MOTION_WORDS, STEPPED_PACE
 from conductor.routes import kiosk
+from conductor.scenes import load_scenes
 from conductor.show import STEPPED_LIVE_OFF, ShowWiring
 from conductor.sim.profiles import profile_parts
 
@@ -31,7 +36,13 @@ REGISTRY = load_registry()
 MODULES = REGISTRY.canopy_modules()
 CAPS = detect(*profile_parts("sqhdk03-sim"))
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]
-STEPPING = {"coastal-tides": "diagonally", "golden-hour": "from one edge"}  # mode → the flow its copy names
+# The approved values live in the pinned fixture, which the Design Lab's export and `make scene-pins` regenerate
+# (Design Lab PLAN §3.7). D65's: Coastal Tides flows "diagonally", Golden Hour "from one edge"; forward, 6 steps of
+# 6 s a cycle, 90 s runs.
+PINS = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+PIN_CHANGED = "approved value changed: run make scene-pins and review the fixture diff"
+STEPPING = {m: p["flow_words"] for m, p in PINS.items() if "stepped" in p}  # mode → the flow its copy names
+D63_SUN = F.RadialField.model_validate({"kind": "radial", "centre_in": (0, 60), "metric": "canopy"})
 
 
 def _ctx(**kw) -> CompileContext:
@@ -59,12 +70,13 @@ def test_coastal_tides_and_golden_hour_step_their_own_designs_and_the_rest_stay_
         if mode.techniques.canvas is not None:  # Golden Hour: the same sun as its per-head canvas
             assert stepped.canvas == mode.techniques.canvas.canvas
         # the lead's D65 defaults: 6 s design steps, 6 a cycle, bounded 90 s runs, flowing the way the copy reads
+        pinned = PINS[mode_id]["stepped"]
         assert (stepped.direction, stepped.steps_per_cycle, stepped.step_s, stepped.run_s) == (
-            "forward",
-            6,
-            6.0,
-            90.0,
-        )
+            pinned["direction"],
+            pinned["steps_per_cycle"],
+            pinned["step_s"],
+            pinned["run_s"],
+        ), PIN_CHANGED
 
 
 @pytest.mark.parametrize("mode_id", list(STEPPING))
@@ -72,7 +84,8 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
     plan = compile_mode(mode_id, Tier.STEPPED, _ctx())
     hold = compile_mode(mode_id, Tier.T3, _ctx())
     steps = plan.program.steps
-    assert plan.tier is Tier.STEPPED and plan.motion is False and len(steps) == 6
+    per_cycle = MODES.mode(mode_id).techniques.stepped.steps_per_cycle  # D65's 6
+    assert plan.tier is Tier.STEPPED and plan.motion is False and len(steps) == per_cycle
     # the hold is the still module-level look, exactly; every step is a different picture of the design
     assert (
         steps[0].rows
@@ -80,7 +93,7 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
         == {d: t.rows for d, t in plan.modules.items()}
     )
     frames = [tuple(s.colours[p] for p in GRID) for s in steps]
-    assert len(set(frames)) == 6 and all(len(set(f)) > 2 for f in frames)
+    assert len(set(frames)) == per_cycle and all(len(set(f)) > 2 for f in frames)
     # still copy while it holds; the moving copy only while a run moves: the mode's own, naming its flow and pace
     assert plan.feature == hold.feature and not MOTION_WORDS.search(plan.feature)
     moving = plan.program.moving_feature
@@ -89,16 +102,23 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
     assert not any(
         w in moving.lower() for w in ("light by light", "each light", "270", "smooth", "animation")
     )
+    rules = {"stepped"}
+    assert scene_mode_problems(load_scenes(), MODES, load_recipes(), load_canopy_config(), rules=rules) == []
 
 
 def test_golden_hours_rays_move_out_from_the_middle_of_the_left_edge():
+    if PINS["golden-hour"]["layout"] != D63_SUN.model_dump(mode="json"):  # any other kind or place
+        pytest.skip("Golden Hour's sun was redesigned in the Design Lab; see DECISIONS")
     steps = compile_mode("golden-hour", Tier.STEPPED, _ctx()).program.steps
     for (
         step
     ) in steps:  # rings around the sun at (0, 60): the top and bottom rows mirror each other every step
         assert [step.colours[f"r0c{c}"] for c in range(3)] == [step.colours[f"r2c{c}"] for c in range(3)]
     # the strand at the sun shows a new colour every step (which way the rings flow: tests/test_compile_stepped.py)
-    assert len({s.colours["r1c0"] for s in steps}) == 6
+    assert (
+        len({s.colours["r1c0"] for s in steps})
+        == MODES.mode("golden-hour").techniques.stepped.steps_per_cycle
+    )
 
 
 def test_on_a_partial_canopy_the_moving_copy_counts_its_strands_and_claims_no_layout():

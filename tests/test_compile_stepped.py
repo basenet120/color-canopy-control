@@ -12,7 +12,7 @@ import yaml
 
 from conductor import rows as R
 from conductor.capabilities import detect
-from conductor.config import load_recipes, load_registry
+from conductor.config import RecipesFile, load_recipes, load_registry
 from conductor.engine_api import PlanError, Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, load_modes, parse_modes
@@ -23,7 +23,18 @@ PATH = Path(__file__).with_name("fixtures_modes_stepped.yaml")
 REGISTRY = load_registry()
 MODULES = REGISTRY.canopy_modules()
 BY_POSITION = {m.module: m for m in MODULES}
-RECIPES = load_recipes()
+FROZEN = Path(__file__).with_name("fixtures_recipes_frozen.yaml")
+
+
+def _frozen_recipes() -> RecipesFile:
+    """config's recipes with today's scene colours frozen over them (Design Lab PLAN §3.7): the fixture names the
+    scenes' recipe keys, so a Design Lab export that renames or drops one can't break these compiler tests."""
+    live = load_recipes().model_dump()
+    frozen = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))
+    return RecipesFile.model_validate({**live, "colors": {**live["colors"], **frozen["colors"]}})
+
+
+RECIPES = _frozen_recipes()
 CANOPY = load_canopy_config()
 STEPPED = parse_modes(
     yaml.safe_load(PATH.read_text(encoding="utf-8")), recipes=RECIPES, canopy=CANOPY, path=PATH
@@ -131,7 +142,8 @@ def test_a_radial_design_moves_out_from_the_centre():
         # r1c1 leads: the edge-middle modules (t = ½) show what the centre showed 3 steps earlier
         assert {step.colours[p] for p in edges} == {steps[(n - 3) % 6].colours["r1c1"]}
         assert step.colours["r0c0"] != step.colours["r1c1"]
-    assert steps[0].colours["r1c1"] == "#FF9E96"  # pastel coral, the first stop, at the centre
+    coral = RECIPES.colors["pastel-coral"].hex  # the frozen recipe, so a Design Lab export can't move it
+    assert steps[0].colours["r1c1"] == coral == "#FF9E96"  # pastel coral, the first stop, at the centre
 
 
 def test_reverse_flows_back_towards_where_the_design_starts():

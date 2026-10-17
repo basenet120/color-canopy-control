@@ -1,4 +1,4 @@
-.PHONY: setup test lint run guest-dev e2e soak docker-smoke
+.PHONY: setup test lint run guest-dev lab-dev lab-roundtrip scene-pins e2e soak docker-smoke
 
 setup:
 	uv sync --frozen --all-extras
@@ -16,6 +16,22 @@ run:
 # throwaway data dir. Open http://127.0.0.1:8100/kiosk/?debug=1 (scripts/dev_guest_panel.py).
 guest-dev:
 	uv run python scripts/dev_guest_panel.py
+
+# The Design Lab on the simulator: the Studio's Lab panel at http://127.0.0.1:8200/ops/showcase/#lab, auth off
+# (this machine only), a throwaway data dir, every HUBSPACE_* and secret variable stripped. Never port 8000: that is
+# the show Conductor's (scripts/dev_design_lab.py refuses it).
+lab-dev:
+	uv run --offline python scripts/dev_design_lab.py
+
+# Slow (minutes per edit): export the canonical Design Lab edits, apply each to a scratch copy of the working tree and
+# run the whole suite there (tests/test_lab_roundtrip.py, skipped unless LAB_ROUNDTRIP=1).
+lab-roundtrip:
+	LAB_ROUNDTRIP=1 uv run --offline pytest -q tests/test_lab_roundtrip.py -p no:cacheprovider
+
+# After a hand edit of config/{scenes,modes,recipes}.yaml: regenerate tests/fixtures_scene_frames.json (frames + the
+# approved-value _pins), then review its diff.
+scene-pins:
+	uv run --offline python scripts/regen_scene_pins.py
 
 # Playwright end-to-end tests and screenshots, on the simulator. Not part of `make test` (CI has no browser).
 e2e:
