@@ -69,6 +69,8 @@ Binding rules for the build, written after an adversarial review of the plan aga
 ## 8. Persistence
 `CONDUCTOR_DATA_DIR` (default `./var`, gitignored; `/data` volume on Railway; a named volume with nightly backup on the venue box) holds tokens, telemetry, bench results, and an **overlay** for ops edits (registry, index maps, slot hashes) under `overrides/*.yaml` — validated, versioned, downloadable as a diff to commit back to git. Git YAML holds the defaults. All writes atomic.
 
+The show's **published looks** are one more overlay, `overrides/show-looks.yaml` (D68): the scenes/modes/recipes trio the show compiles from, written atomically (0600, a history copy first) before it is installed, validated at every load with the same schema, copy and stepped rules as git plus git's ids, ladders and slots; missing = the git defaults; unreadable or invalid = the git defaults with an /ops alert, never a failed start, and the file is left as it was; a published trio that equals git is followed as git. Git stays the record: a published version reaches git only through the Lab's export and a PR.
+
 ## 9. Delivery
 - A cloud session pushes only to its working `claude/*` branch. **Never merge, approve, or enable auto-merge** — Alon merges. PRs come one at a time in sequence; after Alon merges, merge `origin/main` into the working branch before continuing. Ask Alon (in the PR body) for merge commits, not squash. Keep "PR stack in merge order" and "Next step" at the top of `docs/STATUS.md`.
 - **Never edit `.github/workflows/`** (cloud sessions can't push it; CI is maintained from the laptop). CI runs ruff, pytest, a gitleaks scan, a Docker build and a container smoke test.

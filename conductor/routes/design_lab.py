@@ -22,7 +22,16 @@ writes to a device, starts a look, flips `live_enabled` or the ripple, or writes
                                              `confirm_required` (the sentence names every module and the bound) until
                                              `confirm` equals it; 409 apply gap (+ `retry_after_s`, Retry-After); 409
                                              the engine's refusal (+ `retry_after_s`); 422 problems; 503 no engine
-- `POST   /api/lab/trial/stop`               `{}` → `{trial: null, state}`: back to the approved look; 503 no engine
+- `POST   /api/lab/trial/stop`               `{}` → `{trial: null, state}`: back to the show's look; 503 no engine
+- `GET    /api/lab/live`                     LiveJSON (D68): what the show runs (approved or published), the Undo
+                                             target, the six scenes as the iPad shows them, the history
+- `POST   /api/lab/publish`                  `{version: id | "approved" | "previous", confirm?, expected_live, who?,
+                                             show?}` → `{live, report, state}`: the version (or git's looks, or the
+                                             previous publication) becomes the show's look now and after every
+                                             restart. 409 `confirm_required` until `confirm` equals the sentence;
+                                             409 conflict (`expected_live` no longer the live id, + `live`); 409 the
+                                             engine's refusal (+ `retry_after_s`), busy, same, slot lock (+ `field`),
+                                             stale, read-only; 404; 422 problems; 503 no engine
 
 Every route depends on `require_ops` first, then the /ops same-site + JSON-only guard (`routes/ops.py`
 `_no_cross_site`; DELETE too, so the client sends `{}`). Every answer is `Cache-Control: no-store`. CPU work
@@ -57,12 +66,14 @@ from conductor.config import RIPPLE_MAX_WAVES, trial_bound_s
 from conductor.design_lab import draft as D
 from conductor.design_lab import export as X
 from conductor.design_lab import preview as P
+from conductor.design_lab import publish as PUB
 from conductor.design_lab import stepped as ST
 from conductor.design_lab import store as S
 from conductor.design_lab import trial as T
 from conductor.design_lab.service import KEY, LabService, lab_of
 from conductor.looks import CompileContext
 from conductor.looks import scene_rules as R
+from conductor.looks.live import live_looks, scene_source
 from conductor.routes.deps import require_ops, services_of
 from conductor.routes.design import mode_design
 from conductor.routes.ops import _no_cross_site, engine_flag
@@ -288,14 +299,20 @@ def catalog_json(lab: LabService) -> dict:
     idle = {settings.kiosk.idle_mode, settings.kiosk.idle_scene}
     trial = getattr(lab.engine(), "trial", None)
     trying_on = trial.mode_id if trial is not None else None
+    looks = live_looks(lab.services)
     scenes = []
     for scene in approved.scenes.scenes:
         mode = approved.modes.mode(scene.id)
         draft = drafted.get(scene.id)
         seed = D.seed_draft(approved, scene.id)
-        # compared with this scene's own seed, never seeded from draft.scene_id: a hand-edited version whose draft
-        # names another (or no) scene shows as a draft (the versions list marks it stale) instead of failing the Lab
-        state = "draft" if draft is not None and draft.model_dump() != seed.model_dump() else "approved"
+        live_seed = lab.live_seed(scene.id)
+        # compared with the scene's LIVE look (D68: what the show runs), never seeded from draft.scene_id: a
+        # hand-edited version whose draft names another (or no) scene shows as a draft (the versions list marks it
+        # stale) instead of failing the Lab
+        live_source = scene_source(looks, scene.id)
+        differs = draft is not None and draft.model_dump() != live_seed.model_dump()
+        # "draft": differs from the show's look; else the show's look itself — approved, or published ("live")
+        state = "draft" if differs else ("approved" if live_source == "approved" else "live")
         if trying_on == scene.id:
             state = "in try-on"
         scenes.append(
@@ -314,6 +331,10 @@ def catalog_json(lab: LabService) -> dict:
                 "copy": _copy(mode),
                 "state": state,
                 "t1_lock": P.t1_lock(lab, scene.id),
+                # D68: the look the show runs for this scene, where it came from, and the painted slot's repaint
+                "live_look": live_seed.model_dump(mode="json"),
+                "live_source": live_source,
+                "repaint": P.repaint_info(lab, scene.id),
             }
         )
     driver = lab.services.engine_driver
@@ -352,6 +373,7 @@ def catalog_json(lab: LabService) -> dict:
             "effects_note": ST.EFFECTS_OFF,
         },
         "scenes": scenes,
+        "show_looks": PUB.show_looks_brief(lab),
     }
 
 
@@ -390,6 +412,7 @@ def state_json(lab: LabService) -> dict:
         "current": looks.current,
         "engine": _engine_json(lab),
         "trial": T.trial_json(lab),  # Slice B: the try-on running now, or null
+        "show_looks": PUB.show_looks_state(lab),  # D68
     }
 
 
@@ -460,7 +483,7 @@ async def save(body: SaveBody, lab: Lab) -> JSONResponse:
 
     def work() -> dict:
         for draft in body.drafts.values():
-            P.check_t1_lock(lab, draft)
+            P.check_app_lock(lab, draft)
         saved = lab.store.save_version(
             drafts=body.drafts,
             note=body.note,
@@ -495,6 +518,8 @@ async def save(body: SaveBody, lab: Lab) -> JSONResponse:
 @router.delete("/versions/{version_id}")
 async def delete(version_id: str, lab: Lab, _body: EmptyBody | None = None) -> JSONResponse:
     _writable(lab)
+    if PUB.live_version(lab) == version_id:  # D68: Undo and the history need it while it is live
+        raise LabAnswer(409, PUB.LIVE_VERSION)
     try:
         await run_in_threadpool(lab.store.delete_version, version_id)
     except S.NoSuchVersion:
@@ -714,3 +739,24 @@ async def trial_stop(lab: Lab, _body: EmptyBody | None = None) -> JSONResponse:
     if was is not None:
         _record(lab, "trial_stop", scene=was.mode_id)
     return JSONResponse({"trial": T.trial_json(lab), "state": st.to_json()})
+
+
+# ---- the live show (D68, docs/live-lab/PLAN.md §2.8, §2.11) ----------------------------------------------------------
+@router.get("/live")
+async def live(lab: Lab) -> JSONResponse:
+    return JSONResponse(PUB.live_json(lab))
+
+
+@router.post("/publish")
+async def publish(body: PUB.PublishBody, lab: Lab) -> JSONResponse:
+    try:
+        answer = await PUB.publish(lab, body, by=PUB.who_of(body))
+    except PUB.PublishAnswer as exc:
+        detail = exc.body.pop("detail")
+        headers = {}
+        retry = exc.body.get("retry_after_s")
+        if isinstance(retry, int | float) and retry > 0:
+            headers["Retry-After"] = str(max(1, math.ceil(retry)))
+        response = JSONResponse({"detail": detail, **exc.body}, status_code=exc.status_code, headers=headers)
+        return response
+    return JSONResponse(answer)

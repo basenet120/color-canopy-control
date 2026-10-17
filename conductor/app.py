@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI):
     app.state.services = services
     services.extras["logring"] = ring
     AlertBoard.of(services)  # engine/reconciler alerts → /ops "Needs attention" and the log
+    # The show's live looks (D68): the approved trio or the Lab's published one; a bad overlay never stops the start.
+    from conductor.looks.live import build_live_looks
+
+    build_live_looks(services)
     for problem in services.problems:
         log.warning("Needs attention: %s", problem)
     await services.start()

@@ -11,6 +11,10 @@ and bumps its count.
 - "<module>: the … pattern in <slot> …" → "slot:<device>:<slot>"; "… rewrote it (applied)" clears it.
 - "Canopy resting: …" → "outage"; "Hubspace is answering again …" clears it.
 - "Commissioning: …" and "7 am test mode change: …" → one key each; an info one (all good) clears it.
+- "Published looks: …" (D68) → its event's `alert_key`: "looks:load" (the overlay couldn't be used), "looks:git"
+  (a published look masks a deployed config/ change), "looks:repaint:<mode>" (one scene: a repaint, or a look that
+  can't be shown — keyed by the event's `mode_id`, so scene B's success never clears scene A's warn). An info event
+  clears its own key and every key in its `resolves` list (an install clears looks:load and looks:git).
 - anything else: its own sentence is the key.
 Nothing here writes anything anywhere except the in-memory list and the log. All times are the telemetry's clock.
 """
@@ -22,7 +26,6 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("conductor.alerts")
@@ -129,10 +132,12 @@ class AlertBoard:
         if _TIER_ALERT.match(message):
             return  # the `tier` event just before it carries this, with the mode's label
         device_id = event.get("device_id")
-        key, resolves = _key_of(message, device_id)
+        key, resolves = _key_of(message, device_id, event)
         if resolves or not problem:
             if key != message:
                 self._resolve(key)
+            for other in event.get("resolves") or ():
+                self._resolve(str(other))
             return
         self._raise(key, level, message, event, quiet=True)
 
@@ -167,8 +172,25 @@ class AlertBoard:
             return self._entries.pop(key, None) is not None
 
 
-def _key_of(message: str, device_id: Any) -> tuple[str, bool]:
+LOOKS_PREFIX = (
+    "Published looks:"  # = conductor.looks.live.ALERT_PREFIX (not imported: this module stays leaf)
+)
+
+
+def _key_of(message: str, device_id: Any, event: dict | None = None) -> tuple[str, bool]:
     """(key, resolves?) for an alert sentence (see the module docstring)."""
+    event = event or {}
+    if message.startswith(LOOKS_PREFIX):  # before the generic rules (a repaint sentence names a slot)
+        key = event.get("alert_key")
+        if not key:
+            mode_id = event.get("mode_id")
+            if "couldn't be used" in message:
+                key = "looks:load"
+            elif "masks config/" in message:
+                key = "looks:git"
+            else:
+                key = f"looks:repaint:{mode_id}" if mode_id else "looks"
+        return str(key), False
     slot = _SLOT.search(message)
     if slot and device_id:
         return f"slot:{device_id}:{slot.group(1)}", "rewrote it (applied)" in message
@@ -184,13 +206,13 @@ def _key_of(message: str, device_id: Any) -> tuple[str, bool]:
 
 
 def _mode_labels(services: Any) -> Callable[[str], str]:
+    """A mode's label as the show runs it (the live looks, D68: approved or published)."""
+
     def label(mode_id: str) -> str:
         try:
-            import yaml
+            from conductor.looks.live import live_trio
 
-            with open(Path(services.config_dir) / "modes.yaml") as f:
-                modes = (yaml.safe_load(f) or {}).get("modes") or {}
-            return str((modes.get(mode_id) or {}).get("label") or mode_id)
+            return str(live_trio(services).modes.mode(mode_id).label or mode_id)
         except Exception:  # noqa: BLE001 - the id is a fine fallback
             return mode_id
 

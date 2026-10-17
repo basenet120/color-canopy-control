@@ -1,0 +1,46 @@
+{
+  "source": "published",
+  "simulated": false,
+  "fallback": false,
+  "problem": null,
+  "current": {
+    "id": "p0003",
+    "kind": "version",
+    "version": "v0007",
+    "name": "Client Oct 22 v3 – warmer sunset",
+    "published_at": 1792700000.0,
+    "by": "Alon",
+    "changed": ["golden-hour"],
+    "git_changed": false,
+    "version_exists": true,
+    "equals_approved": false
+  },
+  "previous": {"id": "p0002", "name": "Client Oct 22 v2", "published_at": 1792690000.0, "by": "ops"},
+  "scenes": [
+    {
+      "id": "golden-hour",
+      "name": "Golden Hour",
+      "source": "published",
+      "palette": [{"name": "Peach", "hex": "#FFB38A"}],
+      "mood": "Let the evening glow",
+      "held": false
+    }
+  ],
+  "history": [
+    {
+      "id": "p0003",
+      "kind": "version",
+      "version": "v0007",
+      "name": "Client Oct 22 v3 – warmer sunset",
+      "published_at": 1792700000.0,
+      "by": "Alon",
+      "changed": ["golden-hour"],
+      "repaint": null,
+      "outcome": "live",
+      "version_exists": true
+    }
+  ],
+  "repaint": null,
+  "canopy": {"power": true, "brightness": 100, "designed_brightness": 100},
+  "writable": true
+}

@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from conductor.capabilities import Capabilities, detect
@@ -122,12 +123,31 @@ def split_canopy_positions(services: Any) -> tuple[list[str], list[str]]:
     return registered, unregistered
 
 
+@dataclass(frozen=True)
+class RepaintTarget:
+    """One painted mode's slot against a trio (`ShowWiring.repaint_plan`): the modules whose api record differs from
+    the trio's T1 compile (`listed`), how many could be repainted (`eligible`), of `total`; the modules whose slot is
+    hand-painted in the app (`app`), not commissioned yet (`uncommissioned`) or commissioned (`commissioned`)."""
+
+    slot: str
+    listed: list[str]
+    eligible: int
+    total: int
+    app: list[str]
+    uncommissioned: list[str]
+    commissioned: list[str]
+
+
 class ShowWiring:
     def __init__(self, services: Any):
-        from conductor.looks import load_modes
+        from conductor.looks.live import live_looks
 
         self.services = services
-        self.modes_file = load_modes(services.config_dir)
+        # The live looks (D68): the approved trio, or the one the Design Lab published (conductor/looks/live.py);
+        # `install_looks` swaps both in place on a publish.
+        looks = live_looks(services)
+        self.modes_file = looks.trio.modes
+        self.recipes = looks.trio.recipes
         _check_idle_scene(services.settings.kiosk.idle_scene, list(self.modes_file.modes))
         _check_stepped(services.settings, self.modes_file)
         self.caps: dict[str, Capabilities] = {}
@@ -327,6 +347,12 @@ class ShowWiring:
             self._reapply = True
             return
         self._reapply = False
+        # Painted scenes whose commissioned slots don't hold the live design run below T1 until they do (D68): the
+        # truth is recomputed from the records whenever new capabilities let T1 compile (a restart after a publish or
+        # a fallback, a module read for the first time).
+        seed = getattr(engine, "seed_t1_hold", None)
+        if seed is not None:
+            seed()
         plan = engine.current_plan()
         if plan is None:  # the first look: one burst, never a ripple (the engine sends a first look that way)
             await engine.request_mode(self.services.settings.kiosk.idle_mode, source="idle")
@@ -388,7 +414,7 @@ class ShowWiring:
     # ---- compiling -----------------------------------------------------------------------------------------------
     def context(self, modes: Any = None, recipes: Any = None) -> Any:
         """The compile context from the live registry. `modes`/`recipes`: another modes file / recipes (the
-        rehearsal's design, a Design Lab try-on's patch); None = the show's own (git)."""
+        rehearsal's design, a Design Lab try-on's patch); None = the show's own (the live looks: git or published)."""
         from conductor.looks import CompileContext
 
         services = self.services
@@ -409,7 +435,7 @@ class ShowWiring:
             slot_readback=self.slot_readback,
             flags=flags,
             modes=modes if modes is not None else self.modes_file,
-            recipes=recipes,  # None: CompileContext loads the git recipes (cached)
+            recipes=recipes if recipes is not None else self.recipes,  # never the git cache (D68)
             config_dir=services.config_dir,
             addresses=addresses,
         )
@@ -495,6 +521,70 @@ class ShowWiring:
 
     def mode_ids(self) -> list[str]:
         return list(self.modes_file.modes)
+
+    # ---- the live looks (D68) --------------------------------------------------------------------------------------
+    def install_looks(self, modes: Any, recipes: Any) -> None:
+        """A publish (conductor.looks.live.install_looks): the modes file and recipes every compile reads from now,
+        and the stepped rehearsal's designs (derived from the old modes) dropped. Synchronous."""
+        self.modes_file = modes
+        self.recipes = recipes
+        self._rehearsal_modes.clear()
+
+    def repaint_plan(self, trio: Any) -> dict[str, RepaintTarget]:
+        """Per painted mode (a slot and T1 on its ladder): which modules' recorded slot doesn't hold what `trio`
+        compiles to (B1: the publish's locks and counts; B2: the repaint job). Per MODULE: the eligible modules are the
+        canopy modules whose record for the slot is origin "api" (and, on hardware, that have their own t1_frames
+        flag); T1 is compiled over a context restricted to them (PlanError → none eligible). Pure: no engine cache."""
+        import dataclasses
+
+        from conductor.engine_api import PlanError
+        from conductor.looks import compile_mode
+
+        out: dict[str, RepaintTarget] = {}
+        base = self.context(trio.modes, trio.recipes)
+        simulated = self.services.engine_driver.simulated
+        modules = list(self.services.registry.canopy_modules())
+        for mode_id, mode in trio.modes.modes.items():
+            if mode.slot is None or "canvas" not in mode.ladder:
+                continue
+            app, uncommissioned, api = [], [], []
+            for entry in modules:
+                record = self._record(entry, mode.slot)
+                if record is None:
+                    uncommissioned.append(entry.id)
+                elif record["origin"] != "api":
+                    app.append(entry.id)
+                else:
+                    api.append((entry, record))
+            eligible = [
+                (e, r)
+                for e, r in api
+                if simulated or bool(getattr((base.flags or {}).get(e.id), "t1_frames", False))
+            ]
+            listed: list[str] = []
+            if eligible:
+                ctx = dataclasses.replace(base, registry=[e for e, _r in eligible])
+                try:
+                    plan = compile_mode(mode_id, Tier.T1, ctx)
+                except (PlanError, KeyError, LookupError):
+                    plan = None
+                if plan is None:
+                    eligible = []
+                else:
+                    for entry, record in eligible:
+                        mt = plan.modules.get(entry.id)
+                        if mt is not None and mt.slot_hash and mt.slot_hash != record["hash"]:
+                            listed.append(entry.id)
+            out[mode_id] = RepaintTarget(
+                slot=mode.slot,
+                listed=listed,
+                eligible=len(eligible),
+                total=len(modules),
+                app=app,
+                uncommissioned=uncommissioned,
+                commissioned=[e.id for e, _r in api],
+            )
+        return out
 
     def tier_allowed(self, mode_id: str, tier: Tier) -> tuple[bool, str]:
         if tier is Tier.STEPPED:

@@ -86,7 +86,7 @@ from conductor.module import scene_gradient
 from conductor.module.pair import PAIR_IDS, apply_pair
 from conductor.module.session import ModuleError, ModuleSession
 from conductor.routes import kiosk as K
-from conductor.scenes import Scene, SceneCatalog, load_scenes
+from conductor.scenes import Scene, SceneCatalog
 from conductor.show import registered_canopy_ids
 
 log = logging.getLogger(__name__)
@@ -1043,7 +1043,9 @@ class GuestPanel:
         return panel
 
     def scenes(self) -> SceneCatalog:
-        return load_scenes(Path(self.services.config_dir))
+        from conductor.looks.live import live_trio  # the live catalog (D68): approved or published
+
+        return live_trio(self.services).scenes
 
     async def target(self) -> WorkshopTarget | EngineTarget:
         if choose_target(self.services) == WorkshopTarget.kind:

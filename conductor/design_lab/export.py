@@ -47,7 +47,10 @@ EXPORT_FILES = (
 )
 SCENES_FILE, MODES_FILE, RECIPES_FILE, FIXTURE_FILE = EXPORT_FILES
 NO_NEWLINE = "\\ No newline at end of file\n"
-SLOT_REPAINT = "Deploy only in a commissioning window: on restart the reconciler rewrites {slot} on every module (stale slot)."
+SLOT_REPAINT = (
+    "Deploy only in a commissioning window — or publish it from the Lab: on restart the reconciler rewrites {slot} "
+    "on every module (stale slot)."
+)
 STUDIO_SCENES = (
     "demo-model.mjs SCENES still has {hexes} for {scene}; the Studio's shop-kit Apply buttons (studio.js "
     "`scene-apply` and the pair gradient) send it until SCENES is updated by hand."

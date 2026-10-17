@@ -8,6 +8,34 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## PR B (B1, the live Lab — server part; `claude/live-lab`; plan `docs/live-lab/PLAN.md` §2) — built Oct 17–18
+**Merge #A (canopy only) first; PR B targets `main` too (merge commits).** The Design Lab publishes to the live show
+(D68): `conductor/looks/live.py` (the `overrides/show-looks.yaml` overlay — load with alias/size/depth refusal and a
+broad fallback that never fails the start and never moves the file, `validate_trio`, `install_looks` = the §2.4
+checklist, `config_sha`/`ConfigTrio` moved here and re-exported by the Lab), `build_live_looks` in the lifespan right
+after the AlertBoard, the engine seams (`LOOKS_SOURCE` in `RECOMPILE_SOURCES`, `looks_refusal`, `reload_looks`, the
+`_t1_hold` skipped in `compile_best`, lifted by a slot record, seeded at every capability apply; the refused-re-pick
+safe look; `repick_after_rollback`), `ShowWiring.recipes`/`install_looks`/`repaint_plan`, and every live reader on the
+live trio (kiosk modes incl. the per-mode `pattern` specs, guest panel catalog, ops `mode_list`, alert labels, the
+design route, the module page and its open sessions, the Lab's try-on, catalog and state). `conductor/design_lab/
+publish.py`: publish / Revert / Undo, the refusal matrix (Lab sentences), the confirm sentence + cost, the
+`expected_live` + generation conflict guard, one synchronous section (checks → write → install → re-pick), rollback.
+Routes `GET /api/lab/live`, `POST /api/lab/publish`, DELETE of the live version → 409; the §2.11 shapes are pinned
+against `tests/fixtures_live_lab/*.json`. The D66 T1 lock became the **app lock** (a design change over a
+hand-painted slot is refused everywhere) plus, **on hardware only**, the B1 api lock at publish (Revert/Undo exempt);
+**in the simulator a painted design change publishes** (held at module level, then the reconciler's stale rewrite),
+as D66's lock was off there — a deviation from the plan's §5.2 wording, recorded in D68. Text: D68, 07 §8's overlay
+paragraph, 05 #3's clause. **Not in B1:** the operator repaint job (B2), `conductor/preflight.py`'s looks line (that
+file is stream R's: `conductor.looks.live.preflight_line(config_dir, data, settings)` is ready for it), the Lab page
+(stream U). **Verified (sim, macOS, `nice -n 15 uv run --offline pytest -q --ignore=tests/test_deploy.py`):** the
+whole suite; `ruff check` + `ruff format --check`; `node --test tests/*.test.mjs`; new `tests/test_live_looks.py`,
+`tests/test_lab_publish.py` (the checklist, one case per §2.4 row; no live reader on the git defaults; one-burst
+re-pick keeping guest brightness; the T1 hold over 20 virtual minutes and after a restart; every refusal writes and
+sends nothing; conflict, busy, Undo after a deleted version, Revert, try-on, rollback byte for byte, write failure),
+`tests/test_live_lab_routes.py`; 31 mutants of the B1 guards, each killed by its named test. **Needs the show box:**
+the deploy (§8.1 step 3), a publish of a non-painted scene on the two kits, then Revert. **Not run here:** the soak
+and `make lab-roundtrip` (integrator, §5.4).
+
 ## PR stack (merge order — merge commits, not squash)
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR

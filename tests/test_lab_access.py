@@ -44,6 +44,9 @@ LAB_REQUESTS = [
     ("GET", "/api/lab/trial", "/api/lab/trial", None),
     ("POST", "/api/lab/trial/start", "/api/lab/trial/start", {"scene_id": "golden-hour", "draft": DRAFT}),
     ("POST", "/api/lab/trial/stop", "/api/lab/trial/stop", {}),
+    # D68, the live show (no engine here either: 503 once past the guards)
+    ("GET", "/api/lab/live", "/api/lab/live", None),
+    ("POST", "/api/lab/publish", "/api/lab/publish", {"version": "approved", "expected_live": "approved"}),
 ]
 WRITES = [r for r in LAB_REQUESTS if r[0] != "GET"]
 # The Studio page the Lab lives in, and its assets: ops only too.

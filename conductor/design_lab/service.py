@@ -38,6 +38,26 @@ class LabService:
         self.canopy: dict = load_canopy_config(config_dir / "canopy.yaml")
         self.store = LookStore(Path(services.data), clock=services.clock, telemetry=services.telemetry)
         self.store.load()  # never raises (§3.5)
+        # (generation, scene id) → the live look's seed draft (D68): read off the live looks once per publish
+        self._live_seeds: dict[tuple[int, str], Any] = {}
+
+    def live_seed(self, scene_id: str) -> Any:
+        """The SceneDraft that reproduces the scene as the show runs it now (the live looks: approved or published).
+        Keyed by the install generation read BEFORE the trio, so a seed of the old trio is never served after a
+        publish (threadpool readers may race one)."""
+        from conductor.design_lab.draft import seed_draft
+        from conductor.looks.live import live_looks
+
+        looks = live_looks(self.services)
+        key = (looks.generation, scene_id)
+        seed = self._live_seeds.get(key)
+        if seed is None:
+            seed = self._live_seeds[key] = seed_draft(looks.trio, scene_id)
+        return seed
+
+    def live_changed(self) -> None:
+        """A publish installed new live looks (conductor.looks.live.install_looks): drop what came from the old."""
+        self._live_seeds = {}
 
     def show(self) -> Any | None:
         return self.services.extras.get(SHOW_KEY)  # ShowWiring

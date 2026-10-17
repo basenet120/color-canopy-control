@@ -799,3 +799,54 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
   word for word, and once Alon sets `motion.stepped.live_enabled` every Lab line (live line, show-box pace note,
   the export's D65 section) says it is on. Present plays the steps too (button or Space).
   `docs/reports/sim-acceptance.md` is regenerated and committed with this slice (plan §1).
+
+## 2026-10-17 — the live Lab
+
+**D68 — The Design Lab publishes to the live show (supersedes D66's "nothing hot-applies config to a running show",
+"approved looks reach the show only through git → merge → install", the T1 lock and "out of scope: hot-applying
+config, slot repaints"; extends 07 §6 and §8).** Alon, Oct 17: "make the test lab work on the live system so that I
+can just think of everything as one system and we can live iterate on site on the live show at the end of the install
+before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab page).
+- **Publish.** A saved Lab version (or **Revert to approved**, git's looks, or **Undo**, the previous publication's
+  stored trio) becomes the show's look at once and after every restart: validated (schema, copy honesty, stepped and
+  idle rules, git's ids/ladders/slots/motion), written to `overrides/show-looks.yaml` before it is installed, swapped
+  into every in-process copy in one synchronous step (`conductor.looks.live.install_looks`: the show's modes and
+  recipes, the rehearsal designs, the T1 plans, the module page and its open sessions, the Lab's caches; the kiosk,
+  guest panel, /ops, alert labels and the design route read the live trio per request), and the engine re-picks the
+  current look (`CanopyEngine.reload_looks`, source `looks`: one burst, guest brightness/power kept; nothing is sent
+  when the scene showing didn't change and no try-on runs). Ops confirms the server's sentence (what it replaces,
+  the scenes that change or go back to approved, the modules it reaches now, the holds, "the running try-on ends")
+  and sees the cost; a publish computed against a look someone else has since replaced is refused as a conflict
+  (`expected_live`, with the new LiveJSON); the publisher's name is recorded. Refused while the engine is stopped,
+  commissioning, resting (outage) or rehearsing (Gate R), and while another publish runs; allowed while guest input
+  is paused. An exception after the write rolls back: the previous file byte for byte, the previous trio, a re-pick
+  under it (else the safe look), an alert, a plain 500. Routes: `GET /api/lab/live`, `POST /api/lab/publish`;
+  deleting the live version is refused (409).
+- **Fail-safe.** A missing file is the approved looks; an unreadable or invalid one (too big — never read —, not
+  YAML, anchors/aliases, too deep, a bad top level or format, a version without its trio, a trio whose `trio_sha`
+  doesn't match, or one `validate_trio` refuses) is the approved looks plus an /ops line and a warn alert — never a
+  failed start — and is left exactly as it was. A published trio that equals git is followed as git (persisted as
+  `current: {kind: approved, name: "approved (in git)"}`), so a later deploy is never masked; one that differs from a
+  changed git raises an /ops warn ("… masks config/ changes deployed since …").
+- **Painted scenes: copy stays true.** A painted scene whose commissioned (api) slots don't hold the live design runs
+  below T1 (`CanopyEngine._t1_hold`, skipped in `compile_best`, never in `tier_allowed`, so the reconciler still
+  sees the slot as stale and rewrites it) until a slot record makes it current, then one T1 re-pick; the hold is
+  seeded again whenever capabilities are applied (a restart after a publish or a fallback). A design change over a
+  hand-painted ("app") slot is refused on every runtime (preview, save and publish). **Delivery:** in PR B (B1),
+  **on hardware**, a design change over commissioned slots is refused except for Revert and Undo (the scene is
+  held; the reconciler's stale rule rewrites the slots, ≤ once per 10 min per slot, then the hold lifts); **in the
+  simulator** it publishes the same way Revert does (held, then rewritten) — as D66's T1 lock was off there — so a
+  laptop or staging Lab can iterate on every scene. In PR B2 the operator repaint lands (one slot write per module
+  through the executor in a quiet window, only on modules with their own Gate C, map and api record, at most once per
+  2 min per scene, `lab.repaint_min_interval_s`; a sooner publish installs at once and queues it; a revert is never
+  blocked). On today's two kits (no Gate C, nothing commissioned) nothing is repainted and the design shows at module
+  level.
+- **Git stays the record.** The Lab's export of the published version is the PR that approves it; once merged and
+  deployed the overlay equals git and is followed as git. Until then a deploy doesn't change a published look (the
+  /ops warn names the masked change); Revert to approved takes git's.
+- **The try-on stays** (temporary, module level, from the live trio); a publish ends it. Kiosk copy stays true: every
+  published sentence passes the same rules as git's, the iPad's cards follow the live catalog, and the tier in use
+  matches the slots.
+- **Not changed:** `motion.stepped.live_enabled` (Gate R), `kiosk.ripple_stagger_s`, ladders, slot ownership; the
+  Lab never changes them. `<data>/overrides/looks.yaml` (the Lab's version store) is unchanged and the show still
+  never reads it; it reads only `show-looks.yaml`.

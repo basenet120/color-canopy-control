@@ -175,7 +175,12 @@ GUEST_INPUT_FILE = "guest_input.json"
 # Sources that re-pick the look now showing (a tier change, new capabilities, recovery, the simulator's start-up
 # commissioning) rather than choose one: they keep the guest's brightness and power. Any other source choosing a mode
 # (kiosk, ops, idle) clears them, like choosing a scene in the Hubspace app (D60).
-RECOMPILE_SOURCES = frozenset({"reconciler", "recovery", "startup"})
+# A publish from the Design Lab (D68) re-picks the look now showing under the new live looks: it keeps the guest's
+# brightness and power (D60), is one burst (ONE_BURST_SOURCES ⊇ it) and never ends a rehearsal (a publish is refused
+# during one). `_request`'s `source not in ("reconciler", "recovery")` line still counts it as a change for the idle
+# hold: staff just changed the look. ("publish" already means the state push here, so the name says looks.)
+LOOKS_SOURCE = "looks"
+RECOMPILE_SOURCES = frozenset({"reconciler", "recovery", "startup", LOOKS_SOURCE})
 BRIGHTNESS_KEY = ("brightness", None)
 # The Design Lab's try-on (D66 Slice B): its request source, the guest's refusal while it runs, the tiers it never
 # uses (a try-on is module level only and never steps), and the ripple seam (a try-on is one burst; RECOMPILE_SOURCES
@@ -354,6 +359,11 @@ class CanopyEngine:
         self._trial: Trial | None = None
         self._trial_task: asyncio.Task | None = None
         self._trial_sessions = 0
+        # The live looks (D68): painted modes kept off T1 because their commissioned slots don't hold the live design
+        # (yet). `compile_best` skips T1 for them (never `tier_allowed`: t1_target and stale_slot must still see the
+        # slot as stale, or the reconciler would never rewrite it and the hold would never lift); a slot record that
+        # makes the mode's slots current lifts it (`_record_slot_value`), with one T1 re-pick.
+        self._t1_hold: set[str] = set()
         self.stats["governor_trips"] = 0
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
         self._restore_pause()
@@ -1532,6 +1542,141 @@ class CanopyEngine:
             return None
         return round(max(0.0, trial.ends_mono - self.clock.monotonic()), 2)
 
+    # ---- the live looks: a publish from the Design Lab (D68, docs/live-lab/PLAN.md §2.5) ---------------------------
+    @property
+    def t1_hold(self) -> frozenset[str]:
+        """The painted modes shown below T1 until their slots hold the live design."""
+        return frozenset(self._t1_hold)
+
+    def looks_refusal(self) -> tuple[str, float | None] | None:
+        """Why a publish can't be installed now — (code, retry_after_s) — or None. Guest input paused is NOT a
+        refusal (staff own the canopy then); a try-on isn't either (the publish ends it)."""
+        if self._stopped:
+            return "stopped", None
+        if self._commissioning:
+            return "commissioning", 30.0
+        if self._outage is not None:
+            return "outage", float(self.deps.settings.reconciler.outage_probe_interval_s)
+        if self._rehearsal is not None:
+            return "rehearsal", self._rehearsal_left()
+        return None
+
+    def t1_hold_for(self, modes: Iterable[str]) -> set[str]:
+        """The modes of `modes` to hold off T1: a slot, T1 on the ladder and allowed (every position commissioned),
+        and some module's commissioned (api) record differing from what the live looks compile to there. Compiled
+        through the show (the live trio), never the cache. A mode whose T1 doesn't compile isn't held (it isn't
+        picked anyway)."""
+        held: set[str] = set()
+        for mode_id in modes:
+            try:
+                if Tier.T1 not in list(self.deps.ladder(mode_id)):
+                    continue
+                if not self.deps.tier_allowed(mode_id, Tier.T1)[0]:
+                    continue
+                plan = self.deps.compile(mode_id, Tier.T1)
+            except (PlanError, KeyError, LookupError, ValueError):
+                continue
+            for device_id, mt in plan.modules.items():
+                if not mt.slot or not mt.slot_hash:
+                    continue
+                record = self.recorded_slot(device_id, mt.slot)
+                if record is not None and record["origin"] == "api" and record["hash"] != mt.slot_hash:
+                    held.add(mode_id)
+                    break
+        return held
+
+    def seed_t1_hold(self) -> set[str]:
+        """Add every painted mode whose slots don't hold the live design (a restart after a publish or a fallback,
+        a module read for the first time). Only adds: a hold lifts through the slot records."""
+        try:
+            modes = list(self.deps.modes())
+        except Exception:  # noqa: BLE001 - nothing to seed
+            return set(self._t1_hold)
+        found = self.t1_hold_for(modes)
+        if found - self._t1_hold:
+            log.info("Painted modes held below T1 until their slots hold the live design: %s", sorted(found))
+        self._t1_hold |= found
+        return set(self._t1_hold)
+
+    def designed_brightness(self) -> int | None:
+        """The current look's designed level (the brightest module's), whatever a guest set."""
+        plan = self._plan
+        if plan is None:
+            return None
+        levels = [
+            r.value
+            for mt in plan.modules.values()
+            for r in mt.rows
+            if r.key == BRIGHTNESS_KEY and isinstance(r.value, int)
+        ]
+        return max(levels) if levels else None
+
+    async def reload_looks(self, *, changed: Iterable[str], why: str) -> CanopyState:
+        """The live looks changed (conductor/design_lab/publish.py, in the SAME synchronous section as the overlay
+        write and install_looks: nothing here awaits before the re-pick is installed). A try-on ends (no repick of
+        its own); the T1 plans and holds follow the new trio; the current look is re-picked (one burst, guest
+        brightness and power kept) when its scene changed or a try-on ran, else nothing is sent. A re-pick that finds
+        no plan under the new trio puts the safe look up and alerts; an exception is re-raised (the publish rolls
+        back)."""
+        changed = list(changed)
+        cleared = self._clear_trial(f"the look was published ({why})")
+        self.invalidate_t1_plans()
+        self._t1_hold = (self._t1_hold - set(changed)) | self.t1_hold_for(changed)
+        plan = self._plan
+        if plan is None or (plan.mode_id not in changed and cleared is None):
+            self._publish_soon()
+            return self.state()
+        mode_id = plan.mode_id
+        try:
+            st = await self._request(mode_id, source=LOOKS_SOURCE, ripple=False)
+        except BaseException as exc:
+            self._recover_from_trial_error(cleared, exc, restore=True)
+            raise
+        if st.refused:
+            self._restore_approved(cleared)  # compiles from the live trio now
+            if self._plan is plan:  # still the old trio's (or the try-on's) plan: never left up
+                self._safe_look_now()
+            self.telemetry.record(
+                "alert",
+                level="warn",
+                message=f"Published looks: {plan.label} can't be shown under the published looks ({st.message}); "
+                "the safe look is on.",
+                mode_id=mode_id,
+                alert_key=f"looks:repaint:{mode_id}",
+            )
+        return st
+
+    def _safe_look_now(self) -> None:
+        """The safe look (Lowcountry Calm, strand), now, after a look that can't be shown (never raises)."""
+        try:
+            safe = self.deps.compile(SAFE_MODE, Tier.STRAND)
+        except Exception:
+            log.exception("The safe look couldn't be compiled")
+            return
+        self._show(safe, "reconciler")
+
+    async def show_after_publish(self, mode_id: str) -> CanopyState:
+        """The publish dialog's "Show <scene> on the canopy after publishing": staff choose the scene (source ops:
+        its designed brightness, on), one burst whatever the ripple setting."""
+        return await self._request(mode_id, source="ops", ripple=False)
+
+    async def repick_after_rollback(self, why: str) -> CanopyState | None:
+        """A publish that failed after its install was rolled back: the current look again under the restored trio
+        (one burst), else the safe look."""
+        plan = self._plan
+        if plan is None or self._stopped:
+            return None
+        self.invalidate_t1_plans()
+        try:
+            st = await self._request(plan.mode_id, source=LOOKS_SOURCE, ripple=False)
+        except Exception:
+            log.exception("The look couldn't be re-picked after a failed publish (%s)", why)
+            self._safe_look_now()
+            return None
+        if st.refused:
+            self._safe_look_now()
+        return st
+
     # ---- compiling --------------------------------------------------------------------------------------------
     def compile_best(
         self, mode_id: str, *, floor: int | None = None, skip: frozenset[Tier] = frozenset()
@@ -1540,6 +1685,9 @@ class CanopyEngine:
         (never a tier in `skip`). While a Design Lab try-on of `mode_id` stands, only module level or strand (D66)."""
         if self._trial is not None and mode_id == self._trial.mode_id:
             skip = skip | TRIAL_SKIP
+        # its slots don't hold the live design yet (D68): module level, truthfully
+        if mode_id in self._t1_hold:
+            skip = skip | {Tier.T1}
         try:
             ladder = list(self.deps.ladder(mode_id))
         except (KeyError, LookupError, PlanError, ValueError):
@@ -2148,7 +2296,23 @@ class CanopyEngine:
             log.exception("record_slot_hash failed for %s %s", device_id, slot)
             error = f"Written, but the hash couldn't be saved: {e}"
         self._slot_recorded(device_id, slot, previous)
+        self._maybe_lift_hold(plan.mode_id)
         return error
+
+    def _maybe_lift_hold(self, mode_id: str) -> None:
+        """A held mode whose records now equal the live T1 compile on every module: lifted, and the current look
+        re-picked once (`_replan_soon` coalesces several modules into one T1 burst)."""
+        if mode_id not in self._t1_hold:
+            return
+        try:
+            still = self.t1_hold_for([mode_id])
+        except Exception:
+            log.exception("Couldn't check whether %s's slots hold the live design", mode_id)
+            return
+        if not still:
+            self._t1_hold.discard(mode_id)
+            log.info("%s's slots hold the live design again: T1 allowed", mode_id)
+            self._replan_soon()
 
     def adopt_slot(self, device_id: str, slot: str, value: Any) -> bool:
         """A commissioned slot that already holds exactly what its T1 look compiles to now (a rewrite that landed
