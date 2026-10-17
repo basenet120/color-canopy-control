@@ -5,8 +5,11 @@ level, through the canopy engine — never past it.
   ladder, every T1 compile, `t1_target` and `stale_slot` read, and `load_scenes` is the guest panel's cached catalog;
   purity rule, §3.0) and wraps the patched modes and recipes in an engine `Trial`. The engine shows it with
   `start_trial` (source "lab", one burst); the show compiles only that scene's `modules`/`strand` rungs from it.
-- `confirm_sentence` names the driven modules and the bound; `cost_line` says what one apply sends (one write per
-  module now, plus the engine's re-assert and up to `EARLY_REASSERT_LIMIT` early re-sends per module).
+- `confirm_sentence` names the driven modules and the bound (a re-apply: the running session's time left, which it
+  never extends; `confirm_matches` lets that number tick down by up to `CONFIRM_SLACK_S` while ops reads it);
+  `cost_line` says what one apply sends (one write per module now, plus the engine's re-assert and up to
+  `EARLY_REASSERT_LIMIT` early re-sends per module). A re-apply with less than `kiosk.cooldown_s` of the bound left is
+  refused (`ending_sentence`): it would land a moment before the bound puts the approved look back.
 - `ApplyGate`: the server-side minimum gap between accepted applies (`kiosk.cooldown_s`): "lab" bypasses the kiosk
   cooldown like ops, so the Lab keeps its own. `reserve()` runs on the loop thread before any await, so a
   double-tapped second POST is refused even while the first is still being built.
@@ -21,7 +24,7 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from conductor.canopy import EARLY_REASSERT_LIMIT, Trial
+from conductor.canopy import EARLY_REASSERT_LIMIT, TRIAL_ENDING_MESSAGE, Trial
 from conductor.config import trial_bound_s
 from conductor.design_lab.draft import ConfigTrio, SceneDraft, apply_draft
 from conductor.engine_api import PlanError, Tier
@@ -40,6 +43,12 @@ NO_ENGINE = "The canopy engine isn't running here, so nothing can be tried on th
 GAP_MESSAGE = "One apply every {gap:g} s: the lights are still taking the last one. Apply again in {left} s."
 # what the cost line's "over the next 10 s" covers: the re-assert and the early re-sends
 REASSERT_WINDOW_S = 10
+# how long a re-apply's confirm sentence (it names the seconds left) still matches after it was shown
+CONFIRM_SLACK_S = 30
+ERROR_MESSAGE = (
+    "The try-on failed on the server ({name}) and was ended; the approved look is back wherever it could be "
+    "compiled (the alert on /ops says more)."
+)
 
 
 # ---- the trial -------------------------------------------------------------------------------------------------------
@@ -98,27 +107,64 @@ def _count(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 
 
-def confirm_sentence(lab: LabService, draft: SceneDraft, modules: list[Any], bound_s: float) -> str:
-    """What ops confirms before a try-on: the draft, the scene, the tier, every module written to and the bound. The
-    draft is named only when it renames the scene ("Try on Calm evening for Lowcountry Calm …"); a draft that keeps
-    the name is "your draft of Golden Hour", never "Golden Hour for Golden Hour"."""
+def confirm_sentence(
+    lab: LabService, draft: SceneDraft, modules: list[Any], bound_s: float, *, left_s: float | None = None
+) -> str:
+    """What ops confirms before a try-on: the draft, the scene, the tier, every module written to and how long it
+    shows. The draft is named only when it renames the scene ("Try on Calm evening for Lowcountry Calm …"); a draft
+    that keeps the name is "your draft of Golden Hour", never "Golden Hour for Golden Hour". With `left_s` (a re-apply
+    while a try-on runs: it keeps that session's bound) the time named is what's left of it, never the full bound."""
     scene = lab.approved.scenes.get(draft.scene_id).name
     labels = ", ".join((m.label or m.id) for m in modules) or "none"
     who = f"{draft.name} for {scene}" if draft.name != scene else f"your draft of {scene}"
+    when = (
+        f"for up to {bound_s:g} s"
+        if left_s is None
+        else f"for the {math.ceil(left_s)} s left of the running try-on (a re-apply never extends it)"
+    )
     sentence = (
-        f"Try on {who} at module level on {_count(len(modules), 'module', 'modules')} "
-        f"({labels}) for up to {bound_s:g} s."
+        f"Try on {who} at module level on {_count(len(modules), 'module', 'modules')} ({labels}) {when}."
     )
     return f"{sentence} {PAINTED_SUFFIX}" if painted(lab, draft.scene_id) else sentence
 
 
-def cost_line(n: int) -> str:
+def confirm_matches(
+    confirm: str | None,
+    lab: LabService,
+    draft: SceneDraft,
+    modules: list[Any],
+    bound_s: float,
+    *,
+    left_s: float | None = None,
+) -> bool:
+    """Is `confirm` the sentence ops was shown for this apply? A re-apply's sentence names the seconds left, which
+    tick down while ops reads it: one shown up to CONFIRM_SLACK_S ago still matches (its number is then an upper
+    bound, still true); a first start's "for up to 150 s" never confirms a re-apply."""
+    if not confirm:
+        return False
+    if left_s is None:
+        return confirm == confirm_sentence(lab, draft, modules, bound_s)
+    low = math.ceil(left_s)
+    return any(
+        confirm == confirm_sentence(lab, draft, modules, bound_s, left_s=n)
+        for n in range(low, low + CONFIRM_SLACK_S + 1)
+    )
+
+
+def cost_line(n: int, *, left_s: float | None = None) -> str:
     """What one apply sends: one write per module now; with the re-assert and up to EARLY_REASSERT_LIMIT early
-    re-sends per module, up to n × (1 + EARLY_REASSERT_LIMIT) over the next 10 s."""
-    return (
+    re-sends per module, up to n × (1 + EARLY_REASSERT_LIMIT) over the next 10 s. With `left_s` (a re-apply), when
+    the running try-on still ends."""
+    line = (
         f"sends {_count(n, 'write', 'writes')} now, up to ~{n * (1 + EARLY_REASSERT_LIMIT)} over the next "
         f"{REASSERT_WINDOW_S} s"
     )
+    return line if left_s is None else f"{line}; the running try-on still ends in {math.ceil(left_s)} s"
+
+
+def ending_sentence(left_s: float) -> str:
+    """A re-apply refused this close to the bound (less than kiosk.cooldown_s of it left)."""
+    return TRIAL_ENDING_MESSAGE.format(left=math.ceil(left_s))
 
 
 # ---- the apply gap ---------------------------------------------------------------------------------------------------

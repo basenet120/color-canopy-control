@@ -623,20 +623,34 @@ async def trial_start(body: TrialStartBody, lab: Lab) -> JSONResponse:
     clock = lab.services.clock
     bound = trial_bound_s(lab.settings)
     modules = T.driven_modules(lab)
-    sentence = T.confirm_sentence(lab, body.draft, modules, bound)
-    cost = T.cost_line(len(modules))
-    if body.confirm != sentence:  # nothing is sent until ops confirms the sentence that names every module
-        raise LabAnswer(409, sentence, confirm_required=True, confirm=sentence, cost=cost)
     refused: dict[str, Any] = {"scene": body.scene_id, "modules": [m.id for m in modules], "bound_s": bound}
+    # A re-apply keeps the running session's bound: it is confirmed against the time left, and refused when so little
+    # is left that it would land a moment before the bound puts the approved look back (nothing sent, gap kept).
+    running = getattr(engine, "trial", None)
+    left = max(0.0, running.ends_mono - clock.monotonic()) if running is not None else None
+    floor = float(lab.settings.kiosk.cooldown_s)
+    if left is not None and left < floor:
+        _record(lab, "trial_refused", why="too close to its time limit", **refused)
+        wait = round(max(left, 0.01), 2)
+        return JSONResponse(
+            {"detail": T.ending_sentence(left), "retry_after_s": wait},
+            status_code=409,
+            headers={"Retry-After": str(max(1, math.ceil(wait)))},
+        )
+    sentence = T.confirm_sentence(lab, body.draft, modules, bound, left_s=left)
+    cost = T.cost_line(len(modules), left_s=left)
+    # nothing is sent until ops confirms the sentence that names every module
+    if not T.confirm_matches(body.confirm, lab, body.draft, modules, bound, left_s=left):
+        raise LabAnswer(409, sentence, confirm_required=True, confirm=sentence, cost=cost)
     gate = T.apply_gate(lab)
     # on the loop thread, before any await: a double tap is refused here
-    left = gate.reserve(clock.monotonic())
-    if left > 0:
+    left_gap = gate.reserve(clock.monotonic())
+    if left_gap > 0:
         _record(lab, "trial_refused", why="apply gap", **refused)
         return JSONResponse(
-            {"detail": T.gap_sentence(gate, left), "retry_after_s": left},
+            {"detail": T.gap_sentence(gate, left_gap), "retry_after_s": left_gap},
             status_code=409,
-            headers={"Retry-After": str(max(1, math.ceil(left)))},
+            headers={"Retry-After": str(max(1, math.ceil(left_gap)))},
         )
     try:
         built = await run_in_threadpool(
@@ -654,7 +668,17 @@ async def trial_start(body: TrialStartBody, lab: Lab) -> JSONResponse:
     except BaseException:
         gate.release()
         raise
-    st = await engine.start_trial(built)  # every write is the engine's (source "lab", one burst)
+    try:
+        # every write is the engine's (source "lab", one burst); it refuses an apply whose session changed while it
+        # was built (confirmed as a re-apply of one that ended, or as a first start while another began) and a
+        # re-apply that now lands too close to the bound
+        st = await engine.start_trial(
+            built, expect_session=running.session if running is not None else None, min_left_s=floor
+        )
+    except Exception as exc:  # noqa: BLE001 - the engine ended the try-on, put the approved look back and alerted
+        gate.release()
+        _record(lab, "trial_refused", why=f"error: {type(exc).__name__}", **refused)
+        raise LabAnswer(500, T.ERROR_MESSAGE.format(name=type(exc).__name__)) from None
     if st.refused:
         gate.release()
         _record(lab, "trial_refused", why=st.message, **refused)
@@ -667,7 +691,12 @@ async def trial_start(body: TrialStartBody, lab: Lab) -> JSONResponse:
 async def trial_stop(lab: Lab, _body: EmptyBody | None = None) -> JSONResponse:
     engine = _trial_engine(lab)
     was = getattr(engine, "trial", None)
-    st = await engine.end_trial(source="ops (the Design Lab)")
+    try:
+        st = await engine.end_trial(source="ops (the Design Lab)")
+    except Exception as exc:  # noqa: BLE001 - the engine already cleared the override, put a look back where it could and alerted
+        if was is not None:
+            _record(lab, "trial_stop", scene=was.mode_id, why=f"error: {type(exc).__name__}")
+        raise LabAnswer(500, T.ERROR_MESSAGE.format(name=type(exc).__name__)) from None
     if was is not None:
         _record(lab, "trial_stop", scene=was.mode_id)
     return JSONResponse({"trial": T.trial_json(lab), "state": st.to_json()})

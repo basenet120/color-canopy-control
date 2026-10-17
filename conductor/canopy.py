@@ -186,6 +186,15 @@ TRIAL_PAUSED_MESSAGE = (
     "Guest input is paused by staff, so a try-on can't start; resume guest input on /ops first."
 )
 TRIAL_REHEARSAL_MESSAGE = "A stepped rehearsal is running; stop it first."
+# A re-apply too close to the running try-on's bound (it would land just before the bound puts the approved look back)
+TRIAL_ENDING_MESSAGE = (
+    "This try-on ends in {left} s, too soon for another apply; apply again once it has ended."
+)
+# The try-on the apply was confirmed against ended, or another began, while the apply was being built
+TRIAL_CHANGED_MESSAGE = (
+    "The try-on changed while this apply was being prepared; apply again to see what it will do."
+)
+_ANY_SESSION: Any = object()  # start_trial's default: whatever runs (or nothing)
 TRIAL_SKIP = frozenset({Tier.T1, Tier.T2, Tier.STEPPED})
 ONE_BURST_SOURCES = RECOMPILE_SOURCES | {TRIAL_SOURCE}
 
@@ -1322,15 +1331,30 @@ class CanopyEngine:
             return self._refused(TRIAL_REHEARSAL_MESSAGE, self._rehearsal_left())
         return None
 
-    async def start_trial(self, trial: Trial) -> CanopyState:
+    async def start_trial(
+        self, trial: Trial, *, expect_session: Any = _ANY_SESSION, min_left_s: float = 0.0
+    ) -> CanopyState:
         """Show `trial`'s draft of its scene now (source "lab", one burst, module level or strand only), until its
         bound. A re-apply while one runs keeps that session's bound, its start and its bound task. Refused (a plain
         sentence, nothing sent) while stopped, commissioning, paused, resting or rehearsing; a re-apply that is
-        refused leaves the running try-on as it was."""
+        refused leaves the running try-on as it was.
+
+        `expect_session`: the session the caller's confirm described (None: no try-on running); refused
+        (`TRIAL_CHANGED_MESSAGE`) when another runs now. `min_left_s`: a re-apply with less of the bound left is
+        refused (`TRIAL_ENDING_MESSAGE`, retry after the time left). Any exception once the override is set ends the
+        try-on (override and bound task cleared first, the approved look put back, an alert) and is re-raised."""
         refused = self._trial_refusal()
         if refused is not None:
             return refused
         previous = self._trial
+        if expect_session is not _ANY_SESSION:
+            running = previous.session if previous is not None else None
+            if running != expect_session:
+                return self._refused(TRIAL_CHANGED_MESSAGE, None)
+        if previous is not None and min_left_s > 0:
+            left = self._trial_left() or 0.0
+            if left < min_left_s:
+                return self._refused(TRIAL_ENDING_MESSAGE.format(left=math.ceil(left)), max(left, 0.01))
         if previous is not None:  # re-applies never extend the bound
             trial = replace(
                 trial,
@@ -1345,7 +1369,16 @@ class CanopyEngine:
             trial = replace(trial, applies=1, session=self._trial_sessions)
         before = self._plan
         self._trial = trial
-        st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
+        try:
+            st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
+        except BaseException as exc:
+            # Never leave the override (no bound ends it) or a try-on plan up: a re-apply's running plan is the
+            # previous draft, so it goes too; a first start that installed nothing leaves the approved look alone.
+            cleared = self._clear_trial(f"it failed: {type(exc).__name__}")
+            self._recover_from_trial_error(
+                cleared, exc, restore=previous is not None or self._plan is not before, previous=previous
+            )
+            raise
         if st.refused:
             if previous is not None:
                 # the running try-on stays as it was (nothing of this one was installed)
@@ -1388,10 +1421,14 @@ class CanopyEngine:
     async def end_trial(self, *, source: str, why: str | None = None) -> CanopyState:
         """Back to approved: the override is cleared and the scene's approved look goes out (source "lab", one
         burst; it counts as a change for the idle hold). Nothing to do when no try-on runs."""
-        trial = self._clear_trial(why or f"stopped by {source}")
+        trial = self._clear_trial(why or f"stopped by {source}")  # the override and the bound task go first
         if trial is None:
             return self.state()
-        st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
+        try:
+            st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
+        except BaseException as exc:
+            self._recover_from_trial_error(trial, exc, restore=True)
+            raise
         if st.refused:
             self._restore_approved(trial)
         return st
@@ -1402,7 +1439,12 @@ class CanopyEngine:
         if trial is None or trial.session != session:
             return
         bound = trial.ends_mono - trial.started_mono
-        await self.end_trial(source="the try-on's time limit", why=f"it reached its time limit ({bound:g} s)")
+        try:
+            await self.end_trial(
+                source="the try-on's time limit", why=f"it reached its time limit ({bound:g} s)"
+            )
+        except Exception:  # already alerted and recovered by end_trial: the task itself ends cleanly
+            log.exception("The try-on of %s failed at its time limit", trial.label)
 
     def _clear_trial(
         self, why: str, *, repick: bool = False, skip: frozenset[Tier] = frozenset()
@@ -1440,6 +1482,49 @@ class CanopyEngine:
             )
             return
         self._show(approved, "reconciler")
+
+    def _recover_from_trial_error(
+        self, trial: Trial | None, exc: BaseException, *, restore: bool, previous: Trial | None = None
+    ) -> None:
+        """An exception (not a refusal: a compiler or context bug) while a try-on started or ended. The override is
+        already cleared; with `restore`, the approved look of the scene whose try-on plan is up (`trial`'s, or a
+        re-apply's `previous` scene's) goes back, or, should that raise too, the safe look, so a try-on plan never
+        stays installed with no override. Never raises; always alerts."""
+        if trial is None:
+            return
+        log.error("The try-on of %s failed: %s: %s", trial.label, type(exc).__name__, exc)
+        what = f"The try-on of {trial.label} failed ({type(exc).__name__}: {exc}) and was ended"
+        plan = self._plan
+        up = next(
+            (
+                t
+                for t in (trial, previous)
+                if t is not None and plan is not None and plan.mode_id == t.mode_id
+            ),
+            None,
+        )
+        if restore and up is not None and not self._stopped:
+            try:
+                self._restore_approved(up)
+                what += "; its scene's approved look was put back"
+            except Exception as again:  # the approved look's compile is what's broken: the safe look
+                log.exception("The approved look of %s couldn't be put back", up.mode_id)
+                what += self._safe_look_after_error(again)
+        self.telemetry.record("alert", level="warn", message=f"{what}.")
+
+    def _safe_look_after_error(self, exc: BaseException) -> str:
+        try:
+            safe = self.deps.compile(SAFE_MODE, Tier.STRAND)
+        except Exception as e:
+            log.exception("The safe look couldn't be compiled after a failed try-on")
+            return (
+                f"; neither its approved look ({type(exc).__name__}: {exc}) nor the safe look "
+                f"({type(e).__name__}: {e}) could be compiled"
+            )
+        self._show(safe, "reconciler")
+        return (
+            f"; its approved look couldn't be compiled ({type(exc).__name__}: {exc}), so the safe look is on"
+        )
 
     def _trial_left(self) -> float | None:
         trial = self._trial

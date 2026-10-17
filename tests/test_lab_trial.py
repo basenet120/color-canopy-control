@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import math
 import re
 import shutil
 import tempfile
@@ -39,6 +40,8 @@ from conductor.canopy import (
     RECOMPILE_SOURCES,
     RESTING_MESSAGE,
     STOPPED_MESSAGE,
+    TRIAL_CHANGED_MESSAGE,
+    TRIAL_ENDING_MESSAGE,
     TRIAL_MESSAGE,
     TRIAL_PAUSED_MESSAGE,
     TRIAL_REHEARSAL_MESSAGE,
@@ -114,6 +117,8 @@ class Compiles:
         self.base = world.engine.deps.compile
         self.log: list[tuple[str, Tier, str | None]] = []
         self.fail: dict[tuple[str, Tier], int] = {}  # (mode, tier) → how many more compiles fail
+        # (mode, tier, trial standing?) → how many more compiles raise RuntimeError (a compiler bug, not a PlanError)
+        self.boom: dict[tuple[str, Tier, bool], int] = {}
         world.engine.deps.compile = self
 
     def __call__(self, mode_id: str, tier: Tier) -> ModePlan:
@@ -122,6 +127,10 @@ class Compiles:
         if self.fail.get((mode_id, tier), 0) > 0:
             self.fail[(mode_id, tier)] -= 1
             raise PlanError(f"{mode_id} at {tier} can't compile (test)")
+        key = (mode_id, tier, trial is not None)
+        if self.boom.get(key, 0) > 0:
+            self.boom[key] -= 1
+            raise RuntimeError(f"{mode_id} at {tier}: a compiler bug (test)")
         plan = self.base(mode_id, tier)
         if trial is not None and trial.mode_id == mode_id and tier in (Tier.T3, Tier.STRAND):
             plan = dataclasses.replace(plan, label=plan.label + TRIAL_LABEL)
@@ -1112,9 +1121,11 @@ def test_the_server_side_apply_gap_holds(no_threads):
             sentence = asked.json()["confirm"]
             first = await c.post("/api/lab/trial/start", json=start_body(golden_pink(), sentence))
             await w.run_for(3)
-            second = await c.post("/api/lab/trial/start", json=start_body(golden_both(), sentence))
+            # a re-apply is confirmed against the running session's time left (B-TRUTH-1), then the gap holds
+            again = (await c.post("/api/lab/trial/start", json=start_body(golden_both()))).json()["confirm"]
+            second = await c.post("/api/lab/trial/start", json=start_body(golden_both(), again))
             await w.run_for(5.01)
-            third = await c.post("/api/lab/trial/start", json=start_body(golden_both(), sentence))
+            third = await c.post("/api/lab/trial/start", json=start_body(golden_both(), again))
             got = await c.get("/api/lab/trial")
         out = (asked, first, second, third, got, w.events("lab"))
         await w.close()
@@ -1135,9 +1146,10 @@ def test_the_server_side_apply_gap_holds(no_threads):
     trial = first.json()["trial"]
     assert trial["tier"] == "modules" and trial["applies"] == 1 and trial["next_apply_in_s"] == 8
     assert first.json()["state"]["mode"] == GOLDEN
-    # ≈ 8 − 3 (the request round trips themselves take a little virtual time)
-    assert second.status_code == 409 and second.json()["retry_after_s"] == pytest.approx(5, abs=0.5)
-    assert second.headers["retry-after"] == "5"
+    # ≈ 8 − 3 (the request round trips themselves take a little virtual time: the re-apply's ask is one more)
+    left = second.json()["retry_after_s"]
+    assert second.status_code == 409 and 3.5 < left <= 5
+    assert second.headers["retry-after"] == str(math.ceil(left))
     assert third.status_code == 200, third.text
     assert third.json()["trial"]["applies"] == 2 and got.json()["applies"] == 2
     assert [e.get("why") for e in lab if e["action"] == "trial_refused"] == ["apply gap"]
@@ -1480,3 +1492,430 @@ def test_today_during_a_try_on_shows_the_installed_plan_not_the_painted_slots():
         assert (shown["colors"] or [shown["color"]] * len(hexes)) == hexes
     assert P.TRYING_ON_NOTE.split("{")[0] not in (other["note"] or "")
     assert after["tier"] == "canvas" and after["heads"] == "approved"
+
+
+# ---- a compile error that isn't a PlanError never strands the override or the try-on's plan (B-ENG-2) -----------
+def alerts_of(w) -> list[str]:
+    return [e["message"] for e in w.events("alert")]
+
+
+@pytest.mark.parametrize("mode", ["sunset", CALM])
+def test_a_compile_error_at_start_leaves_no_override_and_no_trial_plan(mode):
+    """compile_best catches PlanError only: a compiler bug (here a RuntimeError) raised while the override stands
+    must not leave it set with no bound task (guests told a try-on runs forever; a Calm try-on is never ended by the
+    idle hold). The override is cleared, nothing of the try-on stays installed, an alert says so, and it re-raises."""
+    tier = Tier.STRAND if mode == CALM else Tier.T3
+
+    async def main():
+        w, compiles = await started_world()
+        engine = w.engine
+        await w.run_for(30)
+        plan = engine.current_plan()
+        compiles.boom[(mode, tier, True)] = 1
+        with pytest.raises(RuntimeError):
+            await engine.start_trial(trial_of(mode, w.clock.monotonic()))
+        after = (engine.trial, engine._trial_task, engine.current_plan(), alerts_of(w))
+        await w.run_for(30)  # past kiosk.cooldown_s
+        kiosk = await engine.request_mode("holiday", source="kiosk")
+        await w.close()
+        return plan, after, kiosk
+
+    plan, (trial, task, now, alerts), kiosk = run_virtual(main)
+    assert trial is None and task is None
+    assert not from_trial(now) and now.mode_id == plan.mode_id and now.tier is plan.tier
+    assert any("try-on" in a and "RuntimeError" in a for a in alerts), alerts
+    assert not kiosk.refused and kiosk.message != TRIAL_MESSAGE
+
+
+def test_a_compile_error_on_a_reapply_ends_the_try_on_with_the_approved_look_back():
+    async def main():
+        w, compiles = await started_world()
+        engine = w.engine
+        await engine.start_trial(trial_of("sunset", w.clock.monotonic(), label="A"))
+        await engine.wait_idle()
+        task = engine._trial_task
+        assert from_trial(engine.current_plan())
+        await w.run_for(10)
+        compiles.boom[("sunset", Tier.T3, True)] = 1
+        with pytest.raises(RuntimeError):
+            await engine.start_trial(trial_of("sunset", w.clock.monotonic(), label="B"))
+        await asyncio.sleep(0)
+        out = (
+            engine.trial,
+            engine._trial_task,
+            task.cancelled() or task.done(),
+            engine.current_plan(),
+            alerts_of(w),
+        )
+        await w.close()
+        return out
+
+    trial, task, old_task_done, plan, alerts = run_virtual(main)
+    assert trial is None and task is None and old_task_done  # the bound task is cleared first
+    assert plan.mode_id == "sunset" and not from_trial(plan) and plan.tier is Tier.T1
+    assert any("try-on" in a and "RuntimeError" in a for a in alerts), alerts
+
+
+@pytest.mark.parametrize("mode", ["sunset", CALM])
+def test_a_compile_error_at_the_bound_still_puts_the_approved_look_back(mode):
+    """At the bound end_trial clears the override, then the approved look's compile raises once: the approved look is
+    put back by the fallback (no try-on plan stays installed with no override), an alert says so, and the bound task
+    ends cleanly (no "Task exception was never retrieved")."""
+    tier = Tier.STRAND if mode == CALM else Tier.T1
+
+    async def main():
+        w, compiles = await started_world()
+        engine = w.engine
+        await w.run_for(30)
+        st = await engine.start_trial(trial_of(mode, w.clock.monotonic(), bound=60))
+        assert not st.refused
+        await engine.wait_idle()
+        task = engine._trial_task
+        compiles.boom[(mode, tier, False)] = 1
+        await w.run_for(61)
+        await engine.wait_idle()
+        out = (engine.trial, engine.current_plan(), task, alerts_of(w), w.events("lab"))
+        await w.run_for(600)  # nothing re-asserts a try-on plan meanwhile
+        out += (engine.current_plan(),)
+        await w.close()
+        return out
+
+    trial, plan, task, alerts, lab, later = run_virtual(main)
+    assert trial is None
+    assert plan.mode_id == mode and not from_trial(plan) and plan.tier is tier
+    assert task.done() and not task.cancelled() and task.exception() is None
+    assert any("try-on" in a and "RuntimeError" in a for a in alerts), alerts
+    assert [e["why"] for e in lab if e["action"] == "trial_end"] == ["it reached its time limit (60 s)"]
+    assert not from_trial(later)
+
+
+def test_when_the_approved_look_cant_come_back_either_the_safe_look_does():
+    async def main():
+        w, compiles = await started_world()
+        engine = w.engine
+        await w.run_for(30)
+        await engine.start_trial(trial_of("sunset", w.clock.monotonic(), bound=60))
+        await engine.wait_idle()
+        compiles.boom[("sunset", Tier.T1, False)] = 99  # the approved Sunset never compiles again
+        await w.run_for(61)
+        await engine.wait_idle()
+        out = (engine.trial, engine.current_plan(), alerts_of(w))
+        compiles.boom.clear()
+        await w.close()
+        return out
+
+    trial, plan, alerts = run_virtual(main)
+    assert trial is None and plan.mode_id == CALM and not from_trial(plan)
+    assert any("safe look" in a for a in alerts), alerts
+
+
+# ---- a re-apply never outlives the running try-on unsaid (B-TRUTH-1): the engine's guards ------------------------
+def test_a_reapply_too_close_to_the_bound_is_refused_by_the_engine():
+    async def main():
+        w, _ = await started_world()
+        engine = w.engine
+        await engine.start_trial(trial_of("sunset", w.clock.monotonic(), bound=60, label="A"))
+        await engine.wait_idle()
+        await w.run_for(54 - (w.clock.monotonic() - engine.trial.started_mono))
+        sent = len([e for e in commands(w) if e.get("source") == "lab"])
+        left = engine.trial.ends_mono - w.clock.monotonic()
+        st = await engine.start_trial(trial_of("sunset", w.clock.monotonic(), label="B"), min_left_s=8)
+        out = (left, st, engine.trial, len([e for e in commands(w) if e.get("source") == "lab"]) - sent)
+        await w.close()
+        return out
+
+    left, st, trial, more = run_virtual(main)
+    assert left == pytest.approx(6, abs=0.01)
+    assert st.refused and st.message == TRIAL_ENDING_MESSAGE.format(left=6)
+    assert st.retry_after_s == pytest.approx(6, abs=0.01)
+    assert trial is not None and trial.label == "A" and trial.applies == 1 and more == 0
+
+
+def test_a_reapply_of_a_session_that_ended_meanwhile_is_refused():
+    """The route reads the running session before it builds the trial (in the threadpool): when that session ended,
+    or another began, before start_trial, the apply is refused instead of becoming a fresh try-on its confirm never
+    described (or a re-apply of one it never named)."""
+
+    async def main():
+        w, _ = await started_world()
+        engine = w.engine
+        await engine.start_trial(trial_of("sunset", w.clock.monotonic(), bound=60, label="A"))
+        session = engine.trial.session
+        other = await engine.start_trial(
+            trial_of("sunset", w.clock.monotonic(), label="B"), expect_session=None
+        )
+        await w.run_for(61)
+        await engine.wait_idle()
+        gone = await engine.start_trial(
+            trial_of("sunset", w.clock.monotonic(), label="C"), expect_session=session
+        )
+        out = (other, gone, engine.trial)
+        fresh = await engine.start_trial(
+            trial_of("sunset", w.clock.monotonic(), label="D"), expect_session=None
+        )
+        out += (fresh, engine.trial)
+        await w.close()
+        return out
+
+    other, gone, trial, fresh, last = run_virtual(main)
+    assert other.refused and gone.refused and trial is None
+    assert other.message == gone.message == TRIAL_CHANGED_MESSAGE
+    assert not fresh.refused and last.label == "D" and last.applies == 1
+
+
+# ---- a re-apply's confirm and cost name the time left; none lands just before the bound (B-TRUTH-1) -------------
+def lab_sends(w: Show) -> int:
+    return len([e for e in w.events("command") if e.get("source") == "lab"])
+
+
+def test_a_reapply_near_the_bound_is_refused_and_never_uses_up_the_gap(no_threads):
+    """With less than kiosk.cooldown_s of the bound left, a re-apply would land a moment before the bound puts the
+    approved look back (8 of 9 draft writes superseded): it is refused with a true sentence and Retry-After, nothing
+    is sent, and the gap isn't stamped. Once the try-on has ended, an apply starts a fresh one."""
+
+    async def main():
+        w = await show()
+        async with client_of(w) as c:
+            first = await confirmed(c, golden_pink())
+            trial = w.engine.trial
+            gate = T.apply_gate(w.lab)
+            stamped = gate._last
+            await w.run_for(trial.ends_mono - 5 - w.clock.monotonic())
+            sent = lab_sends(w)
+            sentence = T.confirm_sentence(w.lab, golden_both(), T.driven_modules(w.lab), 150.0)
+            near = await c.post("/api/lab/trial/start", json=start_body(golden_both(), sentence))
+            during = (w.engine.trial, lab_sends(w) - sent, gate._last == stamped)
+            await w.run_for(10)
+            await w.engine.wait_idle()
+            again = await confirmed(c, golden_both())
+            out = (first, trial, near, during, again, w.engine.trial, w.events("lab"))
+        await w.close()
+        return out
+
+    first, trial, near, (still, more, unstamped), again, fresh, lab = run_virtual(main)
+    assert first.status_code == 200
+    assert near.status_code == 409, near.text
+    body = near.json()
+    assert "confirm_required" not in body
+    assert (
+        body["detail"].startswith("This try-on ends in ") and "too soon for another apply" in body["detail"]
+    )
+    assert 0 < body["retry_after_s"] <= 5 and near.headers["retry-after"] == str(
+        math.ceil(body["retry_after_s"])
+    )
+    assert still is trial and more == 0 and unstamped
+    assert again.status_code == 200, again.text
+    assert fresh.session == trial.session + 1 and fresh.applies == 1
+    assert fresh.ends_mono - fresh.started_mono == pytest.approx(150)
+    assert [e["why"] for e in lab if e["action"] == "trial_refused"] == ["too close to its time limit"]
+
+
+def test_a_reapplys_confirm_and_cost_name_the_time_left(no_threads):
+    """A re-apply (same scene or another) is confirmed against the running session's time left, never "for up to
+    150 s": the first start's sentence no longer confirms it. The confirm still matches a few seconds later (its
+    number is an upper bound by then), and the session's end never moves."""
+
+    async def main():
+        w = await show()
+        async with client_of(w) as c:
+            first_ask = await c.post("/api/lab/trial/start", json=start_body(golden_pink()))
+            first_sentence = first_ask.json()["confirm"]
+            assert (
+                await c.post("/api/lab/trial/start", json=start_body(golden_pink(), first_sentence))
+            ).status_code == 200
+            trial = w.engine.trial
+            await w.run_for(trial.started_mono + 40 - w.clock.monotonic())
+            stale = await c.post("/api/lab/trial/start", json=start_body(golden_both(), first_sentence))
+            other = await c.post("/api/lab/trial/start", json=start_body(calm_solid()))
+            await w.run_for(3)
+            ok = await c.post("/api/lab/trial/start", json=start_body(golden_both(), stale.json()["confirm"]))
+            out = (first_sentence, trial, stale, other, ok, w.engine.trial)
+        await w.close()
+        return out
+
+    first_sentence, trial, stale, other, ok, after = run_virtual(main)
+    assert first_sentence.endswith("for up to 150 s. The painted design isn't on the lights.")
+    assert stale.status_code == 409 and stale.json()["confirm_required"], stale.text
+    sentence, cost = stale.json()["confirm"], stale.json()["cost"]
+    left = re.search(r"for the (\d+) s left of the running try-on", sentence)
+    assert left is not None and 108 <= int(left.group(1)) <= 111, sentence
+    assert "150 s" not in sentence and "(a re-apply never extends it)" in sentence
+    assert sentence.startswith("Try on your draft of Golden Hour at module level on 9 modules (Module 1,")
+    assert (
+        cost.startswith("sends 9 writes now, up to ~36 over the next 10 s")
+        and f"ends in {left.group(1)} s" in cost
+    )
+    calm = other.json()["confirm"]
+    assert other.status_code == 409 and "of the running try-on (a re-apply never extends it)." in calm
+    assert calm.startswith("Try on your draft of Lowcountry Calm at module level on 9 modules")
+    assert ok.status_code == 200, ok.text
+    assert after.session == trial.session and after.applies == 2 and after.ends_mono == trial.ends_mono
+
+
+def test_an_engine_error_answers_a_plain_500_and_never_strands_the_try_on(no_threads):
+    async def main():
+        w = await show()
+        async with client_of(w) as c:
+            compile = w.engine.deps.compile
+
+            def broken(mode_id, tier):
+                if w.engine.trial is not None:
+                    raise RuntimeError("a compiler bug (test)")
+                return compile(mode_id, tier)
+
+            w.engine.deps.compile = broken
+            failed = await confirmed(c, golden_pink())
+            state = (
+                w.engine.trial,
+                T.apply_gate(w.lab).remaining(w.clock.monotonic()),
+                w.engine.current_plan(),
+            )
+            w.engine.deps.compile = compile
+            ok = await confirmed(c, golden_pink())
+            out = (failed, state, ok, [e["message"] for e in w.events("alert")])
+        await w.close()
+        return out
+
+    failed, (trial, gap, plan), ok, alerts = run_virtual(main)
+    assert failed.status_code == 500, failed.text
+    assert failed.json()["detail"].startswith("The try-on failed on the server (RuntimeError)")
+    assert trial is None and gap == 0 and plan.mode_id == CALM
+    assert any("RuntimeError" in a for a in alerts)
+    assert ok.status_code == 200, ok.text
+
+
+# ---- a module the confirm never named never gets the draft (B-ENG-1) ------------------------------------------------
+NEW = "canopy-r0c2"
+
+
+def only_registered(monkeypatch, ids: set[str]) -> Any:
+    """Registry.address answers only for `ids` (a mutable set: add to it to register a module mid-test, D62)."""
+    from conductor.config import Registry
+
+    real = Registry.address
+
+    def address(self, device_id, driver_name):
+        return real(self, device_id, driver_name) if device_id in ids else None
+
+    monkeypatch.setattr(Registry, "address", address)
+    return real
+
+
+def spy_writes(w: Show) -> list[tuple[float, str, list]]:
+    writes: list[tuple[float, str, list]] = []
+    driver = w.services.engine_driver
+    original = driver.write
+
+    async def write(device_id, rows, **kw):
+        writes.append((w.clock.monotonic(), device_id, list(rows)))
+        return await original(device_id, rows, **kw)
+
+    driver.write = write
+    return writes
+
+
+def test_a_module_registered_mid_try_on_ends_it_instead_of_getting_the_draft(monkeypatch):
+    """Two modules registered (the VWBD kits), a try-on confirmed on those two; ops registers a third meanwhile
+    (/ops/accounts: caps.pop + request_refresh). The show's re-pick would compile the trial's plan with the third in
+    it — a module the confirm never named. The try-on ends instead (why recorded): every module, the new one too,
+    gets the scene's approved look, and the new one never gets a draft row."""
+    ids = {"canopy-r0c0", "canopy-r0c1"}
+    real = only_registered(monkeypatch, ids)
+
+    async def main():
+        w = await show()
+        d = golden_both()
+        sentence = T.confirm_sentence(w.lab, d, T.driven_modules(w.lab), 150.0)
+        await try_on(w, d)
+        before = (w.engine.trial, sorted(w.engine.current_plan().modules))
+        writes = spy_writes(w)
+        new_address = real(w.services.registry, NEW, w.services.engine_driver.name)
+        ids.add(NEW)
+        w.wiring.caps.pop(NEW, None)
+        w.wiring.request_refresh([NEW])
+        await w.run_for(5)
+        await w.engine.wait_idle()
+        drafted = draft_rows(w, d, Tier.T3)
+        out = (
+            sentence,
+            before,
+            w.engine.trial,
+            w.engine.current_plan(),
+            writes,
+            new_address,
+            drafted,
+            w.events("lab"),
+        )
+        await w.close()
+        return out
+
+    sentence, (trial, modules), after, plan, writes, new_address, drafted, lab = run_virtual(main)
+    assert "on 2 modules (Module 1, Module 2)" in sentence and trial is not None
+    assert modules == ["canopy-r0c0", "canopy-r0c1"]
+    assert after is None, "the try-on ended"
+    assert NEW in plan.modules and not plan.label.endswith(TRIAL_LABEL)
+    assert all(rows != drafted[NEW] for _t, device, rows in writes if device == new_address)
+    assert [w for w in writes if w[1] == new_address], "the new module got the approved look"
+    ends = [e["why"] for e in lab if e["action"] == "trial_end"]
+    assert len(ends) == 1 and "module" in ends[0] and "Module 3" in ends[0], ends
+
+
+def test_a_module_read_mid_try_on_that_would_join_its_plan_ends_it(monkeypatch):
+    """A registered module whose profile couldn't be read was left out of the try-on's plan; when its read comes back
+    mid-try-on, the re-pick would add it: the try-on ends rather than write the draft to it."""
+
+    async def main():
+        w = await show()
+        failing = {NEW}
+        read_one = w.wiring._read_one
+
+        async def flaky(entry):
+            if entry.id in failing:
+                w.wiring.caps_errors[entry.id] = "unreachable (test)"
+                return None
+            return await read_one(entry)
+
+        monkeypatch.setattr(w.wiring, "_read_one", flaky)
+        w.wiring.caps.pop(NEW)
+        await w.engine.request_mode(GOLDEN, source="ops")
+        await w.run_for(10)
+        await w.engine.wait_idle()
+        await try_on(w, golden_both())
+        before = (w.engine.trial, sorted(w.engine.current_plan().modules))
+        failing.clear()
+        w.wiring.request_refresh([NEW])
+        await w.run_for(5)
+        await w.engine.wait_idle()
+        out = (before, w.engine.trial, w.engine.current_plan(), w.events("lab"))
+        await w.close()
+        return out
+
+    (trial, modules), after, plan, lab = run_virtual(main)
+    assert trial is not None and NEW not in modules and len(modules) == 8
+    assert after is None and NEW in plan.modules and not plan.label.endswith(TRIAL_LABEL)
+    assert len([e for e in lab if e["action"] == "trial_end"]) == 1
+
+
+def test_a_module_unregistered_mid_try_on_keeps_it_on_the_others(monkeypatch):
+    """The mirror: a module unregistered mid-try-on drops out of the plan; the rest were all named in the confirm, so
+    the try-on carries on there with the draft's rows (no module it never named is written)."""
+    ids = {e for e in MODULES}
+    only_registered(monkeypatch, ids)
+
+    async def main():
+        w = await show()
+        d = golden_both()
+        await try_on(w, d)
+        before = w.engine.trial
+        ids.discard(NEW)
+        w.wiring.request_refresh([NEW])
+        await w.run_for(5)
+        await w.engine.wait_idle()
+        out = (before, w.engine.trial, w.engine.current_plan(), draft_rows(w, d, Tier.T3))
+        await w.close()
+        return out
+
+    before, after, plan, drafted = run_virtual(main)
+    assert after is not None and after.session == before.session
+    assert NEW not in plan.modules and len(plan.modules) == 8
+    assert plan.tier is Tier.T3 and rows_of(plan) == drafted
