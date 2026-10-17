@@ -1,0 +1,80 @@
+{
+  "show_looks": {
+    "id": "p0003",
+    "source": "published",
+    "name": "Client Oct 22 v3 – warmer sunset"
+  },
+  "scene": {
+    "live_look": {
+      "scene_id": "golden-hour",
+      "name": "Golden Hour",
+      "mood": "Let the evening glow",
+      "description": "Soft gold, peach, sunset pink, rose and lavender. Pinks lead the sunset.",
+      "palette": [
+        {
+          "name": "Soft gold",
+          "hex": "#FFDB9B"
+        },
+        {
+          "name": "Peach",
+          "hex": "#FFB38A"
+        },
+        {
+          "name": "Sunset pink",
+          "hex": "#FF8FBF"
+        },
+        {
+          "name": "Rose",
+          "hex": "#E779B0"
+        },
+        {
+          "name": "Lavender",
+          "hex": "#B59AE2"
+        }
+      ],
+      "layout": {
+        "transform": "linear",
+        "invert": false,
+        "cycles": 1,
+        "kind": "radial",
+        "centre_in": [
+          0.0,
+          60.0
+        ],
+        "centres_in": null,
+        "radius_in": "auto",
+        "metric": "canopy"
+      },
+      "sample_at": "centre",
+      "brightness": 95,
+      "solid": 2,
+      "stepped": {
+        "direction": "forward",
+        "steps_per_cycle": 6,
+        "step_s": 6.0,
+        "run_s": 90.0
+      },
+      "copy": {
+        "modules": "auto",
+        "stepped": "auto"
+      }
+    },
+    "live_source": "published",
+    "repaint": {
+      "slot": "custom-3",
+      "commissioned": [
+        "r0c0",
+        "r0c1",
+        "r0c2",
+        "r1c0",
+        "r1c1"
+      ],
+      "eligible": 5,
+      "total": 9,
+      "app": [],
+      "simulated": true,
+      "available": true,
+      "sentence": "custom-3 is commissioned on 5 of 9 modules (Modules 1–5); publishing repaints those 5 (one slot write each). The other 4 get the published design when they are commissioned."
+    }
+  }
+}

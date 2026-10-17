@@ -1,0 +1,66 @@
+{
+  "running": true,
+  "queued_until": null,
+  "scene": "golden-hour",
+  "label": "Golden Hour",
+  "slot": "custom-3",
+  "publication": "p0003",
+  "started_at": 1792700002.0,
+  "finished_at": null,
+  "modules": [
+    {
+      "id": "canopy-r0c0",
+      "label": "Module 1",
+      "status": "applied",
+      "reason": null
+    },
+    {
+      "id": "canopy-r0c1",
+      "label": "Module 2",
+      "status": "applied",
+      "reason": null
+    },
+    {
+      "id": "canopy-r0c2",
+      "label": "Module 3",
+      "status": "applied",
+      "reason": null
+    },
+    {
+      "id": "canopy-r1c0",
+      "label": "Module 4",
+      "status": "applied",
+      "reason": null
+    },
+    {
+      "id": "canopy-r1c1",
+      "label": "Module 5",
+      "status": "applied",
+      "reason": null
+    },
+    {
+      "id": "canopy-r1c2",
+      "label": "Module 6",
+      "status": "applied",
+      "reason": null
+    },
+    {
+      "id": "canopy-r2c0",
+      "label": "Module 7",
+      "status": "pending",
+      "reason": null
+    },
+    {
+      "id": "canopy-r2c1",
+      "label": "Module 8",
+      "status": "pending",
+      "reason": null
+    },
+    {
+      "id": "canopy-r2c2",
+      "label": "Module 9",
+      "status": "pending",
+      "reason": null
+    }
+  ]
+}

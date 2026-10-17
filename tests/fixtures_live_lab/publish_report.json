@@ -1,0 +1,26 @@
+{
+  "id": "p0004",
+  "sent": 2,
+  "repick": true,
+  "ended_trial": false,
+  "copies": [
+    "live looks",
+    "show modes",
+    "show recipes",
+    "rehearsal designs",
+    "T1 plans",
+    "module page",
+    "design lab"
+  ],
+  "held": [
+    "golden-hour"
+  ],
+  "repaint": [
+    {
+      "scene": "golden-hour",
+      "slot": "custom-3",
+      "modules": 9,
+      "in_s": 56
+    }
+  ]
+}

@@ -1,0 +1,219 @@
+{
+  "source": "published",
+  "simulated": false,
+  "fallback": false,
+  "problem": null,
+  "current": {
+    "id": "p0003",
+    "kind": "version",
+    "version": "v0007",
+    "name": "Client Oct 22 v3 – warmer sunset",
+    "published_at": 1792700000.0,
+    "by": "Alon",
+    "changed": [
+      "golden-hour"
+    ],
+    "git_changed": false,
+    "version_exists": true
+  },
+  "previous": {
+    "id": "p0002",
+    "name": "Client Oct 22 v2",
+    "published_at": 1792690000.0,
+    "by": "ops"
+  },
+  "scenes": [
+    {
+      "id": "lowcountry-calm",
+      "name": "Lowcountry Calm",
+      "source": "approved",
+      "palette": [
+        {
+          "name": "Soft ivory",
+          "hex": "#F7F2E7"
+        },
+        {
+          "name": "Sea glass",
+          "hex": "#D1EAE3"
+        }
+      ],
+      "mood": "Settle in",
+      "held": false
+    },
+    {
+      "id": "rainbow-row-sunset",
+      "name": "Rainbow Row Sunset",
+      "source": "approved",
+      "palette": [
+        {
+          "name": "Pastel coral",
+          "hex": "#FF9E96"
+        },
+        {
+          "name": "Blush pink",
+          "hex": "#FFD2E0"
+        },
+        {
+          "name": "Lilac",
+          "hex": "#C4B3EC"
+        }
+      ],
+      "mood": "Stay a little longer",
+      "held": false
+    },
+    {
+      "id": "garden-gathering",
+      "name": "Garden Gathering",
+      "source": "approved",
+      "palette": [
+        {
+          "name": "Sage green",
+          "hex": "#8FBF9D"
+        },
+        {
+          "name": "Pale lime",
+          "hex": "#E6EED1"
+        },
+        {
+          "name": "Ivory",
+          "hex": "#F7F2E7"
+        }
+      ],
+      "mood": "Bring everyone together",
+      "held": false
+    },
+    {
+      "id": "coastal-tides",
+      "name": "Coastal Tides",
+      "source": "approved",
+      "palette": [
+        {
+          "name": "Ocean blue",
+          "hex": "#659BD5"
+        },
+        {
+          "name": "Aqua",
+          "hex": "#79CED4"
+        },
+        {
+          "name": "Seafoam",
+          "hex": "#B2E8D2"
+        },
+        {
+          "name": "Foam white",
+          "hex": "#E9F3E7"
+        }
+      ],
+      "mood": "Find your coast",
+      "held": false
+    },
+    {
+      "id": "golden-hour",
+      "name": "Golden Hour",
+      "source": "published",
+      "palette": [
+        {
+          "name": "Soft gold",
+          "hex": "#FFDB9B"
+        },
+        {
+          "name": "Peach",
+          "hex": "#FFB38A"
+        },
+        {
+          "name": "Sunset pink",
+          "hex": "#FF8FBF"
+        },
+        {
+          "name": "Rose",
+          "hex": "#E779B0"
+        },
+        {
+          "name": "Lavender",
+          "hex": "#B59AE2"
+        }
+      ],
+      "mood": "Let the evening glow",
+      "held": false
+    },
+    {
+      "id": "goodnight-glow",
+      "name": "The Goodnight Glow",
+      "source": "approved",
+      "palette": [
+        {
+          "name": "Periwinkle",
+          "hex": "#8B8BD1"
+        },
+        {
+          "name": "Lavender",
+          "hex": "#BEA9E6"
+        },
+        {
+          "name": "Moonlight blue",
+          "hex": "#C4D6F3"
+        }
+      ],
+      "mood": "Slow the night down",
+      "held": false
+    }
+  ],
+  "history": [
+    {
+      "id": "p0003",
+      "kind": "version",
+      "version": "v0007",
+      "name": "Client Oct 22 v3 – warmer sunset",
+      "published_at": 1792700000.0,
+      "by": "Alon",
+      "changed": [
+        "golden-hour"
+      ],
+      "repaint": null,
+      "outcome": "live",
+      "version_exists": true
+    },
+    {
+      "id": "p0002",
+      "kind": "version",
+      "version": "v0006",
+      "name": "Client Oct 22 v2",
+      "published_at": 1792690000.0,
+      "by": "ops",
+      "changed": [
+        "golden-hour"
+      ],
+      "repaint": {
+        "golden-hour": {
+          "slot": "custom-3",
+          "applied": 9,
+          "skipped": 0,
+          "failed": 0
+        }
+      },
+      "outcome": "replaced",
+      "version_exists": true
+    },
+    {
+      "id": "p0001",
+      "kind": "approved",
+      "version": null,
+      "name": "approved",
+      "published_at": 1792680000.0,
+      "by": "Alon",
+      "changed": [
+        "golden-hour"
+      ],
+      "repaint": null,
+      "outcome": "replaced",
+      "version_exists": false
+    }
+  ],
+  "repaint": null,
+  "canopy": {
+    "power": true,
+    "brightness": 100,
+    "designed_brightness": 100
+  },
+  "writable": true
+}
