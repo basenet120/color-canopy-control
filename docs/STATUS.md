@@ -133,6 +133,20 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     ```
     If the stack isn't merged before the Oct 19 undo, the kit try-on happens in the Hubspace app or on `/ops/module`
     and the Lab stays screen-only until after it.
+0h. **Design Lab Slice C, server side (C1; to stack on #26 with C2's editor UI; D66's Slice C line; plan §7).**
+    **No show-path file touched** (`show.py`, `canopy.py`, `reconciler.py`, `executor.py`, `sequence.py`, drivers,
+    `config/` unchanged; `motion.stepped.live_enabled` and `kiosk.ripple_stagger_s` untouched).
+    `conductor/design_lab/stepped.py`: `effective_step_s` (the runner's rule), `canopy_pace`, `stepped_preview`
+    (the compiled stepped steps exactly, `pace.nine`/`pace.today`, moving copy, live sentence), `ripple_rings`,
+    `ripple_json`. PreviewJSON fills `stepped` and `rings` and adds `ripple`; CatalogJSON adds
+    `limits.stepped.{step_s_increment, run_s_min, directions}`, `limits.ripple`, `live.{stepped_live_note,
+    ripple_note, effects_note}` (existing fields unchanged). Drafts: `step_s` in 0.5 s steps; the idle look's stepped
+    refusal says why. Export: the D65 line gives the nine-strand pace; the `step_s` comment in modes.yaml follows it.
+    **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2312 passed, 5 skipped, 136 subtests;
+    `make lint`; node 116/116; `tests/test_lab_stepped.py` 192 tests (virtual clock, a real `ProgramRunner` on the
+    engine); 16 mutants each killed by a named test. **Not run:** `make soak`, `make lab-roundtrip`.
+    **Needs a look on the Mac:** C2's editor and ripple animation in the browser. **Needs the real kits:** nothing
+    new (stepped stays off on hardware until Gate R).
 - **Merged:** PR #18, `claude/mac-show-box` (D61), as `9c4c7aa` on Oct 13.
 - **Items 1–6 below are older and all merged** (#11–#16); kept for their notes.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:

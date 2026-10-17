@@ -1299,6 +1299,16 @@ def ripple_rings(patched: ConfigTrio, scene_id: str, canopy: dict) -> list[list[
 - **Custom-slot effects:** a greyed card "Effects — not enabled: no code has passed the bench (06 #4)".
 - **Copy:** moving copy only from the schema-checked `moving_feature` (approved or `STEPPED_TEMPLATE`).
 - `make soak` run on the final branch; `docs/reports/sim-acceptance.md` committed in #27 only.
+- **As built (C1, Oct 17; deviations):** `stepped_preview(patched, scene_id, canopy, settings, today_positions)`
+  takes the show box's driven positions (the preview passes `show_box_today`'s, else `LIVE_KITS`), not a count, so
+  the ripple term of the runner's rule can be computed over them; `effective_step_s(…, *, rings=1)` carries that
+  term (0 while `ripple_stagger_s` is 0). The stepped JSON adds `feature` (the hold's sentence),
+  `today_moving_feature` (D62's two-strand copy), `runs.{nine,today}` (`step_s`, `hold_at` = the runner's
+  `count`, `moves_s`, `still` = why it would hold still), `live_enabled`, `live_note`, `trial_note`, `error`;
+  `pace` adds `today_positions`, `planned_writes_per_min`, `account_writes_per_min`. PreviewJSON keeps `rings`
+  (positions per ring) and adds `ripple` {rings, stagger_s [0, 1.2], max_rings, live_stagger_s, note}.
+  `export_patch(…, settings=)` (optional; the shipped defaults without) gives the D65 line its pace and keeps the
+  modes.yaml `step_s` comment's "step every N s" true.
 
 ---
 

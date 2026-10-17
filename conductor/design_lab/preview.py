@@ -18,7 +18,7 @@ Truth rules:
 - Brightness is a level (`brightness`, `lit.level`), never multiplied into a colour (D59).
 
 Owners: `design_registry`, `design_caps`, `T1_LOCKED` and `T1Locked` are the contracts commit (L); the bodies are
-stream S1's (C1 later adds `stepped`/`rings`).
+stream S1's; `stepped`, `rings` and `ripple` are Slice C's (`conductor/design_lab/stepped.py`).
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from conductor.canopy_view import module_colours
 from conductor.capabilities import Capabilities, detect
 from conductor.config import DeviceEntry, DeviceFlags
 from conductor.design_lab import draft as D
+from conductor.design_lab import stepped as ST
 from conductor.design_lab.draft import GRID, ConfigTrio, SceneDraft
 from conductor.engine_api import ModePlan, PlanError, Tier
 from conductor.looks import CompileContext, compile_mode, ladder, scene_rules
@@ -431,6 +432,9 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
         if p.mode == scene_id
     ]
     stepped = copy["stepped"]
+    show_box = show_box_today(lab, patched, scene_id)
+    driven = (show_box.get("positions") or {}).get("driven") or list(scene_rules.LIVE_KITS)
+    ripple = ST.ripple_json(patched, scene_id, canopy, lab.settings)
     answer = {
         "scene_id": scene_id,
         "label": mode.label,
@@ -440,7 +444,7 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
         "layout_words": F.layout_words(draft.layout, canopy),  # the "Reads as:" line (S4), edited or not
         "tiers": tiers_json(patched, scene_id, canopy),
         "today": today_view(lab, patched, scene_id),
-        "show_box_today": show_box_today(lab, patched, scene_id),
+        "show_box_today": show_box,
         "warnings": warnings,
         "copy": {
             "modules": copy["modules"].to_json() if copy["modules"] is not None else None,
@@ -450,8 +454,11 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
         # notes on the free client copy (never a refusal): a description the colours or layout moved under
         "copy_notes": D.description_notes(D.seed_draft(approved, scene_id), draft),
         "t1_lock": t1_lock(lab, scene_id),
-        "stepped": None,  # Slice C (§7)
-        "rings": None,  # Slice C (§7)
+        # Slice C (§7): the exact compiled steps at real pacing (None without a stepped rung), and the ripple's
+        # rings (screen only; the canopy's kiosk.ripple_stagger_s is shown, never changed)
+        "stepped": ST.stepped_preview(patched, scene_id, canopy, lab.settings, driven),
+        "rings": ripple["rings"],
+        "ripple": ripple,
     }
     answer["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
     return answer

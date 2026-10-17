@@ -84,11 +84,22 @@ class DraftColour(_Strict):
         return v
 
 
+STEP_S_INCREMENT = 0.5  # the Lab's step_s goes in half seconds (Slice C, PLAN §7)
+
+
 class DraftStepped(_Strict):  # = SteppedTechnique's bounds (schema.py)
     direction: Literal["forward", "reverse"]
     steps_per_cycle: int = Field(ge=3, le=12)
-    step_s: float = Field(ge=4.0, le=12.0)
-    run_s: float = Field(gt=0, le=180.0)  # ≥ step_s here; ≤ kiosk.idle_return_s in apply
+    step_s: float = Field(ge=4.0, le=12.0)  # in STEP_S_INCREMENT steps
+    run_s: float = Field(gt=0, le=180.0)  # ≥ step_s here; ≤ kiosk.idle_return_s in apply (`_check_stepped`)
+
+    @field_validator("step_s")
+    @classmethod
+    def _half_seconds(cls, v: float) -> float:
+        steps = v / STEP_S_INCREMENT
+        if abs(steps - round(steps)) > 1e-9:
+            raise ValueError(f"step_s goes in {STEP_S_INCREMENT:g} s steps (4, 4.5, … 12); {v:g} s isn't one")
+        return v
 
     @field_validator("run_s")
     @classmethod
@@ -598,9 +609,15 @@ def _recipe(colour: DraftColour) -> dict:
 
 
 # ---- the patch (S1) --------------------------------------------------------------------------------------------------
-def _lock_problems(mode: Mode, draft: SceneDraft) -> list[Problem]:
+IDLE_NEVER_STEPS = (
+    "{label} is the idle look (kiosk.idle_mode), and the idle look never steps (D65): it has no stepped rung to "
+    "edit"
+)
+
+
+def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list[Problem]:
     """The D63 locks and the stepped rung's presence: a draft can't repeat the design, sample at the mean, or add or
-    drop a stepped rung."""
+    drop a stepped rung (the idle look, `idle`, says why it has none)."""
     sid = draft.scene_id
     out = []
     if draft.layout.cycles != 1:
@@ -622,7 +639,9 @@ def _lock_problems(mode: Mode, draft: SceneDraft) -> list[Problem]:
             Problem(
                 f"the draft of {sid} → stepped",
                 "stepped",
-                f"{mode.label} has no stepped rung, and a draft can't add one",
+                IDLE_NEVER_STEPS.format(label=mode.label)
+                if idle
+                else f"{mode.label} has no stepped rung, and a draft can't add one",
             )
         )
     return out
@@ -767,7 +786,7 @@ def apply_drafts(
     for sid in ids:
         draft = drafts[sid]
         mode = trio.modes.mode(sid)
-        found = _lock_problems(mode, draft)
+        found = _lock_problems(mode, draft, idle=sid == settings.kiosk.idle_mode)
         try:
             keys = recipe_keys(mode, draft, trio.recipes, {**owners, **claimed})
         except DraftError as exc:
@@ -955,11 +974,13 @@ def problems_from_config_error(text: str) -> list[Problem]:
 __all__ = [
     "FIELD_FOR",
     "GRID",
+    "IDLE_NEVER_STEPS",
     "MODULE_PAGE",
     "NUMBER_NAMES",
     "PALETTE_MAX",
     "PALETTE_MIN",
     "STEPPED_TEMPLATE",
+    "STEP_S_INCREMENT",
     "STRAND_TEMPLATE",
     "T3_TEMPLATE",
     "ConfigTrio",
