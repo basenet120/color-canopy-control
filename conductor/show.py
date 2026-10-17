@@ -580,6 +580,14 @@ class ShowWiring:
             self._task = asyncio.create_task(self._sim_commission())
         return engine
 
+    @property
+    def started(self) -> bool:
+        """Is startup over? On the simulator: its automatic commissioning has run and the look showing was re-picked
+        after it. The first look goes out before that commissioning begins, so an engine that merely has a plan and
+        isn't commissioning may not have started it yet. On hardware commissioning is an ops action: over once the
+        engine has started."""
+        return self.engine is not None and (self._task is None or self._task.done())
+
     async def _sim_commission(self) -> None:
         try:
             await self.caps_ready.wait()

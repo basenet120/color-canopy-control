@@ -181,6 +181,16 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     run of exactly one step (`count == 1`): the iPad would show the moving copy for one step while no colour changes.
     The Lab now says such a run holds still; `test_a_one_step_run_is_still_in_the_lab_and_the_runners_gap_is_pinned`
     pins the gap until `count_for(step) < 2` (and `run_s < 2 × step_s`) is decided.
+    **CI flakes (Oct 17, #25's branch, merged forward):** `test_a_rehearsal_from_ops_on_the_show_engine_…` (KeyError `'preview'`)
+    waited for "a plan and not commissioning", which holds for an instant *before* the simulator's startup
+    commissioning begins (the first look goes out first); on a slow box the rehearsal preview then met
+    commissioning (409) or started a rehearsal that commissioning's re-pick overrode. Tests now wait on
+    `ShowWiring.started` (commissioning run and the look re-picked; `tests/show_started.py`), as do the kiosk/guest
+    rehearsal helper, `partial_canopy.showing` and the surfaces fixtures. The Lab's "preview under a second"
+    checks bound the preview's CPU time, not wall time. Reproduced by delaying startup commissioning 0.05–2 s
+    (failed before, 157/157 after); the 9 touched tests
+    passed 30 runs in a row under 20 CPU hogs (2 per core); full suite 2044 passed, 5 skipped, 136 subtests;
+    `make lint`.
 - **Merged:** PR #18, `claude/mac-show-box` (D61), as `9c4c7aa` on Oct 13.
 - **Items 1–6 below are older and all merged** (#11–#16); kept for their notes.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
