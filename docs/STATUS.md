@@ -146,7 +146,7 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     lint`; node 124/124; `tests/test_lab_stepped.py` 192 tests (virtual clock, a real `ProgramRunner` on the engine);
     C1 16 and C2 6 mutants, each killed by a named test. `python -m conductor.soak`: exit 0 (overall PASS, 33 s wall),
     the one FAIL is the non-gating "(reported)" D65 stepped landing spread (p95 2.78 s > 2 s, unchanged since #23);
-    **`docs/reports/sim-acceptance.md` is regenerated and committed in this PR** (plan §1). **Not run:** `make lab-roundtrip`.
+    **`docs/reports/sim-acceptance.md` is regenerated and committed in this PR** (plan §1). `LAB_ROUNDTRIP=1 make lab-roundtrip` on the final branch (Oct 17): 5 passed (all five exported configs pass the whole suite, 50 min).
     **Browser smoke** (own dev server `scripts/dev_design_lab.py --port 8208`, Playwright on system Chrome, 1440×900
     and 1180×820 touch, screenshots looked at): Coastal Tides plays 12 steps of 7.5 s (15 of 6 s at the show box's
     pace, only Modules 1–2 lit); its step time edited to 9 s → "10 steps of 9 s (90 s)" at both paces, run length's
