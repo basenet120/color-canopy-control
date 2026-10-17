@@ -30,6 +30,10 @@
   brightness) stepped at the D65 defaults, with moving copy that says staff are testing and names the flow
   (`motion_words`). It is checked by the same schema and copy rules as modes.yaml, and only used while the
   rehearsal of that mode runs: then the mode's ladder has the stepped rung first (`ladder`, `compile`).
+- **The Design Lab's try-on (D66 Slice B)** is the only other override: while `engine.trial` is of a mode, that
+  mode's `modules` and `strand` tiers compile from the trial's patched modes and recipes (`compile`); the engine never
+  asks for any other tier of it then (`compile_best` skips T1/T2/stepped). `ladder`, `tier_allowed`, `_record` and
+  every T1 compile keep the git design, so the slot checks never see a try-on.
 - In sim, the slots are commissioned automatically once every module's capabilities are read, so demos run T1
   exactly as the show would after install-day commissioning. On hardware commissioning is an explicit ops action.
 """
@@ -346,7 +350,9 @@ class ShowWiring:
         self.request_refresh()
 
     # ---- compiling -----------------------------------------------------------------------------------------------
-    def context(self, modes: Any = None) -> Any:
+    def context(self, modes: Any = None, recipes: Any = None) -> Any:
+        """The compile context from the live registry. `modes`/`recipes`: another modes file / recipes (the
+        rehearsal's design, a Design Lab try-on's patch); None = the show's own (git)."""
         from conductor.looks import CompileContext
 
         services = self.services
@@ -367,6 +373,7 @@ class ShowWiring:
             slot_readback=self.slot_readback,
             flags=flags,
             modes=modes if modes is not None else self.modes_file,
+            recipes=recipes,  # None: CompileContext loads the git recipes (cached)
             config_dir=services.config_dir,
             addresses=addresses,
         )
@@ -378,7 +385,18 @@ class ShowWiring:
         # when no module has been read does compile_mode refuse (PlanError).
         if tier is Tier.STEPPED and self._rehearsing(mode_id):
             return self.rehearsal_plan(mode_id)
+        # The Design Lab's try-on (D66 Slice B): its scene's module-level and strand rungs only, from the draft's own
+        # patched modes AND recipes. Every other tier — T1 above all, so t1_target, slot_expectations and stale_slot
+        # keep judging the slots by the git design — and the ladder, tier_allowed and records stay on git.
+        trial = self._trial_for(mode_id)
+        if trial is not None and tier in (Tier.T3, Tier.STRAND):
+            return compile_mode(mode_id, tier, self.context(trial.modes, trial.recipes))
         return compile_mode(mode_id, tier, self.context())
+
+    def _trial_for(self, mode_id: str) -> Any | None:
+        """The engine's try-on when it is of `mode_id` (None otherwise)."""
+        trial = getattr(self.engine, "trial", None) if self.engine is not None else None
+        return trial if trial is not None and trial.mode_id == mode_id else None
 
     def ladder(self, mode_id: str) -> list[Tier]:
         from conductor.looks import ladder

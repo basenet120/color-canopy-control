@@ -23,6 +23,7 @@ SLICE_A = {
     ("POST", "/api/lab/restore"),
     ("GET", "/api/lab/export"),
 }
+SLICE_B = {("GET", "/api/lab/trial"), ("POST", "/api/lab/trial/start"), ("POST", "/api/lab/trial/stop")}  # B1
 
 
 def draft_json(scene_id: str) -> dict:
@@ -81,8 +82,8 @@ def test_the_router_is_mounted_with_every_slice_a_route_behind_ops_and_the_same_
         return out
 
     routes = _lab_routes()
-    assert {(m, r.path) for r in routes for m in r.methods} == SLICE_A
-    assert _mounted() == SLICE_A
+    assert {(m, r.path) for r in routes for m in r.methods} == SLICE_A | SLICE_B
+    assert _mounted() == SLICE_A | SLICE_B
     for route in routes:
         assert isinstance(route, LabRoute)
         deps = [c for c in calls(route.dependant) if c is not None]

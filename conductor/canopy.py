@@ -101,6 +101,18 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   re-run on that account for `governor_cooloff_s`, then `_settle`. Its report goes to telemetry ("rehearsal") and
   `<data>/bench/rehearsals/*.json`.
 
+- **The Design Lab's try-on (D66 Slice B, docs/design-lab/PLAN.md §6).** `start_trial(Trial)` — ops only, from
+  `/api/lab/trial/start` behind its confirm sentence — shows a draft of one scene through `_request(source="lab",
+  ripple=False)`: one burst, at module level or strand only (`compile_best` skips `TRIAL_SKIP` for the trial's mode
+  while the override stands; the show compiles those two tiers from the trial's patched modes and recipes and every
+  other tier, T1 slot judging included, from git). Refused while stopped, commissioning, paused, resting or
+  rehearsing. Kiosk requests are refused (`TRIAL_MESSAGE`) while it runs. It ends at its bound (`ends_mono`, at most
+  `kiosk.idle_return_s`), on "Back to approved" (`end_trial`), and whenever anything else chooses a look (ops, idle,
+  the safe look, a rehearsal, commissioning) or guest input is paused or the engine stops: the override is cleared
+  before that look is compiled, and a caller that then can't install its own look puts the approved one back
+  (`_restore_approved`), so a trial plan never stays installed without its override and bound. Memory only: a
+  restart has no trial.
+
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
 """
@@ -165,6 +177,17 @@ GUEST_INPUT_FILE = "guest_input.json"
 # (kiosk, ops, idle) clears them, like choosing a scene in the Hubspace app (D60).
 RECOMPILE_SOURCES = frozenset({"reconciler", "recovery", "startup"})
 BRIGHTNESS_KEY = ("brightness", None)
+# The Design Lab's try-on (D66 Slice B): its request source, the guest's refusal while it runs, the tiers it never
+# uses (a try-on is module level only and never steps), and the ripple seam (a try-on is one burst; RECOMPILE_SOURCES
+# itself is unchanged, so a try-on still clears the guest's brightness and counts as a change for the idle hold).
+TRIAL_SOURCE = "lab"
+TRIAL_MESSAGE = "Staff are trying a new look on the canopy. Try again in a few minutes."
+TRIAL_PAUSED_MESSAGE = (
+    "Guest input is paused by staff, so a try-on can't start; resume guest input on /ops first."
+)
+TRIAL_REHEARSAL_MESSAGE = "A stepped rehearsal is running; stop it first."
+TRIAL_SKIP = frozenset({Tier.T1, Tier.T2, Tier.STEPPED})
+ONE_BURST_SOURCES = RECOMPILE_SOURCES | {TRIAL_SOURCE}
 
 Compiler = Callable[[str, Tier], ModePlan]
 Ladder = Callable[[str], list[Tier]]
@@ -213,6 +236,23 @@ class EngineDeps:
     # <data>/bench/rehearsals, where its reports go (None = telemetry only).
     rehearsal_compile: Callable[[str], ModePlan] | None = None
     rehearsal_dir: Path | None = None
+
+
+@dataclass
+class Trial:
+    """A Design Lab try-on (D66 Slice B): one scene's draft shown at module level until `ends_mono`. Memory only."""
+
+    mode_id: str
+    label: str  # the draft's name (telemetry, the Lab)
+    modes: Any  # the patched ModesFile: opaque to the engine; the show compiles T3/strand with it
+    # the patched RecipesFile: T3/strand colours come from recipes (a hex edit, a renamed colour)
+    recipes: Any
+    started_mono: float
+    ends_mono: float
+    started_at: float
+    version: str | None = None
+    applies: int = 1
+    session: int = 0  # set by the engine: a re-apply keeps it (and the bound); a new try-on gets a new one
 
 
 @dataclass
@@ -300,6 +340,11 @@ class CanopyEngine:
         self._rehearsal: Rehearsal | None = None
         self._rehearsals: list[Rehearsal] = []  # ended, report still being written (stop() waits for them)
         self.last_rehearsal: dict | None = None
+        # The Design Lab's try-on (D66 Slice B): the override in force, and the task that ends it at its bound (a loop
+        # task like _settle_task, not in self._tasks, so wait_idle never waits for the bound). Never persisted.
+        self._trial: Trial | None = None
+        self._trial_task: asyncio.Task | None = None
+        self._trial_sessions = 0
         self.stats["governor_trips"] = 0
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
         self._restore_pause()
@@ -386,6 +431,9 @@ class CanopyEngine:
     async def stop(self) -> None:
         """Stop the reconciler and wait for the engine's own background tasks. Call before closing executors."""
         self._stopped = True
+        trial_task = self._trial_task
+        # the try-on ends here (memory only: a restart has none)
+        self._clear_trial("the canopy engine stopped")
         if self._rehearsal is not None:
             self._end_rehearsal("the canopy engine stopped", rehearsal=self._rehearsal, settle=False)
         if self._runner is not None:
@@ -395,6 +443,10 @@ class CanopyEngine:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._settle_task
             self._settle_task = None
+        if trial_task is not None and trial_task is not _current_task():
+            trial_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await trial_task
         await self.reconciler.stop()
         for task in list(self._tasks):
             task.cancel()
@@ -476,17 +528,31 @@ class CanopyEngine:
     def rehearsal_active(self) -> bool:
         return self._rehearsal is not None
 
+    @property
+    def trial(self) -> Trial | None:
+        """The Design Lab try-on in force (None when none): the show compiles its mode's T3/strand from it."""
+        return self._trial
+
+    @property
+    def trial_active(self) -> bool:
+        return self._trial is not None
+
     async def request_mode(self, mode_id: str, *, source: str) -> CanopyState:
         """Guest/ops/idle mode request. Kiosk requests honour the cooldown, the pause and the resting state. A mood
         chosen (any source but a re-pick, `RECOMPILE_SOURCES`) lands as a ripple when one is configured (D64); the
         first look, with nothing showing yet, is one burst."""
-        return await self._request(mode_id, source=source, ripple=source not in RECOMPILE_SOURCES)
+        return await self._request(mode_id, source=source, ripple=source not in ONE_BURST_SOURCES)
 
     async def _request(self, mode_id: str, *, source: str, ripple: bool) -> CanopyState:
         now = self.clock.monotonic()
         refused = self._refusal(source, now)
         if refused is not None:
             return refused
+        # A look chosen by anything but the try-on itself or a re-pick (ops, idle, the safe look's fallback) ends the
+        # Design Lab's try-on before the tier is picked, so its override is gone when this mode compiles (D66).
+        cleared = None
+        if self._trial is not None and source not in RECOMPILE_SOURCES and source != TRIAL_SOURCE:
+            cleared = self._clear_trial(f"{source} chose {mode_id}")
         rehearsal = self._rehearsal if source not in RECOMPILE_SOURCES else None
         # A look chosen (by ops) ends the stepped rehearsal before the tier is picked, so its gate is closed.
         if rehearsal is not None:
@@ -495,6 +561,7 @@ class CanopyEngine:
         if plan is None:
             if rehearsal is not None and self._runner is not None and self._runner.running:
                 self._runner.finish("the stepped rehearsal ended")  # never step on without it
+            self._restore_approved(cleared)  # the try-on's plan never stays without its override
             return self._refused(why, None)
         if source == "kiosk":
             self._last_kiosk_mono = now
@@ -521,6 +588,8 @@ class CanopyEngine:
                 return self._refused(PAUSED_MESSAGE, None)
             if self._rehearsal is not None:  # guests wait for the stepped rehearsal (Gate R) to finish
                 return self._refused(REHEARSAL_MESSAGE, self._rehearsal_left())
+            if self._trial is not None:  # guests wait for the Design Lab's try-on to end (D66)
+                return self._refused(TRIAL_MESSAGE, self._trial_left())
             if self._outage is not None:
                 return self._refused(RESTING_MESSAGE, self.deps.settings.reconciler.outage_probe_interval_s)
             remaining = self._cooldown_remaining(now)
@@ -672,6 +741,8 @@ class CanopyEngine:
         return self.state()
 
     def pause_guest_input(self, paused: bool, *, source: str) -> CanopyState:
+        if paused:  # a pause ends the Design Lab's try-on: the approved look is back (D66)
+            self._clear_trial("guest input was paused", repick=True)
         if paused and self._rehearsal is not None:  # a pause would hold every step: the rehearsal ends here
             self._stop_rehearsal(f"guest input was paused ({source}), which holds every step")
         if paused != self._paused:
@@ -690,11 +761,14 @@ class CanopyEngine:
     async def safe_look(self, *, source: str) -> CanopyState:
         """Lowcountry Calm at its strand technique, every module, now (bypasses cooldown, pause and floors). Always
         on, at its designed brightness: it clears the guest's settings (D60)."""
+        # First: with a Lowcountry Calm try-on still set, the show would compile the draft's solid as the safe look.
+        cleared = self._clear_trial("the safe look")
         try:
             plan = self.deps.compile(SAFE_MODE, Tier.STRAND)
         except (PlanError, KeyError, LookupError) as e:
             plan, why = self.compile_best(SAFE_MODE)
             if plan is None:
+                self._restore_approved(cleared)
                 return self._refused(f"The safe look can't be compiled: {e}; {why}", None)
         self.last_change_mono = self._chosen_mono = self.clock.monotonic()
         self._guest_brightness, self._guest_power = None, True
@@ -707,6 +781,9 @@ class CanopyEngine:
             return {"ok": False, "message": "Commissioning is already running.", "modes": {}, "skipped": []}
         if self._outage is not None:
             return {"ok": False, "message": RESTING_MESSAGE, "modes": {}, "skipped": []}
+        # The try-on ends; its scene's approved look goes back without T1/T2/stepped: the show's wrapper has already
+        # set its commissioning flag, under which T1 passes without slot records. _replan_soon lifts it afterwards.
+        self._clear_trial("commissioning started", repick=True, skip=TRIAL_SKIP)
         report: dict[str, Any] = {
             "ok": True,
             "simulated": self._simulated(),
@@ -1056,6 +1133,8 @@ class CanopyEngine:
         operator starts it (the ops route, behind `rehearsal_preview`'s confirm sentence). Returns
         {ok, message, rehearsal}; RehearsalRefused (a plain sentence) when it can't start."""
         preview = self.rehearsal_preview(mode_id, minutes)
+        # Before the rehearsal is set: with a try-on still set, compile_best would skip STEPPED for its scene (D66).
+        cleared = self._clear_trial("a stepped rehearsal started")
         rehearsal = Rehearsal(
             self,
             mode=mode_id,
@@ -1073,6 +1152,7 @@ class CanopyEngine:
         if plan is None or plan.program is None:
             self._rehearsal = None
             self._restore_floor(rehearsal)
+            self._restore_approved(cleared)
             raise RehearsalRefused(
                 why
                 or f"{preview['label']} would show {plan.tier if plan else 'nothing'}, not a stepped look."
@@ -1228,12 +1308,153 @@ class CanopyEngine:
             "max_minutes": MAX_MINUTES,
         }
 
+    # ---- the Design Lab's try-on (D66 Slice B; conductor/design_lab/trial.py, docs/design-lab/PLAN.md §6) -----------
+    def _trial_refusal(self) -> CanopyState | None:
+        if self._stopped:
+            return self._refused(STOPPED_MESSAGE, None)
+        if self._commissioning:
+            return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        if self._paused:
+            return self._refused(TRIAL_PAUSED_MESSAGE, None)
+        if self._outage is not None:
+            return self._refused(RESTING_MESSAGE, self.deps.settings.reconciler.outage_probe_interval_s)
+        if self._rehearsal is not None:
+            return self._refused(TRIAL_REHEARSAL_MESSAGE, self._rehearsal_left())
+        return None
+
+    async def start_trial(self, trial: Trial) -> CanopyState:
+        """Show `trial`'s draft of its scene now (source "lab", one burst, module level or strand only), until its
+        bound. A re-apply while one runs keeps that session's bound, its start and its bound task. Refused (a plain
+        sentence, nothing sent) while stopped, commissioning, paused, resting or rehearsing; a re-apply that is
+        refused leaves the running try-on as it was."""
+        refused = self._trial_refusal()
+        if refused is not None:
+            return refused
+        previous = self._trial
+        if previous is not None:  # re-applies never extend the bound
+            trial = replace(
+                trial,
+                started_mono=previous.started_mono,
+                started_at=previous.started_at,
+                ends_mono=previous.ends_mono,
+                applies=previous.applies + 1,
+                session=previous.session,
+            )
+        else:
+            self._trial_sessions += 1
+            trial = replace(trial, applies=1, session=self._trial_sessions)
+        before = self._plan
+        self._trial = trial
+        st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
+        if st.refused:
+            if previous is not None:
+                # the running try-on stays as it was (nothing of this one was installed)
+                self._trial = previous
+            else:
+                cleared = self._clear_trial(f"it couldn't start: {st.message}")
+                # A refused request installs nothing, so the approved look is still up; should that ever change,
+                # never leave a trial plan up without its override.
+                if self._plan is not before:
+                    self._restore_approved(cleared)
+            return st
+        if previous is None:
+            self._arm_trial_bound(trial)
+        plan = self._plan
+        self.telemetry.record(
+            "lab",
+            action="trial_start" if previous is None else "trial_apply",
+            scene=trial.mode_id,
+            draft=trial.label,
+            version=trial.version,
+            modules=list(plan.modules) if plan is not None else [],
+            tier=str(plan.tier) if plan is not None else None,
+            bound_s=round(trial.ends_mono - trial.started_mono, 3),
+            applies=trial.applies,
+            source="engine",
+        )
+        return st
+
+    def _arm_trial_bound(self, trial: Trial) -> None:
+        session = trial.session
+
+        async def bound() -> None:
+            await self.clock.sleep(max(0.0, trial.ends_mono - self.clock.monotonic()))
+            await self._end_trial_at_bound(session)
+
+        self._trial_task = asyncio.get_running_loop().create_task(
+            bound(), name=f"canopy:trial:{trial.mode_id}"
+        )
+
+    async def end_trial(self, *, source: str, why: str | None = None) -> CanopyState:
+        """Back to approved: the override is cleared and the scene's approved look goes out (source "lab", one
+        burst; it counts as a change for the idle hold). Nothing to do when no try-on runs."""
+        trial = self._clear_trial(why or f"stopped by {source}")
+        if trial is None:
+            return self.state()
+        st = await self._request(trial.mode_id, source=TRIAL_SOURCE, ripple=False)
+        if st.refused:
+            self._restore_approved(trial)
+        return st
+
+    async def _end_trial_at_bound(self, session: int) -> None:
+        """The try-on's bound: ends it only if it is still the same session (a stale task does nothing)."""
+        trial = self._trial
+        if trial is None or trial.session != session:
+            return
+        bound = trial.ends_mono - trial.started_mono
+        await self.end_trial(source="the try-on's time limit", why=f"it reached its time limit ({bound:g} s)")
+
+    def _clear_trial(
+        self, why: str, *, repick: bool = False, skip: frozenset[Tier] = frozenset()
+    ) -> Trial | None:
+        """End the override now (before the caller compiles its own look) and return the try-on it cleared (None if
+        none). The bound task is cancelled unless it is the caller. With `repick`, the approved look goes back."""
+        trial = self._trial
+        if trial is None:
+            return None
+        task, self._trial_task = self._trial_task, None
+        if task is not None and task is not _current_task():
+            task.cancel()
+        self._trial = None
+        self.telemetry.record(
+            "lab", action="trial_end", scene=trial.mode_id, why=why, applies=trial.applies, source="engine"
+        )
+        self._publish_soon()
+        if repick:
+            self._restore_approved(trial, skip=skip)
+        return trial
+
+    def _restore_approved(self, trial: Trial | None, *, skip: frozenset[Tier] = frozenset()) -> None:
+        """The transactional fallback: a caller that cleared a try-on and then couldn't install its own look puts the
+        scene's approved look back (one burst), so a trial plan never stays installed with no override and no bound
+        (the reconciler re-asserts the current plan forever, and the idle hold skips the idle mode)."""
+        plan = self._plan
+        if trial is None or self._stopped or plan is None or plan.mode_id != trial.mode_id:
+            return
+        approved, why = self.compile_best(trial.mode_id, skip=skip)
+        if approved is None:
+            self.telemetry.record(
+                "alert",
+                level="warn",
+                message=f"The try-on of {trial.label} ended but its approved look can't be shown: {why}",
+            )
+            return
+        self._show(approved, "reconciler")
+
+    def _trial_left(self) -> float | None:
+        trial = self._trial
+        if trial is None:
+            return None
+        return round(max(0.0, trial.ends_mono - self.clock.monotonic()), 2)
+
     # ---- compiling --------------------------------------------------------------------------------------------
     def compile_best(
         self, mode_id: str, *, floor: int | None = None, skip: frozenset[Tier] = frozenset()
     ) -> tuple[ModePlan | None, str]:
         """The best plan for `mode_id`: the first allowed tier that compiles, from the floor down, then above it
-        (never a tier in `skip`)."""
+        (never a tier in `skip`). While a Design Lab try-on of `mode_id` stands, only module level or strand (D66)."""
+        if self._trial is not None and mode_id == self._trial.mode_id:
+            skip = skip | TRIAL_SKIP
         try:
             ladder = list(self.deps.ladder(mode_id))
         except (KeyError, LookupError, PlanError, ValueError):
@@ -2156,6 +2377,13 @@ class CanopyEngine:
         if data != self._last_published:
             self._last_published = data
             hub.publish(TOPIC, data)
+
+
+def _current_task() -> asyncio.Task | None:
+    try:
+        return asyncio.current_task()
+    except RuntimeError:  # no running loop
+        return None
 
 
 def _clock_time(t: float | None) -> str:
