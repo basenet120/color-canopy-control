@@ -113,7 +113,7 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     approved look back (the safe look if that raises too), an alert, the route answers a plain 500, the bound task
     ends cleanly. The Lab's JS is unchanged (it already re-asks on a 409 confirm and counts a plain 409 down).
     **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2120 passed, 5 skipped, 136 subtests; `make lint`; node 116/116; soak exit 0, only
-    the non-gating "(reported)" D65 row FAILs, as before; `tests/test_lab_trial.py` 74 tests. **Open for Alon:** the try-on
+    the non-gating "(reported)" D65 row FAILs, as before; `tests/test_lab_trial.py` 74 tests. **CI fix (Oct 17):** the try-on route tests failed on CI (apply gap 2.47 s left, a missing `retry_after_s`, "105 s left") because FastAPI runs the sync dependencies (`require_ops`, `_no_cross_site`, …) on real worker threads, and the virtual loop jumps its clock to the next timer while a thread computes; `no_threads` now runs `anyio.to_thread.run_sync` inline and refuses `Thread.start`, and the time assertions are bounded by the clock read around each request. Verified: with every dependency and build made 50 ms slower in real time the old tests fail 9, the new pass 74; `tests/test_lab_trial.py` 30/30 under 10 CPU hogs (the first 4 under 30); pytest 2120 passed, 5 skipped; `make lint`; node tests pass. **Open for Alon:** the try-on
     doesn't apply the T1 lock (it never writes a slot), so a locked painted design can be tried on at module level;
     say if it should.
     **Deploy block (§11; Alon runs it, coordinated with Paris; this ends Paris's break-glass hold):**
