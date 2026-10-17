@@ -15,6 +15,7 @@ commit (L); the function bodies marked `S1` are stream S1's.
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from collections.abc import Mapping
@@ -130,14 +131,29 @@ with warnings.catch_warnings():
         stepped: DraftStepped | None = None  # present iff the approved ladder has "stepped"
         copy: DraftCopy = Field(default_factory=DraftCopy)
 
-        @field_validator("mood")
+        @field_validator("name", "mood", "description")
         @classmethod
-        def _still_mood(cls, v: str) -> str:
-            # The mood is the mode's blurb, shown at every tier (schema.py Mode._ladder), so it never says "moves".
-            if m := MOTION_WORDS.search(v):
-                raise ValueError(
-                    f"the mood can't say {m.group(0)!r}: it shows at every tier, also when nothing moves"
-                )
+        def _true_client_copy(cls, v: str, info: ValidationInfo) -> str:
+            # The client copy shows on the guest panel at every tier (the name is the kiosk card's title, the mood
+            # the mode's blurb, the description the Now-showing card's line) and on a partial canopy too, and nothing
+            # rewrites it: it never says "moves" or counts the lights (scene_rules.copy_problem, PROMPT A1, D62).
+            why = scene_rules.copy_problem(str(info.field_name), v)
+            if why is not None:
+                raise ValueError(why)
+            return v
+
+        @field_validator("layout")
+        @classmethod
+        def _finite_layout(cls, v: F.FieldSpec) -> F.FieldSpec:
+            # field.py's own check runs before coercion, so a quoted "nan" or "1e400" got through as nan/inf and
+            # failed later as a 500; refused here, after coercion, on the layout field.
+            for name in ("centre_in", "centres_in", "angle_deg", "start_deg", "radius_in"):
+                raw = getattr(v, name, None)
+                points = raw if name == "centres_in" and raw is not None else [raw]
+                for point in points:
+                    values = point if isinstance(point, tuple | list) else [point]
+                    if any(isinstance(n, float) and not math.isfinite(n) for n in values):
+                        raise ValueError(f"{name} must be finite numbers (canopy inches or degrees)")
             return v
 
         @field_validator("palette")
@@ -280,6 +296,18 @@ def _same_layout(a: SceneDraft, b: SceneDraft) -> bool:
     return a.layout.model_dump() == b.layout.model_dump()
 
 
+def painted_change(seed: SceneDraft, draft: SceneDraft) -> Literal["palette", "layout"] | None:
+    """What of a painted scene's frames the draft changes: "palette" when the hexes in stop order differ (a hex edit, a
+    reorder, an added or removed colour), "layout" when the 2-D field or the module sample does, else None. A rename
+    alone gives a new recipe key but the same frames, so the same slot hash: nothing to repaint. One predicate for
+    the T1 lock (preview.check_t1_lock) and `needs_slot_repaint`, so they never disagree."""
+    if [c.hex for c in seed.palette] != [c.hex for c in draft.palette]:
+        return "palette"
+    if not _same_layout(draft, seed) or draft.sample_at != seed.sample_at:
+        return "layout"
+    return None
+
+
 def _names(draft: SceneDraft) -> list[str]:
     return [c.name.casefold() for c in draft.palette]
 
@@ -331,13 +359,31 @@ def _canvas_of(layout: F.FieldSpec, keys: list[str] | None = None) -> FieldCanva
     )
 
 
+def reached_stops(layout: F.FieldSpec, n: int, canopy: dict) -> list[int]:
+    """The palette stops (n of them, at i / (n − 1)) the module level actually shows: stop i is reached when the
+    design's t at some module centre (D63: every sample at: centre) is within half a stop spacing of it. In stop
+    order; never empty. A sweep centred on an edge or a corner covers only part of the circle, and a line misses the
+    far ends, so a colour no strand shows is never named in the T3 sentence."""
+    if n < 2:
+        return list(range(n))
+    centres = F.module_centres(canopy, GRID)
+    ts = [F.value(layout, x, y, canopy) for x, y in centres.values()]
+    half = 0.5 / (n - 1)
+    return [i for i in range(n) if any(abs(t - i / (n - 1)) <= half + 1e-9 for t in ts)]
+
+
 def generated_copy(mode: Mode, draft: SceneDraft, canopy: dict) -> dict[str, str]:
     """{"modules": T3_TEMPLATE(...), "strand": STRAND_TEMPLATE(...), "stepped": STEPPED_TEMPLATE(...)} — the stepped
-    sentence only when the mode has a stepped rung and the draft its timing."""
+    sentence only when the mode has a stepped rung and the draft its timing. The T3 sentence names only the colours
+    the module level reaches (`reached_stops`); over a run every strand steps through the whole palette, so the moving
+    sentence names them all."""
     layout = draft.layout
-    colours = colour_phrase([c.name for c in draft.palette], invert=layout.invert, transform=layout.transform)
+    names = [c.name for c in draft.palette]
+    shown = [names[i] for i in reached_stops(layout, len(names), canopy)]
+    still = colour_phrase(shown, invert=layout.invert, transform=layout.transform)
+    colours = colour_phrase(names, invert=layout.invert, transform=layout.transform)
     out = {
-        "modules": T3_TEMPLATE.format(words=F.layout_words(layout, canopy), colours=colours),
+        "modules": T3_TEMPLATE.format(words=F.layout_words(layout, canopy), colours=still),
         "strand": STRAND_TEMPLATE.format(solid=draft.palette[draft.solid].name.lower()),
     }
     if mode.techniques.stepped is not None and draft.stepped is not None:
@@ -406,6 +452,40 @@ def resolve_copy(approved: ConfigTrio, draft: SceneDraft, canopy: dict) -> dict[
             [] if solid_same else ["the solid colour changed"],
         )
     return out
+
+
+# The description is free client copy: nothing regenerates it, so when the colours or the layout move under it the
+# Lab says so (a note in the preview and the export's review notes, never a refusal).
+DESCRIPTION_NAMES_GONE = (
+    "The description still names {names}, which the palette no longer has — check it still reads true."
+)
+DESCRIPTION_UNCHANGED = "The description is unchanged but the {what} changed — check it still reads true."
+
+
+def description_notes(seed: SceneDraft, draft: SceneDraft) -> list[str]:
+    """Non-blocking notes on a description the draft's colours or layout may have made stale: it names a colour the
+    palette dropped or renamed, or it is the approved text while the colour names, their order or the layout moved."""
+    kept = {c.name.casefold() for c in draft.palette}
+    gone = [
+        c.name.lower()
+        for c in seed.palette
+        if c.name.casefold() not in kept
+        and re.search(rf"(?<!\w){re.escape(c.name)}(?!\w)", draft.description, re.IGNORECASE)
+    ]
+    if gone:
+        names = gone[0] if len(gone) == 1 else f"{', '.join(gone[:-1])} and {gone[-1]}"
+        return [DESCRIPTION_NAMES_GONE.format(names=names)]
+    if draft.description != seed.description:
+        return []
+    what = [
+        w
+        for w, moved in (
+            ("colours", _names(draft) != _names(seed)),
+            ("layout", not _same_layout(draft, seed)),
+        )
+        if moved
+    ]
+    return [DESCRIPTION_UNCHANGED.format(what=" and the ".join(what))] if what else []
 
 
 # ---- recipe keys (§3.2.1) --------------------------------------------------------------------------------------------
@@ -792,7 +872,7 @@ def draft_changes(approved: ConfigTrio, draft: SceneDraft, *, canopy: dict) -> d
     solid_to = {"index": draft.solid, **draft.palette[draft.solid].model_dump()}
     copy = resolve_copy(approved, draft, canopy)
     name = pair(seed.name, draft.name)
-    frames_differ = [c.hex for c in seed.palette] != [c.hex for c in draft.palette] or layout is not None
+    frames_differ = painted_change(seed, draft) is not None
     return {
         "approved_colours": colours,
         "name": name,
@@ -893,14 +973,17 @@ __all__ = [
     "apply_draft",
     "apply_drafts",
     "colour_phrase",
+    "description_notes",
     "draft_changes",
     "field_for",
     "generated_copy",
     "is_approved",
     "load_trio",
     "owners_of",
+    "painted_change",
     "problem_of",
     "problems_from_config_error",
+    "reached_stops",
     "recipe_keys",
     "resolve_copy",
     "seed_draft",

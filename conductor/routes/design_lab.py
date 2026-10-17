@@ -49,10 +49,10 @@ from conductor.design_lab import draft as D
 from conductor.design_lab import export as X
 from conductor.design_lab import preview as P
 from conductor.design_lab import store as S
-from conductor.design_lab.service import LabService, lab_of
+from conductor.design_lab.service import KEY, LabService, lab_of
 from conductor.looks import CompileContext
 from conductor.looks import scene_rules as R
-from conductor.routes.deps import require_ops
+from conductor.routes.deps import require_ops, services_of
 from conductor.routes.design import mode_design
 from conductor.routes.ops import _no_cross_site, engine_flag
 from conductor.show import STEPPED_LIVE_OFF
@@ -60,6 +60,9 @@ from conductor.show import STEPPED_LIVE_OFF
 log = logging.getLogger(__name__)
 
 NO_STORE = {"Cache-Control": "no-store"}
+CONFIG_SHA_HEADER = (
+    "X-Lab-Config-Sha"  # on every answer: an open page sees the Conductor restart on a new config
+)
 TELEMETRY_KIND = "lab"
 SCENE_ID = r"^[a-z][a-z0-9-]{1,40}$"
 FIXTURE_TEST = "tests/test_modes_match_scenes.py"
@@ -110,24 +113,35 @@ class LabRoute(APIRoute):
             try:
                 response = await handler(request)
             except LabAnswer as exc:
-                return JSONResponse(exc.body, status_code=exc.status_code, headers=NO_STORE)
+                response = JSONResponse(exc.body, status_code=exc.status_code)
             except HTTPException as exc:
-                headers = {**(exc.headers or {}), **NO_STORE}
-                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=headers)
+                response = JSONResponse(
+                    {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+                )
             except RequestValidationError as exc:
                 body = _problems(_validation_problems(list(exc.errors())), "The request").body
-                return JSONResponse(body, status_code=422, headers=NO_STORE)
+                response = JSONResponse(body, status_code=422)
             except NotImplementedError as exc:
                 what = str(exc) or "this part of the Design Lab"
-                return JSONResponse(
-                    {"detail": f"Not built yet: {what}.", "not_built": True},
-                    status_code=501,
-                    headers=NO_STORE,
+                response = JSONResponse(
+                    {"detail": f"Not built yet: {what}.", "not_built": True}, status_code=501
                 )
             response.headers["Cache-Control"] = "no-store"
+            sha = _config_sha_of(request)
+            if sha:
+                response.headers[CONFIG_SHA_HEADER] = sha
             return response
 
         return lab_handler
+
+
+def _config_sha_of(request: Request) -> str | None:
+    """The approved config the Lab loaded (once it is built), for CONFIG_SHA_HEADER."""
+    try:
+        lab = services_of(request).extras.get(KEY)
+    except Exception:  # noqa: BLE001 - a header never fails an answer
+        return None
+    return getattr(lab, "config_sha", None)
 
 
 router = APIRouter(
@@ -252,14 +266,17 @@ def catalog_json(lab: LabService) -> dict:
     current = lab.store.file().current
     try:
         drafted = lab.store.get(current).drafts if current else {}
-    except KeyError:
+    except S.NoSuchVersion:
         drafted = {}
     idle = {settings.kiosk.idle_mode, settings.kiosk.idle_scene}
     scenes = []
     for scene in approved.scenes.scenes:
         mode = approved.modes.mode(scene.id)
         draft = drafted.get(scene.id)
-        state = "draft" if draft is not None and not D.is_approved(approved, draft) else "approved"
+        seed = D.seed_draft(approved, scene.id)
+        # compared with this scene's own seed, never seeded from draft.scene_id: a hand-edited version whose draft
+        # names another (or no) scene shows as a draft (the versions list marks it stale) instead of failing the Lab
+        state = "draft" if draft is not None and draft.model_dump() != seed.model_dump() else "approved"
         scenes.append(
             {
                 "id": scene.id,
@@ -271,7 +288,7 @@ def catalog_json(lab: LabService) -> dict:
                 "painted": mode.slot is not None,
                 "stepped": "stepped" in mode.ladder,
                 "idle": scene.id in idle,
-                "approved": D.seed_draft(approved, scene.id).model_dump(mode="json"),
+                "approved": seed.model_dump(mode="json"),
                 "design": mode_design(scene.id, ctx),
                 "copy": _copy(mode),
                 "state": state,
@@ -392,7 +409,7 @@ async def versions(lab: Lab) -> JSONResponse:
 async def version(version_id: str, lab: Lab) -> JSONResponse:
     try:
         body = await run_in_threadpool(lambda: lab.store.version_json(version_id, **_store_ctx(lab)))
-    except KeyError:
+    except S.NoSuchVersion:
         raise _no_version(version_id) from None
     return JSONResponse(body)
 
@@ -406,7 +423,7 @@ async def save(body: SaveBody, lab: Lab) -> JSONResponse:
     if body.parent is not None:
         try:
             lab.store.get(body.parent)
-        except KeyError:
+        except S.NoSuchVersion:
             raise _no_version(body.parent) from None
 
     def work() -> dict:
@@ -419,10 +436,13 @@ async def save(body: SaveBody, lab: Lab) -> JSONResponse:
             parent=body.parent,
             **_store_ctx(lab),
         )
-        return lab.store.version_json(saved.id, **_store_ctx(lab))
+        # the answer is built from what was saved: a delete landing right after can't turn a save into an error
+        return lab.store.version_answer(saved, **_store_ctx(lab))
 
     try:
         answer = await run_in_threadpool(work)
+    except S.NoSuchVersion as exc:  # the parent was deleted after the check above (another tab)
+        raise _no_version(str(exc.args[0])) from None
     except D.DraftError as exc:
         raise _draft_error(exc) from None
     except P.T1Locked as exc:
@@ -445,7 +465,7 @@ async def delete(version_id: str, lab: Lab, _body: EmptyBody | None = None) -> J
     _writable(lab)
     try:
         await run_in_threadpool(lab.store.delete_version, version_id)
-    except KeyError:
+    except S.NoSuchVersion:
         raise _no_version(version_id) from None
     except S.StoreReadOnly as exc:
         raise _read_only(exc) from None
@@ -461,7 +481,7 @@ async def restore(body: RestoreBody, lab: Lab) -> JSONResponse:
     if body.version != "approved":
         try:
             saved = lab.store.get(body.version)
-        except KeyError:
+        except S.NoSuchVersion:
             raise _no_version(body.version) from None
 
     def work() -> dict:
@@ -484,6 +504,8 @@ async def restore(body: RestoreBody, lab: Lab) -> JSONResponse:
 
     try:
         answer = await run_in_threadpool(work)
+    except S.NoSuchVersion:  # deleted after the check above (another tab)
+        raise _no_version(body.version) from None
     except S.StoreReadOnly as exc:
         raise _read_only(exc) from None
     _record(lab, "restore", version=body.version)
@@ -498,7 +520,7 @@ async def export(
 ) -> Response:
     try:
         saved = lab.store.get(version)
-    except KeyError:
+    except S.NoSuchVersion:
         raise _no_version(version) from None
     approved, canopy = lab.approved, lab.canopy
     now = lab.services.clock.now()

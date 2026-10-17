@@ -27,7 +27,7 @@ from conductor.design_lab.service import LabService
 from conductor.engine_api import Tier
 from conductor.looks import CompileContext, compile_mode, load_modes, scene_rules
 from conductor.routes.design import mode_design
-from conductor.show import ShowWiring
+from conductor.show import STEPPED_LIVE_OFF, ShowWiring
 from conductor.sim.settings import SimSettings
 
 REGISTRY = load_registry()
@@ -337,6 +337,11 @@ def test_the_show_box_view_lights_only_r0c0_and_r0c1_with_the_d62_sentence(tmp_p
         assert states == {p: ("lit" if p in LIVE else "dark") for p in D.GRID}
         t3 = hexes(answer["design"]["modules"])
         assert {p: c for p, c in lit_colours(view).items() if c} == {p: t3[p] for p in LIVE}
+        assert view["note"].startswith(P.SHOW_BOX_NOTE)
+        # the gate's own sentence, and only for a scene with a stepped rung (none is enabled here)
+        stepped = "stepped" in TRIO.modes.mode(draft.scene_id).ladder
+        assert (STEPPED_LIVE_OFF.lower() in view["note"].lower()) is stepped, draft.scene_id
+        assert P.SHOW_BOX_STEPPED_ON not in view["note"]
 
 
 def test_the_show_box_steps_only_once_alon_enables_it(tmp_path):
@@ -347,6 +352,10 @@ def test_the_show_box_steps_only_once_alon_enables_it(tmp_path):
         "show_box_today"
     ]
     assert view["tier"] == "stepped"
+    # the note never says stepped is off while the view steps
+    assert STEPPED_LIVE_OFF.lower() not in view["note"].lower() and view["note"].endswith(
+        P.SHOW_BOX_STEPPED_ON
+    )
 
 
 # ---- today on the app's own show wiring (simulator, virtual time) -----------------------------------------------------
@@ -481,13 +490,19 @@ def test_t1_lock_refuses_design_edits_after_commissioning_on_live_only(tmp_path)
     assert lock["sentence"] == f"Golden Hour: {P.T1_LOCKED}."
     for changes, field in (
         ({"palette.2.hex": NEW_PINK}, "palette"),
-        ({"palette.1.name": "Apricot"}, "palette"),
         ({"layout": {"kind": "linear", "angle_deg": 30}}, "layout"),
     ):
         with pytest.raises(P.T1Locked) as exc:
             P.preview(lab, edit("golden-hour", **changes))
         assert exc.value.field == field and exc.value.detail == lock["sentence"]
-    # brightness, the solid, the client copy and the stepped timing stay editable
+    # a colour's name, brightness, the solid, the client copy and the stepped timing stay editable: a rename keeps
+    # the frames and the slot hash (no repaint), so the lock never claims it needs one
+    P.preview(lab, edit("golden-hour", **{"palette.1.name": "Apricot"}))
+    swapped = D.seed_draft(lab.approved, "golden-hour").model_dump(mode="json")["palette"]
+    swapped[0], swapped[1] = swapped[1], swapped[0]  # a reorder moves the frames: locked
+    with pytest.raises(P.T1Locked) as exc:
+        P.preview(lab, edit("golden-hour", palette=swapped))
+    assert exc.value.field == "palette"
     P.preview(
         lab,
         edit(

@@ -22,7 +22,7 @@ import difflib
 import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ from typing import Any
 import yaml
 
 from conductor.config import RecipesFile
+from conductor.design_lab import draft as D
 from conductor.design_lab.draft import ConfigTrio
 from conductor.design_lab.store import Version
 from conductor.looks import field as F
@@ -50,6 +51,16 @@ STUDIO_SCENES = (
     "demo-model.mjs SCENES still has {hexes} for {scene}; the Studio's shop-kit Apply buttons (studio.js "
     "`scene-apply` and the pair gradient) send it until SCENES is updated by hand."
 )
+# A palette that changed with no approved hex changed (a colour added, or renamed): SCENES still has the old list.
+STUDIO_SCENES_PALETTE = (
+    "demo-model.mjs SCENES still has {scene}'s approved {n}-colour palette ({palette}); the Studio's shop-kit Apply "
+    "buttons (studio.js `scene-apply` and the pair gradient) send it until SCENES is updated by hand."
+)
+# SCENES also holds the scene's name, its default colour and its brightness, which the Studio opens the scene on.
+STUDIO_SCENES_OPENS = (
+    'demo-model.mjs SCENES still opens {scene} as "{name}" on {solid} at {brightness}% in the Studio (studio.js) '
+    "until SCENES is updated by hand."
+)
 FIXTURE_STALE = (
     "tests/fixtures_scene_frames.json isn't what the approved config gives; run make scene-pins first"
 )
@@ -65,6 +76,9 @@ class LabExport:
     layout_changes: list[str]  # D63 sentences
     review_notes: list[str]  # e.g. comments kept in a rewritten block that may now be stale
     problem: str = ""  # set when the edited files didn't re-read as the patched trio: then patch == ""
+    stepped_changes: list[str] = field(
+        default_factory=list
+    )  # D65 sentences (stepped timing; live off until Gate R)
 
 
 class LocateError(ValueError):
@@ -743,12 +757,45 @@ def _colour(c: Any) -> str:
 
 @dataclass
 class _Changes:
-    approved: list[str]
-    layout: list[str]
+    approved: list[
+        str
+    ]  # D59: exactly what sets draft_changes' needs_d59 (a scene's name, its palette colours)
+    layout: list[str]  # D63: the 2-D design and its module sample
     brightness: list[str]
-    copy: list[str]
+    copy: list[str]  # the rung sentences the Lab regenerated
     notes: list[str]
     slot_repaint: list[str]
+    solid: list[str] = field(default_factory=list)  # the strand's solid (a draft default, not a D59 colour)
+    stepped: list[str] = field(default_factory=list)  # D65: the stepped run's timing
+    client_copy: list[str] = field(default_factory=list)  # the client's own words (mood, description)
+
+
+def _studio_notes(a: Any, p: Any) -> list[str]:
+    """What demo-model.mjs SCENES (the Studio's hand-kept copy of the catalog) still holds after this export."""
+    notes = []
+    changed_hexes = [
+        c.hex for i, c in enumerate(a.palette) if i >= len(p.palette) or p.palette[i].hex != c.hex
+    ]
+    if changed_hexes:
+        notes.append(STUDIO_SCENES.format(hexes=", ".join(changed_hexes), scene=a.name))
+    elif [(c.name, c.hex.upper()) for c in a.palette] != [(c.name, c.hex.upper()) for c in p.palette]:
+        notes.append(
+            STUDIO_SCENES_PALETTE.format(
+                scene=a.name, n=len(a.palette), palette=", ".join(_colour(c) for c in a.palette)
+            )
+        )
+    if (a.name, a.solid.name, a.solid.hex, a.brightness_draft) != (
+        p.name,
+        p.solid.name,
+        p.solid.hex,
+        p.brightness_draft,
+    ):
+        notes.append(
+            STUDIO_SCENES_OPENS.format(
+                scene=p.name, name=a.name, solid=_colour(a.solid), brightness=a.brightness_draft
+            )
+        )
+    return notes
 
 
 def _changes(
@@ -775,11 +822,20 @@ def _changes(
             else:
                 ch.approved.append(f"{name}: colour {i + 1} {_colour(old)} → {_colour(new)}")
         if a.default_solid != p.default_solid or a.solid.name != p.solid.name:
-            ch.approved.append(f"{name}: solid colour {_colour(a.solid)} → {_colour(p.solid)}")
+            ch.solid.append(f"{name}: solid colour {_colour(a.solid)} → {_colour(p.solid)}")
         if a.mood != p.mood:
-            ch.copy.append(f'{name}: mood "{a.mood}" → "{p.mood}"')
+            ch.client_copy.append(f'{name}: mood "{a.mood}" → "{p.mood}"')
         if a.description != p.description:
-            ch.copy.append(f'{name}: description "{a.description}" → "{p.description}"')
+            ch.client_copy.append(f'{name}: description "{a.description}" → "{p.description}"')
+        try:
+            ch.notes.extend(
+                f"{name}: {note}"
+                for note in D.description_notes(
+                    D.seed_draft(approved, scene_id), D.seed_draft(patched, scene_id)
+                )
+            )
+        except D.DraftError:  # a scene with no 2-D design has no draft (the validator says why)
+            pass
         a_design = am.techniques.modules.sample if am.techniques.modules else None
         p_design = pm.techniques.modules.sample if pm.techniques.modules else None
         if a_design is not None and p_design is not None:
@@ -810,17 +866,13 @@ def _changes(
                 if getattr(a_st, f) != getattr(p_st, f)
             ]
             if moved:
-                ch.layout.append(f"{name}: stepped run {', '.join(moved)}")
+                ch.stepped.append(f"{name}: stepped run {', '.join(moved)}")
         # a painted scene's T1 design: its canvas and the colours its stops name
         if am.slot is not None and am.techniques.canvas is not None and pm.techniques.canvas is not None:
             a_canvas, p_canvas = am.techniques.canvas.canvas, pm.techniques.canvas.canvas
             if _painted(approved, a_canvas) != _painted(patched, p_canvas):
                 ch.slot_repaint.append(f"{name}: " + SLOT_REPAINT.format(slot=am.slot))
-        changed_hexes = [
-            c.hex for i, c in enumerate(a.palette) if i >= len(p.palette) or p.palette[i].hex != c.hex
-        ]
-        if changed_hexes:
-            ch.notes.append(STUDIO_SCENES.format(hexes=", ".join(changed_hexes), scene=name))
+        ch.notes.extend(_studio_notes(a, p))
     return ch
 
 
@@ -872,10 +924,18 @@ def decision_draft(
             + "; ".join(changes.approved)
             + "."
         )
+    if changes.solid:
+        parts.append("Strand solid (a draft default, not a D59 colour): " + "; ".join(changes.solid) + ".")
     if changes.layout:
         parts.append("Layout changes (D63; Paris reviews): " + "; ".join(changes.layout) + ".")
+    if changes.stepped:
+        parts.append("Stepped timing (D65; live off until Gate R): " + "; ".join(changes.stepped) + ".")
     if changes.brightness:
         parts.append("Brightness (drafts): " + "; ".join(changes.brightness) + ".")
+    if changes.client_copy:
+        parts.append(
+            "Client copy edited (check it is true at every tier): " + "; ".join(changes.client_copy) + "."
+        )
     if changes.copy:
         parts.append("Copy regenerated: " + "; ".join(changes.copy) + ".")
     parts.extend(changes.slot_repaint)
@@ -924,7 +984,9 @@ def export_patch(
     review_notes = [*changes.slot_repaint, *changes.notes]
 
     def refused(problem: str) -> LabExport:
-        return LabExport("", [], scene_ids, "", changes.approved, changes.layout, review_notes, problem)
+        return LabExport(
+            "", [], scene_ids, "", changes.approved, changes.layout, review_notes, problem, changes.stepped
+        )
 
     before: dict[str, str] = {}
     for path in EXPORT_FILES[:3]:
@@ -993,6 +1055,7 @@ def export_patch(
         approved_changes=changes.approved,
         layout_changes=changes.layout,
         review_notes=review_notes,
+        stepped_changes=changes.stepped,
     )
 
 

@@ -37,6 +37,7 @@ import hashlib
 import logging
 import os
 import re
+import stat
 import threading
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -72,18 +73,23 @@ READ_ONLY_ALERT = (
 )
 REASON_MAX = 120  # an alert's reason: the first line of the error, at most this long
 STORE_PATH = "overrides/looks.yaml"
+MAX_DEPTH = (
+    64  # a real looks.yaml nests ~7 deep (versions → version → drafts → scene → palette → colour → field)
+)
 _VERSION_N = re.compile(r"^v(\d+)$")
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # NaN and ±inf never validate: a non-finite number (`created_at: .nan`) would pass and then break every JSON
+    # answer that carries it (Starlette refuses non-finite floats), instead of being listed as one unreadable version.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class Version(_Strict):
     id: str = Field(pattern=r"^v\d{4,}$")
     name: str = Field(min_length=1, max_length=80)
     note: str = Field("", max_length=60)
-    created_at: float
+    created_at: float = Field(ge=0)
     parent: str | None = None
     config_sha: str = Field(pattern=r"^[0-9a-f]{12}$")
     drafts: dict[str, SceneDraft] = Field(default_factory=dict)
@@ -93,6 +99,9 @@ class LooksFile(_Strict):
     format: Literal[1] = 1
     seq: int = Field(0, ge=0)
     current: str | None = None
+    # the highest "Client <Mon> <D> v<N>" number issued per local date ("2026-10-17" → 3), so deleting the newest
+    # version of a day never reissues its name (as `seq` never reissues its id)
+    names: dict[str, int] = Field(default_factory=dict)
     versions: list[Version] = Field(default_factory=list, max_length=MAX_VERSIONS)
 
 
@@ -102,7 +111,13 @@ class _TopLevel(_Strict):
     format: Literal[1]
     seq: int = Field(0, ge=0)
     current: str | None = None
+    names: dict[str, int] = Field(default_factory=dict)
     versions: list[Any] = Field(default_factory=list, max_length=MAX_VERSIONS)
+
+
+class NoSuchVersion(KeyError):
+    """No saved version has this id (or it is unreadable): a 404. A KeyError, so older `except KeyError` callers keep
+    working, but the routes catch only this one, so an internal KeyError is never reported as a missing version."""
 
 
 class StoreReadOnly(RuntimeError):
@@ -115,10 +130,16 @@ class _Corrupt(Exception):
 
 @dataclass(frozen=True)
 class _Unreadable:
-    """A saved version that didn't parse: written back exactly as it was read."""
+    """A saved version that didn't parse: written back exactly as it was read. `id` is its label in the list, unique
+    among the entries (a missing id is "?1", "?2", …; a second copy of an id is "<id> (copy 2)"), so each one can be
+    deleted on its own."""
 
     id: str
     raw: Any
+    error: str = ""
+
+    def to_json(self) -> dict:
+        return {"id": self.id, "unreadable": True, "error": self.error}
 
 
 Entry = Version | _Unreadable
@@ -137,6 +158,21 @@ def _reason(exc: BaseException) -> str:
         where = ".".join(str(p) for p in first.get("loc", ())) or "the file"
         return _short(f"{where}: {first.get('msg', 'invalid')}")
     return _short(str(exc)) or type(exc).__name__
+
+
+def _too_deep(data: Any, limit: int = MAX_DEPTH) -> bool:
+    """True when `data` nests deeper than `limit` (walked with a stack, never recursion): such a file is corrupt,
+    and one that loads must also dump back (yaml.safe_dump recurses, and fails sooner than safe_load)."""
+    stack = [(data, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(item, dict):
+            stack.extend((v, depth + 1) for v in item.values())
+        elif isinstance(item, list | tuple):
+            stack.extend((v, depth + 1) for v in item)
+    return False
 
 
 def _number(version_id: Any) -> int:
@@ -173,7 +209,6 @@ class LookStore:
         self.pending_alert: str | None = None  # the /ops alert `lab_of` records on the loop thread
         self._file = LooksFile()
         self._entries: list[Entry] = []  # the file's order, unreadable versions included
-        self._unreadable: list[dict] = []  # {"id", "unreadable": True, "error"} per version that didn't parse
         self._checks: dict[
             tuple[str, str], dict
         ] = {}  # (version id, config_sha) → {stale, problems, needs_d59}
@@ -182,13 +217,15 @@ class LookStore:
     # ---- loading -------------------------------------------------------------------------------------------------
     def load(self) -> LooksFile:
         """Read looks.yaml; never raises (§3.5). No file → an empty store. A corrupt file (bad YAML, a bad top level,
-        an unknown format, over MAX_BYTES — checked before reading) is set aside and the store starts empty; a file
-        that can't be read (OSError) or set aside stays where it is and the store goes read-only."""
+        an unknown format, over MAX_BYTES — checked before reading and bounded while reading —, nested deeper than
+        MAX_DEPTH, or not a regular file: a FIFO or a device would block or never end) is set aside and the store
+        starts empty; a file that can't be read (OSError) or set aside stays where it is and the store goes
+        read-only."""
         with self._lock:
             self.error = self.set_aside = self.pending_alert = None
             self.read_only = False
             self._checks.clear()
-            self._set(LooksFile(), [], [])
+            self._set(LooksFile(), [])
             try:
                 self._load_file()
             except _Corrupt as exc:
@@ -199,19 +236,29 @@ class LookStore:
 
     def _load_file(self) -> None:
         try:
-            size = self.path.stat().st_size
+            st = self.path.stat()  # follows a symlink: what a read would open
         except FileNotFoundError:
             return
-        if size > MAX_BYTES:  # never read it
-            raise _Corrupt(f"it is {size} bytes, over the {MAX_BYTES}-byte limit")
+        if not stat.S_ISREG(
+            st.st_mode
+        ):  # a FIFO blocks a read, a device (/dev/zero) never ends: st_size is 0
+            raise _Corrupt("it isn't a regular file")
+        if st.st_size > MAX_BYTES:  # never read it
+            raise _Corrupt(f"it is {st.st_size} bytes, over the {MAX_BYTES}-byte limit")
+        with open(self.path, "rb") as f:
+            data = f.read(MAX_BYTES + 1)  # bounded, whatever the size said
+        if len(data) > MAX_BYTES:
+            raise _Corrupt(f"it is over the {MAX_BYTES}-byte limit")
         try:
-            text = self.path.read_text(encoding="utf-8")
+            text = data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise _Corrupt(f"it isn't UTF-8 text ({exc.reason})") from None
         try:
             raw = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
+        except (yaml.YAMLError, RecursionError) as exc:
             raise _Corrupt(f"it isn't valid YAML ({_reason(exc)})") from None
+        if _too_deep(raw):
+            raise _Corrupt(f"it is nested more than {MAX_DEPTH} levels deep")
         if not isinstance(raw, dict):
             raise _Corrupt("it isn't a mapping of format, seq, current and versions")
         if "format" in raw and raw["format"] != 1:
@@ -221,24 +268,34 @@ class LookStore:
         except ValidationError as exc:
             raise _Corrupt(_reason(exc)) from None
         entries: list[Entry] = []
-        unreadable: list[dict] = []
-        seen: set[str] = set()
+        seen: set[str] = set()  # real string ids
+        labels: set[str] = set()  # every entry's label (unique, so each can be deleted on its own)
+        nameless = 0
         for item in top.versions:
             raw_id = item.get("id") if isinstance(item, dict) else None
-            label = raw_id if isinstance(raw_id, str) else "?"
+            label = raw_id if isinstance(raw_id, str) else None
             try:
                 if not isinstance(item, dict):
                     raise TypeError("a version must be a mapping")
-                if label in seen:
+                if label is not None and label in seen:
                     raise ValueError(f"a second version with the id {label!r}")
                 entries.append(Version.model_validate(item))
             except (ValidationError, ValueError, TypeError) as exc:
-                entries.append(_Unreadable(label, item))
-                unreadable.append({"id": label, "unreadable": True, "error": _reason(exc)})
-            seen.add(label)
+                if label is None:
+                    nameless += 1
+                    shown = f"?{nameless}"
+                else:
+                    shown, n = label, 1
+                    while shown in labels:
+                        n += 1
+                        shown = f"{label} (copy {n})"
+                entries.append(_Unreadable(shown, item, _reason(exc)))
+            if label is not None:
+                seen.add(label)
+            labels.add(entries[-1].id)
         versions = [e for e in entries if isinstance(e, Version)]
         current = top.current if top.current in {v.id for v in versions} else None
-        self._set(LooksFile(seq=top.seq, current=current, versions=versions), entries, unreadable)
+        self._set(LooksFile(seq=top.seq, current=current, names=top.names, versions=versions), entries)
 
     def _quarantine(self, reason: str) -> None:
         """Move the corrupt file aside (it is never overwritten), start empty and raise the /ops alert."""
@@ -249,7 +306,8 @@ class LookStore:
             self._go_read_only(f"{reason}; moving it aside failed: {_reason(exc)}")
             return
         try:
-            os.chmod(target, 0o600)
+            if not target.is_symlink():  # chmod follows a link: never change the mode of a file elsewhere
+                os.chmod(target, 0o600)
         except OSError:
             log.warning("Design Lab: couldn't make %s 0600", target)
         self.error = _short(reason)
@@ -265,10 +323,9 @@ class LookStore:
             "Design Lab: %s couldn't be read or set aside (%s); the store is read-only", self.path, reason
         )
 
-    def _set(self, looks: LooksFile, entries: list[Entry], unreadable: list[dict]) -> None:
+    def _set(self, looks: LooksFile, entries: list[Entry]) -> None:
         self._file = looks
         self._entries = list(entries)
-        self._unreadable = list(unreadable)
 
     # ---- reading -------------------------------------------------------------------------------------------------
     def file(self) -> LooksFile:
@@ -276,15 +333,15 @@ class LookStore:
         return self._file
 
     def get(self, version_id: str) -> Version:
-        """The saved version; KeyError when there is none (or it is unreadable)."""
+        """The saved version; NoSuchVersion (a KeyError) when there is none (or it is unreadable)."""
         for version in self._file.versions:
             if version.id == version_id:
                 return version
-        raise KeyError(version_id)
+        raise NoSuchVersion(version_id)
 
     def unreadable(self) -> list[dict]:
         """The versions that didn't parse, as `{"id", "unreadable": true, "error"}` (kept in the file verbatim)."""
-        return list(self._unreadable)
+        return [e.to_json() for e in self._entries if isinstance(e, _Unreadable)]
 
     # ---- writing (the caller holds the lock) ---------------------------------------------------------------------
     def _writable(self) -> None:
@@ -295,25 +352,33 @@ class LookStore:
     def _refuse(message: str) -> D.DraftError:
         return D.DraftError([Problem(path=STORE_PATH, field="draft", message=message)])
 
-    def _write(self, seq: int, current: str | None, entries: list[Entry]) -> None:
+    def _write(
+        self, seq: int, current: str | None, entries: list[Entry], names: Mapping[str, int] | None = None
+    ) -> None:
         """Validate the whole proposed file, write the history copy, then the file (atomic, 0600); only then
         change the in-memory state."""
         if len(entries) > MAX_VERSIONS:
             raise self._refuse(f"The Lab keeps at most {MAX_VERSIONS} versions; delete an old one first.")
         versions = [e for e in entries if isinstance(e, Version)]
+        names = dict(self._file.names if names is None else names)
         looks = LooksFile.model_validate(
-            {"seq": seq, "current": current, "versions": [v.model_dump() for v in versions]}
+            {"seq": seq, "current": current, "names": names, "versions": [v.model_dump() for v in versions]}
         )
         if current is not None and current not in {v.id for v in versions}:
-            raise KeyError(current)
-        document = {
-            "format": 1,
-            "seq": seq,
-            "current": current,
-            "versions": [e.model_dump(mode="json") if isinstance(e, Version) else e.raw for e in entries],
-        }
+            raise NoSuchVersion(current)
+        document: dict[str, Any] = {"format": 1, "seq": seq, "current": current}
+        if names:
+            document["names"] = names
+        document["versions"] = [
+            e.model_dump(mode="json") if isinstance(e, Version) else e.raw for e in entries
+        ]
         _TopLevel.model_validate(document)  # the top level exactly as load() will read it
-        text = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode()
+        try:
+            text = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode()
+        except RecursionError:
+            raise self._refuse(
+                "A saved version is nested too deeply to write back; delete it first."
+            ) from None
         if len(text) > MAX_BYTES:
             raise self._refuse(
                 f"The saved versions would be {len(text)} bytes, over the {MAX_BYTES}-byte limit; delete an old "
@@ -325,8 +390,7 @@ class LookStore:
             atomic_write(self.path, text, mode=0o600)
         except OSError as exc:
             raise StoreReadOnly(NOT_SAVED.format(reason=_reason(exc))) from None
-        kept = {e.id for e in entries if isinstance(e, _Unreadable)}
-        self._set(looks, entries, [u for u in self._unreadable if u["id"] in kept])
+        self._set(looks, entries)
 
     def _next_seq(self) -> int:
         return max([self._file.seq, *(_number(e.id) for e in self._entries)]) + 1
@@ -345,7 +409,7 @@ class LookStore:
     ) -> Version:
         """Validate (apply_drafts of the new version against `approved`; older versions aren't re-validated), history
         copy, atomic 0600 write; the new version becomes `current`. Only the scenes that differ from approved are
-        kept, in catalog order. DraftError (422), StoreReadOnly (409), KeyError for an unknown parent (404)."""
+        kept, in catalog order. DraftError (422), StoreReadOnly (409), NoSuchVersion for an unknown parent (404)."""
         order = [s.id for s in approved.scenes.scenes]
         ranked = sorted(drafts.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order))
         with self._lock:
@@ -363,16 +427,21 @@ class LookStore:
                 and isinstance(e.raw, dict)
                 and isinstance(e.raw.get("name"), str)
             ]
+            day = local_day(now)
+            issued = dict(self._file.names)
+            chosen = name or default_name(note, now, names, issued=issued.get(day, 0))
+            if not name and (n := day_number(chosen)) is not None:
+                issued[day] = max(issued.get(day, 0), n)
             version = Version(
                 id=f"v{seq:04d}",
-                name=name or default_name(note, now, names),
+                name=chosen,
                 note=note,
                 created_at=now,
                 parent=parent,
                 config_sha=config_sha,
                 drafts=kept,
             )
-            self._write(seq, version.id, [*self._entries, version])
+            self._write(seq, version.id, [*self._entries, version], issued)
             self._check(
                 version,
                 approved=approved,
@@ -384,21 +453,28 @@ class LookStore:
             return version
 
     def delete_version(self, version_id: str) -> None:
-        """KeyError; clears `current` if it pointed there. StoreReadOnly. An unreadable version can be deleted too.
-        Its number is never issued again (`seq` stays)."""
+        """Delete exactly one entry: the readable version with this id, else the unreadable one with this label (an
+        unreadable twin of a readable id stays, written back verbatim). NoSuchVersion; clears `current` if it pointed
+        there. StoreReadOnly. Its number is never issued again (`seq` stays)."""
         with self._lock:
             self._writable()
-            entries = [e for e in self._entries if e.id != version_id]
-            if len(entries) == len(self._entries):
-                raise KeyError(version_id)
+            match = next(
+                (i for i, e in enumerate(self._entries) if isinstance(e, Version) and e.id == version_id),
+                None,
+            )
+            if match is None:
+                match = next((i for i, e in enumerate(self._entries) if e.id == version_id), None)
+            if match is None:
+                raise NoSuchVersion(version_id)
+            entries = [e for i, e in enumerate(self._entries) if i != match]
             current = None if self._file.current == version_id else self._file.current
             self._write(self._next_seq() - 1, current, entries)
             for key in [k for k in self._checks if k[0] == version_id]:
                 self._checks.pop(key, None)
 
     def set_current(self, version_id: str | None) -> None:
-        """The version the Lab opens on (None = approved). KeyError; StoreReadOnly. Nothing is written when it is
-        already current."""
+        """The version the Lab opens on (None = approved). NoSuchVersion; StoreReadOnly. Nothing is written when it
+        is already current."""
         with self._lock:
             self._writable()
             if version_id is not None:
@@ -431,6 +507,10 @@ class LookStore:
                 D.apply_drafts(approved, version.drafts, canopy=canopy, settings=settings)
         except D.DraftError as exc:
             problems = [p.to_json() for p in exc.problems]
+        except (
+            ValueError
+        ) as exc:  # pydantic's ValidationError too: one version that can't apply is stale, never fatal
+            problems = [Problem(path=STORE_PATH, field="draft", message=_reason(exc)).to_json()]
         needs_d59 = False
         for draft in version.drafts.values():
             try:
@@ -477,8 +557,21 @@ class LookStore:
         settings: ConductorSettings,
         config_sha: str,
     ) -> dict:
-        """VersionJSON = VersionSummary + {"drafts": {scene_id: SceneDraft JSON}}. KeyError."""
-        version = self.get(version_id)
+        """VersionJSON = VersionSummary + {"drafts": {scene_id: SceneDraft JSON}}. NoSuchVersion."""
+        return self.version_answer(
+            self.get(version_id), approved=approved, canopy=canopy, settings=settings, config_sha=config_sha
+        )
+
+    def version_answer(
+        self,
+        version: Version,
+        *,
+        approved: ConfigTrio,
+        canopy: dict,
+        settings: ConductorSettings,
+        config_sha: str,
+    ) -> dict:
+        """VersionJSON of a Version in hand (a save answers with what it saved, even if a delete lands right after)."""
         ctx = {"approved": approved, "canopy": canopy, "settings": settings, "config_sha": config_sha}
         return {
             **self._summary(version, **ctx),
@@ -489,9 +582,21 @@ class LookStore:
 _NAME_N = re.compile(r"^Client (?P<mon>[A-Z][a-z]{2}) (?P<day>\d{1,2}) v(?P<n>\d+)")
 
 
-def default_name(note: str, now: float, existing: Iterable[str]) -> str:
-    """`Client <Mon> <D> v<N>[ – <note>]` in the box's local date; N = 1 + the largest N already used that day (not a
-    count, so deleting v1 of v1, v2 doesn't reissue "v2")."""
+def local_day(now: float) -> str:
+    """The box's local date of an epoch time, as the store's `names` keys it ("2026-10-17")."""
+    return f"{datetime.fromtimestamp(now, UTC).astimezone():%Y-%m-%d}"
+
+
+def day_number(name: str) -> int | None:
+    """N of a default name ("Client Oct 17 v3 – x" → 3), else None."""
+    m = _NAME_N.match(name)
+    return int(m["n"]) if m is not None else None
+
+
+def default_name(note: str, now: float, existing: Iterable[str], *, issued: int = 0) -> str:
+    """`Client <Mon> <D> v<N>[ – <note>]` in the box's local date; N = 1 + the largest N already used that day, among
+    the names still there and `issued` (the store's high-water mark for the day), so a deleted version's name is never
+    reissued, not even the newest one's."""
     dt = datetime.fromtimestamp(now, UTC).astimezone()  # the box's local date
     mon, day = f"{dt:%b}", str(dt.day)
     used = [
@@ -499,7 +604,7 @@ def default_name(note: str, now: float, existing: Iterable[str]) -> str:
         for name in existing
         if (m := _NAME_N.match(name)) is not None and m["mon"] == mon and m["day"] == day
     ]
-    base = f"Client {mon} {day} v{max(used, default=0) + 1}"
+    base = f"Client {mon} {day} v{max([*used, issued], default=0) + 1}"
     room = 80 - len(base) - 3  # Version.name is at most 80 characters
     return f"{base} – {note[:room]}" if note else base
 

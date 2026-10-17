@@ -175,7 +175,7 @@ def test_the_done_means_edit_moves_the_design_on_every_rung_and_regenerates_the_
         assert design.recipe == "rgb_only"
     assert t.modules.feature == (
         "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: "
-        "soft gold, then peach, sunset pink, rose and lavender."
+        "peach, then sunset pink and rose."  # no strand reaches soft gold or lavender at 30° (reached_stops)
     )
     assert "move diagonally across the canopy" in t.stepped.moving_feature
     assert mode.ladder == TRIO.modes.mode("golden-hour").ladder and mode.slot == "custom-3"

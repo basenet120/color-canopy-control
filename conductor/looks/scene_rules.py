@@ -10,7 +10,8 @@ and gain one line calling this validator alongside.
 
 | rule        | invariant                                                                                            |
 |-------------|------------------------------------------------------------------------------------------------------|
-| catalog     | mode ids == scene ids in order; label == name; blurb == mood; preview (upper) == palette hexes      |
+| catalog     | mode ids == scene ids in order; label == name; blurb == mood; preview (upper) == palette hexes;     |
+|             | the client copy (name, mood, description) never claims motion or a count of lights (`copy_problem`) |
 | brightness  | canvas / slot / modules / stepped / strand brightness == the scene's `brightness_draft`              |
 | static      | no motion_effect / motion_feature, slot speed 0, `motion: false`, the design's `cycles == 1`         |
 | ladder-end  | the ladder ends [modules, strand]; the strand is the scene's solid in RGB, no fallback, copy ends on it |
@@ -27,6 +28,7 @@ Pure: no I/O. Module-level colours come from the real compiler (`compile.module_
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +36,7 @@ from typing import Any
 from conductor.config import DeviceEntry, RecipesFile
 from conductor.looks import field as F
 from conductor.looks.schema import (
+    MOTION_WORDS,
     STEPPED_PACE,
     FieldCanvas,
     Mode,
@@ -56,6 +59,24 @@ STRIPES = "Reads as stripes at module level (D63)"
 SAME_KITS = "Modules 1 and 2 would show the same colour"
 _DESIGN = "techniques → modules → sample → canvas"
 RGB = tuple[int, int, int]
+# The client copy (a scene's name, mood and description) shows on the guest panel at every tier, on a partial canopy
+# too, and `compile._counted` never rewrites it (it counts only the rung sentences, D62): so it may not claim motion,
+# and it may not count the canopy's lights or strands.
+COUNT_CLAIMS = re.compile(r"\b(270|nine)\b", re.IGNORECASE)
+CLIENT_COPY = ("name", "mood", "description")
+
+
+def copy_problem(what: str, text: str) -> str | None:
+    """Why a scene's client copy (`what`: name, mood or description) can't say `text`, or None. Shared by the
+    Design Lab's draft model and the catalog rule, so a hand edit of scenes.yaml is held to the same words."""
+    if m := MOTION_WORDS.search(text):
+        return f"the {what} can't say {m.group(0)!r}: it shows at every tier, also when nothing moves"
+    if m := COUNT_CLAIMS.search(text):
+        return (
+            f"the {what} can't say {m.group(0)!r}: it shows on a partial canopy too, where that count isn't true "
+            "and nothing rewrites it (D62)"
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -203,6 +224,10 @@ def _catalog(scenes: SceneCatalog, modes: ModesFile, out: _Found) -> None:
                 "blurb",
                 f"the blurb {mode.blurb!r} isn't the scene's mood {scene.mood!r}",
             )
+        for what, path in (("name", "label"), ("mood", "blurb"), ("description", "description")):
+            why = copy_problem(what, getattr(scene, what))
+            if why is not None:
+                out.add("catalog", scene.id, path, why)
         preview = [c.upper() for c in mode.preview]
         palette = [c.hex for c in scene.palette]
         if preview != palette:

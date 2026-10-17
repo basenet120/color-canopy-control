@@ -37,6 +37,7 @@ from conductor.engine_api import ModePlan, PlanError, Tier
 from conductor.looks import CompileContext, compile_mode, ladder, scene_rules
 from conductor.looks import field as F
 from conductor.routes.design import mode_design
+from conductor.show import STEPPED_LIVE_OFF
 from conductor.sim.profiles import profile_parts
 
 if TYPE_CHECKING:
@@ -61,9 +62,11 @@ HEADS_APPROVED = (
     "merge and commissioning."
 )
 SHOW_BOX_NOTE = (
-    "Until the Oct 19 undo the Mac show box drives VWBD's two test kits as Modules 1–2 only (D62), with no bench "
-    "gates passed: nothing painted, and stepped looks are off on live hardware until Gate R."
+    "Until the Oct 19 undo the Mac show box drives VWBD's two test kits as Modules 1–2 only (D62), with no painted "
+    "slot commissioned: nothing painted."
 )
+# The stepped clause comes from the gate itself, so the note never says stepped is off while the view steps.
+SHOW_BOX_STEPPED_ON = "Stepped looks are enabled on live hardware (motion.stepped.live_enabled)."
 SIM_LOCK_SENTENCE = (
     "In the simulator the slots are commissioned at start-up; on the show box this scene's painted design is "
     "read-only once commissioned."
@@ -274,20 +277,25 @@ def show_box_today(lab: LabService, patched: ConfigTrio, scene_id: str) -> dict:
 
     def allowed(tier: Tier) -> tuple[bool, str]:
         if tier is Tier.STEPPED and not live_stepped:
-            return False, "stepped looks are off on live hardware until the stepped rehearsal (Gate R) passes"
+            return False, STEPPED_LIVE_OFF
         return True, ""
 
     plan, reasons = _first_plan(scene_id, patched.modes, ctx, allowed)
     if plan is None:
         return _view(SHOW_BOX_TITLE, None, note="No rung of this scene can run there: " + "; ".join(reasons))
     level = patched.modes.mode(scene_id).techniques.modules.sample.brightness  # type: ignore[union-attr]
+    note = SHOW_BOX_NOTE
+    if Tier.STEPPED in ladder(scene_id, patched.modes):
+        note += " " + (
+            SHOW_BOX_STEPPED_ON if live_stepped else STEPPED_LIVE_OFF[0].upper() + STEPPED_LIVE_OFF[1:] + "."
+        )
     return _view(
         SHOW_BOX_TITLE,
         plan,
         lit=_lit(lab.canopy, registry, plan, level),
         heads="draft",
         positions=_positions(registry, plan),
-        note=SHOW_BOX_NOTE,
+        note=note,
     )
 
 
@@ -326,19 +334,18 @@ def t1_lock(lab: LabService, scene_id: str) -> dict:
 
 
 def check_t1_lock(lab: LabService, draft: SceneDraft) -> None:
-    """Raise T1Locked when `t1_lock` is on for the draft's scene and the draft changes its painted design (palette
-    hexes/names, layout, sample_at); brightness, solid, copy and stepped timing stay editable. Used by preview and
-    by the save route."""
+    """Raise T1Locked when `t1_lock` is on for the draft's scene and the draft changes its painted frames (the
+    palette's hexes, their order and count, the layout, sample_at: `D.painted_change`, the same predicate as
+    `needs_slot_repaint`); colour names, brightness, solid, copy and stepped timing stay editable (a rename keeps the
+    slot hash, so it needs no repaint). Used by preview and by the save route."""
     if draft.scene_id not in lab.approved.modes.modes:
         return  # an unknown scene is apply_drafts' problem (field scene_id)
     lock = t1_lock(lab, draft.scene_id)
     if not lock["locked"]:
         return
-    seed = D.seed_draft(lab.approved, draft.scene_id)
-    if [c.model_dump() for c in draft.palette] != [c.model_dump() for c in seed.palette]:
-        raise T1Locked(lock["sentence"], "palette")
-    if draft.layout.model_dump() != seed.layout.model_dump() or draft.sample_at != seed.sample_at:
-        raise T1Locked(lock["sentence"], "layout")
+    changed = D.painted_change(D.seed_draft(lab.approved, draft.scene_id), draft)
+    if changed is not None:
+        raise T1Locked(lock["sentence"], changed)
 
 
 # ---- the preview ---------------------------------------------------------------------------------------------------------
@@ -397,6 +404,8 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
             "stepped": stepped.to_json() if stepped is not None else None,
         },
         "changes": D.draft_changes(approved, draft, canopy=canopy),
+        # notes on the free client copy (never a refusal): a description the colours or layout moved under
+        "copy_notes": D.description_notes(D.seed_draft(approved, scene_id), draft),
         "t1_lock": t1_lock(lab, scene_id),
         "stepped": None,  # Slice C (§7)
         "rings": None,  # Slice C (§7)

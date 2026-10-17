@@ -474,21 +474,32 @@ def test_one_bad_version_is_listed_unreadable_and_kept(tmp_path, fake_s1):
     assert store.error is None and store.set_aside is None and store.pending_alert is None
     assert [v.id for v in store.file().versions] == ["v0001", "v0003"] and store.file().current == "v0003"
     unreadable = store.unreadable()
-    assert [(u["id"], u["unreadable"]) for u in unreadable] == [("v0002", True), ("?", True), ("v0001", True)]
+    # each unreadable entry has its own label, so each can be deleted on its own
+    assert [(u["id"], u["unreadable"]) for u in unreadable] == [
+        ("v0002", True),
+        ("?1", True),
+        ("v0001 (copy 2)", True),
+    ]
     assert "rings" in unreadable[0]["error"] and "second version" in unreadable[2]["error"]
     with pytest.raises(KeyError):
         store.get("v0002")
-    assert [s["id"] for s in store.version_summaries(**CTX)] == ["v0003", "v0001", "v0002", "?", "v0001"]
+    assert [s["id"] for s in store.version_summaries(**CTX)] == [
+        "v0003",
+        "v0001",
+        "v0002",
+        "?1",
+        "v0001 (copy 2)",
+    ]
 
     new = save(store)
     assert new.id == "v0004"
     kept = yaml.safe_load(looks(tmp_path).read_text())["versions"]
     assert kept[1] == bad and kept[3] == "not a version"  # written back verbatim
     again, _, _ = make_store(tmp_path)
-    assert [u["id"] for u in again.unreadable()] == ["v0002", "?", "v0001"]
+    assert [u["id"] for u in again.unreadable()] == ["v0002", "?1", "v0001 (copy 2)"]
 
     store.delete_version("v0002")  # an unreadable version can be cleared out by hand
-    assert [u["id"] for u in store.unreadable()] == ["?", "v0001"]
+    assert [u["id"] for u in store.unreadable()] == ["?1", "v0001 (copy 2)"]
     assert all(
         not (isinstance(v, dict) and v.get("rings"))
         for v in yaml.safe_load(looks(tmp_path).read_text())["versions"]
