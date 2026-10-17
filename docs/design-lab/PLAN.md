@@ -1078,6 +1078,12 @@ properties `trial` and **`trial_active`** (`self._trial is not None`, read by th
   refused, a **first** start clears it (`_clear_trial(…)` + `_restore_approved`, below) and a failed **re-apply
   restores `previous`** (the running try-on stays as it was). On a first start, arms `_trial_task` to call
   `_end_trial_at_bound(session=trial)` at `ends_mono`. Telemetry `lab` `trial_start`/`trial_apply`.
+  *(Review fix, Oct 17.)* Keyword `expect_session` (the session the route's confirm described, None for none):
+  another one running now → refused `TRIAL_CHANGED_MESSAGE`; `min_left_s` (the route passes `kiosk.cooldown_s`): a
+  re-apply with less of the bound left → refused `TRIAL_ENDING_MESSAGE`, retry after the time left. Any **exception**
+  from `_request` once the override is set clears it (and the bound task) first, puts the approved look back
+  (`_recover_from_trial_error`: a re-apply's running draft plan too; the safe look if the approved compile raises
+  again), alerts, and re-raises; `end_trial` does the same, and the bound task logs it and ends cleanly.
 - `async def end_trial(self, *, source: str) -> CanopyState` — "Back to approved": `_clear_trial("stopped by …")`
   then `await self._request(mode_id, source=TRIAL_SOURCE, ripple=False)` with no trial set (the approved look, one
   burst; counts as a change for the idle hold); if that is refused, `_restore_approved(trial)`.
@@ -1108,6 +1114,11 @@ Edits to existing methods (all small, each with a test). **Placements are pinned
   land on `modules`/`strand` while the override stands. (`downgrade` (:1647) doesn't call `compile_best`; it walks
   **down** from the current tier and skips STEPPED itself, so from a trial at modules it can only reach strand,
   which the override also covers — no edit.)
+- *(Review fix, Oct 17)* ShowWiring's `_apply_new_caps`: before its `reconciler` re-pick, `_joining_trial(plan)`
+  compiles the try-on's plan again (`compile_best`, pure); when it would ADD a module (registered, or newly read,
+  mid-try-on: the confirm never named it) it calls `engine.end_trial(…)` instead (why: "a canopy module joined the
+  look mid-try-on (Module 3; …)"), so the approved look goes to every module. A re-pick that keeps or shrinks the set
+  keeps the try-on.
 - `stop` (:386): `_clear_trial("the canopy engine stopped")` first; then, beside the `_settle_task` block, cancel and
   `await` `_trial_task` (suppressing `CancelledError`).
 - `pause_guest_input` (:674): when pausing, `_clear_trial("guest input was paused", repick=True)`.
@@ -1166,7 +1177,15 @@ def build_trial(lab: LabService, draft: SceneDraft, *, version: str | None, now_
 def confirm_sentence(lab, scene_id, positions, bound_s, painted: bool) -> str
     # "Try on <draft name> for <Scene> at module level on 2 modules (Module 1, Module 2) for up to 150 s.
     #  The painted design isn't on the lights."  (positions = registered, driven modules: wiring.context().addresses)
+    # A draft that keeps the scene's name: "Try on your draft of <Scene> at module level on …" (never "Golden Hour
+    #  for Golden Hour"). TrialJSON's `label` is the approved scene's name, `draft_name` the draft's.
+    # (Review fix, Oct 17) A re-apply while a try-on runs keeps its bound, so it names the time left instead:
+    #  "… for the 110 s left of the running try-on (a re-apply never extends it)."; `confirm_matches` accepts one
+    #  shown up to CONFIRM_SLACK_S (30 s) earlier. With less than kiosk.cooldown_s left the route refuses it (409,
+    #  retry_after_s = the time left, nothing sent, the gap kept): "This try-on ends in 6 s, too soon for another
+    #  apply; apply again once it has ended."
 def cost_line(n: int) -> str   # f"sends {n} writes now, up to ~{n * (1 + EARLY_REASSERT_LIMIT)} over the next 10 s"
+                               # a re-apply's adds "; the running try-on still ends in N s"
 class ApplyGate:               # the server-side minimum gap between accepted applies (kiosk.cooldown_s, 8 s)
     def reserve(self, now_mono: float) -> float  # on the LOOP THREAD, before any await: seconds left (> 0 = refuse);
                                                  #   0 = stamped now, so a double-tapped second POST is refused even

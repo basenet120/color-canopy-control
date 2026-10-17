@@ -75,7 +75,7 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-dot { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--orange); }
 .lab-badge { align-self: center; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: #e4eadc; color: #3d5b3f; white-space: nowrap; }
 .lab-badge.draft { background: #fbe6d6; color: #8a4a1f; }
-.lab-badge.in-try-on { background: #25372f; color: #f4f2eb; }
+.lab-badge.in-try-on { background: var(--orange); color: #fff; }
 .lab-badge.approved-design { background: #e4eadc; color: #3d5b3f; }
 
 /* the stage (the Studio's dark card around its light canopy view) */
@@ -105,6 +105,34 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--orange); color: #fff; letter-spacing: .04em; }
 .lab-today { display: grid; gap: 3px; color: #f6e7c8; }
 .lab-tiers .lab-muted { color: #8fa097; }
+
+/* the try-on (Slice B): a card on the dark stage column, under the picture it sends */
+.lab-trial { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: #2b463a; border: 1px solid #4b6a5b; display: grid; gap: 8px; }
+.lab-trial.is-on { border-color: var(--orange); box-shadow: inset 0 0 0 1px #d9724555; }
+.lab-trial.is-note { background: transparent; border-style: dashed; }
+.lab-trial p { margin: 0; font-size: 13px; line-height: 1.45; }
+.lab-trial [hidden] { display: none !important; }
+.lab-trial-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.lab-trial-left { font-size: 14px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+.lab-trial-reason { color: #f0c9a8; }
+.lab-trial.is-note .lab-trial-reason { color: #c9d6c8; }
+.lab-trial-now { display: grid; gap: 3px; color: #e6ecdc; }
+.lab-trial-what { color: #fff; font-weight: 600; }
+.lab-trial-edited { color: #f0c9a8; }
+.lab-trial-edited:empty { display: none; }
+.lab-trial-scope { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; line-height: 1.45; color: #c9d6c8; }
+.lab-trial-scope li:before { content: "· "; color: #8fa097; }
+.lab-trial-cost { color: #adbeb1; font-size: 12px !important; }
+.lab-trial-cost:empty { display: none; }
+.lab-trial-confirm { background: #f6ebd5; color: #3d2f12; border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+.lab-trial-confirm .lab-trial-sentence { font-size: 14px; font-weight: 600; color: #3d2f12; }
+.lab-trial-confirm .lab-trial-cost { color: #695931; }
+.lab-trial-confirm .lab-btn.quiet-dark { color: #526c4c; border-color: #c9d1c1; }
+.lab-btn.tryon { background: var(--orange); border-color: var(--orange); color: #fff; font-weight: 600; }
+.lab-btn.tryon:disabled { background: #6f7f73; border-color: #6f7f73; opacity: .7; }
+.lab-btn.quiet-dark { background: transparent; border-color: #859f8e88; color: #edf1df; }
+.lab-trial-badge { min-height: var(--lab-tap); padding: 0 14px; border-radius: 999px; background: var(--orange); border: 0; color: #fff; font-size: 13px; font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.lab-trial-badge[hidden] { display: none; }
 
 /* the editor */
 .lab-editor { background: var(--lab-card); border: 1px solid var(--lab-line); border-radius: 10px; padding: 14px 16px; min-width: 0; }

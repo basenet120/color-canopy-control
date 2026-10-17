@@ -16,6 +16,13 @@ writes to a device, starts a look, flips `live_enabled` or the ripple, or writes
                                              not drafted); 404; 409 stale (with problems)
 - `GET    /api/lab/export?version=&format=`  json: ExportJSON; patch: a `text/x-diff` attachment; 404; 409 stale, a
                                              failed re-read check, or a D63 warning standing
+- `GET    /api/lab/trial`                    TrialJSON | null (Slice B, the try-on); 503 with no engine
+- `POST   /api/lab/trial/start`              `{scene_id, draft, confirm?}` → `{trial, state}`: the draft at module
+                                             level on the real lights, through the engine (one burst). 409
+                                             `confirm_required` (the sentence names every module and the bound) until
+                                             `confirm` equals it; 409 apply gap (+ `retry_after_s`, Retry-After); 409
+                                             the engine's refusal (+ `retry_after_s`); 422 problems; 503 no engine
+- `POST   /api/lab/trial/stop`               `{}` → `{trial: null, state}`: back to the approved look; 503 no engine
 
 Every route depends on `require_ops` first, then the /ops same-site + JSON-only guard (`routes/ops.py`
 `_no_cross_site`; DELETE too, so the client sends `{}`). Every answer is `Cache-Control: no-store`. CPU work
@@ -31,6 +38,7 @@ page degrades readably.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Coroutine
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -45,10 +53,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
+from conductor.config import trial_bound_s
 from conductor.design_lab import draft as D
 from conductor.design_lab import export as X
 from conductor.design_lab import preview as P
 from conductor.design_lab import store as S
+from conductor.design_lab import trial as T
 from conductor.design_lab.service import KEY, LabService, lab_of
 from conductor.looks import CompileContext
 from conductor.looks import scene_rules as R
@@ -177,6 +187,12 @@ class EmptyBody(_Body):
     pass
 
 
+class TrialStartBody(_Body):
+    scene_id: str = Field(pattern=SCENE_ID)
+    draft: D.SceneDraft
+    confirm: str | None = Field(None, max_length=1000)
+
+
 # ---- helpers -------------------------------------------------------------------------------------------------------
 def _scene_ids(lab: LabService) -> list[str]:
     return [s.id for s in lab.approved.scenes.scenes]
@@ -269,6 +285,8 @@ def catalog_json(lab: LabService) -> dict:
     except S.NoSuchVersion:
         drafted = {}
     idle = {settings.kiosk.idle_mode, settings.kiosk.idle_scene}
+    trial = getattr(lab.engine(), "trial", None)
+    trying_on = trial.mode_id if trial is not None else None
     scenes = []
     for scene in approved.scenes.scenes:
         mode = approved.modes.mode(scene.id)
@@ -277,6 +295,8 @@ def catalog_json(lab: LabService) -> dict:
         # compared with this scene's own seed, never seeded from draft.scene_id: a hand-edited version whose draft
         # names another (or no) scene shows as a draft (the versions list marks it stale) instead of failing the Lab
         state = "draft" if draft is not None and draft.model_dump() != seed.model_dump() else "approved"
+        if trying_on == scene.id:
+            state = "in try-on"
         scenes.append(
             {
                 "id": scene.id,
@@ -357,7 +377,7 @@ def state_json(lab: LabService) -> dict:
         },
         "current": looks.current,
         "engine": _engine_json(lab),
-        "trial": None,  # Slice B
+        "trial": T.trial_json(lab),  # Slice B: the try-on running now, or null
     }
 
 
@@ -567,3 +587,116 @@ async def export(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     return JSONResponse({**asdict(result), "filename": filename})
+
+
+# ---- the try-on (Slice B, PLAN §6.4) ---------------------------------------------------------------------------------
+def _trial_engine(lab: LabService) -> Any:
+    engine = lab.engine()
+    if engine is None or not callable(getattr(engine, "start_trial", None)):
+        raise LabAnswer(503, T.NO_ENGINE)
+    return engine
+
+
+def _current_version(lab: LabService, draft: D.SceneDraft) -> str | None:
+    """The current saved version, when it drafts this scene exactly as tried on (else None: an unsaved draft)."""
+    current = lab.store.file().current
+    if not current:
+        return None
+    try:
+        saved = lab.store.get(current).drafts.get(draft.scene_id)
+    except S.NoSuchVersion:
+        return None
+    return current if saved is not None and saved.model_dump() == draft.model_dump() else None
+
+
+@router.get("/trial")
+async def trial(lab: Lab) -> JSONResponse:
+    _trial_engine(lab)
+    return JSONResponse(T.trial_json(lab))
+
+
+@router.post("/trial/start")
+async def trial_start(body: TrialStartBody, lab: Lab) -> JSONResponse:
+    engine = _trial_engine(lab)
+    _known_scene(lab, body.scene_id)
+    _draft_matches(body.scene_id, body.draft, "draft → scene_id")
+    clock = lab.services.clock
+    bound = trial_bound_s(lab.settings)
+    modules = T.driven_modules(lab)
+    refused: dict[str, Any] = {"scene": body.scene_id, "modules": [m.id for m in modules], "bound_s": bound}
+    # A re-apply keeps the running session's bound: it is confirmed against the time left, and refused when so little
+    # is left that it would land a moment before the bound puts the approved look back (nothing sent, gap kept).
+    running = getattr(engine, "trial", None)
+    left = max(0.0, running.ends_mono - clock.monotonic()) if running is not None else None
+    floor = float(lab.settings.kiosk.cooldown_s)
+    if left is not None and left < floor:
+        _record(lab, "trial_refused", why="too close to its time limit", **refused)
+        wait = round(max(left, 0.01), 2)
+        return JSONResponse(
+            {"detail": T.ending_sentence(left), "retry_after_s": wait},
+            status_code=409,
+            headers={"Retry-After": str(max(1, math.ceil(wait)))},
+        )
+    sentence = T.confirm_sentence(lab, body.draft, modules, bound, left_s=left)
+    cost = T.cost_line(len(modules), left_s=left)
+    # nothing is sent until ops confirms the sentence that names every module
+    if not T.confirm_matches(body.confirm, lab, body.draft, modules, bound, left_s=left):
+        raise LabAnswer(409, sentence, confirm_required=True, confirm=sentence, cost=cost)
+    gate = T.apply_gate(lab)
+    # on the loop thread, before any await: a double tap is refused here
+    left_gap = gate.reserve(clock.monotonic())
+    if left_gap > 0:
+        _record(lab, "trial_refused", why="apply gap", **refused)
+        return JSONResponse(
+            {"detail": T.gap_sentence(gate, left_gap), "retry_after_s": left_gap},
+            status_code=409,
+            headers={"Retry-After": str(max(1, math.ceil(left_gap)))},
+        )
+    try:
+        built = await run_in_threadpool(
+            T.build_trial,
+            lab,
+            body.draft,
+            version=_current_version(lab, body.draft),
+            now_mono=clock.monotonic(),
+            now=clock.now(),
+        )
+    except D.DraftError as exc:
+        gate.release()
+        _record(lab, "trial_refused", why="problems", **refused)
+        raise _draft_error(exc) from None
+    except BaseException:
+        gate.release()
+        raise
+    try:
+        # every write is the engine's (source "lab", one burst); it refuses an apply whose session changed while it
+        # was built (confirmed as a re-apply of one that ended, or as a first start while another began) and a
+        # re-apply that now lands too close to the bound
+        st = await engine.start_trial(
+            built, expect_session=running.session if running is not None else None, min_left_s=floor
+        )
+    except Exception as exc:  # noqa: BLE001 - the engine ended the try-on, put the approved look back and alerted
+        gate.release()
+        _record(lab, "trial_refused", why=f"error: {type(exc).__name__}", **refused)
+        raise LabAnswer(500, T.ERROR_MESSAGE.format(name=type(exc).__name__)) from None
+    if st.refused:
+        gate.release()
+        _record(lab, "trial_refused", why=st.message, **refused)
+        extra = {"retry_after_s": st.retry_after_s} if st.retry_after_s else {}
+        raise LabAnswer(409, st.message or "The try-on was refused.", **extra)
+    return JSONResponse({"trial": T.trial_json(lab), "state": st.to_json()})
+
+
+@router.post("/trial/stop")
+async def trial_stop(lab: Lab, _body: EmptyBody | None = None) -> JSONResponse:
+    engine = _trial_engine(lab)
+    was = getattr(engine, "trial", None)
+    try:
+        st = await engine.end_trial(source="ops (the Design Lab)")
+    except Exception as exc:  # noqa: BLE001 - the engine already cleared the override, put a look back where it could and alerted
+        if was is not None:
+            _record(lab, "trial_stop", scene=was.mode_id, why=f"error: {type(exc).__name__}")
+        raise LabAnswer(500, T.ERROR_MESSAGE.format(name=type(exc).__name__)) from None
+    if was is not None:
+        _record(lab, "trial_stop", scene=was.mode_id)
+    return JSONResponse({"trial": T.trial_json(lab), "state": st.to_json()})

@@ -198,6 +198,14 @@ class MotionSettings(_Strict):
     stepped: SteppedMotionSettings = Field(default_factory=SteppedMotionSettings)
 
 
+class LabSettings(_Strict):
+    """The Design Lab's try-on (D66 Slice B, docs/design-lab/PLAN.md §6): a draft shown at module level on the real
+    lights for at most `trial_max_s` (None = `kiosk.idle_return_s`). Validated to be at most `kiosk.idle_return_s`,
+    so the idle hold never swaps the look under a try-on; `trial_bound_s` is the bound in force."""
+
+    trial_max_s: float | None = Field(None, gt=0, le=600)
+
+
 class ConductorSettings(_Strict):
     executor: ExecutorSettings = Field(default_factory=ExecutorSettings)
     reconciler: ReconcilerSettings = Field(default_factory=ReconcilerSettings)
@@ -205,6 +213,24 @@ class ConductorSettings(_Strict):
     module_page: ModulePageSettings = Field(default_factory=ModulePageSettings)
     effects: EffectSettings = Field(default_factory=EffectSettings)
     motion: MotionSettings = Field(default_factory=MotionSettings)
+    lab: LabSettings = Field(default_factory=LabSettings)
+
+    @model_validator(mode="after")
+    def _trial_within_idle(self) -> ConductorSettings:
+        limit = self.lab.trial_max_s
+        if limit is not None and limit > self.kiosk.idle_return_s:
+            raise ValueError(
+                f"lab.trial_max_s ({limit:g} s) must be at most kiosk.idle_return_s ({self.kiosk.idle_return_s:g} s), "
+                "so the idle hold never swaps the look under a try-on"
+            )
+        return self
+
+
+def trial_bound_s(settings: ConductorSettings) -> float:
+    """How long a Design Lab try-on may run: min(lab.trial_max_s or kiosk.idle_return_s, kiosk.idle_return_s)."""
+    idle = float(settings.kiosk.idle_return_s)
+    limit = settings.lab.trial_max_s
+    return min(float(limit), idle) if limit is not None else idle
 
 
 def load_settings(config_dir: Path = CONFIG_DIR) -> ConductorSettings:

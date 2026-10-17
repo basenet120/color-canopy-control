@@ -621,6 +621,7 @@ class WorkshopTarget:
             "feature": feature,
             "cooldown_remaining_s": cooldown,
             "lit": None,
+            "waiting": None,  # the shop strands have no try-on or rehearsal
         }
 
     def lease_holders(self) -> dict[str, str | None]:
@@ -682,6 +683,19 @@ def _module_errors(result: dict) -> str:
 
 
 # ---- everywhere else: the canopy engine --------------------------------------------------------------------------
+# why guests wait on the canopy, from the engine's own flags: "try-on" (a Design Lab try-on, D66) or "testing" (the
+# stepped rehearsal); the iPad drops a waiting toast once it clears
+_WAITING_MESSAGES = {K.TRYING_ON: "try-on", K.TESTING: "testing"}
+
+
+def _waiting(engine: Any) -> str | None:
+    if K._flag(engine, "trial_active") is True:
+        return "try-on"
+    if K._flag(engine, "rehearsal_active") is True:
+        return "testing"
+    return None
+
+
 class EngineTarget:
     """The canopy engine at `services.extras["canopy"]` (see the module docstring)."""
 
@@ -808,6 +822,7 @@ class EngineTarget:
         if isinstance(new, CanopyState) and new.refused:
             status, message, extra = K.refusal_for_state(engine, new, self.services.clock.now())
             raise GuestRefused(status, message, extra, why=f"engine: {new.message}")
+        self.message = ""  # the guest's scene is showing: an older lane refusal no longer applies
 
     async def brightness(self, level: int) -> int:
         engine, _ = self._ready_engine()
@@ -871,6 +886,7 @@ class EngineTarget:
             "feature": None,
             "cooldown_remaining_s": 0.0,
             "lit": None,
+            "waiting": None,
         }
         if engine is None:
             return resting
@@ -880,6 +896,12 @@ class EngineTarget:
             log.exception("The canopy engine couldn't report its state.")
             return resting
         cooldown = K._remaining(st.cooldown_until, now)
+        waiting = _waiting(engine)
+        # A lane refusal that names an engine flag (a guest's brightness or power refused during a try-on or the
+        # stepped rehearsal) is true only while that flag stands: once it lifts, never keep saying "It will be back
+        # shortly" (kiosk copy must be true).
+        if self.message in _WAITING_MESSAGES and _WAITING_MESSAGES[self.message] != waiting:
+            self.message = ""
         # The look's own phase, over the strands it drives: on a partial canopy `phase` stays needs attention for
         # /ops (D62) while the guest still sees the change and its end. An engine without it: `phase`.
         look = getattr(st, "look_phase", None) or st.phase
@@ -916,6 +938,7 @@ class EngineTarget:
             else st.feature,
             "cooldown_remaining_s": cooldown,
             "lit": self._lit(engine, st),
+            "waiting": waiting,
         }
 
     def lease_holders(self) -> dict[str, str | None]:

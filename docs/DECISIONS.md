@@ -686,8 +686,8 @@ defaults, in `config/modes.yaml` (Alon can change them there):
 
 ## 2026-10-16 — the Design Lab
 
-**D66 — The Design Lab: edit the scenes on screen, approve through git (a freeze exception; Slice A built, B and C
-to follow).** Alon asked for a pattern and animation admin so he can iterate the canopy's colours and styles with the
+**D66 — The Design Lab: edit the scenes on screen, try them on at module level, approve through git (a freeze
+exception; Slices A and B built, C to follow).** Alon asked for a pattern and animation admin so he can iterate the canopy's colours and styles with the
 client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 feature freeze
 (`docs/runbooks/release-and-freeze.md`); this is the exception, granted by asking for it. Brief and plan:
 `docs/design-lab/PROMPT.md`, `docs/design-lab/PLAN.md`.
@@ -727,4 +727,39 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
 - **Option for Alon, not built:** a read-only "client viewer" role for Present on the client's own device. It would
   change the binding 07 §2 role table.
 - **Out of scope for v1:** hot-applying config, slot repaints and firmware presets from the Lab.
-- **Slices B (try-on at module level through the engine) and C (stepped editor)** append their lines here when built.
+- **Slice B (built Oct 16; try-on at module level through the engine).** One tap tries a draft of one scene on the real
+  lights: `POST /api/lab/trial/start` builds an engine `Trial` from deep copies of the show's own trio patched by the
+  draft (its own modes **and** recipes), and `CanopyEngine.start_trial` shows it with `request_mode` source `"lab"`,
+  one burst (no ripple, whatever `kiosk.ripple_stagger_s` says). `ShowWiring.compile` uses the draft only for that
+  scene's `modules`/`strand` rungs, and `compile_best` skips T1/T2/stepped for it while the try-on stands, so a painted
+  scene is tried on at module level and says so. The ladder, every T1 compile, `t1_target`, `slot_expectations`,
+  `stale_slot`, `adopt_slot`, `rewrite_slot` and commissioning keep the git config: no slot is written or judged
+  stale because of a try-on. Ops confirms a sentence naming every driven module and the bound (409
+  `confirm_required` until `confirm` equals it) and sees the cost ("sends N writes now, up to ~4N over the next
+  10 s"); the server keeps accepted applies at least `kiosk.cooldown_s` (8 s) apart (a double tap is refused with
+  `retry_after_s`). A try-on ends at `min(lab.trial_max_s, kiosk.idle_return_s)` (150 s; the setting is validated
+  ≤ `idle_return_s`; re-applies never extend it), on **Back to approved**, and before any other source's look is
+  compiled (ops, idle, the safe look, commissioning, a rehearsal); pause, stop and commissioning clear it, and a clear
+  whose own look then fails puts the approved look back. It is never persisted: a restart comes up clean. It is
+  refused while the engine is stopped, commissioning, paused, resting (outage) or rehearsing. Guests are refused with
+  "Staff are trying a new look. It will be back shortly." (503 + `retry_after_s`) on mood, brightness and power; the
+  sentence is true only while the try-on runs: the guest panel's state carries `waiting: "try-on" | "testing" | null`,
+  a lane refusal under the title is dropped once its flag lifts (and on an accepted scene), and the iPad drops a
+  waiting toast at the first read after it that says nothing waits (review fix, Oct 17). A re-pick (the reconciler
+  after new capabilities) keeps the try-on, unless it would ADD a module to the try-on's plan (one registered, or
+  newly read, mid-try-on: the confirm never named it): then the try-on ends and every module gets the approved look
+  (second review fix, Oct 17). A re-apply keeps the running session's bound, so it is confirmed against the time left
+  ("… for the 110 s left of the running try-on (a re-apply never extends it)"; a sentence shown up to 30 s earlier
+  still matches; the cost line adds "the running try-on still ends in N s"), and it is refused (409, `retry_after_s`
+  = the time left, nothing sent, the gap not used up) with less than `kiosk.cooldown_s` of the bound left, or when
+  the session it was confirmed against ended or another began while it was built. An exception (not a refusal)
+  while a try-on starts or ends clears the override and its bound task, puts the approved look back (the safe look
+  if that raises too), raises an alert, and the route answers a plain 500. The confirm sentence names the draft only when it renames the scene
+  ("Try on your draft of Golden Hour …"); TrialJSON's `label` is the approved scene's name and `draft_name` the
+  draft's. The Lab's preview "today" shows the try-on's installed plan while it runs. Every write goes through the engine and the
+  executor; `reconciler.py`, `executor.py` and the drivers are unchanged, and the Lab never flips
+  `motion.stepped.live_enabled` or `kiosk.ripple_stagger_s`. The try-on doesn't apply the T1 lock (it never writes a
+  slot), so a locked painted design can still be tried on at module level. The iPad's scene cards now rebuild when a
+  card's contents change (`cardsKey`), not only its id. Telemetry `kind="lab"`: the engine records `trial_start`,
+  `trial_apply`, `trial_end` (with `why`); the route records `trial_refused` and `trial_stop`.
+- **Slice C (stepped editor)** appends its lines here when built.

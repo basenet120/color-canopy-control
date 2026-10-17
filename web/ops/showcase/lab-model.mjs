@@ -764,3 +764,213 @@ export function entryLabel(entry, versions, { unsaved = false } = {}) {
 export function previewKey(draft) {
   return draft ? JSON.stringify(normaliseDraft(draft)) : "";
 }
+
+// ---- the try-on (Slice B: PLAN §4 TrialJSON, §6.4) -------------------------------------------------------------------
+// A try-on sends the working draft to the real lights through the engine, module level only, for a bounded time. The
+// server owns every sentence that says what the lights do (TrialJSON.message, the confirm sentence, the cost, each
+// refusal); these helpers only pick which one to show, count the time down, and keep a double tap from sending twice.
+
+export const EARLY_REASSERT_LIMIT = 3; // = conductor/canopy.py: up to 3 early re-sends per module per change
+export const DOUBLE_TAP_MS = 800; // a second tap on Apply this soon after the first is ignored
+export const TRIAL_POLL_MS = 2000; // GET /api/lab/trial while a try-on runs (the WS "canopy" topic nudges it sooner)
+export const TRIAL_IDLE_POLL_MS = 15000; // and while none does (a try-on started from another screen still shows)
+export const TRIAL_COPY = Object.freeze({
+  missing: "Trying a draft on the lights isn’t on this server yet; everything here is screen only.",
+  noEngine: "The canopy engine isn’t running here, so nothing can be tried on the lights.",
+  unreachable: "Can’t reach the Conductor, so whether a try-on is running is unknown.",
+  stopped: "The canopy engine is stopped, so a try-on can’t start.",
+  commissioning: "The canopy is being set up (commissioning), so a try-on can’t start until that finishes.",
+  paused: "Guest input is paused by staff, so a try-on can’t start; resume guest input on /ops first.",
+  outage: "The canopy is resting after a connection problem, so a try-on can’t start.",
+  problems: "Fix the draft’s problems first: only a draft the server accepts can be tried on.",
+  loading: "Checking whether a try-on is running…",
+  moduleLevel:
+    "A try-on is module level only: one colour per strand (or one colour on every strand if module level can’t be compiled).",
+  painted: "The painted design isn’t on the lights during a try-on; the slots keep the approved one.",
+  stepped: "A try-on never steps: the lights hold the still module-level look.",
+  guests: "Guests on the iPad are asked to wait while it runs. A look chosen on /ops, a pause or a stop ends it early.",
+});
+const TIER_PHRASE = { modules: "at module level (one colour per strand)", strand: "as one colour on every strand" };
+
+/** The trial in a GET /api/lab/trial answer (TrialJSON or null), or in a start/stop answer ({trial, state}). */
+export function trialFromAnswer(answer) {
+  if (!answer || typeof answer !== "object") return null;
+  if ("trial" in answer && !("scene_id" in answer)) return trialFromAnswer(answer.trial);
+  return typeof answer.scene_id === "string" && answer.scene_id ? answer : null;
+}
+
+/** What a failed GET /api/lab/trial says about the try-on API: 'missing' (the route isn't there — FastAPI's own
+ * "Not Found" — or a 501 stub), 'no-engine' (503), 'unreachable' (status 0), 'none' (any other 404: the API is there
+ * and no try-on runs), else 'error'. */
+export function trialApiFromError(err) {
+  const status = Number(err && err.status);
+  const body = err && err.body && typeof err.body === "object" ? err.body : null;
+  const detail = body && typeof body.detail === "string" ? body.detail : "";
+  if (status === 501 || (body && body.not_built)) return "missing";
+  if (status === 404 || status === 405) {
+    return !detail || detail === "Not Found" || detail === "Method Not Allowed" ? "missing" : "none";
+  }
+  if (status === 503) return "no-engine";
+  if (status === 0 || !Number.isFinite(status)) return "unreachable";
+  return "error";
+}
+
+/**
+ * Whether the Try-on panel offers its controls, and if not, the one readable line it shows instead.
+ * `api`: 'loading' | 'ready' | 'missing' | 'no-engine' | 'unreachable' | 'error'; `engine`: StateJSON.engine.
+ * → {controls, canApply, canStop, reason}. The controls show only when the API exists and the engine runs; a pause,
+ * commissioning or an outage keeps them (a running try-on can still be ended) with Apply off and the reason.
+ */
+export function trialAvailability({ api, engine, trial = null, problems = 0, error = "" } = {}) {
+  const note = (reason) => ({ controls: false, canApply: false, canStop: false, reason });
+  if (api === "loading") return note(TRIAL_COPY.loading);
+  if (api === "missing") return note(TRIAL_COPY.missing);
+  if (api === "no-engine") return note(TRIAL_COPY.noEngine);
+  if (api === "unreachable") return note(TRIAL_COPY.unreachable);
+  if (api !== "ready") return note(error ? `The try-on state couldn’t be read: ${error}` : "The try-on state couldn’t be read.");
+  const e = engine && typeof engine === "object" ? engine : null;
+  if (e && e.running === false) return note(TRIAL_COPY.stopped);
+  let reason = "";
+  if (e && e.commissioning) reason = TRIAL_COPY.commissioning;
+  else if (e && e.paused) reason = TRIAL_COPY.paused;
+  else if (e && e.outage) reason = TRIAL_COPY.outage;
+  else if (problems > 0) reason = TRIAL_COPY.problems;
+  return { controls: true, canApply: !reason, canStop: !!trial, reason };
+}
+
+/** The lines under the panel's title: true to what a try-on of this scene can do, before anything is applied. */
+export function trialScopeLines(scene) {
+  const out = [TRIAL_COPY.moduleLevel];
+  if (scene && scene.painted) out.push(TRIAL_COPY.painted);
+  if (scene && scene.stepped) out.push(TRIAL_COPY.stepped);
+  out.push(TRIAL_COPY.guests);
+  return out;
+}
+
+/** "sends 2 writes now, up to ~8 over the next 10 s": one write per driven module, then the engine's re-assert and
+ * early re-sends (EARLY_REASSERT_LIMIT) per module. The server's own `cost` wins whenever it sent one. */
+export function costLine(n) {
+  const k = Math.max(0, Math.round(Number(n) || 0));
+  return `sends ${k} write${k === 1 ? "" : "s"} now, up to ~${k * (1 + EARLY_REASSERT_LIMIT)} over the next 10 s`;
+}
+
+/** Before the first apply: the modules the running show drives (the preview's today.positions.driven) and the cost
+ * line, or null when the preview doesn't say (no engine here, or no preview yet). */
+export function trialEstimate(preview) {
+  const today = preview && preview.today;
+  const pos = today && today.tier && today.positions;
+  const driven = pos && Array.isArray(pos.driven) ? pos.driven : null;
+  if (!driven || !driven.length) return null;
+  return { positions: driven, modules: moduleList(driven), cost: costLine(driven.length) };
+}
+
+/** Seconds left on the try-on's bound: the server's `left_s` at `readAtMs`, counted down on this clock (never the
+ * wall-clock `ends_at`, so a skewed laptop clock can't stretch or cut it). Null with no trial. */
+export function trialLeft(trial, readAtMs, nowMs) {
+  if (!trial) return null;
+  const base = Number(trial.left_s);
+  if (!Number.isFinite(base)) return null;
+  const gone = (Number(nowMs) - Number(readAtMs)) / 1000;
+  return Math.max(0, base - (Number.isFinite(gone) && gone > 0 ? gone : 0));
+}
+
+/** "2:05 left", "45 s left", "ending…" (at zero, until the server says it ended). */
+export function formatLeft(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "";
+  const s = Math.ceil(Number(seconds));
+  if (s <= 0) return "ending…";
+  if (s < 60) return `${s} s left`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} left`;
+}
+
+const trialName = (trial) => trial.draft_name || trial.label || trial.scene_id;
+
+/** The Lab's eyebrow: "screen only" stays true only where no try-on can reach the lights. */
+export function labEyebrow(api, trial) {
+  if (trial) return "DESIGN LAB · A TRY-ON IS ON THE LIGHTS";
+  if (api === "ready") return "DESIGN LAB · SCREEN ONLY UNTIL YOU APPLY";
+  return "DESIGN LAB · SCREEN ONLY";
+}
+
+/** The header badge while a try-on runs: "In try-on · Golden Hour · 2:05 left". */
+export function trialBadge(trial, leftS) {
+  if (!trial) return "";
+  return ["In try-on", trialName(trial), formatLeft(leftS)].filter(Boolean).join(" · ");
+}
+
+/** What the lights are doing now, from the server: the try-on's own sentence and the tier the engine installed. */
+export function trialStatusLines(trial) {
+  if (!trial) return [];
+  const name = trial.draft_name && trial.label && trial.draft_name !== trial.label ? `${trial.draft_name} (${trial.label})` : trialName(trial);
+  const tier = TIER_PHRASE[trial.tier] || (trial.tier ? `at the ${String(trial.tier)} tier` : "");
+  const lines = [`On the lights now: ${name}${tier ? `, ${tier}` : ""}.`];
+  if (trial.message) lines.push(String(trial.message));
+  if (Array.isArray(trial.positions) && trial.positions.length) lines.push(`Writing to ${moduleList(trial.positions)}.`);
+  if (Number(trial.applies) > 1) lines.push(`Applied ${Number(trial.applies)} times; re-applying never extends the time limit.`);
+  return lines;
+}
+
+/** Whether Apply may send now. `busy`: a start or stop is on its way; `lastTapMs`: the last tap on Apply (double-tap
+ * guard); `acceptedAtMs` + `nextApplyInS`: the server's gap after the last accepted apply (it refuses inside it too).
+ * → {ok, waitS, why: 'busy' | 'double-tap' | 'gap' | null}. */
+export function applyReady({ busy = false, lastTapMs = null, acceptedAtMs = null, nextApplyInS = 0, nowMs } = {}) {
+  if (busy) return { ok: false, waitS: 0, why: "busy" };
+  if (lastTapMs !== null && lastTapMs !== undefined && nowMs - lastTapMs < DOUBLE_TAP_MS) return { ok: false, waitS: 0, why: "double-tap" };
+  const gap = Number(nextApplyInS);
+  if (acceptedAtMs !== null && acceptedAtMs !== undefined && Number.isFinite(gap) && gap > 0) {
+    const waitS = gap - (nowMs - acceptedAtMs) / 1000;
+    if (waitS > 0) return { ok: false, waitS, why: "gap" };
+  }
+  return { ok: true, waitS: 0, why: null };
+}
+
+/** The Apply button's words (never a slider: one tap, one apply). */
+export function applyLabel({ busy = false, waitS = 0, reapply = false } = {}) {
+  if (busy) return "Sending…";
+  if (waitS > 0) return `Apply again in ${Math.ceil(waitS)} s`;
+  return reapply ? "Apply again" : "Apply to the lights";
+}
+
+/** A refused POST /api/lab/trial/start, classified: {kind: 'confirm', sentence, cost} (the server wants its confirm
+ * sentence back), 'problems' (422, shown at their fields), 'refused' (a 409 engine refusal or the apply gap, with
+ * retryAfterS), 'no-engine' (503), 'missing' (the route isn't on this server), 'unreachable', 'error'. */
+export function startOutcome(err) {
+  const status = Number(err && err.status);
+  const body = err && err.body && typeof err.body === "object" ? err.body : {};
+  const detail = typeof body.detail === "string" ? body.detail : (err && err.message) || "";
+  const retry = Number(body.retry_after_s);
+  const retryAfterS = Number.isFinite(retry) && retry > 0 ? retry : 0;
+  if (status === 409 && body.confirm_required) {
+    return { kind: "confirm", sentence: String(body.confirm || body.detail || ""), cost: typeof body.cost === "string" ? body.cost : "" };
+  }
+  if (status === 422) return { kind: "problems", problems: Array.isArray(body.problems) ? body.problems : [], text: detail || "The draft has problems." };
+  if (status === 409) return { kind: "refused", text: detail || "The try-on was refused.", retryAfterS };
+  if (status === 503) return { kind: "no-engine", text: detail || TRIAL_COPY.noEngine, retryAfterS };
+  if (trialApiFromError(err) === "missing") return { kind: "missing", text: TRIAL_COPY.missing };
+  if (status === 0 || !Number.isFinite(status)) return { kind: "unreachable", text: "Can’t reach the Conductor, so the try-on wasn’t sent." };
+  return { kind: "error", text: detail || `The try-on failed (HTTP ${status}).`, retryAfterS };
+}
+
+/** The body of POST /api/lab/trial/start: the working draft as the preview sends it, plus the confirm sentence once the
+ * server has asked for it. */
+export function trialStartBody(sceneId, draft, confirm = null) {
+  const body = { scene_id: sceneId, draft: normaliseDraft(draft) };
+  if (confirm) body.confirm = confirm;
+  return body;
+}
+
+/** A line for the panel when the working draft changed after it was applied (the lights still show the applied one). */
+export function editedSinceApply(trial, sceneId, working, applied) {
+  if (!trial || trial.scene_id !== sceneId || !applied || !working) return "";
+  if (draftEquals(working, applied)) return "";
+  return "You’ve edited this scene since it was applied: the lights show the applied draft until you apply again.";
+}
+
+/** The note under a stage picture that isn't what the lights show during a try-on of this scene: the painted view, and
+ * "today" while it paints the slots' approved design. Empty otherwise. */
+export function trialStageNote(view, preview, trial, sceneId) {
+  if (!trial || trial.scene_id !== sceneId) return "";
+  const today = todayOf(view, preview);
+  if (view !== "canvas" && !(today && today.heads === "approved")) return "";
+  return `During the try-on the lights show the tried draft ${TIER_PHRASE[trial.tier] || TIER_PHRASE.modules}, not this picture.`;
+}

@@ -60,6 +60,12 @@ motion:
     governor_cooloff_s: 300      # then stepped runs on that account wait this long (the still look holds)
     fold_guest_within_s: 2.0     # a guest brightness change this close to the next step goes out with that step
 
+lab:
+  # The Design Lab's try-on (D66 Slice B): a draft shown at module level on the real lights, one burst, for at most
+  # this long, then the approved look is back. Must be at most kiosk.idle_return_s (validated), so the idle hold never
+  # swaps the look under a try-on. null = kiosk.idle_return_s. Any other look, a pause, commissioning or a stop ends it.
+  trial_max_s: 150
+
 effects:
   # motionEffect / brightnessEffect codes the bench has enabled. Every code starts disabled (06 #4).
   # Example after the bench: {motionEffect: {1: "scroll (benched Oct 2)"}}

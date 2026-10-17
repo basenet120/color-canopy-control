@@ -1,6 +1,7 @@
 # Status
 
-_Last updated: 2026-10-14. **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
+_Last updated: 2026-10-17 (Design Lab Slice B review fixes, two rounds, on #26; see the PR stack). Before that 2026-10-16.
+**The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
 Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
 test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
@@ -41,7 +42,7 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     tree. **Not yet:** a browser pass of the integrated Lab at 1440×900 and 1180×820 touch with real previews (S4
     checked the UI against fixture answers); D66 in `docs/DECISIONS.md`; the PR. **Needs a real iPad:** the
     colour-picker popover, element fullscreen in Present, swipe without pull-to-refresh, the 28 px slider thumbs.
-    Slice B (try-on) and C (motion editor) are not built.
+    Slice B (try-on) is #26 below; C (motion editor) is not built.
     **Review fixes (Oct 16, same branch):** a five-lens review's confirmed findings, each fixed at the root with a
     regression test that failed before the fix (or a mutation test that kills a mutant that used to survive):
     client copy (name, mood, description) refuses motion words and "270"/"nine", in the draft model and in
@@ -61,6 +62,77 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     of them fail on f2a2f6d) plus 17 mutants killed; a Playwright walk (system Chrome, 1440×900 and 1180×820 touch,
     own dev server on 8209) 29/29 on the fixes, 20 of its checks failing on f2a2f6d. **Not re-run:** `make
     lab-roundtrip` (the gated export round trip).
+0g. **#26 `claude/design-lab-trial` → stacked on #25** (Design Lab Slice B, the try-on; D66's Slice B line; plan
+    §6). **Show-path edits:** `conductor/canopy.py` (the trial seam), `conductor/show.py` (`_trial_for`,
+    `context(recipes=)`, the trial compile at T3/strand only), `conductor/config.py` + `config/conductor.yaml`
+    (`lab.trial_max_s: 150`), one `trial_active` branch in `conductor/routes/kiosk.py`; **not** `reconciler.py`,
+    `executor.py` or the drivers. Lab side: `conductor/design_lab/trial.py`, `GET /api/lab/trial`,
+    `POST /api/lab/trial/start|stop`; the Lab's Try-on panel (Apply → the server's confirm sentence naming every
+    driven module and the bound → Try it on; countdown, "In try-on" badge, Back to approved, "Apply again in N s");
+    the iPad's scene cards rebuild on a content change (`cardsKey`). Integrated Oct 16 from two streams (B1 server,
+    B2 UI; merge commits, no conflicts) plus one glue commit: the preview's "today" shows the try-on's installed plan
+    while it runs (it showed the slots' painted design while the lights were at module level), the page re-reads it
+    when a try-on starts or ends, Lab assets `lab-3`.
+    **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2094 passed, 5 skipped, 136 subtests;
+    `make lint`; node 115/115; `python -m conductor.soak` exit 0, 21 PASS rows, the one FAIL is the non-gating
+    "(reported)" D65 stepped landing spread (p95 2.78 s > 2 s; not B's; the report was not committed, it goes with
+    C); `LAB_ROUNDTRIP=1 make lab-roundtrip`: 5 passed (all five exported configs pass the whole suite, 48 min).
+    `tests/test_lab_trial.py` (49 tests, virtual clock) covers every test plan §6.6 names, incl. the 20-virtual-minute Golden Hour try-on (hex and layout changed) with
+    zero slot writes, an unchanged `t1_target` slot hash and no stale-slot alert; B1 recorded 25 mutation checks
+    (about 30 mutants), each killed by a named test.
+    **Smoke** (`scripts/dev_design_lab.py --port 8203`, curl + the browser at 1440×900): a Golden Hour draft with
+    Sunset pink `#FF9BC4` → `#FF8FBF`: start without confirm → 409 with the sentence and "sends 9 writes now, up to
+    ~36 over the next 10 s"; confirmed → 200, `tier: modules`, 150 s bound; `/api/canopy/heads` went from canvas
+    (24–30 colours per module) to one colour per module, six of nine modules differing from a try-on of the
+    unchanged approved draft; a confirmed re-apply 4 s later → 409 "Apply again in 4 s" + `Retry-After: 4`; after
+    the gap → 200, `applies: 2`, bound unchanged; `POST /api/kiosk/scene` and `/api/kiosk/select` → 503 "Staff are
+    trying a new look. It will be back shortly." + `retry_after_s`; stop → `trial: null`, Golden Hour back on canvas
+    with all 270 heads matching. In the browser the real routes drove the panel (confirm, badge, countdown, today at
+    module level with the try-on note, Back to approved → today back to the painted approved design); the only
+    console error was the expected 409. **Needs the real kits (after the deploy block below):** a try-on on Modules
+    1–2 (only r0c0/r0c1 registered there, so the sentence names two modules and "sends 2 writes now, up to ~8"),
+    that the lights show the draft's colours at module level and come back on Back to approved and at the bound,
+    real write latency within the 8 s gap, and the iPad's "Staff are trying a new look" toast. **Review fixes (Oct 17,
+    10 confirmed findings):** the iPad no longer keeps saying "Staff are trying a new look" after a try-on (or
+    "being tested" after a rehearsal) ends — the panel state gains `waiting` (`"try-on"|"testing"|null`), a stale
+    lane refusal under the title is dropped once its flag lifts or a scene is accepted, and kiosk.js drops the
+    waiting toast at the first fresh read with `waiting: null` (`waitToastOver` in panel-model.mjs); the confirm
+    sentence reads "Try on your draft of Golden Hour …" unless the draft renames the scene; TrialJSON `label` is the
+    approved scene's name (Back to approved named the draft). Six test gaps closed, each test checked against its
+    mutant: a first start the engine refuses, re-picks keep the try-on (engine + the real capability loop), stop()
+    awaits the bound task, the restart test checks before start-up's idle look, the concurrent-starts test really
+    overlaps, and an AST check refuses any writer call from a Lab source (`design_lab/trial.py` left
+    `COVERED_MODULES`). **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2106 passed, 5 skipped,
+    136 subtests; `make lint`; node 116/116; soak: only the non-gating "(reported)" D65 row FAILs, as before.
+    Browser (own dev server on 8205): during a try-on the iPad toast counts down; after Back to approved it is gone
+    within one poll and the header reads "Choose a scene below."; a renamed draft shows "On the lights now: Pinker
+    Hour (Golden Hour)" and Back to approved says "the lights show Golden Hour's approved look". **Needs a real
+    iPad:** the Try-on panel's tap targets and the confirm block's scroll position. **Second review fixes (Oct 17, 3
+    confirmed findings, each with a virtual-clock test that fails without its fix):** (1) a re-apply keeps the
+    running session's bound, so its confirm now names the time left ("… for the 110 s left of the running try-on (a
+    re-apply never extends it)"; one shown up to 30 s earlier still matches; the cost adds "the running try-on still
+    ends in N s"), the first start's "for up to 150 s" no longer confirms it, and with less than `kiosk.cooldown_s`
+    of the bound left it is refused (409 "This try-on ends in 6 s, too soon for another apply; …", Retry-After,
+    nothing sent, gap not used up); the engine also refuses an apply whose session ended or changed while it was
+    built (`expect_session`, `min_left_s`); (2) a capability re-pick that would ADD a module to the try-on's plan (one
+    registered, or newly read, mid-try-on) ends the try-on so every module gets the approved look; same-set and
+    shrinking re-picks keep it (`ShowWiring._joining_trial`); (3) an exception (not a PlanError) while a try-on
+    starts, re-applies or ends no longer strands the override or its plan: override and bound task cleared, the
+    approved look back (the safe look if that raises too), an alert, the route answers a plain 500, the bound task
+    ends cleanly. The Lab's JS is unchanged (it already re-asks on a 409 confirm and counts a plain 409 down).
+    **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2120 passed, 5 skipped, 136 subtests; `make lint`; node 116/116; soak exit 0, only
+    the non-gating "(reported)" D65 row FAILs, as before; `tests/test_lab_trial.py` 74 tests. **CI fix (Oct 17):** the try-on route tests failed on CI (apply gap 2.47 s left, a missing `retry_after_s`, "105 s left") because FastAPI runs the sync dependencies (`require_ops`, `_no_cross_site`, …) on real worker threads, and the virtual loop jumps its clock to the next timer while a thread computes; `no_threads` now runs `anyio.to_thread.run_sync` inline and refuses `Thread.start`, and the time assertions are bounded by the clock read around each request. Verified: with every dependency and build made 50 ms slower in real time the old tests fail 9, the new pass 74; `tests/test_lab_trial.py` 30/30 under 10 CPU hogs (the first 4 under 30); pytest 2120 passed, 5 skipped; `make lint`; node tests pass. **Open for Alon:** the try-on
+    doesn't apply the T1 lock (it never writes a slot), so a locked painted design can be tried on at module level;
+    say if it should.
+    **Deploy block (§11; Alon runs it, coordinated with Paris; this ends Paris's break-glass hold):**
+    ```
+    # after merging #24 → #26 (retarget each to main first; merge commits):
+    git -C ~/canopy-show switch main && git -C ~/canopy-show pull --ff-only && canopy-mac install && canopy-mac start
+    # hand the box back to Paris (break-glass hold):
+    canopy-mac stop --yes
+    ```
+    If the stack isn't merged before the Oct 19 undo, the kit try-on happens in the Hubspace app or on `/ops/module`
+    and the Lab stays screen-only until after it.
     **CI flakes (Oct 17, same branch):** `test_a_rehearsal_from_ops_on_the_show_engine_…` (KeyError `'preview'`)
     waited for "a plan and not commissioning", which holds for an instant *before* the simulator's startup
     commissioning begins (the first look goes out first); on a slow box the rehearsal preview then met
@@ -407,6 +479,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    Gate R on the two test kits before the undo. (d) Release tag for the freeze. (e) On the Mac: show accounts when
    they exist, automatic login, wired + reserved address, restart and pull the plug once (`mac-show-box.md` §1–§2).
    Signing in a show account waits for Home Depot's authorization (06 #20).
+   (f) **Design Lab:** merge #24 → #25 → #26 (retarget each to main first), then run #26's deploy block (in the PR
+   stack above) when Paris can spare the box; a kit try-on on Modules 1–2 needs it before the Oct 19 undo.
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
    registry after the redeploy.
@@ -424,6 +498,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 6. Turn the Gate A dump into the simulator's SQHDK03 fixture (gap 6).
 
 ## Needs real hardware (UNVERIFIED)
+- **The Design Lab try-on (D66 Slice B):** sim only. On the show box: a module-level try-on on the two kits, Back to
+  approved and the bound's end on the lights, and the iPad's refusal toast during it.
 - **The other kits.** Kingston is the only kit with a T1 flag and a map. Every canopy module needs its own Gate C and
   address map at install (~5 min each; D25, D54, D57). The show engine has never sent a mapped T1 frame to real
   hardware, and Apply map (D58) has never recorded a map from real runs.

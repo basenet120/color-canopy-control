@@ -4,11 +4,13 @@
 //
 // lab.js owns everything inside <section id="lab">; studio.js and demo-model.mjs are not edited. The stage paints ONLY
 // through lab-model's viewPainter (the server's design via demo-model's designPaint, or today's lit modules via the
-// guest panel's paintFor); it never uses the Studio's handoff palette. Screen only: nothing here writes to a light.
+// guest panel's paintFor); it never uses the Studio's handoff palette. Screen only, except the Try-on panel (Slice B,
+// PLAN §6.4): one Apply button sends the working draft to POST /api/lab/trial/start, which the SERVER confirms, gates
+// and hands to the canopy engine (module level, bounded, one burst). Nothing here writes to a light any other way.
 
-import { api as baseApi, copyJSON } from "/static/app.js";
+import { api as baseApi, connectLive, copyJSON } from "/static/app.js";
 import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-3";
-import * as M from "./lab-model.mjs?v=lab-2";
+import * as M from "./lab-model.mjs?v=lab-3";
 
 const API = "/api/lab";
 const UI_KEY = "lab-ui"; // remembered scene / view / angle (not a draft key: staleDraftKeys never matches it)
@@ -78,6 +80,26 @@ const L = {
   present: null,
   saving: false, // a save is on its way: Save and Export wait (a double tap never saves twice)
   configChanged: false, // the Conductor answered from another approved config than the one this page loaded
+  // the try-on (GET /api/lab/trial; never kept in the browser: a reload reads the server's)
+  tryon: {
+    api: "loading", // loading | ready | missing | no-engine | unreachable | error
+    error: "",
+    trial: null, // TrialJSON | null
+    readAt: 0, // Date.now() when `trial.left_s` was read
+    busy: false, // a start or stop is on its way
+    lastTapAt: null,
+    acceptedAt: null, // when the last apply was accepted (or refused with a retry): the gap counts from here
+    nextApplyInS: 0,
+    confirm: null, // {scene, sentence, cost}: the server's confirm sentence, waiting for "Try it on"
+    confirmed: {}, // scene → the sentence last confirmed (a re-apply of the running scene sends it straight back)
+    applied: {}, // scene → the draft last applied
+    pollTimer: null,
+    nudgeTimer: null,
+    clock: null,
+    ending: false,
+    live: null,
+    watching: false,
+  },
 };
 
 /** Every Lab call: the shared api() plus a look at which approved config the Conductor answered from. */
@@ -174,6 +196,13 @@ function workingPreview(sceneId = L.scene) {
   return { preview: catalogPreview(draft), fresh: false, failed };
 }
 
+/** A try-on started, ended or changed tier: every cached preview's "today" (what the lights show) is out of date, so
+ * drop the cache and ask again for the scene on screen. The server's today_view reports the try-on's installed plan. */
+function invalidateToday() {
+  L.cache.clear();
+  schedulePreview();
+}
+
 function schedulePreview() {
   clearTimeout(L.timer);
   const now = Date.now();
@@ -259,6 +288,7 @@ async function boot() {
   renderAll();
   schedulePreview();
   prefetchApproved();
+  startTrialWatch();
 }
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -597,11 +627,12 @@ function header() {
   return h(
     "header",
     { class: "lab-head" },
-    h("div", { class: "lab-title" }, h("span", { class: "eyebrow", text: "DESIGN LAB · SCREEN ONLY" }), h("h1", { text: "Shape each scene." })),
+    h("div", { class: "lab-title" }, h("span", { id: "lab-eyebrow", class: "eyebrow", text: "DESIGN LAB · SCREEN ONLY" }), h("h1", { text: "Shape each scene." })),
     h(
       "div",
       { class: "lab-head-actions" },
       h("span", { id: "lab-sim", class: "lab-sim", role: "status", title: "Simulated: no real lights are driven from the Lab.", hidden: true, text: "Simulator" }),
+      h("button", { id: "lab-trial-badge", class: "lab-trial-badge", type: "button", hidden: true, title: "Show the scene being tried on" }),
       h("button", { id: "lab-present-open", class: "lab-btn primary", type: "button", disabled: true, text: "Present" }),
       h("a", { class: "lab-close", href: "#", text: "Close Lab" }),
     ),
@@ -651,6 +682,7 @@ function buildLab() {
           h("button", { id: "lab-ab", class: "lab-chip", type: "button", "aria-pressed": "false", text: "Compare A/B" }),
           h("button", { id: "lab-angle", class: "lab-chip", type: "button", "aria-pressed": "false", text: "Ceiling plan" }),
         ),
+        trialPanel(),
         h("ol", { id: "lab-tiers", class: "lab-tiers", "aria-label": "Each tier's sentence as the iPad shows it" }),
       ),
       h("aside", { id: "lab-editor", class: "lab-editor", "aria-label": "Edit the scene" }),
@@ -683,6 +715,20 @@ function buildLab() {
     rememberUi();
     renderStage();
   });
+  $("#lab-trial-badge").addEventListener("click", () => {
+    const t = trial();
+    if (t) selectScene(t.scene_id);
+  });
+  $("#lab-trial-apply").addEventListener("click", () => applyTrial());
+  $("#lab-trial-go").addEventListener("click", () => {
+    const c = L.tryon.confirm;
+    if (c && c.scene === L.scene) applyTrial({ confirm: c.sentence });
+  });
+  $("#lab-trial-cancel").addEventListener("click", () => {
+    L.tryon.confirm = null;
+    renderTrial();
+  });
+  $("#lab-trial-stop").addEventListener("click", stopTrial);
   wirePresentTouch();
   L.built = true;
   setAlert("_", null);
@@ -690,7 +736,11 @@ function buildLab() {
 }
 
 // ---- the scene list ---------------------------------------------------------------------------------------------------
+/** The running try-on, as the server last said: GET /api/lab/trial (or a start/stop answer), else StateJSON's. */
 function trial() {
+  const api = L.tryon.api;
+  if (api === "ready" || api === "unreachable" || api === "error") return L.tryon.trial; // the last known, until it answers
+  if (api === "missing" || api === "no-engine") return null;
   return (L.state && L.state.trial) || null;
 }
 
@@ -854,7 +904,7 @@ function renderStage() {
     const v = M.availableViews(preview).includes(view) ? view : M.pickView(preview, view);
     // under the picture: why "today" shows what it shows, and (for the working draft) a D63 warning the last edit
     // raised, wherever that edit was made
-    const notes = [M.todayNote(v, preview), ...(entry === M.WORKING && fresh ? M.warningLines(preview) : [])];
+    const notes = [M.todayNote(v, preview), M.trialStageNote(v, preview, trial(), L.scene), ...(entry === M.WORKING && fresh ? M.warningLines(preview) : [])];
     paintStage(st, preview, v, { fresh, failed, notes });
     const picker = $("select", st.el);
     if (picker && document.activeElement !== picker) picker.value = entry;
@@ -908,14 +958,17 @@ function renderTiers(preview, view) {
   const ol = $("#lab-tiers");
   if (!ol) return;
   const items = [];
-  const running = preview && preview.today ? preview.today.tier : null;
+  // during a try-on of this scene the lights run the tier the engine installed for it, not today's
+  const t0 = trial();
+  const trying = !!(t0 && t0.scene_id === L.scene && t0.tier);
+  const running = trying ? t0.tier : preview && preview.today ? preview.today.tier : null;
   for (const t of (preview && preview.tiers) || []) {
     const isRunning = running && running === t.tier;
     items.push(
       h(
         "li",
         { class: isRunning ? "running" : null },
-        h("span", { class: "lab-tier-label" }, t.label || t.tier, isRunning ? h("span", { class: "lab-tag", text: "Running here" }) : null),
+        h("span", { class: "lab-tier-label" }, t.label || t.tier, isRunning ? h("span", { class: "lab-tag", text: trying ? "Try-on running" : "Running here" }) : null),
         h("span", { class: "lab-tier-feature", text: t.feature || "" }),
         t.moving_feature ? h("span", { class: "lab-tier-feature moving", text: `While it moves: ${t.moving_feature}` }) : null,
         t.note ? h("small", { text: t.note }) : null,
@@ -1232,7 +1285,326 @@ function renderAll() {
   renderVersionsBar();
   renderStage();
   syncEditor();
+  renderTrial();
   if (L.present) renderPresent();
+}
+
+// ---- the try-on (Slice B, PLAN §4/§6.4) -----------------------------------------------------------------------------
+// The panel sends nothing on its own: Apply → POST /trial/start (the server answers 409 with the confirm sentence
+// naming the modules; "Try it on" sends it back) and Back to approved → POST /trial/stop. The server keeps the gap
+// between applies, the bound and every refusal; this page shows its sentences and debounces taps.
+
+function trialPanel() {
+  return h(
+    "section",
+    { id: "lab-trial", class: "lab-trial", "aria-label": "Try on the lights" },
+    h(
+      "div",
+      { class: "lab-trial-head" },
+      h("span", { class: "eyebrow light", text: "TRY ON THE LIGHTS" }),
+      h("span", { id: "lab-trial-left", class: "lab-trial-left", role: "timer", "aria-live": "off", hidden: true }),
+    ),
+    h("p", { id: "lab-trial-reason", class: "lab-trial-reason" }),
+    h("div", { id: "lab-trial-now", class: "lab-trial-now", role: "status", "aria-live": "polite" }),
+    h("p", { id: "lab-trial-edited", class: "lab-trial-edited" }),
+    h("ul", { id: "lab-trial-scope", class: "lab-trial-scope" }),
+    h("p", { id: "lab-trial-cost", class: "lab-trial-cost" }),
+    h(
+      "div",
+      { id: "lab-trial-confirm", class: "lab-trial-confirm", hidden: true, role: "group", "aria-label": "Confirm the try-on" },
+      h("p", { id: "lab-trial-sentence", class: "lab-trial-sentence" }),
+      h("p", { id: "lab-trial-confirm-cost", class: "lab-trial-cost" }),
+      h(
+        "div",
+        { class: "lab-row" },
+        h("button", { id: "lab-trial-go", class: "lab-btn tryon", type: "button", text: "Try it on" }),
+        h("button", { id: "lab-trial-cancel", class: "lab-btn quiet-dark", type: "button", text: "Cancel" }),
+      ),
+    ),
+    h(
+      "div",
+      { id: "lab-trial-actions", class: "lab-row lab-trial-actions" },
+      h("button", { id: "lab-trial-apply", class: "lab-btn tryon", type: "button", text: "Apply to the lights" }),
+      h("button", { id: "lab-trial-stop", class: "lab-btn quiet-dark", type: "button", hidden: true, text: "Back to approved" }),
+    ),
+  );
+}
+
+function trialAvailability() {
+  const T = L.tryon;
+  return M.trialAvailability({
+    api: T.api,
+    engine: L.state && L.state.engine,
+    trial: trial(),
+    problems: (L.problems[L.scene] || []).length,
+    error: T.error,
+  });
+}
+
+function trialGate(now = Date.now()) {
+  const T = L.tryon;
+  return M.applyReady({ busy: T.busy, lastTapMs: null, acceptedAtMs: T.acceptedAt, nextApplyInS: T.nextApplyInS, nowMs: now });
+}
+
+function renderTrial() {
+  const box = $("#lab-trial");
+  if (!box || !L.scene) return;
+  const T = L.tryon;
+  const t = trial();
+  const scene = sceneOf(L.scene);
+  const avail = trialAvailability();
+  const ours = !!(t && t.scene_id === L.scene);
+  box.classList.toggle("is-on", !!t);
+  box.classList.toggle("is-note", !avail.controls);
+  const reason = $("#lab-trial-reason");
+  reason.textContent = avail.reason || "";
+  reason.hidden = !avail.reason;
+  const now = $("#lab-trial-now");
+  const lines = M.trialStatusLines(t);
+  if (t && !ours) lines.push(`Applying ${sceneName(L.scene)} replaces it (the time limit stays the running one's).`);
+  now.replaceChildren(...lines.map((text, i) => h("p", { class: i === 0 ? "lab-trial-what" : null, text })));
+  now.hidden = !lines.length;
+  const edited = $("#lab-trial-edited");
+  edited.textContent = M.editedSinceApply(t, L.scene, L.working[L.scene], T.applied[L.scene]);
+  // what a try-on of this scene can do, and what it costs: only where the controls are
+  const scope = $("#lab-trial-scope");
+  scope.replaceChildren(...(avail.controls && !ours ? M.trialScopeLines(scene).map((text) => h("li", { text })) : []));
+  scope.hidden = !scope.childElementCount;
+  const cost = $("#lab-trial-cost");
+  const estimate = M.trialEstimate(workingPreview().preview);
+  cost.textContent = !avail.controls
+    ? ""
+    : ours && t.cost
+      ? `Each apply ${t.cost}.`
+      : estimate
+        ? `Apply ${estimate.cost}, to ${estimate.modules}; the server confirms the modules first.`
+        : "Apply asks the server which modules it writes to before anything is sent.";
+  const c = T.confirm && T.confirm.scene === L.scene && avail.controls ? T.confirm : null;
+  $("#lab-trial-confirm").hidden = !c;
+  if (c) {
+    $("#lab-trial-sentence").textContent = c.sentence;
+    $("#lab-trial-confirm-cost").textContent = c.cost ? `It ${c.cost}.` : "";
+    $("#lab-trial-go").disabled = T.busy || !avail.canApply;
+  }
+  $("#lab-trial-actions").hidden = !avail.controls;
+  const stop = $("#lab-trial-stop");
+  stop.hidden = !t;
+  stop.disabled = T.busy;
+  renderTrialClock();
+}
+
+/** The parts that change every second: the time left, the header badge, the Apply button's wait. */
+function renderTrialClock() {
+  const T = L.tryon;
+  const t = trial();
+  const now = Date.now();
+  const left = M.trialLeft(t, T.readAt, now);
+  const leftEl = $("#lab-trial-left");
+  if (leftEl) {
+    leftEl.hidden = !t;
+    leftEl.textContent = t ? M.formatLeft(left) : "";
+  }
+  const badge = $("#lab-trial-badge");
+  if (badge) {
+    badge.hidden = !t;
+    badge.textContent = M.trialBadge(t, left);
+  }
+  const eyebrow = $("#lab-eyebrow");
+  if (eyebrow) eyebrow.textContent = M.labEyebrow(T.api, t);
+  const apply = $("#lab-trial-apply");
+  if (apply) {
+    const avail = trialAvailability();
+    const gate = trialGate(now);
+    apply.disabled = !avail.canApply || !gate.ok || !!(T.confirm && T.confirm.scene === L.scene);
+    apply.textContent = M.applyLabel({ busy: T.busy, waitS: gate.waitS, reapply: !!(t && t.scene_id === L.scene) });
+  }
+  if (t && left === 0 && !T.ending) {
+    T.ending = true; // the engine ends it at the bound: read the end soon after
+    setTimeout(refreshTrial, 1500);
+  }
+}
+
+/** GET /api/lab/trial: the running try-on (or none), and whether the API is on this server at all. */
+async function refreshTrial() {
+  const T = L.tryon;
+  const before = T.trial;
+  try {
+    const answer = await api(`${API}/trial`);
+    T.api = "ready";
+    T.error = "";
+    T.trial = M.trialFromAnswer(answer);
+  } catch (err) {
+    const kind = M.trialApiFromError(err);
+    T.api = kind === "none" ? "ready" : kind;
+    T.error = kind === "error" ? M.alertFor(err) || "" : "";
+    if (kind === "none" || kind === "missing" || kind === "no-engine") T.trial = null;
+  }
+  T.readAt = Date.now();
+  T.ending = false;
+  if (before && !T.trial && T.api === "ready") setNotice(`The try-on of ${before.label || before.scene_id} ended.`);
+  const changed = !before !== !T.trial || (before && T.trial && (before.scene_id !== T.trial.scene_id || before.applies !== T.trial.applies || before.tier !== T.trial.tier));
+  if (changed) {
+    invalidateToday();
+    renderAll();
+  } else renderTrial();
+}
+
+/** GET /api/lab/state: the engine's flags (running, paused, commissioning, outage) and the store, for the panel. */
+async function refreshLabState() {
+  try {
+    L.state = await api(`${API}/state`);
+    setAlert("store", M.alertFor(L.state));
+  } catch {
+    // the trial's own read says whether the Conductor answers; the last state stands
+  }
+}
+
+function scheduleTrialPoll() {
+  const T = L.tryon;
+  clearTimeout(T.pollTimer);
+  if (!T.watching || T.api === "missing") return;
+  T.pollTimer = setTimeout(
+    async () => {
+      if (!document.hidden) {
+        if (!trial()) await refreshLabState();
+        await refreshTrial();
+      }
+      scheduleTrialPoll();
+    },
+    trial() ? M.TRIAL_POLL_MS : M.TRIAL_IDLE_POLL_MS,
+  );
+}
+
+/** A "canopy" event (any look change, a pause, the bound's end): read the try-on and the engine flags soon, once. */
+function nudgeTrial() {
+  const T = L.tryon;
+  if (T.nudgeTimer) return;
+  T.nudgeTimer = setTimeout(async () => {
+    T.nudgeTimer = null;
+    await refreshLabState();
+    await refreshTrial();
+  }, 600);
+}
+
+async function startTrialWatch() {
+  const T = L.tryon;
+  if (T.watching) return;
+  T.watching = true;
+  await refreshTrial();
+  if (!T.watching) return;
+  scheduleTrialPoll();
+  if (T.api !== "missing" && !T.live) {
+    try {
+      T.live = connectLive({ topics: ["canopy"], onEvent: (topic) => topic === "canopy" && nudgeTrial() });
+    } catch {
+      T.live = null; // polling still keeps the panel current
+    }
+  }
+  clearInterval(T.clock);
+  T.clock = setInterval(() => {
+    if (trial() || L.tryon.acceptedAt) renderTrialClock();
+  }, 1000);
+}
+
+function stopTrialWatch() {
+  const T = L.tryon;
+  T.watching = false;
+  clearTimeout(T.pollTimer);
+  clearTimeout(T.nudgeTimer);
+  T.nudgeTimer = null;
+  clearInterval(T.clock);
+  if (T.live) {
+    try {
+      T.live.close();
+    } catch {
+      // already closed
+    }
+    T.live = null;
+  }
+}
+
+/** Apply: the working draft of the scene on screen, to the lights. A double tap, a tap while one is on its way and a
+ * tap inside the server's gap send nothing. Without `confirm` the server answers with its confirm sentence first
+ * (except a re-apply of the scene already on, which sends back the sentence confirmed for it). */
+async function applyTrial({ confirm = null } = {}) {
+  const T = L.tryon;
+  const now = Date.now();
+  // "Try it on" answers the server's question, so it never counts as Apply's second tap
+  const lastTapMs = confirm ? null : T.lastTapAt;
+  const gate = M.applyReady({ busy: T.busy, lastTapMs, acceptedAtMs: T.acceptedAt, nextApplyInS: T.nextApplyInS, nowMs: now });
+  if (!gate.ok || !trialAvailability().canApply) return;
+  T.lastTapAt = now;
+  const scene = L.scene;
+  const draft = clone(L.working[scene]);
+  const t = trial();
+  const sentence = confirm || (t && t.scene_id === scene ? T.confirmed[scene] : null) || null;
+  T.busy = true;
+  renderTrial();
+  try {
+    const answer = await api(`${API}/trial/start`, { method: "POST", body: M.trialStartBody(scene, draft, sentence) });
+    T.api = "ready";
+    T.trial = M.trialFromAnswer(answer);
+    T.readAt = Date.now();
+    T.acceptedAt = Date.now();
+    T.nextApplyInS = Number((T.trial && T.trial.next_apply_in_s) || 0);
+    T.confirm = null;
+    if (sentence) T.confirmed[scene] = sentence;
+    T.applied[scene] = draft;
+    if (answer && answer.state && answer.state.engine) L.state = answer.state;
+    setAlert("trial", null);
+    setNotice(T.trial ? `Applied to the lights: ${T.trial.draft_name || T.trial.label || sceneName(scene)}.` : "Applied.");
+    invalidateToday();
+  } catch (err) {
+    const out = M.startOutcome(err);
+    if (out.kind === "confirm") {
+      T.confirm = { scene, sentence: out.sentence, cost: out.cost };
+      delete T.confirmed[scene];
+      setAlert("trial", null);
+    } else {
+      T.confirm = null;
+      if (out.kind === "problems") L.problems[scene] = out.problems;
+      if (out.kind === "missing") T.api = "missing";
+      setAlert("trial", out.kind === "problems" ? M.alertFor(err) || out.text : out.text);
+      if (out.retryAfterS) {
+        T.acceptedAt = Date.now(); // the button counts the server's wait down
+        T.nextApplyInS = out.retryAfterS;
+      }
+    }
+  } finally {
+    T.busy = false;
+  }
+  renderAll();
+  if (T.confirm && T.confirm.scene === scene) {
+    const box = $("#lab-trial-confirm");
+    if (box && box.scrollIntoView) box.scrollIntoView({ block: "nearest" }); // the question is never left off-screen
+  }
+  refreshLabState().then(renderTrial);
+}
+
+/** Back to approved: the server ends the try-on and the engine puts the scene's approved look back (one burst). */
+async function stopTrial() {
+  const T = L.tryon;
+  if (T.busy) return;
+  const was = trial();
+  T.busy = true;
+  renderTrial();
+  try {
+    const answer = await api(`${API}/trial/stop`, { method: "POST", body: {} });
+    T.trial = M.trialFromAnswer(answer);
+    T.readAt = Date.now();
+    T.confirm = null;
+    if (answer && answer.state && answer.state.engine) L.state = answer.state;
+    setAlert("trial", null);
+    setNotice(was ? `Back to approved: the lights show ${was.label || sceneName(was.scene_id)}’s approved look.` : "No try-on was running.");
+    invalidateToday();
+  } catch (err) {
+    const out = M.startOutcome(err);
+    if (out.kind === "missing") T.api = "missing";
+    setAlert("trial", out.text);
+  } finally {
+    T.busy = false;
+  }
+  renderAll();
 }
 
 // ---- Present ------------------------------------------------------------------------------------------------------------
@@ -1464,10 +1836,12 @@ function route() {
   el.hidden = !open;
   if (!open) {
     if (L.present) closePresent();
+    stopTrialWatch(); // no polling or socket while the Lab is closed
     return;
   }
   window.scrollTo(0, 0);
   if (!L.booting) L.booting = boot();
+  else if (L.built) startTrialWatch();
 }
 
 wireKeys();

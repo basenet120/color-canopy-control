@@ -163,6 +163,23 @@ export function cardTap(sceneId, state, { pendingId = null, cooldownS = 0 } = {}
   return { send: true };
 }
 
+/** The scene cards' build key: everything a card draws (id, name, mood, solid, the palette's names and hexes, the
+ * strip's frame), so a catalog whose contents change under the same ids (a deploy, a new approved look) rebuilds the
+ * cards instead of keeping the old names and colours. PLAN §6.5 named id, name, mood, solid and the hexes; the colour
+ * names (the card's accessible name) and the frame (its strip) are drawn too, so they are in the key. */
+export function cardsKey(scenes) {
+  return JSON.stringify(
+    (scenes || []).map((s) => [
+      s.id,
+      s.name,
+      s.mood,
+      s.solid ?? null,
+      (s.palette || []).map((p) => [p.name, p.hex]),
+      Array.isArray(s.frame) ? s.frame : null,
+    ]),
+  );
+}
+
 /** The card's accessible name. */
 export function sceneLabel(scene) {
   const colors = (scene.palette || []).map((p) => p.name).join(", ");
@@ -240,6 +257,22 @@ export function refusalToast(err) {
   if (!detail || !GUEST_REFUSALS.has(err.status)) return { text: COPY.reconnecting, retryAfterS: 0 };
   const retry = Number(body.retry_after_s);
   return { text: detail, retryAfterS: Number.isFinite(retry) && retry > 0 ? retry : 0 };
+}
+
+/** A refusal toast that asks the guest to wait for staff: a 503 with a retry (a try-on or the stepped rehearsal on
+ * the canopy). Its countdown is the server's upper bound, so the panel drops it once the wait is over. */
+export function isWaitRefusal(err) {
+  return !!err && err.status === 503 && refusalToast(err).retryAfterS > 0;
+}
+
+/** Hide a waiting toast? `waitToast` is `{at}` (local ms the refusal landed) or null; `state` a panel state read that
+ * started at `readStartedAt` (local ms). Only a read begun after the refusal counts (an older one predates the
+ * wait), only a state that carries `waiting` (an older server never says), and never on "resting": a canopy being
+ * set up or resting keeps the server's own retry. */
+export function waitToastOver(waitToast, state, readStartedAt) {
+  if (!waitToast || !state || typeof state !== "object" || !("waiting" in state)) return false;
+  if (!(readStartedAt >= waitToast.at)) return false;
+  return state.waiting == null && phaseOf(state) !== "resting";
 }
 
 // ---- debug -----------------------------------------------------------------------------------------------------

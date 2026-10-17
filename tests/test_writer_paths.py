@@ -22,6 +22,7 @@ from conductor import rows as R
 from conductor.bench.runner import BenchBusy, BenchRunner
 from conductor.clock import run_virtual
 from conductor.config import ExecutorSettings
+from conductor.engine_api import Tier
 from conductor.executor import CommandExecutor
 from conductor.executor_api import Command
 from conductor.gate import Purpose
@@ -558,6 +559,30 @@ async def _stepped_rehearsal(env: Env, address: str) -> str:
     return str(commands[-1]["status"])
 
 
+async def _lab_trial(env: Env, address: str) -> str:
+    """The Design Lab's try-on (D66 Slice B): ops applies a draft; the engine shows it at module level (sunset's T3
+    rung: the try-on skips T1/T2/stepped) as one burst through engine.send, like any look. The Lab itself never writes."""
+    from conductor.canopy import Trial
+
+    engine, _ = _canopy_engine(env, address)
+    now = env.world.clock.monotonic()
+    trial = Trial(
+        "sunset",
+        "Sunset (draft)",
+        modes=None,
+        recipes=None,
+        started_mono=now,
+        ends_mono=now + 150,
+        started_at=0.0,
+    )
+    state = await engine.start_trial(trial)
+    await engine.wait_idle()
+    plan = engine.current_plan()
+    await engine.stop()
+    assert not state.refused and plan is not None and plan.tier is Tier.T3, (state.message, plan)
+    return str(engine.last_status[address])
+
+
 async def _vignette_action(env: Env, address: str) -> str:
     """/vignette/<room>: a staff tablet's action → one ENGINE command per device through the executor. (The fake
     devices are 20-segment strings, so the room's device under test is the Glow Garden string.)"""
@@ -613,6 +638,7 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "slot manager (commission)": _canopy_commission,
     "program runner (stepped look)": _program_runner,
     "stepped rehearsal (Gate R)": _stepped_rehearsal,
+    "lab try-on (module level)": _lab_trial,
     "vignette action": _vignette_action,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
@@ -624,6 +650,10 @@ COVERED_MODULES = {
     "conductor/reconciler.py": "reconciler (re-assert)",
     "conductor/sequence.py": "program runner (stepped look)",  # sends through CanopyEngine.send
     "conductor/vignettes.py": "vignette action",
+    # the try-on's routes never write; every write is the engine's (the entry proves it on the wire). Listing a file
+    # here exempts it from test_every_writer_module_is_listed's scan, so the Lab must stay a non-writer by its own
+    # check: tests/test_lab_access.py test_no_lab_module_calls_a_writer (an AST walk over every Lab source).
+    "conductor/routes/design_lab.py": "lab try-on (module level)",
 }
 ALLOWED = {"denied", "lock_refused", "locked"}
 
