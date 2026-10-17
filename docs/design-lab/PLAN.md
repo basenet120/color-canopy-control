@@ -1166,6 +1166,8 @@ def build_trial(lab: LabService, draft: SceneDraft, *, version: str | None, now_
 def confirm_sentence(lab, scene_id, positions, bound_s, painted: bool) -> str
     # "Try on <draft name> for <Scene> at module level on 2 modules (Module 1, Module 2) for up to 150 s.
     #  The painted design isn't on the lights."  (positions = registered, driven modules: wiring.context().addresses)
+    # A draft that keeps the scene's name: "Try on your draft of <Scene> at module level on …" (never "Golden Hour
+    #  for Golden Hour"). TrialJSON's `label` is the approved scene's name, `draft_name` the draft's.
 def cost_line(n: int) -> str   # f"sends {n} writes now, up to ~{n * (1 + EARLY_REASSERT_LIMIT)} over the next 10 s"
 class ApplyGate:               # the server-side minimum gap between accepted applies (kiosk.cooldown_s, 8 s)
     def reserve(self, now_mono: float) -> float  # on the LOOP THREAD, before any await: seconds left (> 0 = refuse);

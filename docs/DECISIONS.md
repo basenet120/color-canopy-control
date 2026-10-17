@@ -742,8 +742,13 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
   compiled (ops, idle, the safe look, commissioning, a rehearsal); pause, stop and commissioning clear it, and a clear
   whose own look then fails puts the approved look back. It is never persisted: a restart comes up clean. It is
   refused while the engine is stopped, commissioning, paused, resting (outage) or rehearsing. Guests are refused with
-  "Staff are trying a new look. It will be back shortly." (503 + `retry_after_s`) on mood, brightness and power. The
-  Lab's preview "today" shows the try-on's installed plan while it runs. Every write goes through the engine and the
+  "Staff are trying a new look. It will be back shortly." (503 + `retry_after_s`) on mood, brightness and power; the
+  sentence is true only while the try-on runs: the guest panel's state carries `waiting: "try-on" | "testing" | null`,
+  a lane refusal under the title is dropped once its flag lifts (and on an accepted scene), and the iPad drops a
+  waiting toast at the first read after it that says nothing waits (review fix, Oct 17). A re-pick (the reconciler
+  after new capabilities) keeps the try-on. The confirm sentence names the draft only when it renames the scene
+  ("Try on your draft of Golden Hour …"); TrialJSON's `label` is the approved scene's name and `draft_name` the
+  draft's. The Lab's preview "today" shows the try-on's installed plan while it runs. Every write goes through the engine and the
   executor; `reconciler.py`, `executor.py` and the drivers are unchanged, and the Lab never flips
   `motion.stepped.live_enabled` or `kiosk.ripple_stagger_s`. The try-on doesn't apply the T1 lock (it never writes a
   slot), so a locked painted design can still be tried on at module level. The iPad's scene cards now rebuild when a

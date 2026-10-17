@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-16 (Design Lab Slice B integrated, #26; see the PR stack). Before that 2026-10-14.
+_Last updated: 2026-10-17 (Design Lab Slice B review fixes on #26; see the PR stack). Before that 2026-10-16.
 **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
 Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
 test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
@@ -92,7 +92,21 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     console error was the expected 409. **Needs the real kits (after the deploy block below):** a try-on on Modules
     1–2 (only r0c0/r0c1 registered there, so the sentence names two modules and "sends 2 writes now, up to ~8"),
     that the lights show the draft's colours at module level and come back on Back to approved and at the bound,
-    real write latency within the 8 s gap, and the iPad's "Staff are trying a new look" toast. **Needs a real
+    real write latency within the 8 s gap, and the iPad's "Staff are trying a new look" toast. **Review fixes (Oct 17,
+    10 confirmed findings):** the iPad no longer keeps saying "Staff are trying a new look" after a try-on (or
+    "being tested" after a rehearsal) ends — the panel state gains `waiting` (`"try-on"|"testing"|null`), a stale
+    lane refusal under the title is dropped once its flag lifts or a scene is accepted, and kiosk.js drops the
+    waiting toast at the first fresh read with `waiting: null` (`waitToastOver` in panel-model.mjs); the confirm
+    sentence reads "Try on your draft of Golden Hour …" unless the draft renames the scene; TrialJSON `label` is the
+    approved scene's name (Back to approved named the draft). Six test gaps closed, each test checked against its
+    mutant: a first start the engine refuses, re-picks keep the try-on (engine + the real capability loop), stop()
+    awaits the bound task, the restart test checks before start-up's idle look, the concurrent-starts test really
+    overlaps, and an AST check refuses any writer call from a Lab source (`design_lab/trial.py` left
+    `COVERED_MODULES`). **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2106 passed, 5 skipped,
+    136 subtests; `make lint`; node 116/116; soak: only the non-gating "(reported)" D65 row FAILs, as before.
+    Browser (own dev server on 8205): during a try-on the iPad toast counts down; after Back to approved it is gone
+    within one poll and the header reads "Choose a scene below."; a renamed draft shows "On the lights now: Pinker
+    Hour (Golden Hour)" and Back to approved says "the lights show Golden Hour's approved look". **Needs a real
     iPad:** the Try-on panel's tap targets and the confirm block's scroll position. **Open for Alon:** the try-on
     doesn't apply the T1 lock (it never writes a slot), so a locked painted design can be tried on at module level;
     say if it should.
