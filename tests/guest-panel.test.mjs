@@ -7,6 +7,7 @@ import {
   BRIGHTNESS_SEND_MS,
   IDLE_MS,
   attractDue,
+  cardsKey,
   cardState,
   cardTap,
   clampLevel,
@@ -151,6 +152,44 @@ test("refusals show the server's calm detail; anything else reads as reconnectin
   for (const e of [err(0, null), err(500, { detail: "Traceback" }), err(422, { detail: "Send {level}" }), err(403, { detail: "x" })]) {
     assert.deepEqual(refusalToast(e), { text: COPY.reconnecting, retryAfterS: 0 });
   }
+});
+
+test("during a try-on the guest sees the server's trying-on sentence with its retry, never 'unavailable'", () => {
+  // PLAN §6.5: routes/kiosk.py refusal_for_state answers 503 TRYING_ON + Retry-After while the engine's trial runs
+  const TRYING_ON = "Staff are trying a new look. It will be back shortly.";
+  for (const status of [503, 409]) {
+    assert.deepEqual(refusalToast({ status, body: { detail: TRYING_ON, retry_after_s: 142.4 } }), { text: TRYING_ON, retryAfterS: 142.4 });
+  }
+  assert.deepEqual(refusalToast({ status: 503, body: { detail: TRYING_ON, retry_after_s: null } }), { text: TRYING_ON, retryAfterS: 0 });
+});
+
+test("cardsKey changes when a scene's contents change, not only its ids", () => {
+  const base = [scene("a", { solid: 0 }), scene("b", { solid: 1 })];
+  const key = cardsKey(base);
+  assert.equal(cardsKey(JSON.parse(JSON.stringify(base))), key, "the same catalog keeps its cards");
+  const changed = [
+    ["name", (s) => ({ ...s, name: "Golden Hour" })],
+    ["mood", (s) => ({ ...s, mood: "Warm and slow" })],
+    ["solid", (s) => ({ ...s, solid: 1 })],
+    ["a hex", (s) => ({ ...s, palette: [{ ...s.palette[0], hex: "#FF8FBF" }, s.palette[1]] })],
+    ["a colour name", (s) => ({ ...s, palette: [{ ...s.palette[0], name: "Shell" }, s.palette[1]] })],
+    ["the palette's order", (s) => ({ ...s, palette: [...s.palette].reverse() })],
+    ["a colour added", (s) => ({ ...s, palette: [...s.palette, { name: "Marsh", hex: "#6E8B5E" }] })],
+    ["the strip's frame", (s) => ({ ...s, frame: s.frame.map((c, i) => (i === 3 ? [9, 9, 9] : c)) })],
+  ];
+  for (const [what, fn] of changed) assert.notEqual(cardsKey([fn(base[0]), base[1]]), key, what);
+  assert.notEqual(cardsKey([base[1], base[0]]), key, "the order of the cards");
+  assert.notEqual(cardsKey(base.slice(0, 1)), key);
+  assert.equal(cardsKey([]), "[]");
+  assert.equal(cardsKey(undefined), "[]");
+  // the description isn't drawn on a card, so it doesn't rebuild them
+  assert.equal(cardsKey([{ ...base[0], description: "new words" }, base[1]]), key);
+});
+
+test("kiosk.js builds its cards on cardsKey, never on the ids alone", () => {
+  const js = readFileSync(new URL("../web/kiosk/kiosk.js", import.meta.url), "utf8").replace(/(^|\s)\/\/.*$/gm, "");
+  assert.match(js, /const key = cardsKey\(scenes\);/);
+  assert.doesNotMatch(js, /scenes\.map\(\(s\) => s\.id\)\.join/);
 });
 
 test("now showing: the scene, or calm copy with grey lights when off or unknown", () => {
