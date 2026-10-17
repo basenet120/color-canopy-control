@@ -67,12 +67,14 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-5">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-6">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert '<script type="module" src="./studio.js?v=show-design-3"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-5"')
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-6"')
+    # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
+    assert 'from "./lab-model.mjs?v=lab-6"' in _text("lab.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -148,6 +150,8 @@ LAB_API_PATHS = {
     "trial",
     "trial/start",
     "trial/stop",
+    "live",  # the live show (docs/live-lab/PLAN.md §2.11)
+    "publish",
 }
 
 
@@ -184,8 +188,14 @@ def test_the_lab_calls_only_its_own_routes_and_never_sends_a_live_setting():
     for call in re.finditer(r"api\(", code):
         assert "stagger" not in code[call.start() : code.find("\n", call.start())], call.group(0)
     assert not re.search(r"body = \{[^}]*stagger", code)
-    # the only switches are the layout's two and the fast preview: none for a live setting
-    assert re.findall(r'type: "checkbox", id: "([\w-]+)"', js) == ["lab-mirror", "lab-invert", "lab-fast"]
+    # the only switches are the layout's two, the fast preview and the publish dialog's "Show it on the canopy" (a
+    # one-shot `show` in the confirmed publish): none for a live setting
+    assert re.findall(r'type: "checkbox", id: "([\w-]+)"', js) == [
+        "lab-mirror",
+        "lab-invert",
+        "lab-fast",
+        "lab-publish-show",
+    ]
 
 
 def test_the_motion_lines_come_from_the_page_model():
@@ -218,6 +228,75 @@ def test_a_run_ends_when_every_side_on_screen_has_ended():
     tick = _function(_code(_text("lab.js")), "motionTick")
     assert "M.runsAt([tl, ...motionSidePreviews().map((p) => motionTimeline(p).tl)], motionElapsed())" in tick
     assert "m.elapsed = runs.totalS;" in tick and "key = `step|${runs.key}`;" in tick
+
+
+# ---- the live show (docs/live-lab/PLAN.md §3, §5.3; D68): publish only through the server's confirm ---------------
+def test_the_publish_dialog_shows_the_servers_sentence_and_sends_it_back():
+    js = _code(_text("lab.js"))
+    assert 'h(\n    "dialog",\n    { id: "lab-publish", class: "lab-dialog lab-publish-dialog"' in js
+    for el in (
+        "lab-publish-sentence",
+        "lab-publish-cost",
+        "lab-publish-who",
+        "lab-publish-go",
+        "lab-publish-show",
+    ):
+        assert f'id: "{el}"' in js, el
+    # exactly two publish requests, both with the page model's body: the ask (no confirm) and the confirmed one,
+    # which sends back the server's own sentence and the live id the dialog was opened against
+    calls = re.findall(r'api\(`\$\{API\}/publish`, \{ method: "POST", body: ([^\n]*)', js)
+    assert len(calls) == 2, calls
+    assert calls[0].startswith("M.publishBody({ version, expected })"), calls[0]
+    assert calls[1].startswith(
+        "M.publishBody({ version: d.version, confirm: d.view.sentence, expected: d.expected, who: L.who, show })"
+    ), calls[1]
+    assert "dialog: publishDialog(body)" in _text("lab-model.mjs") and "out.dialog" in _function(
+        js, "askPublish"
+    )
+    # the sentence is shown verbatim, never rebuilt in the page
+    assert '$("#lab-publish-sentence").textContent = v.sentence;' in _function(js, "renderPublishDialog")
+
+
+def test_the_live_poll_runs_at_5_s_and_1_s_during_a_repaint():
+    model = _code(_text("lab-model.mjs"))
+    js = _code(_text("lab.js"))
+    assert "export const LIVE_POLL_MS = 5000;" in model
+    assert "export const LIVE_REPAINT_POLL_MS = 1000;" in model
+    delay = _function(js, "liveDelay")
+    assert "M.LIVE_REPAINT_POLL_MS : M.LIVE_POLL_MS" in delay
+    assert "}, liveDelay());" in _function(js, "scheduleLivePoll")
+    assert "document.hidden" in _function(js, "scheduleLivePoll")  # a hidden page doesn't poll
+    assert '"visibilitychange", onVisible' in js and '"focus", onVisible' in js
+    assert "stopLiveWatch();" in _function(js, "route")  # no polling while the Lab is closed
+
+
+def test_the_version_file_input_accepts_only_json():
+    js = _code(_text("lab.js"))
+    inputs = re.findall(r'h\("input", \{[^}]*type: "file"[^}]*\}', js)
+    assert len(inputs) == 1, inputs
+    assert 'accept: ".json,application/json"' in inputs[0]
+
+
+def test_the_badges_compare_the_working_draft_with_the_live_look():
+    """Never "Approved" for a published look: the scene list and the stage compare with what the show runs."""
+    js = _code(_text("lab.js"))
+    assert "const state = M.workingState(d, L.liveLooks[id], trial());" in _function(js, "renderSceneList")
+    assert "M.liveBadge(sceneOf(id), liveScene(id))" in _function(js, "renderSceneList")
+    assert "return M.workingState(draft, L.liveLooks[L.scene], trial());" in _function(js, "stageDraftState")
+    assert "M.stageState(v, preview, stageDraftState(entry, draft))" in _function(js, "renderStage")
+    # a working draft starts from the show's look when no version is opened (seedFor's live fallback)
+    assert "L.base[id] = clone(M.seedFor(sceneOf(id)));" in _function(js, "boot")
+
+
+def test_no_publish_state_is_kept_in_the_browser():
+    """Only working drafts (under their config's key) and UI prefs (scene, view, angle, the publisher's name) are
+    stored: what the show runs is always the server's answer."""
+    js = _code(_text("lab.js"))
+    assert set(re.findall(r"setItem\((\w+)", js)) == {"key", "UI_KEY"}
+    assert "const key = M.draftStoreKey(L.catalog.config_sha, id);" in _function(js, "persist")
+    remember = _function(js, "rememberUi")
+    keys = re.findall(r"(\w+):", remember.split("JSON.stringify(", 1)[1])
+    assert set(keys) == {"scene", "view", "angle", "who"}, keys
 
 
 @pytest.mark.skipif(

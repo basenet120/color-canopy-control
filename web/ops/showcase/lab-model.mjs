@@ -25,6 +25,7 @@ export const SWIPE_MAX_MS = 600;
 export const STORE_PREFIX = "lab:";
 export const APPROVED = "approved"; // the compare set's first entry (git)
 export const WORKING = "working"; // the working draft (unsaved), when there is one
+export const LIVE = "live"; // an A/B side: what the show runs now (the approved looks or a published version)
 export const D63_LOCKS = Object.freeze({
   cycles: "Cycles: 1 (locked, D63) — one static design, no repeats; unlocking it is a D63 change for Alon.",
   sample_at: "Sample at: centre (locked, D63) — each strand shows the design at its own centre.",
@@ -376,7 +377,7 @@ export function draftState(approvedDraft, draft, trial) {
   return "draft";
 }
 
-export const BADGE_TEXT = { approved: "Approved", draft: "Draft", "in try-on": "In try-on", "approved design": "Approved design" };
+export const BADGE_TEXT = { approved: "Approved", draft: "Draft", "in try-on": "In try-on", "approved design": "Approved design", live: "Live" };
 
 /** True when colour `i` of `draft` renames or rehexes the approved colour at that index (D59: needs sign-off). */
 export function changesApprovedColour(approvedDraft, draft, i) {
@@ -770,9 +771,11 @@ export function swipeOf(dx, dy, dtMs) {
   return y < 0 ? "up" : "down";
 }
 
-/** The draft Present shows for (scene, entry): the working draft, the version's draft for the scene, or approved. */
-export function presentDraft(entry, sceneId, { approved, working, versionDrafts }) {
+/** The draft Present (or an A/B side) shows for (scene, entry): the working draft, the show's live look, the version's
+ * draft for the scene, or approved. */
+export function presentDraft(entry, sceneId, { approved, working, versionDrafts, live = null }) {
   if (entry === WORKING) return (working && working[sceneId]) || (approved && approved[sceneId]) || null;
+  if (entry === LIVE) return (live && live[sceneId]) || (approved && approved[sceneId]) || null;
   if (entry === APPROVED || !entry) return (approved && approved[sceneId]) || null;
   const drafts = versionDrafts && versionDrafts[entry];
   if (!drafts) return null; // not loaded yet
@@ -783,7 +786,8 @@ export function presentDraft(entry, sceneId, { approved, working, versionDrafts 
 export function entryLabel(entry, versions, { unsaved = false } = {}) {
   if (entry === APPROVED) return "Approved";
   if (entry === WORKING) return unsaved ? "Working draft (unsaved)" : "Working draft";
-  const v = (versions || []).find((x) => x.id === entry);
+  if (entry === LIVE) return "Live on the show";
+  const v =(versions || []).find((x) => x.id === entry);
   return v ? v.name : String(entry);
 }
 
@@ -913,8 +917,10 @@ export function formatLeft(seconds) {
 const trialName = (trial) => trial.draft_name || trial.label || trial.scene_id;
 
 /** The Lab's eyebrow: "screen only" stays true only where no try-on can reach the lights. */
-export function labEyebrow(api, trial) {
+export function labEyebrow(api, trial, publishing = false) {
   if (trial) return "DESIGN LAB · A TRY-ON IS ON THE LIGHTS";
+  if (api === "ready" && publishing) return "DESIGN LAB · SCREEN ONLY UNTIL YOU APPLY OR PUBLISH";
+  if (publishing) return "DESIGN LAB · SCREEN ONLY UNTIL YOU PUBLISH";
   if (api === "ready") return "DESIGN LAB · SCREEN ONLY UNTIL YOU APPLY";
   return "DESIGN LAB · SCREEN ONLY";
 }
@@ -1335,4 +1341,490 @@ export function rippleLine(schedule, liveStaggerS = null) {
   }
   const line = `${rings}, ${fmtS(schedule.stagger)} s apart: the last lands ${fmtS(schedule.spanS)} s after the first`;
   return same ? `${line}, as the canopy lands a new mood today.` : `${line}.`;
+}
+
+// ---- the live show (docs/live-lab/PLAN.md §3: the Lab as one system) ----------------------------------------------------
+// The show runs the approved (git) looks or a published Lab version; working drafts and saved versions are drafts until
+// a publish. Every sentence that says what a publish does or why it was refused is the SERVER's (the confirm sentence,
+// the cost, each 409); these helpers only word the show bar from LiveJSON (PLAN §2.11), pick which server sentence to
+// show, and count waits down. Nothing here decides what reaches the lights.
+
+export const LIVE_POLL_MS = 5000; // GET /api/lab/live while the Lab is visible
+export const LIVE_REPAINT_POLL_MS = 1000; // and while a slot repaint is running or queued (B2)
+export const WHO_MAX = 40; // the publisher's name (`who`, kept as a UI pref in this browser)
+export const NOTE_MAX = 60; // a version's note
+export const NAME_MAX = 80; // a version's name
+export const VERSION_FILE_KIND = "color-canopy-lab-version";
+export const VERSION_FILE_MAX_BYTES = 2_000_000;
+export const PUBLISH = "Publish to the show";
+export const REVERT = "Revert the show to approved";
+export const UNDO_PUBLISH = "Undo last publish";
+export const SAVE_PUBLISH = "Save & publish";
+export const LIVE_NOW = "Live now";
+export const WORKING_TEXT = Object.freeze({ live: "Live", draft: "Draft", "in try-on": "In try-on" });
+export const LIVE_COPY = Object.freeze({
+  loading: "checking what it runs…",
+  missing: "publishing from the Lab isn’t on this server yet",
+  missingAction: "Publishing from the Lab isn’t on this server yet; the show runs the approved looks.",
+  unreachable: "Can’t reach the Conductor, so what the show runs is unknown",
+  unknownAction: "What the show runs is unknown, so publishing waits until the Conductor answers.",
+  noData: "This runtime has no data folder, so a publish couldn’t survive a restart: publishing is off here.",
+  liveNow: "The working drafts are what the show runs.",
+  gitChanged: "config/ changed since this was published; the show still runs the published looks.",
+  inGit: "(the same as approved — it’s in git)",
+  canopyOff: "The canopy is off (guest power): a publish changes the look, not the power.",
+  ipad: "Drafts and try-ons never change the iPad’s cards; a publish does.",
+  d59: "changes an approved colour — needs the client’s sign-off",
+  endsTrial: "The running try-on ends.",
+  repaintOff:
+    "A new painted design (its colours’ hexes or its layout) can’t be published from this box yet: there is no slot repaint here. Brightness, solid, colour names, copy and stepped timing can.",
+});
+const OUTCOME_TEXT = { live: "Live", replaced: "Replaced", "rolled back": "Rolled back", "in git": "In git" };
+const STATUS_TEXT = { pending: "waiting", applied: "repainted", skipped: "skipped", locked: "held by the module page", failed: "failed", mismatch: "read back different" };
+
+const str = (v) => (typeof v === "string" ? v : "");
+const strs = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x) : []);
+const listWords = (items) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
+
+/** "Modules 1–2" for module labels ("Module 1", "Module 2"): runs collapsed as moduleList does; other labels joined. */
+export function labelList(labels) {
+  const list = strs(labels);
+  const ns = list.map((l) => /^Module (\d)$/.exec(l)).map((m) => (m ? Number(m[1]) : NaN));
+  if (!list.length || ns.some((n) => !Number.isFinite(n) || n < 1)) return listWords(list);
+  return moduleList(ns.map((n) => `r${Math.floor((n - 1) / 3)}c${(n - 1) % 3}`));
+}
+
+/** The scene's live badge: 'Published' when the show runs a published look for it, else 'Approved' (also from a server
+ * without publishing, whose show runs git). LiveJSON's per-scene `source` wins over the catalog's (it is polled). */
+export function liveBadge(scene, liveScene = null) {
+  const source = (liveScene && liveScene.source) || (scene && scene.live_source);
+  return source === "published" ? "Published" : "Approved";
+}
+
+/** The look the show runs for a catalog scene: its `live_look`, else (a server without publishing) its approved one. */
+export function liveLookOf(scene) {
+  return (scene && (scene.live_look || scene.approved)) || null;
+}
+
+/** The working draft against the show: 'in try-on' (the engine's trial is this scene) over 'draft' (differs from the
+ * LIVE look — not from approved) over 'live'. */
+export function workingState(working, liveLook, trial) {
+  const id = (working && working.scene_id) || (liveLook && liveLook.scene_id);
+  if (trial && trial.scene_id && trial.scene_id === id) return "in try-on";
+  if (!working || !liveLook || draftEquals(working, liveLook)) return "live";
+  return "draft";
+}
+
+/** Where a scene's working draft starts: the draft this browser kept, else the opened version's draft, else (no
+ * version opened) the show's live look; a scene an opened version doesn't name is approved in that version. */
+export function seedFor(scene, stored = null, { versionDraft = null, fromVersion = false } = {}) {
+  if (stored) return stored;
+  if (versionDraft) return versionDraft;
+  if (fromVersion) return (scene && scene.approved) || null;
+  return liveLookOf(scene);
+}
+
+/** 'Publish to the show' ↔ 'Publish to this simulator': on a simulator runtime "the show" is this simulator. */
+export function publishLabel(simulated, base) {
+  const text = String(base ?? "");
+  return simulated ? text.replace(/\bthe show\b/g, "this simulator") : text;
+}
+
+/** The one Publish button: 'Save & publish' while the working drafts differ from the selected version (or nothing is
+ * saved), 'Publish to the show' for the selected version ("approved" when every working draft is git's), disabled
+ * 'Live now' when the working drafts are what the show runs. → {label, enabled, version, save, why}. */
+export function publishAction({ working = {}, base = {}, approved = {}, liveLooks = {}, order = null, selected = null, api = "ready", writable = true, readOnly = false, busy = false, simulated = false } = {}) {
+  const ids = order || Object.keys(working || {});
+  const label = (t) => publishLabel(simulated, t);
+  const off = (text, why) => ({ label: label(text), enabled: false, version: null, save: false, why });
+  if (api === "missing") return off(PUBLISH, LIVE_COPY.missingAction);
+  if (api !== "ready") return off(PUBLISH, api === "loading" ? `The show: ${LIVE_COPY.loading}` : LIVE_COPY.unknownAction);
+  if (!writable) return off(PUBLISH, LIVE_COPY.noData);
+  const differs = ids.some((id) => working[id] && liveLooks[id] && !draftEquals(working[id], liveLooks[id]));
+  if (!differs) return off(LIVE_NOW, LIVE_COPY.liveNow);
+  const unsaved = unsavedScenes(working, base, ids).length > 0;
+  const allApproved = ids.every((id) => !working[id] || !approved[id] || draftEquals(working[id], approved[id]));
+  if (!unsaved && !selected && allApproved) return { label: label(PUBLISH), enabled: !busy, version: APPROVED, save: false, why: "" };
+  if (unsaved || !selected) {
+    // save first (the note field names it), then publish the version just saved: what goes live is what's on screen
+    const why = readOnly ? "The Lab’s saved versions are read-only here, so nothing can be saved first." : "";
+    return { label: SAVE_PUBLISH, enabled: !busy && !readOnly, version: null, save: true, why };
+  }
+  return { label: label(PUBLISH), enabled: !busy, version: selected, save: false, why: "" };
+}
+
+/** The id the publish dialog was opened against (`expected_live`): the live publication, or "approved". */
+export function expectedLive(live) {
+  return live && live.current && live.current.id ? live.current.id : APPROVED;
+}
+
+/** The publisher's name as sent: spaces collapsed, trimmed, ≤ 40 characters, "" when blank. */
+export function whoValue(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim().slice(0, WHO_MAX);
+}
+
+/** The body of POST /api/lab/publish (PLAN §2.11). */
+export function publishBody({ version, confirm = null, expected = APPROVED, who = "", show = null } = {}) {
+  const body = { version: String(version), expected_live: String(expected || APPROVED) };
+  if (confirm) body.confirm = String(confirm);
+  const name = whoValue(who);
+  if (name) body.who = name;
+  if (show !== null && show !== undefined) body.show = !!show;
+  return body;
+}
+
+/** The dialog's title for what is being published. */
+export function publishTitle(kind, simulated = false) {
+  if (kind === "approved") return publishLabel(simulated, REVERT);
+  if (kind === "previous") return UNDO_PUBLISH;
+  return publishLabel(simulated, PUBLISH);
+}
+
+function repaintPlanLine(r, names = {}) {
+  const modules = strs(r && r.modules);
+  const writes = Number(r && r.writes);
+  const inS = Number(r && r.in_s);
+  const where = modules.length ? ` on ${labelList(modules)}` : "";
+  const count = Number.isFinite(writes) && r.writes !== null ? `: ${plural(writes, "slot write")}` : "";
+  const when = Number.isFinite(inS) && inS > 0 ? `, in ${Math.ceil(inS)} s` : "";
+  const scene = (r && (r.name || names[r.scene] || r.scene)) || "A painted scene";
+  return `${scene} repaints ${(r && r.slot) || "its slot"}${where}${count}${when}`;
+}
+
+/** The 409 confirm_required body as the dialog shows it: the server's sentence verbatim, its cost, the changes, the
+ * repaint lines, the (non-blocking) warnings, the notes, the try-on line (only when the sentence doesn't say it) and
+ * the scene the "Show it on the canopy" checkbox offers. */
+export function publishDialog(body409) {
+  const b = body409 && typeof body409 === "object" ? body409 : {};
+  const sentence = str(b.confirm) || str(b.detail);
+  const changes = (Array.isArray(b.changes) ? b.changes : []).map((c) => {
+    const name = str(c && c.name) || str(c && c.scene);
+    const what = strs(c && c.what);
+    const back = c && c.to === "approved" ? " — back to approved" : "";
+    return { scene: str(c && c.scene), name, text: `${name}${what.length ? `: ${what.join(", ")}` : ""}${back}`, d59: !!(c && c.needs_d59) };
+  });
+  const offer = str(b.show_offer) || null;
+  const offered = offer ? changes.find((c) => c.scene === offer) : null;
+  return {
+    sentence,
+    cost: str(b.cost),
+    replaces: b.replaces && typeof b.replaces === "object" ? str(b.replaces.name) || null : null,
+    changes,
+    repaint: (Array.isArray(b.repaint) ? b.repaint : []).map((r) => repaintPlanLine(r, Object.fromEntries(changes.map((c) => [c.scene, c.name])))),
+    warnings: strs(b.warnings),
+    notes: strs(b.notes),
+    endsTrial: !!b.ends_trial,
+    trialLine: b.ends_trial && !sentence.includes(LIVE_COPY.endsTrial) ? LIVE_COPY.endsTrial : "",
+    showOffer: offer,
+    showLabel: offer ? `Show ${(offered && offered.name) || offer} on the canopy after publishing` : "",
+  };
+}
+
+/** A refused POST /api/lab/publish, classified (PLAN §2.8): 'confirm' (the dialog), 'conflict' (someone published
+ * since: ask again from its `live`), 'wait' (retry_after_s), 'field' (marks a scene), 'stale' (422 / stale: marks the
+ * version), 'nothing', 'read-only', 'refused' (any other 409, or a 404 for an unknown version), 'missing' (no route
+ * here), 'no-engine' (503), 'unreachable', 'error'. */
+export function publishOutcome(err) {
+  const status = Number(err && err.status);
+  const body = err && err.body && typeof err.body === "object" ? err.body : {};
+  const detail = str(body.detail) || str(err && err.message);
+  const retry = Number(body.retry_after_s);
+  const retryAfterS = Number.isFinite(retry) && retry > 0 ? retry : 0;
+  if (status === 409 && body.confirm_required) return { kind: "confirm", dialog: publishDialog(body), text: detail };
+  if (status === 409 && body.conflict) return { kind: "conflict", text: detail, live: body.live && typeof body.live === "object" ? body.live : null };
+  if (status === 409 && body.nothing) return { kind: "nothing", text: detail || "This is already what the show runs." };
+  if (status === 409 && body.read_only) return { kind: "read-only", text: detail };
+  if (status === 422 || (status === 409 && body.stale)) {
+    return { kind: "stale", text: detail || "That version doesn’t apply to the show’s config.", problems: Array.isArray(body.problems) ? body.problems : [] };
+  }
+  if (status === 409 && typeof body.field === "string" && body.field) {
+    const [scene, ...rest] = body.field.split(".");
+    return { kind: "field", text: detail, field: body.field, scene, slot: rest.join(".") || "draft" };
+  }
+  if (status === 409 && retryAfterS) return { kind: "wait", text: detail, retryAfterS };
+  if (status === 409) return { kind: "refused", text: detail || "The publish was refused." };
+  if (liveApiFromError(err) === "missing") return { kind: "missing", text: LIVE_COPY.missingAction };
+  if (status === 404) return { kind: "refused", text: detail };
+  if (status === 503) return { kind: "no-engine", text: detail || "The canopy engine isn’t running here, so nothing can be published." };
+  if (status === 0 || !Number.isFinite(status)) return { kind: "unreachable", text: "Can’t reach the Conductor, so nothing was published." };
+  return { kind: "error", text: detail ? `The publish failed (HTTP ${status}): ${detail}` : `The publish failed (HTTP ${status}).` };
+}
+
+/** What a failed GET /api/lab/live says: 'missing' (the route isn't on this server: FastAPI's own "Not Found", 405 or
+ * a 501 stub), 'unreachable' (status 0), else 'error'. */
+export function liveApiFromError(err) {
+  const status = Number(err && err.status);
+  const body = err && err.body && typeof err.body === "object" ? err.body : null;
+  const detail = body && typeof body.detail === "string" ? body.detail : "";
+  if (status === 501 || (body && body.not_built) || status === 405 || (status === 404 && (!detail || detail === "Not Found"))) return "missing";
+  if (status === 0 || !Number.isFinite(status)) return "unreachable";
+  return "error";
+}
+
+/** "12:04" for a time today, "Oct 22, 12:04" otherwise (the viewer's local time, from epoch seconds). */
+export function whenLine(epochSeconds, nowMs = Date.now(), locale = undefined) {
+  const n = Number(epochSeconds);
+  if (epochSeconds === null || epochSeconds === undefined || !Number.isFinite(n)) return "";
+  const d = new Date(n * 1000);
+  const now = new Date(Number(nowMs));
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (!sameDay) return versionDate(n, locale);
+  return d.toLocaleTimeString(locale || "en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+/** Seconds left on a server wait (`retry_after_s` read at `sentMs`, or a queued repaint), counted down on this clock:
+ * whole seconds, never negative. */
+export function gateCountdown(retryAfterS, nowMs, sentMs) {
+  const r = Number(retryAfterS);
+  if (!Number.isFinite(r) || r <= 0) return 0;
+  const gone = (Number(nowMs) - Number(sentMs)) / 1000;
+  return Math.max(0, Math.ceil(r - (Number.isFinite(gone) && gone > 0 ? gone : 0)));
+}
+
+/** A queued repaint's seconds left: `queued_until` (the server's wall clock) as read at `readAtMs`, counted down here. */
+export function queuedLeft(repaint, nowMs, readAtMs) {
+  const until = Number(repaint && repaint.queued_until);
+  if (!repaint || repaint.queued_until === null || !Number.isFinite(until)) return 0;
+  return gateCountdown(until - Number(readAtMs) / 1000, nowMs, readAtMs);
+}
+
+const sceneNameIn = (live, catalog) => (id) => {
+  const s = ((live && live.scenes) || []).find((x) => x.id === id) || ((catalog && catalog.scenes) || []).find((x) => x.id === id);
+  return (s && s.name) || id;
+};
+
+/** RepaintJSON (B2) as the show bar shows it: "Repainting Golden Hour into custom-3: 6 of 9 modules done", the queue's
+ * wait, or how it ended; `rows` for the per-module list. Null without a repaint (B1, or none yet). */
+export function repaintProgress(repaint, { nowMs = Date.now(), readAtMs = nowMs } = {}) {
+  if (!repaint || typeof repaint !== "object") return null;
+  const rows = (Array.isArray(repaint.modules) ? repaint.modules : []).map((m) => {
+    const label = str(m && m.label) || str(m && m.id);
+    const status = str(m && m.status) || "pending";
+    const reason = str(m && m.reason);
+    return { id: str(m && m.id), label, status, reason, text: `${label}: ${STATUS_TEXT[status] || status}${reason ? ` (${reason})` : ""}` };
+  });
+  const total = rows.length;
+  const done = rows.filter((r) => r.status !== "pending").length;
+  const applied = rows.filter((r) => r.status === "applied").length;
+  const label = str(repaint.label) || str(repaint.scene) || "A painted scene";
+  const slot = str(repaint.slot) || "its slot";
+  const queued = repaint.queued_until !== null && repaint.queued_until !== undefined && !repaint.started_at && !repaint.finished_at;
+  const finished = !!repaint.finished_at || (!repaint.running && !queued);
+  const base = { done, total, applied, rows, running: !!repaint.running && !queued && !finished, queued, finished, scene: str(repaint.scene) };
+  if (queued) {
+    const left = queuedLeft(repaint, nowMs, readAtMs);
+    return { ...base, tone: "warn", left, text: `${label}’s repaint into ${slot} is queued: it starts ${left > 0 ? `in ${left} s` : "now"} (one repaint per scene every 2 min at most)` };
+  }
+  if (!finished) return { ...base, tone: "warn", left: 0, text: `Repainting ${label} into ${slot}: ${done} of ${plural(total, "module")} done` };
+  if (total && applied === total) return { ...base, tone: "ok", left: 0, text: `${label}’s painted design is in ${slot} on ${plural(total, "module")}` };
+  const missed = rows.filter((r) => r.status !== "applied").map((r) => `${r.label}: ${STATUS_TEXT[r.status] || r.status}${r.reason ? `, ${r.reason}` : ""}`);
+  return {
+    ...base,
+    tone: "warn",
+    left: 0,
+    text: `${label}: ${slot} repainted on ${applied} of ${plural(total, "module")}${missed.length ? ` (${missed.join("; ")})` : ""}; it shows at module level until the rest are current (the reconciler retries after 10 min)`,
+  };
+}
+
+/** The live look equals git: approve-into-git merged and deployed (LiveLooks.equals_approved, or the load's "in git"
+ * history row for the current publication). */
+function inGit(live) {
+  const c = live && live.current;
+  if (!c) return false;
+  if (live.equals_approved || c.equals_approved) return true;
+  const top = (live.history || [])[0];
+  return c.kind === "approved" && !!top && top.id === c.id && top.outcome === "in git";
+}
+
+/**
+ * The show bar (PLAN §3.1) from LiveJSON: {tone: 'ok'|'warn'|'error'|'unknown', text, chip, lines: [{tone, text}],
+ * repaint (repaintProgress), actions: {undo, revert, history}}. `api`: the state of GET /api/lab/live ('loading' |
+ * 'ready' | 'missing' | 'unreachable' | 'error'); `host`: the simulator's host for its line.
+ */
+export function showBar(live, catalog, { api = "ready", host = "", nowMs = Date.now(), readAtMs = nowMs } = {}) {
+  const simulated = live && typeof live.simulated === "boolean" ? live.simulated : !!(catalog && catalog.simulated);
+  const sim = `● Simulator on ${host || "this machine"}: nothing here reaches the canopy`;
+  const chip = simulated ? "Simulator" : "Live hardware";
+  const none = { undo: null, revert: null, history: null };
+  const sha = catalog && typeof catalog.config_sha === "string" ? catalog.config_sha.slice(0, 6) : "";
+  const git = sha ? ` · git ${sha}` : "";
+  if (api === "loading" || (api === "ready" && !live)) {
+    return { tone: "unknown", text: `${simulated ? sim : "● The show"} · ${LIVE_COPY.loading}`, chip, lines: [], repaint: null, actions: none };
+  }
+  if (api === "missing") {
+    const text = simulated ? `${sim} · it runs the approved looks${git} · ${LIVE_COPY.missing}` : `● Live on the show: the approved looks${git} · ${LIVE_COPY.missing}`;
+    return { tone: "ok", text, chip, lines: [], repaint: null, actions: none };
+  }
+  if (api !== "ready") {
+    const last = live && live.current && live.source === "published" ? ` (last known: “${live.current.name}”)` : live ? " (last known: the approved looks)" : "";
+    return { tone: "warn", text: `● ${LIVE_COPY.unreachable}${last}`, chip, lines: [], repaint: null, actions: none };
+  }
+  const name = sceneNameIn(live, catalog);
+  const c = live.current;
+  const published = live.source === "published" && !!c;
+  let what;
+  if (published) {
+    const changed = (c.changed || []).map(name);
+    const differ = changed.length ? ` · ${listWords(changed)} ${changed.length === 1 ? "differs" : "differ"} from approved` : "";
+    const by = c.by ? ` by ${c.by}` : "";
+    what = `“${c.name}” · published ${whenLine(c.published_at, nowMs)}${by}${differ}`;
+  } else what = `the approved looks${inGit(live) ? ` ${LIVE_COPY.inGit}` : ""}${git}`;
+  const text = simulated ? `${sim} · it runs ${what}` : `● Live on the show: ${what}`;
+  const lines = [];
+  if (live.fallback) {
+    lines.push({ tone: "error", text: `The published looks couldn’t be loaded (${live.problem || "unreadable"}), so the show runs the approved looks. Publish again, or Revert to approved.` });
+  }
+  if (published && c.git_changed && !inGit(live)) lines.push({ tone: "warn", text: LIVE_COPY.gitChanged });
+  const progress = repaintProgress(live.repaint, { nowMs, readAtMs });
+  for (const s of live.scenes || []) {
+    if (!s || !s.held) continue;
+    const queued = progress && progress.queued && progress.scene === s.id ? ` · repaint in ${progress.left} s` : "";
+    lines.push({ tone: "warn", text: `${s.name || s.id} shows at module level until its slots are repainted${queued}` });
+  }
+  if (progress && !progress.queued) lines.push({ tone: progress.tone, text: progress.text, repaint: true });
+  if (live.canopy && live.canopy.power === false) lines.push({ tone: "note", text: LIVE_COPY.canopyOff });
+  if (live.writable === false) lines.push({ tone: "note", text: LIVE_COPY.noData });
+  const tone = live.fallback ? "error" : lines.some((l) => l.tone === "warn") ? "warn" : "ok";
+  const prev = live.previous;
+  const actions = {
+    undo: prev ? { label: UNDO_PUBLISH, title: `Back to “${prev.name}”${prev.by ? ` (published by ${prev.by})` : ""}` } : null,
+    revert: published || live.fallback || (c && c.kind === "version") ? { label: publishLabel(simulated, REVERT) } : null,
+    history: (live.history || []).length ? { label: `History (${Math.min(live.history.length, 20)})` } : null,
+  };
+  return { tone, text, chip, lines, repaint: progress, actions };
+}
+
+/** LiveJSON.history (newest first, ≤ 20) as the drawer's rows, with what each row offers: Open in editor (the restore
+ * route; "approved" for an approved row), Publish again (never the live row; a version only while it exists), Export
+ * (a version that exists). */
+export function historyRows(history, { scenes = {}, nowMs = Date.now() } = {}) {
+  const nameOf = (id) => (scenes && scenes[id]) || id;
+  return (Array.isArray(history) ? history : []).slice(0, 20).map((h) => {
+    const kind = h && h.kind === "approved" ? "approved" : "version";
+    const exists = kind === "approved" || (!!(h && h.version) && h.version_exists !== false);
+    const repaint =
+      h && h.repaint && typeof h.repaint === "object"
+        ? Object.entries(h.repaint).map(([sid, r]) => {
+            const total = ["applied", "skipped", "failed"].reduce((n, k) => n + (Number(r && r[k]) || 0), 0);
+            return `${nameOf(sid)}: ${(r && r.slot) || "slot"} repainted on ${Number(r && r.applied) || 0} of ${plural(total, "module")}`;
+          })
+        : [];
+    const outcome = str(h && h.outcome);
+    return {
+      id: str(h && h.id),
+      kind,
+      version: kind === "approved" ? APPROVED : str(h && h.version),
+      name: kind === "approved" ? "The approved looks" : str(h && h.name) || str(h && h.version),
+      when: whenLine(h && h.published_at, nowMs),
+      by: str(h && h.by),
+      scenes: h && Array.isArray(h.changed) && h.changed.length ? h.changed.map(nameOf).join(", ") : "no scene changed",
+      repaint: repaint.join(" · "),
+      outcome,
+      outcomeText: OUTCOME_TEXT[outcome] || outcome,
+      live: outcome === "live",
+      canOpen: exists,
+      canRepublish: outcome !== "live" && exists,
+      canExport: kind === "version" && exists,
+      gone: kind === "version" && !exists ? "Its Lab version was deleted." : "",
+    };
+  });
+}
+
+/** "The show changed: “<name>” was published at 12:10 by Alon." — only when the live publication's id changed between
+ * two reads (null on the first read, and for the same id). */
+export function liveNotice(prev, next, { nowMs = Date.now() } = {}) {
+  if (!prev || !next) return null;
+  const id = (l) => (l.current && l.current.id) || APPROVED;
+  if (id(prev) === id(next)) return null;
+  const c = next.current;
+  const by = c && c.by ? ` by ${c.by}` : "";
+  const at = c && Number.isFinite(Number(c.published_at)) ? ` at ${whenLine(c.published_at, nowMs)}` : "";
+  if (!c || c.kind === "approved") return `The show changed: it runs the approved looks again${at}${by}.`;
+  return `The show changed: “${c.name}” was published${at}${by}.`;
+}
+
+/** What the iPad's six cards show now: LiveJSON's scenes (name + swatches), else (no publishing here) the catalog's
+ * approved ones — the iPad follows the live catalog, never a draft or a try-on. */
+export function ipadCards(live, catalog) {
+  const fromLive = !!(live && Array.isArray(live.scenes) && live.scenes.length);
+  const scenes = fromLive ? live.scenes : (catalog && catalog.scenes) || [];
+  return scenes.map((s) => {
+    const palette = fromLive ? s.palette : s.approved && s.approved.palette;
+    return { id: s.id, name: s.name, source: fromLive ? s.source || "approved" : "approved", palette: (Array.isArray(palette) ? palette : []).map((c) => String(c.hex)) };
+  });
+}
+
+/** The editor's line about a painted scene's slot (the catalog's / preview's RepaintInfo): the server's sentence, plus
+ * the B1 note when a new painted design can't be published here (commissioned slots, no repaint on this box yet). */
+export function repaintNote(info) {
+  if (!info || typeof info !== "object") return "";
+  const blocked = info.available === false && Array.isArray(info.commissioned) && info.commissioned.length > 0;
+  return [str(info.sentence), blocked ? LIVE_COPY.repaintOff : ""].filter(Boolean).join(" ");
+}
+
+/** The download's object for a version (GET /api/lab/versions/{id}): name, note, drafts and the config it was made
+ * against, so another Lab (a laptop, staging, the show box) can open it. */
+export function versionFile(versionJson, configSha = null) {
+  const v = versionJson && typeof versionJson === "object" ? versionJson : {};
+  return {
+    kind: VERSION_FILE_KIND,
+    format: 1,
+    id: str(v.id),
+    name: str(v.name),
+    note: str(v.note),
+    created_at: Number.isFinite(Number(v.created_at)) && v.created_at !== null ? Number(v.created_at) : null,
+    config_sha: str(v.config_sha) || str(configSha) || null,
+    drafts: v.drafts && typeof v.drafts === "object" ? JSON.parse(JSON.stringify(v.drafts)) : {},
+  };
+}
+
+/** "lab-version-v0007-client-oct-22-v3-warmer-sunset.json" */
+export function versionFileName(versionJson) {
+  const v = versionJson || {};
+  const slug = String(v.name || "")
+    .normalize("NFKD")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "-")
+    .slice(0, 48)
+    .replace(/-+$/, "");
+  return `lab-version-${String(v.id || "file").replace(/[^\w-]/g, "")}${slug ? `-${slug}` : ""}.json`;
+}
+
+/** The note a version opened from a file is saved with: "from <original name>" (≤ 60 characters). */
+export function fromNote(name) {
+  const n = String(name || "").trim() || "a version file";
+  return `from ${n}`.slice(0, NOTE_MAX);
+}
+
+/** A version file's text → {name, note, drafts, configSha} for POST /api/lab/versions (the server validates them like
+ * any save), or {error} for anything that isn't one. */
+export function readVersionFile(text) {
+  if (typeof text !== "string" || !text.trim()) return { error: "That file is empty: it isn’t a Lab version." };
+  if (text.length > VERSION_FILE_MAX_BYTES) return { error: "That file is too large to be a Lab version." };
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return { error: "That file isn’t a Lab version (it isn’t JSON)." };
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return { error: "That file isn’t a Lab version." };
+  if (data.kind !== undefined && data.kind !== VERSION_FILE_KIND) return { error: "That file isn’t a Lab version (it is another kind of file)." };
+  const drafts = data.drafts;
+  if (!drafts || typeof drafts !== "object" || Array.isArray(drafts)) return { error: "That file isn’t a Lab version (it has no drafts)." };
+  for (const [sid, d] of Object.entries(drafts)) {
+    if (!d || typeof d !== "object" || d.scene_id !== sid || !Array.isArray(d.palette) || !d.layout || typeof d.layout !== "object") {
+      return { error: `That file’s draft for ${sid} isn’t a scene draft.` };
+    }
+  }
+  const name = str(data.name).trim().slice(0, NAME_MAX);
+  return { name, note: fromNote(name), drafts, configSha: str(data.config_sha) || null };
+}
+
+/** The toast after a publish: "Live now: <name>" ("the approved looks" after a revert). */
+export function publishedToast(live, simulated = false) {
+  const c = live && live.current;
+  const what = c && live.source === "published" ? `“${c.name}”` : "the approved looks";
+  return `${simulated ? "Live on this simulator now" : "Live now"}: ${what}`;
 }

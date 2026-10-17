@@ -1,0 +1,16 @@
+{
+  "slot": "custom-3",
+  "commissioned": [
+    "r0c0",
+    "r0c1",
+    "r0c2",
+    "r1c0",
+    "r1c1"
+  ],
+  "eligible": 5,
+  "total": 9,
+  "app": [],
+  "simulated": true,
+  "available": true,
+  "sentence": "custom-3 is commissioned on 5 of 9 modules (Modules 1–5); publishing repaints those 5 (one slot write each). The other 4 get the published design when they are commissioned."
+}
