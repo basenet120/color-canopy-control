@@ -3,3 +3,6 @@
 de06e9361bae0e26da132cc09460c10f9e5031ee:tests/test_accounts_routes.py:generic-api-key:16
 de06e9361bae0e26da132cc09460c10f9e5031ee:tests/test_accounts_canary_routes.py:generic-api-key:25
 d19b0b4d63c6ab6c3a031cbe9feb1427c8764af6:tests/test_credential_canary.py:generic-api-key:22
+# Design Lab test fixture, not a secret: a made-up 12-hex config fingerprint ("3f9a1c0e2b7d") passed to staleDraftKeys;
+# the generic-api-key rule reads `staleDraftKeys(keys, "…")` as a key assignment.
+da741149675aea2896498a9ecb0de98d8f6bddda:tests/lab-model.test.mjs:generic-api-key:452
