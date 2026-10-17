@@ -10,7 +10,9 @@ motion. The layouts are D63's drafts (Paris reviews them); palettes, names, brig
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +29,7 @@ from conductor.looks import (
     placement_for,
 )
 from conductor.looks import field as F
+from conductor.looks.scene_rules import scene_mode_problems
 from conductor.looks.schema import FieldCanvas
 from conductor.rows import FrameEntry
 from conductor.scenes import load_scenes
@@ -43,17 +46,18 @@ POSITIONS = [f"r{r}c{c}" for r in range(3) for c in range(3)]
 CAPS = detect(*profile_parts("sqhdk03-sim"))
 LIVE = ("r0c0", "r0c1")  # the Mac show box's two shop kits (D62)
 D62_TWO = "Colour and dimming: two Hubspace strands, each set to a single colour from the scene."
+# The approved values (each design's layout and words, module-level colours) live in the pinned fixture, which the
+# Design Lab's export and `make scene-pins` regenerate (Design Lab PLAN §3.7); the invariants stay here.
+PINS = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
+PIN_CHANGED = "approved value changed: run make scene-pins and review the fixture diff"
 
-# D63's draft layouts, in canopy inches (reflected-ceiling view: x from the left edge, y from the top edge)
-LAYOUTS = {
-    "lowcountry-calm": {"kind": "radial", "centre_in": (112.5, 60), "invert": True},  # sea glass, centre
-    "rainbow-row-sunset": {"kind": "linear", "angle_deg": 45},  # corner to corner
-    "garden-gathering": {"kind": "radial", "centre_in": (112.5, 120), "invert": True},  # from one long edge
-    "coastal-tides": {"kind": "linear", "angle_deg": 78},  # a tilted shoreline
-    # a sun at the middle of the left edge, measured in the canopy's proportions so its arc shows at module level
-    "golden-hour": {"kind": "radial", "centre_in": (0, 60), "metric": "canopy"},
-    "goodnight-glow": {"kind": "radial", "centre_in": (187.5, 20), "invert": True},  # a moon over r0c2
-}
+# The approved layouts, in canopy inches (reflected-ceiling view: x from the left edge, y from the top edge). D63's
+# drafts: Lowcountry Calm radial from the centre (sea glass there), Rainbow Row Sunset corner to corner (linear 45°),
+# Garden Gathering radial from the middle of the bottom long edge, Coastal Tides a tilted shoreline (linear 78°),
+# Golden Hour a sun at the middle of the left edge in the canopy's proportions, The Goodnight Glow a moon over r0c2.
+LAYOUTS = {m: PINS[m]["layout"] for m in IDS}
+# D63's sun, the design the Golden Hour sun test describes (skipped once the Lab redesigns it)
+D63_SUN = F.RadialField.model_validate({"kind": "radial", "centre_in": (0, 60), "metric": "canopy"})
 
 
 def _ctx(**kw) -> CompileContext:
@@ -108,6 +112,7 @@ def test_the_modes_are_the_scenes_ids_labels_blurbs_and_previews_in_order():
         assert mode.label == scene.name
         assert mode.blurb == scene.mood
         assert [c.upper() for c in mode.preview] == [c.hex for c in scene.palette]
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"catalog"}) == []
 
 
 @pytest.mark.parametrize("mode_id", IDS)
@@ -127,6 +132,7 @@ def test_every_tier_uses_the_scenes_brightness_and_nothing_moves(mode_id):
     assert levels and set(levels) == {scene.brightness_draft}
     assert mode.motion is False
     assert _design(mode_id).field.cycles == 1  # one static design, no repeats
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"brightness", "static"}) == []
 
 
 @pytest.mark.parametrize("mode_id", IDS)
@@ -137,6 +143,7 @@ def test_every_ladder_ends_on_the_solid_colour(mode_id):
     assert strand.look.kind == "rgb" and tuple(strand.look.rgb) == scene.solid.rgb
     assert strand.fallback_look is None
     assert strand.feature.endswith(f"set to {scene.solid.name.lower()}.")
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"ladder-end"}) == []
 
 
 def test_three_modes_are_painted_one_per_slot_and_the_rest_start_at_module_level():
@@ -152,6 +159,7 @@ def test_three_modes_are_painted_one_per_slot_and_the_rest_start_at_module_level
     for mode_id, mode in MODES.modes.items():
         expected = ["canvas", "slot", "modules", "strand"] if mode_id in painted else ["modules", "strand"]
         assert mode.ladder == stepped.get(mode_id, expected)
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"slots"}) == []
 
 
 @pytest.mark.parametrize("mode_id", IDS)
@@ -165,10 +173,11 @@ def test_each_scene_is_one_design_whose_stops_are_its_palette(mode_id):
     assert [s.at for s in design.stops] == [i / (n - 1) for i in range(n)]
     assert [RECIPES.colors[s.color].hex.upper() for s in design.stops] == [c.hex for c in scene.palette]
     assert [RECIPES.colors[s.color].label for s in design.stops] == [c.name for c in scene.palette]
-    # the D63 layout
-    assert design.field == type(design.field).model_validate(LAYOUTS[mode_id])
+    # the approved (D63) layout
+    assert design.field == type(design.field).model_validate(LAYOUTS[mode_id]), PIN_CHANGED
     if mode.techniques.canvas is not None:  # one design drives T1 and T3
         assert mode.techniques.canvas.canvas == design
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"one-design"}) == []
 
 
 @pytest.mark.parametrize("mode_id", ["rainbow-row-sunset", "garden-gathering", "golden-hour"])
@@ -193,6 +202,7 @@ def test_module_level_is_the_design_at_each_modules_centre(mode_id):
     for pos, (x, y) in F.module_centres(CANOPY, POSITIONS).items():
         assert colours[pos] == _palette_at(mode_id, F.value(design.field, x, y, CANOPY)), pos
     assert 4 <= len(set(colours.values())) <= 9  # a 2-D design on the grid, not one colour or three columns
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"two-d"}) == []
 
 
 @pytest.mark.parametrize("mode_id", IDS)
@@ -221,11 +231,14 @@ def test_no_scene_reads_as_three_columns_at_module_level(mode_id):
     down = max(spread([f"r{r}c{c}" for r in range(3)]) for c in range(3))
     across = max(spread([f"r{r}c{c}" for c in range(3)]) for r in range(3))
     assert down >= across / 3, (round(down, 1), round(across, 1))
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"two-d"}) == []
 
 
 def test_golden_hours_sun_shows_at_module_level():
     """The sun sits at the middle of the left edge: on the grid the middle-left module is the goldest, and the sun's
     arc shows — the left column's corners are visibly pinker than its middle, and so is the middle column's."""
+    if PINS["golden-hour"]["layout"] != D63_SUN.model_dump(mode="json"):  # any other kind or place
+        pytest.skip("Golden Hour's sun was redesigned in the Design Lab; see DECISIONS")
     t = {
         p: F.value(_design("golden-hour").field, x, y, CANOPY)
         for p, (x, y) in F.module_centres(CANOPY, POSITIONS).items()
@@ -238,20 +251,16 @@ def test_golden_hours_sun_shows_at_module_level():
 
 
 def test_the_d63_layouts_name_where_each_design_sits():
+    # D63's drafts: Calm "from the centre out", Rainbow Row Sunset and Coastal Tides "diagonally", Garden Gathering
+    # and Golden Hour "from one edge", The Goodnight Glow "from one spot" (the pinned fixture holds the approved words)
     words = {m: F.layout_words(_design(m).field, CANOPY) for m in IDS}
-    assert words == {
-        "lowcountry-calm": "from the centre out",
-        "rainbow-row-sunset": "diagonally",
-        "garden-gathering": "from one edge",
-        "coastal-tides": "diagonally",
-        "golden-hour": "from one edge",
-        "goodnight-glow": "from one spot",
-    }
+    assert words == {m: PINS[m]["layout_words"] for m in IDS}, PIN_CHANGED
     calm = _t3("lowcountry-calm")  # radial symmetry: the four corners alike, sea glass in the centre
-    assert len({calm[p] for p in ("r0c0", "r0c2", "r2c0", "r2c2")}) == 1
-    assert calm["r1c1"] == (209, 234, 227) != calm["r0c0"]
+    if PINS["lowcountry-calm"]["layout_words"] == "from the centre out":  # a design centred on the canopy
+        assert len({calm[p] for p in ("r0c0", "r0c2", "r2c0", "r2c2")}) == 1
+    assert calm["r1c1"] == tuple(PINS["lowcountry-calm"]["t3"]["r1c1"]) != calm["r0c0"], PIN_CHANGED
     goodnight = _t3("goodnight-glow")  # the moon over r0c2 is moonlight blue
-    assert goodnight["r0c2"] == (196, 214, 243)
+    assert goodnight["r0c2"] == tuple(PINS["goodnight-glow"]["t3"]["r0c2"]), PIN_CHANGED
 
 
 @pytest.mark.parametrize("mode_id", IDS)
@@ -268,6 +277,7 @@ def test_on_the_partial_live_canopy_the_two_kits_show_different_colours():
     """D63's layouts keep r0c0 and r0c1 visibly different (the plan asked for at least five of six; all six do)."""
     differ = [m for m in IDS if (c := _t3(m))["r0c0"] != c["r0c1"]]
     assert differ == IDS
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"kits-differ"}) == []
 
 
 def test_every_design_recipe_is_rgb_only_with_no_white():
@@ -288,3 +298,4 @@ def test_every_design_recipe_is_rgb_only_with_no_white():
             recipe.blend == recipe.rgb_only
         )  # per-puck white is unverified (gate 6): no white is designed in
         assert recipe.strand.rgb == (r, g, b)
+    assert scene_mode_problems(SCENES, MODES, RECIPES, CANOPY, rules={"recipes"}) == []

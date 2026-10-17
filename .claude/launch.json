@@ -6,6 +6,12 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "uvicorn", "conductor.app:app", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "design-lab",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--offline", "python", "scripts/dev_design_lab.py", "--port", "8200"],
+      "port": 8200
     }
   ]
 }

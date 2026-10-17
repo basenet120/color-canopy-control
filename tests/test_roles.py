@@ -13,6 +13,25 @@ from conductor.roles_api import ENROLLMENT_TTL_S, OPS, Principal, Role
 TESTER = Principal(Role.TESTER, "VWBD shop phone", frozenset({"bench-kit"}))
 KIOSK = Principal(Role.KIOSK, "canopy kiosk")
 VIGNETTE = Principal(Role.VIGNETTE, "kitchen iPad", frozenset({"kitchen"}))
+# The Design Lab (D66): its API and the Studio page it lives in are ops only, for every method.
+LAB_PATHS = [
+    ("GET", "/api/lab/catalog"),
+    ("GET", "/api/lab/state"),
+    ("POST", "/api/lab/preview"),
+    ("GET", "/api/lab/versions"),
+    ("POST", "/api/lab/versions"),
+    ("GET", "/api/lab/versions/v0001"),
+    ("DELETE", "/api/lab/versions/v0001"),
+    ("POST", "/api/lab/restore"),
+    ("GET", "/api/lab/export"),
+    ("GET", "/api/lab/trial"),  # Slice B
+    ("POST", "/api/lab/trial/start"),
+    ("POST", "/api/lab/trial/stop"),
+    ("GET", "/ops/showcase"),
+    ("GET", "/ops/showcase/"),
+    ("GET", "/ops/showcase/lab.js"),
+    ("GET", "/ops/showcase/lab-model.mjs"),
+]
 
 
 # ---- enrollment ---------------------------------------------------------------------------------------------
@@ -194,6 +213,9 @@ def test_tester_reaches_its_module_page(method, path):
         ("GET", "/ops/module\\..\\accounts"),
         ("GET", "/visualizer/"),
         ("GET", "/api/canopy/design"),  # the Studio's scene designs: ops only (P12)
+        *LAB_PATHS,  # the Design Lab: ops only (D66)
+        ("GET", "/ops/module/../../api/lab/state"),
+        ("POST", "/api/module/bench-kit/../../lab/versions"),
         ("GET", "/"),
         ("GET", "relative/path"),
     ],
@@ -225,6 +247,9 @@ def test_kiosk_paths():
         ("GET", "/kiosks"),
         ("GET", "/vignette/kitchen/"),
         ("GET", "/api/canopy/design"),
+        *LAB_PATHS,
+        ("GET", "/kiosk/../api/lab/state"),
+        ("POST", "/api/kiosk/../lab/versions"),
     ]:
         assert not path_allowed(KIOSK, method, path), path
 
@@ -238,6 +263,9 @@ def test_vignette_paths():
     assert not path_allowed(VIGNETTE, "GET", "/kiosk/")
     assert not path_allowed(VIGNETTE, "GET", "/ops/module")
     assert not path_allowed(VIGNETTE, "GET", "/api/canopy/design")
+    for method, path in LAB_PATHS:
+        assert not path_allowed(VIGNETTE, method, path), path
+    assert not path_allowed(VIGNETTE, "POST", "/api/vignette/kitchen/../../lab/versions")
 
 
 def test_ops_reaches_everything_and_homes_are_per_role():

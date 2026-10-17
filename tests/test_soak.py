@@ -107,7 +107,10 @@ def test_builtin_compiler_covers_every_mode_on_its_ladder(tmp_path):
             if tier is Tier.T1:
                 assert all(mt.slot and mt.slot_value and mt.slot_hash for mt in plan.modules.values())
     goodnight = compiler.compile("goodnight-glow", Tier.STRAND)
-    assert R.color_rgb(139, 139, 209) in goodnight.modules["canopy-r0c0"].rows  # periwinkle
+    from conductor.scenes import load_scenes
+
+    solid = load_scenes().get("goodnight-glow").solid  # periwinkle (139, 139, 209): the scene's solid colour
+    assert R.color_rgb(*solid.rgb) in goodnight.modules["canopy-r0c0"].rows
     # the white CCT clamp, on the pre-D59 recipes (a test fixture)
     shutil.copy(TECHNIQUES, tmp_path / "modes.yaml")
     legacy = soak.BuiltinCompiler(registry, config_dir=tmp_path)

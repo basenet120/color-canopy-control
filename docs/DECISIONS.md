@@ -683,3 +683,48 @@ defaults, in `config/modes.yaml` (Alon can change them there):
   on a stepped rung: from Golden Hour's per-head sun (or its slot) it passes over the stepped rung to the still
   modules rung, and the floor lifts back past it, so easing off never starts a run (`CanopyEngine.downgrade` /
   `upgrade`).
+
+## 2026-10-16 — the Design Lab
+
+**D66 — The Design Lab: edit the scenes on screen, approve through git (a freeze exception; Slice A built, B and C
+to follow).** Alon asked for a pattern and animation admin so he can iterate the canopy's colours and styles with the
+client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 feature freeze
+(`docs/runbooks/release-and-freeze.md`); this is the exception, granted by asking for it. Brief and plan:
+`docs/design-lab/PROMPT.md`, `docs/design-lab/PLAN.md`.
+- **Slice A (built; screen only; no show-path file touched).** A Lab panel in the Studio (`/ops/showcase/#lab`, ops
+  only; `/api/lab/*`). A draft is a patch over the parsed `scenes.yaml` / `modes.yaml` / `recipes.yaml` that moves
+  every rung of one scene's mode in lockstep (T1 canvas, slot brightness, module sample, stepped design, strand solid,
+  preview, recipes); ids, ladders, slot ownership and `lowcountry-calm` never move. The preview goes through the real
+  compiler with the draft's own recipes (`mode_design`, `compile_mode`) and shows each tier plus "what this simulator
+  shows" / "what the lights can show today" from the running show's registry and bench flags, and a pinned "Show box
+  today (Modules 1–2)" view until the Oct 19 undo. Versions are named `Client <Mon D> v<N> – <note>` (a number is
+  never reissued) and kept in `<data>/overrides/looks.yaml` (validated, history copies, atomic 0600). A corrupt,
+  oversized or unreadable file is set aside and flagged on /ops; the show never reads the file. Export is a reviewed
+  git patch of exactly four files (`config/scenes.yaml`, `modes.yaml`, `recipes.yaml`,
+  `tests/fixtures_scene_frames.json`), rewritten in place (comments and anchors kept), re-read through the real
+  loaders before it is offered, with a drafted DECISIONS entry. Approved looks reach the show only through git →
+  merge → `canopy-mac install`; nothing hot-applies config to a running show.
+- **Defaults taken** (the three questions Alon hadn't answered): an approved palette colour (D59) can change, as a
+  labelled draft whose export says "changes an approved colour — needs the client's sign-off and a D59 update"; Present
+  runs in Alon's laptop browser as ops (the Test iPad stays the guest panel); version names as above.
+- **Copy stays true and is never free text.** Each kiosk sentence is the approved one while the design is unchanged,
+  else generated from the layout's own words and the colours some strand actually shows. The client copy (name, mood,
+  description) refuses motion words and light counts ("270", "nine"), because nothing rewrites those for a partial
+  canopy (D62); a description the colours moved under gets a note, never a refusal.
+- **Locked to D63 in v1:** a design's `cycles` (1) and the module sample (`at: centre`), which the suite pins. On live
+  hardware, once a painted scene is commissioned its design is read-only in the Lab ("changing this needs a slot
+  repaint at commissioning", 07 §6); its brightness, solid, copy and stepped timing stay editable. In the simulator the
+  lock is off and the Lab says what would happen. D63's design-quality rules (`two-d`, `kits-differ`) warn in the
+  preview and block only the export. An export that changes a painted scene's design says "Deploy only in a
+  commissioning window" (slot repaint).
+- **Approved-value pins** in the tests moved to `tests/fixtures_scene_frames.json` (`_pins`), which the export
+  regenerates (or `make scene-pins` after a hand edit), so an approved edit passes the suite with only that fixture
+  changed; compiler tests compile against frozen copies of the Oct 16 scene recipes.
+- **Where a client session runs:** Alon's laptop (`make lab-dev`, sim, port 8200); Railway staging with an
+  ops-signed-in iPad once this is on main; the show box only after the deploy.
+- **Cut (follow-ups):** the Studio's own scene tiles and shop-kit buttons still read `demo-model.mjs` `SCENES`; each
+  export's review notes name a colour that would go stale there.
+- **Option for Alon, not built:** a read-only "client viewer" role for Present on the client's own device. It would
+  change the binding 07 §2 role table.
+- **Out of scope for v1:** hot-applying config, slot repaints and firmware presets from the Lab.
+- **Slices B (try-on at module level through the engine) and C (stepped editor)** append their lines here when built.

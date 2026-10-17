@@ -24,6 +24,43 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     level — compiler, runner with budget reserve and throttle governor, kiosk/ops surfaces, soak scenario, the
     operator-started Gate R rehearsal; Coastal Tides and Golden Hour get a stepped rung; context docs 02/04/06. Live
     off (`motion.stepped.live_enabled: false`). Verified: see the PR.
+0f. **#25 `claude/design-lab` → `main`, after #24 `claude/stack-to-main`** (Design Lab Slice A, screen only; plan
+    `docs/design-lab/PLAN.md`): drafts over the parsed config, `/api/lab/*` (catalog, state, preview, versions,
+    restore, export), the corrupt-store safety, the Studio's Lab panel (tier views, today / show-box views, A/B,
+    versions, Present, export), the extracted validator `conductor/looks/scene_rules.py`, the scene pins fixture and
+    frozen recipes, `make lab-dev` on port 8200. **No show-path edits.** Integrated Oct 16 from four streams (merge
+    commits, no conflicts) plus two glue commits. **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest
+    1960 passed, 5 skipped (the gated round trip), 136 subtests; `make lint`; node 95/95. `LAB_ROUNDTRIP=1 make
+    lab-roundtrip`: all five exported configs (canonical, rename, add, remove, reorder) pass the whole suite; remove
+    needed a rerun, its first run hit one wall-clock flake in the pre-existing
+    `test_a_rehearsal_from_ops_on_the_show_engine_writes_its_report_and_leaves_the_look_still` (passed in isolation
+    6/6 and in every other full run). `tests/test_lab_slice_a.py` drives the Done-means client workflow through the
+    real routes (preview < 1 s, save "Client Oct 17 v2", compare, export, `git apply`, re-read == the saved drafts)
+    and checks nothing the show reads changed. curl smoke on `scripts/dev_design_lab.py --port 8200`: catalog 200,
+    Golden Hour preview 200 in 28 ms, save 201, export 200 with a patch that `git apply --check`s on the working
+    tree. **Not yet:** a browser pass of the integrated Lab at 1440×900 and 1180×820 touch with real previews (S4
+    checked the UI against fixture answers); D66 in `docs/DECISIONS.md`; the PR. **Needs a real iPad:** the
+    colour-picker popover, element fullscreen in Present, swipe without pull-to-refresh, the 28 px slider thumbs.
+    Slice B (try-on) and C (motion editor) are not built.
+    **Review fixes (Oct 16, same branch):** a five-lens review's confirmed findings, each fixed at the root with a
+    regression test that failed before the fix (or a mutation test that kills a mutant that used to survive):
+    client copy (name, mood, description) refuses motion words and "270"/"nine", in the draft model and in
+    scene_rules' catalog rule; a description the colours or layout moved under gets a note (preview, export); the T3
+    sentence names only colours a strand reaches (`reached_stops`; the new sweep default is [75, 60]); the T1 lock
+    uses the slot-repaint predicate (a colour rename stays editable) and is tested on save; the show-box note follows
+    the stepped gate; the export lists the solid, stepped timing (D65) and client copy under their own headers and
+    the Studio SCENES note covers added colours and the opening look; the store rejects NaN/inf, FIFOs/devices and
+    deep YAML (set aside), deletes exactly one entry (unique labels for unreadable ones) and never reissues a deleted
+    name; races and internal KeyErrors answer 404/500 correctly (`NoSuchVersion`); the catalog survives a hand-edited
+    version; every Lab answer carries `X-Lab-Config-Sha` and the page notices a restart on a new config. Page: no
+    duplicated stage after save/delete/angle/Present (blocker), one save per double tap, stale alerts clear, the
+    today view's caption, badge ("Approved design") and note say when the slots hold the approved design (editor
+    and Present), D63 warnings show on the stage, the export dialog fits, positions read "Modules 1–2", the iPad
+    tabs and tiles fit. Asset version `lab-2`. **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest
+    2044 passed, 5 skipped, 136 subtests; `make lint`; node 100/100; `tests/test_lab_review_fixes.py` 84 tests (45
+    of them fail on f2a2f6d) plus 17 mutants killed; a Playwright walk (system Chrome, 1440×900 and 1180×820 touch,
+    own dev server on 8209) 29/29 on the fixes, 20 of its checks failing on f2a2f6d. **Not re-run:** `make
+    lab-roundtrip` (the gated export round trip).
 - **Merged:** PR #18, `claude/mac-show-box` (D61), as `9c4c7aa` on Oct 13.
 - **Items 1–6 below are older and all merged** (#11–#16); kept for their notes.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:

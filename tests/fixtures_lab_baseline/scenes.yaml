@@ -1,0 +1,75 @@
+# The six approved Color Canopy scenes — the single scene catalog (D59).
+# Source: Paris's six-scene handoff (ALON-SIX-SCENES.json, 2026-10-07), generated from web/ops/showcase/demo-model.mjs
+# (sha256 a56cedcd…9c4d). Names, ids and palette colours are approved and must not change; brightness values are
+# editable drafts (physical mood approval pending). Gradient rule, per strand of 30 heads: t = head / 29, linear
+# interpolation between evenly spaced palette stops in RGB, rounded per channel; transform `mirror` replaces t with
+# 1 - |2t - 1| (Lowcountry Calm). Every scene is static (motionEffect 0, brightnessEffect 0).
+scenes:
+  - id: lowcountry-calm
+    name: "Lowcountry Calm"
+    mood: "Settle in"
+    description: "Soft ivory with a pale sea-glass center for a calm, airy setting."
+    transform: mirror
+    brightness_draft: 70
+    default_solid: 0
+    palette:
+      - {name: "Soft ivory", hex: "#F7F2E7"}
+      - {name: "Sea glass", hex: "#D1EAE3"}
+  - id: rainbow-row-sunset
+    name: "Rainbow Row Sunset"
+    mood: "Stay a little longer"
+    description: "Pastel coral, blush pink and lilac, inspired by Charleston’s colorful facades."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 0
+    palette:
+      - {name: "Pastel coral", hex: "#FF9E96"}
+      - {name: "Blush pink", hex: "#FFD2E0"}
+      - {name: "Lilac", hex: "#C4B3EC"}
+  - id: garden-gathering
+    name: "Garden Gathering"
+    mood: "Bring everyone together"
+    description: "Sage green softens into pale lime and ivory for a fresh garden glow."
+    transform: linear
+    brightness_draft: 75
+    default_solid: 0
+    palette:
+      - {name: "Sage green", hex: "#8FBF9D"}
+      - {name: "Pale lime", hex: "#E6EED1"}
+      - {name: "Ivory", hex: "#F7F2E7"}
+  - id: coastal-tides
+    name: "Coastal Tides"
+    mood: "Find your coast"
+    description: "Ocean blue, aqua, seafoam and foam white, inspired by the Lowcountry coastline."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 1
+    palette:
+      - {name: "Ocean blue", hex: "#659BD5"}
+      - {name: "Aqua", hex: "#79CED4"}
+      - {name: "Seafoam", hex: "#B2E8D2"}
+      - {name: "Foam white", hex: "#E9F3E7"}
+  - id: golden-hour
+    name: "Golden Hour"
+    mood: "Let the evening glow"
+    description: "Soft gold, peach, sunset pink, rose and lavender. Pinks lead the sunset."
+    transform: linear
+    brightness_draft: 95
+    default_solid: 2
+    palette:
+      - {name: "Soft gold", hex: "#FFDB9B"}
+      - {name: "Peach", hex: "#FFB69D"}
+      - {name: "Sunset pink", hex: "#FF9BC4"}
+      - {name: "Rose", hex: "#E779B0"}
+      - {name: "Lavender", hex: "#B59AE2"}
+  - id: goodnight-glow
+    name: "The Goodnight Glow"
+    mood: "Slow the night down"
+    description: "Dim periwinkle, lavender and moonlight blue for a restful evening mood."
+    transform: linear
+    brightness_draft: 28
+    default_solid: 0
+    palette:
+      - {name: "Periwinkle", hex: "#8B8BD1"}
+      - {name: "Lavender", hex: "#BEA9E6"}
+      - {name: "Moonlight blue", hex: "#C4D6F3"}
