@@ -659,7 +659,8 @@ def reread(texts: Mapping[str, str], canopy: dict) -> ConfigTrio
   scene on the old ones (review 2026-10-16).
 - **Decision draft** (`decision`): "**D<next> — <scene names>: Design Lab version "<name>" (<date>).** Approved
   colour changes (D59; needs the client's sign-off and a D59 update): … Strand solid (a draft default, not a D59
-  colour): … Layout changes (D63; Paris reviews): … Stepped timing (D65; live off until Gate R): … Brightness
+  colour): … Layout changes (D63; Paris reviews): … Stepped timing (D65; live off until Gate R | live on
+  (motion.stepped.live_enabled), from the settings; `stepped_live_clause`): … Brightness
   (drafts): … Client copy edited (check it is true at every tier): … Copy regenerated: … Exported from the Design Lab
   (D66); verified: re-read equal, suite to run in the PR." The D59 list is exactly what sets `needs_d59` (a scene's
   name, its palette colours); stepped changes are `stepped_changes`, never `layout_changes` (review 2026-10-16).
@@ -1309,6 +1310,26 @@ def ripple_rings(patched: ConfigTrio, scene_id: str, canopy: dict) -> list[list[
   (positions per ring) and adds `ripple` {rings, stagger_s [0, 1.2], max_rings, live_stagger_s, note}.
   `export_patch(…, settings=)` (optional; the shipped defaults without) gives the D65 line its pace and keeps the
   modes.yaml `step_s` comment's "step every N s" true.
+- **As built (C2 + integration, Oct 17):** the page reads PLAN §7's shape and C1's additions: the live line is
+  `stepped.live_sentence` + `live_note` word for word (C2's own sentence only before the server answers), the
+  ripple label prefers `CatalogJSON.live.ripple_note`, a pace whose `runs.<pace>.still` is set is not played (its
+  reason is shown), and at the show box's pace the moving sentence is `today_moving_feature` (D62). Assets `lab-4`.
+  Not cut: the ripple preview and pause/stop both shipped; step-timeline scrubbing was not built (play/pause/stop
+  and the counter instead).
+- **As built (review fixes, Oct 17):** `DraftStepped` keeps exactly `SteppedTechnique`'s bounds, so any valid
+  approved `step_s` seeds (a modes.yaml at 6.25 s no longer stops the whole Lab); the half-second rule applies to an
+  EDIT only (`apply_drafts`, field `stepped.step_s`), and the page snaps only the field being edited. A run that
+  fits one step is still (step 0 IS the still design: `runs.<pace>.still` says so, the page doesn't play it; the
+  runner itself still counts it as running, a show-path gap left for Alon). The stepped JSON adds `steps_when`
+  (Golden Hour: it steps only where its higher rungs can't run), shown on the Motion card, the editor and Present.
+  With `motion.stepped.live_enabled` set, every live line is the server's (`STEPPED_LIVE_ON`; the catalog's
+  `stepped_live_sentence` is null), the show-box pace note drops "(stepped stays off …)", and the export's D65
+  section says "live on (motion.stepped.live_enabled)". The ripple line says "as the canopy does today" only at
+  the canopy's own `live_stagger_s`. The export's `step_s` comment comes from the D65 line's own `canopy_pace`
+  (ripple rings, max_step_s, a too-short run: "hold the still design (…)") whenever the timing or that pace moves.
+  In A/B (and Present A/B) the run ends when the longest side's does; each side lands on its own hold. At the show
+  box's pace the tier list labels its moving lines "on all nine modules" and "on the show box today". Assets
+  `lab-5`.
 
 ---
 

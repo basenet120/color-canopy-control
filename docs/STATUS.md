@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-17 (Design Lab Slice B review fixes, two rounds, on #26; see the PR stack). Before that 2026-10-16.
+_Last updated: 2026-10-17 (Design Lab Slice C integrated as #27 `claude/design-lab-motion`; all three Lab slices built; see the PR stack). Before that 2026-10-16.
 **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
 Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
 test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
@@ -133,20 +133,62 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     ```
     If the stack isn't merged before the Oct 19 undo, the kit try-on happens in the Hubspace app or on `/ops/module`
     and the Lab stays screen-only until after it.
-0h. **Design Lab Slice C, server side (C1; to stack on #26 with C2's editor UI; D66's Slice C line; plan §7).**
-    **No show-path file touched** (`show.py`, `canopy.py`, `reconciler.py`, `executor.py`, `sequence.py`, drivers,
-    `config/` unchanged; `motion.stepped.live_enabled` and `kiosk.ripple_stagger_s` untouched).
-    `conductor/design_lab/stepped.py`: `effective_step_s` (the runner's rule), `canopy_pace`, `stepped_preview`
-    (the compiled stepped steps exactly, `pace.nine`/`pace.today`, moving copy, live sentence), `ripple_rings`,
-    `ripple_json`. PreviewJSON fills `stepped` and `rings` and adds `ripple`; CatalogJSON adds
-    `limits.stepped.{step_s_increment, run_s_min, directions}`, `limits.ripple`, `live.{stepped_live_note,
-    ripple_note, effects_note}` (existing fields unchanged). Drafts: `step_s` in 0.5 s steps; the idle look's stepped
-    refusal says why. Export: the D65 line gives the nine-strand pace; the `step_s` comment in modes.yaml follows it.
-    **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2312 passed, 5 skipped, 136 subtests;
-    `make lint`; node 116/116; `tests/test_lab_stepped.py` 192 tests (virtual clock, a real `ProgramRunner` on the
-    engine); 16 mutants each killed by a named test. **Not run:** `make soak`, `make lab-roundtrip`.
-    **Needs a look on the Mac:** C2's editor and ripple animation in the browser. **Needs the real kits:** nothing
-    new (stepped stays off on hardware until Gate R).
+0h. **#27 `claude/design-lab-motion` → `main`, stacked on #26** (Design Lab Slice C, the motion editor; D66's
+    Slice C line; plan §7). **No show-path file touched:** `show.py`, `canopy.py`, `reconciler.py`, `executor.py`,
+    `sequence.py`, the drivers and `config/` are unchanged; `motion.stepped.live_enabled` and
+    `kiosk.ripple_stagger_s` are never written (route, AST and config checks). Server (C1):
+    `conductor/design_lab/stepped.py` (`effective_step_s`, the runner's rule, pinned equal to a real `ProgramRunner`
+    for nine and two modules; `stepped_preview`: the compiled stepped steps exactly, `pace.nine` 7.5 s / `pace.today`
+    6 s at the 6 s design, `runs`, moving copy incl. D62's two-strand copy, the live sentence; `ripple_rings`: the
+    show's own ripple bands); PreviewJSON fills `stepped` and `rings` and adds `ripple`; CatalogJSON adds the
+    editor's limits and live lines; drafts take `step_s` in 0.5 s steps; an exported stepped timing's D65 line names
+    its pace and keeps the modes.yaml comment true. Page (C2): the editor's Motion section (direction, steps per
+    cycle, step time, run length, run line, live line, greyed effects card; scenes without a stepped rung say why),
+    **Play the steps** under the picture at the server's pace (pace toggle: nine modules or the show box's Modules
+    1–2, step counter, pause/stop, a labelled 4× fast preview), the moving sentence only while it plays, **Play the
+    ripple** at a 0–1.2 s stagger (screen only), Present plays the steps (button or Space). Integrated Oct 17 from two
+    streams (merge commits, no conflicts) plus two glue commits: assets `lab-4`; the live line is the server's
+    `STEPPED_LIVE_OFF` + note word for word and the ripple label the server's note; a pace the server says would
+    hold still is not played; at the show box's pace the moving sentence is the partial canopy's (D62).
+    **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2312 passed, 5 skipped, 136 subtests; `make
+    lint`; node 124/124; `tests/test_lab_stepped.py` 192 tests (virtual clock, a real `ProgramRunner` on the engine);
+    C1 16 and C2 6 mutants, each killed by a named test. `python -m conductor.soak`: exit 0 (overall PASS, 33 s wall),
+    the one FAIL is the non-gating "(reported)" D65 stepped landing spread (p95 2.78 s > 2 s, unchanged since #23);
+    **`docs/reports/sim-acceptance.md` is regenerated and committed in this PR** (plan §1). **Not run:** `make lab-roundtrip`.
+    **Browser smoke** (own dev server `scripts/dev_design_lab.py --port 8208`, Playwright on system Chrome, 1440×900
+    and 1180×820 touch, screenshots looked at): Coastal Tides plays 12 steps of 7.5 s (15 of 6 s at the show box's
+    pace, only Modules 1–2 lit); its step time edited to 9 s → "10 steps of 9 s (90 s)" at both paces, run length's
+    minimum follows to 9; direction → Reverse marks it Draft with generated stepped copy; the live line reads
+    "Stepped looks are off on live hardware until the stepped rehearsal (Gate R) passes. Alon sets
+    motion.stepped.live_enabled after Gate R."; Play the ripple lands three rings 0.6 s apart under the D64
+    screen-only label; the effects card is greyed; Present plays and Space pauses; Lowcountry Calm says the idle look
+    never steps. No page errors (the only console error is the old favicon 404). **Needs a look on the Mac:** none
+    left for Slice C. **Needs a real iPad:** the Motion sliders' thumbs, the pace toggle and Play in Present by
+    touch. **Needs the real kits:** nothing new — stepped stays off on hardware until Gate R, the ripple until D64.
+    **Slice C review fixes (Oct 17, 16 findings; no show-path file, neither live setting touched):** an approved
+    `step_s` off the half second (valid for `SteppedTechnique`, e.g. 6.25) no longer stops the whole Lab (the
+    half-second rule now applies to an edit only, at `stepped.step_s`; the page snaps only the edited field); a run
+    that fits one step (step 0 is the still design) is said to hold still and isn't played; Golden Hour says it
+    steps only where its painted rungs can't run (server `steps_when`, on the Motion card, editor and Present); with
+    `motion.stepped.live_enabled` set, the live line is the server's `STEPPED_LIVE_ON` (no "..", the catalog's
+    off sentence is null), the show-box pace note drops "stepped stays off" and the export's D65 section says "live
+    on"; the ripple line claims "as the canopy does today" only at the canopy's own stagger; the export's `step_s`
+    comment follows the D65 line's pace (ripple rings, a still run) and no longer says "instead" twice; in A/B the
+    run ends with the longest side; at the show box's pace the tier list labels whose moving sentence each line is.
+    Assets `lab-5`. **Verified (sim, macOS, `--ignore=tests/test_deploy.py`):** pytest 2345 passed, 5 skipped, 136
+    subtests; `make lint`; node 133/133 (`lab-model.test.mjs` 62); each fix has a regression test seen failing
+    first; 18 mutants (6 page guards, export settings/still/route plumbing, ms ceil, catalog live note, idle
+    wording, the one-step still, the live clause, the increment check, the A/B end) each killed;
+    `python -m conductor.soak` exit 0, same numbers as above (report unchanged but its timestamp). **Browser**
+    (own dev server on 8210, sim): Golden Hour's "steps only where…" line on the Motion card, editor and Present;
+    the ripple at 0 s "as the canopy does today"; at the show box's pace the tier list's two labelled lines; A/B
+    with a 30 s draft against the approved 90 s run keeps A stepping after B's "Run over" and ends both on their
+    holds; a 10 s run can't be played and says why; an exported step_s 10 gives the "live off until Gate R"
+    section; no console errors. The live-on lines are checked by tests only (no Lab path sets the flag).
+    **For Alon (show path, outside the Slice C freeze):** `ProgramRunner` (and `SteppedTechnique._honest`) accept a
+    run of exactly one step (`count == 1`): the iPad would show the moving copy for one step while no colour changes.
+    The Lab now says such a run holds still; `test_a_one_step_run_is_still_in_the_lab_and_the_runners_gap_is_pinned`
+    pins the gap until `count_for(step) < 2` (and `run_s < 2 × step_s`) is decided.
 - **Merged:** PR #18, `claude/mac-show-box` (D61), as `9c4c7aa` on Oct 13.
 - **Items 1–6 below are older and all merged** (#11–#16); kept for their notes.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
@@ -483,8 +525,12 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    Gate R on the two test kits before the undo. (d) Release tag for the freeze. (e) On the Mac: show accounts when
    they exist, automatic login, wired + reserved address, restart and pull the plug once (`mac-show-box.md` §1–§2).
    Signing in a show account waits for Home Depot's authorization (06 #20).
-   (f) **Design Lab:** merge #24 → #25 → #26 (retarget each to main first), then run #26's deploy block (in the PR
-   stack above) when Paris can spare the box; a kit try-on on Modules 1–2 needs it before the Oct 19 undo.
+   (f) **Design Lab:** merge #24 → #25 → #26 → #27 in that order, each targeting main (retarget each to main
+   before merging; merge commits, not squash), then run #26's deploy block (in the PR stack above) when Paris can
+   spare the box; a kit try-on on Modules 1–2 needs it before the Oct 19 undo. All three Lab slices are built;
+   before the client session, open `make lab-dev` on the laptop and walk Golden Hour (colour, layout, brightness,
+   save, compare, Present, export) and Coastal Tides' Motion section once. Stepped live and the ripple stay off
+   (Gate R, D64) — the Lab only shows them.
 1. **Before merging:** check staging's `/data/overrides/registry.yaml` for `frame_offset`. Only main's Calibrate-tab
    frame-offset field (Sep 27 – Oct 7) could have written it. The registry forbids unknown keys, so remove it or staging won't load the
    registry after the redeploy.
@@ -502,7 +548,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 6. Turn the Gate A dump into the simulator's SQHDK03 fixture (gap 6).
 
 ## Needs real hardware (UNVERIFIED)
-- **The Design Lab try-on (D66 Slice B):** sim only. On the show box: a module-level try-on on the two kits, Back to
+- **The Design Lab (D66):** Slice C (motion editor) is screen only and needs nothing on hardware; its paces are
+  the runner's own (7.5 s on nine modules, 6 s on two), checked only in sim until Gate R. The try-on (Slice B) is
+  sim only. On the show box: a module-level try-on on the two kits, Back to
   approved and the bound's end on the lights, and the iPad's refusal toast during it.
 - **The other kits.** Kingston is the only kit with a T1 flag and a map. Every canopy module needs its own Gate C and
   address map at install (~5 min each; D25, D54, D57). The show engine has never sent a mapped T1 frame to real

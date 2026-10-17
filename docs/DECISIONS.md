@@ -687,7 +687,7 @@ defaults, in `config/modes.yaml` (Alon can change them there):
 ## 2026-10-16 — the Design Lab
 
 **D66 — The Design Lab: edit the scenes on screen, try them on at module level, approve through git (a freeze
-exception; Slices A and B built, C to follow).** Alon asked for a pattern and animation admin so he can iterate the canopy's colours and styles with the
+exception; Slices A, B and C built).** Alon asked for a pattern and animation admin so he can iterate the canopy's colours and styles with the
 client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 feature freeze
 (`docs/runbooks/release-and-freeze.md`); this is the exception, granted by asking for it. Brief and plan:
 `docs/design-lab/PROMPT.md`, `docs/design-lab/PLAN.md`.
@@ -762,7 +762,7 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
   slot), so a locked painted design can still be tried on at module level. The iPad's scene cards now rebuild when a
   card's contents change (`cardsKey`), not only its id. Telemetry `kind="lab"`: the engine records `trial_start`,
   `trial_apply`, `trial_end` (with `why`); the route records `trial_refused` and `trial_stop`.
-- **Slice C (stepped editor; server side C1 built Oct 17, screen only, no show-path file touched).** For Coastal Tides
+- **Slice C (the motion editor; built Oct 17 from C1 server and C2 page, screen only, no show-path file touched).** For Coastal Tides
   and Golden Hour (the two scenes with a stepped rung) a draft edits the direction, `steps_per_cycle` 3–12, `step_s`
   4–12 in half seconds and `run_s` from one step to `min(180, kiosk.idle_return_s)`; each bound is refused with its
   field (`stepped.<name>`). The other four scenes refuse a stepped edit (no rung to add), and the idle look says it
@@ -779,4 +779,23 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
   "Effects — not enabled: no code has passed the bench (06 #4)". An exported stepped timing's D65 line names the
   pace ("nine strands on one account step every 10 s (6 steps, then the still design holds)"), and modes.yaml's
   `step_s` comment follows the new pace. The Lab still never changes `motion.stepped.live_enabled` or
-  `kiosk.ripple_stagger_s` (route, AST and config checks). The editor UI is C2's.
+  `kiosk.ripple_stagger_s` (route, AST and config checks).
+  **The page (C2):** the editor's Motion section has direction, steps per cycle, step time and run length (bounded
+  as above, a run never shorter than a step), a run line ("A 90 s run — Nine modules (7.5 s): 12 steps · Show box
+  today (two modules, 6 s): 15 steps; then the still look holds"), the live line and the greyed effects card; a
+  scene without a stepped rung shows why, read only. Under the picture, **Play the steps** plays the server's
+  compiled steps at the server's pace as `ProgramRunner` schedules them (step n shows `steps[n mod cycle]` from
+  n × step, ⌊run_s / step⌋ steps, then the still look holds), with pause, stop and a step counter; a toggle picks
+  the nine-module pace or the show box's (only Modules 1–2 lit, the rest dark); a 4× fast preview is labelled "not
+  the real pace" wherever it shows; the client never estimates a pace, and a pace the server says would hold still
+  (`runs.*.still`, which includes a run that fits only step 0, the still design itself) is not played. The moving
+  sentence shows only while the steps play (on the stage, the tier list and Present; at the show box's pace the
+  stage and Present show the partial canopy's, D62, and the tier list shows both, each labelled). Golden Hour's
+  Motion card, editor and Present say it steps only where its painted rungs can't run (the server's `steps_when`).
+  In A/B the run ends when the longest side's does. An approved `step_s` off the half second (valid for the
+  schema) loads; only an edit moves in half seconds. **Play the ripple** lands the server's rings at a
+  0–1.2 s stagger slider on the screen only, under "Screen preview only — the canopy's ripple is off
+  (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)". The live line is the server's `STEPPED_LIVE_OFF` and note
+  word for word, and once Alon sets `motion.stepped.live_enabled` every Lab line (live line, show-box pace note,
+  the export's D65 section) says it is on. Present plays the steps too (button or Space).
+  `docs/reports/sim-acceptance.md` is regenerated and committed with this slice (plan §1).
