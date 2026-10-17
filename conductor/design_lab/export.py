@@ -29,8 +29,9 @@ from typing import Any
 
 import yaml
 
-from conductor.config import RecipesFile
+from conductor.config import ConductorSettings, RecipesFile
 from conductor.design_lab import draft as D
+from conductor.design_lab import stepped as ST
 from conductor.design_lab.draft import ConfigTrio
 from conductor.design_lab.store import Version
 from conductor.looks import field as F
@@ -61,6 +62,12 @@ STUDIO_SCENES_OPENS = (
     'demo-model.mjs SCENES still opens {scene} as "{name}" on {solid} at {brightness}% in the Studio (studio.js) '
     "until SCENES is updated by hand."
 )
+# D65: what an edited stepped timing means on the canopy (the runner's own pace, `stepped.effective_step_s`)
+STEPPED_PACE = (
+    "nine strands on one account step every {nine:g} s ({hold_at} steps, then the still design holds)"
+)
+STEPPED_STILL = "nine strands on one account would hold the still design instead: {why}"
+_STEP_COMMENT = re.compile(r"step every [0-9.]+ s")
 FIXTURE_STALE = (
     "tests/fixtures_scene_frames.json isn't what the approved config gives; run make scene-pins first"
 )
@@ -433,8 +440,12 @@ def rewrite_modes_yaml(
     *,
     canopy: Mapping[str, Any] | None = None,
     version_name: str = "",
+    settings: ConductorSettings | None = None,
 ) -> tuple[str, list[str]]:
-    """modes.yaml with each listed scene's mode block rewritten line by line; returns (text, review notes)."""
+    """modes.yaml with each listed scene's mode block rewritten line by line; returns (text, review notes). A
+    changed `step_s` whose comment gives the nine-strand pace gets the new pace (`settings`' budget; the shipped
+    defaults without)."""
+    pace_settings = settings if settings is not None else ConductorSettings()
     lines, newline = _split_lines(text)
     notes: list[str] = []
     for scene_id in scene_ids:
@@ -517,6 +528,10 @@ def rewrite_modes_yaml(
             stepped_comment = path in (("techniques", "stepped"), ("techniques", "stepped", "direction"))
             if stepped_comment and (field_changed or direction_changed):
                 comment = ""  # "rays move out from the left edge" no longer describes the run
+            if path == ("techniques", "stepped", "step_s") and old != new and _STEP_COMMENT.search(comment):
+                # "nine strands on one account step every 7.5 s" is the runner's pace for the OLD step_s
+                nine = ST.effective_step_s(float(new), len(D.GRID), pace_settings)
+                comment = _STEP_COMMENT.sub(f"step every {nine:g} s", comment)
             if path == ("techniques", "strand", "look"):
                 if old != new or solid_changed:
                     comment = f"   # {p_scene.solid.name.lower()}" if ln.comment or solid_changed else ""
@@ -798,8 +813,23 @@ def _studio_notes(a: Any, p: Any) -> list[str]:
     return notes
 
 
+def _stepped_pace(
+    patched: ConfigTrio, scene_id: str, canopy: Mapping[str, Any], settings: ConductorSettings
+) -> str:
+    """The D65 pace of an edited stepped run on the full canopy (the runner's rule, `stepped.effective_step_s`)."""
+    run = ST.canopy_pace(patched, scene_id, dict(canopy), settings)
+    assert run is not None
+    if run["still"] is not None:
+        return STEPPED_STILL.format(why=run["still"])
+    return STEPPED_PACE.format(nine=run["step_s"], hold_at=run["hold_at"])
+
+
 def _changes(
-    approved: ConfigTrio, patched: ConfigTrio, scene_ids: list[str], canopy: Mapping[str, Any]
+    approved: ConfigTrio,
+    patched: ConfigTrio,
+    scene_ids: list[str],
+    canopy: Mapping[str, Any],
+    settings: ConductorSettings | None = None,
 ) -> _Changes:
     ch = _Changes([], [], [], [], [], [])
     for scene_id in scene_ids:
@@ -866,7 +896,12 @@ def _changes(
                 if getattr(a_st, f) != getattr(p_st, f)
             ]
             if moved:
-                ch.stepped.append(f"{name}: stepped run {', '.join(moved)}")
+                line = f"{name}: stepped run {', '.join(moved)}"
+                timing = fields[1:]  # the pace changes with these, never with the direction
+                if any(getattr(a_st, f) != getattr(p_st, f) for f in timing):
+                    pace = _stepped_pace(patched, scene_id, canopy, settings or ConductorSettings())
+                    line += f" ({pace})"
+                ch.stepped.append(line)
         # a painted scene's T1 design: its canvas and the colours its stops name
         if am.slot is not None and am.techniques.canvas is not None and pm.techniques.canvas is not None:
             a_canvas, p_canvas = am.techniques.canvas.canvas, pm.techniques.canvas.canvas
@@ -970,13 +1005,15 @@ def export_patch(
     canopy: dict,
     version: Version | None,
     now: float,
+    settings: ConductorSettings | None = None,
 ) -> LabExport:
     """The four files rewritten for `patched`, as one unified diff against `root` (the repo: `config/` and, when
-    present, `tests/`), re-read and proven equal to `patched` before it is offered."""
+    present, `tests/`), re-read and proven equal to `patched` before it is offered. `settings` (the Conductor's)
+    gives the stepped pace the D65 lines and the step_s comment state; the shipped defaults without."""
     root = Path(root)
     scene_ids = changed_scenes(approved, patched)
     try:
-        changes = _changes(approved, patched, scene_ids, canopy)
+        changes = _changes(approved, patched, scene_ids, canopy, settings)
     except (KeyError, ValueError) as e:  # a trio whose ids or ladders moved: never a patch
         return LabExport(
             "", [], scene_ids, "", [], [], [], f"the draft doesn't match the scenes ({_first_line(e)})"
@@ -1017,6 +1054,7 @@ def export_patch(
                 scene_ids,
                 canopy=canopy,
                 version_name=version.name if version is not None else "",
+                settings=settings,
             )[0],
             RECIPES_FILE: rewrite_recipes_yaml(before[RECIPES_FILE], approved, patched),
             FIXTURE_FILE: fixture_for(patched, canopy),
