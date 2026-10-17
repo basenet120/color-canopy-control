@@ -169,13 +169,11 @@ def test_ops_mode_picker_and_enrollment(page_at, call):
     page.wait_for_selector("#enroll-link:not([hidden])")
     assert "/enroll/" in page.input_value("#enroll-url")
     page.wait_for_function("document.querySelector('#enrollments').textContent.includes('Canopy kiosk')")
-    # a vignette link needs ids
-    page.check("#enroll-role input[value='vignette']")
-    assert page.locator("#enroll-vignette").is_visible() and page.locator("#enroll-devices").is_hidden()
-    page.fill("#enroll-name", "Living room iPad")
-    page.fill("#enroll-vignettes", "living-room")
-    page.click("#enroll-form button[type='submit']")
-    page.wait_for_function("document.querySelector('#enrollments').textContent.includes('Living room iPad')")
+    # only kiosk and tester can be enrolled (D67)
+    assert page.locator("#enroll-role input[value]").evaluate_all("els => els.map((e) => e.value)") == [
+        "kiosk",
+        "tester",
+    ]
 
 
 def test_ops_tablet_shows_a_held_module(page_at, held_module, screenshots):
@@ -341,33 +339,17 @@ def test_ops_alerts_can_be_acknowledged(page_at, screenshots):
     assert acked == [{"key": "slot:canopy-r0c2:custom-1"}]
 
 
-def test_ops_devices_grouped_by_role_and_room(page_at, screenshots):
+def test_ops_devices_grouped_by_role(page_at, screenshots):
     page = page_at(TABLET)
     _open_ops(page)
-    page.wait_for_selector("#devices section[data-group='vignette-garden'] li")
+    page.wait_for_selector("#devices section[data-group='spares'] li")
     groups = page.eval_on_selector_all("#devices section.dev-group", "els => els.map((e) => e.dataset.group)")
-    assert groups == [
-        "canopy",
-        "bench",
-        "spares",
-        "vignette-entry",
-        "vignette-living",
-        "vignette-bedroom",
-        "vignette-garden",
-    ]
+    assert groups == ["canopy", "bench", "spares"]
     for key in ("canopy", "bench", "spares"):
         for row in page.locator(f"#devices section[data-group='{key}'] li").all():
             assert row.locator("a", has_text="Open module page").count() == 1
             assert row.locator("a", has_text="Bench").count() == 1
             assert "30 heads" in row.inner_text()
     assert page.locator("#devices section[data-group='canopy'] li").count() == 9
-    for key in ("vignette-entry", "vignette-living", "vignette-bedroom", "vignette-garden"):
-        room = key.split("-", 1)[1]
-        section = page.locator(f"#devices section[data-group='{key}']")
-        assert section.locator("a", has_text="Open module page").count() == 0
-        assert section.locator("a", has_text="Bench").count() == 0
-        assert "heads" not in section.inner_text()
-        for link in section.locator("li a", has_text="Open room page").all():
-            assert link.get_attribute("href") == f"/vignette/{room}/"
-    assert "Holiday Living Room" in page.inner_text("#devices section[data-group='vignette-living'] h3")
+    assert page.locator("#devices a", has_text="Open room page").count() == 0
     page.locator("#devices-card").screenshot(path=str(screenshots / "ops-devices-tablet.png"))

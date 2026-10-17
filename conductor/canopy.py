@@ -1228,8 +1228,8 @@ class CanopyEngine:
         alert = (
             f"Stepped rehearsal stopped: Hubspace answered 403 (forbidden) on account {account}. Nothing more was "
             f"sent for it: the canopy holds the step it was on, and the look's still design goes out after "
-            f"{cooloff / 60:g} min. Stepped motion stays off; check the accounts on /ops/accounts and the vignettes "
-            "before anything else."
+            f"{cooloff / 60:g} min. Stepped motion stays off; check the accounts on /ops/accounts "
+            "before running it again."
         )
         runner = self._runner
         if runner is not None and runner.running and runner is rehearsal.runner:

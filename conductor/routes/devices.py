@@ -1,12 +1,11 @@
 """Devices and the ops summary (ops only; BUILD_PLAN "HTTP API", 07 §1, §6, §10).
 
 - `GET /api/devices[?refresh=1]` — every enabled registry device: identity (id, label, role, account, module,
-  vignette room + kind, orientation, expected heads, flags, metadevice id), where each purpose's writes go ({driver,
+  orientation, expected heads, flags, metadevice id), where each purpose's writes go ({driver,
   simulated, address}), the tracker's status + reason for the engine address, who holds its lock, capabilities
   detected from the device's own profile, and any head-count problem (`conductor.framemap.head_check`; `mapped` is
   true when the kit's own controller map applies, D54, and `frame_length` is the controller's). Plus `groups`: the
-  /ops device list's sections in order — canopy modules, bench, spares, then each vignette room (with its
-  /vignette/<room>/ link).
+  /ops device list's sections in order — canopy modules, bench, spares (every device is a strand, D67).
 - `GET /api/devices/{id}[?refresh=1]` — the same record plus the tracker's full snapshot.
 - `GET /api/ops/summary` — version, "Needs attention" items, accounts, locks, the executor's rate budget per
   driver, and simulator statistics when the engine runs on the simulator. "Needs attention" includes the canopy
@@ -143,8 +142,6 @@ def _device_record(services: Any, entry: Any, caps_record: dict | None) -> dict:
         "account": entry.account,
         "model": entry.model,
         "module": entry.module,
-        "vignette": entry.vignette,
-        "kind": entry.kind,
         "orientation": entry.orientation,
         "expected_heads": entry.expected_heads,
         "writable": entry.writable,
@@ -183,20 +180,8 @@ STRAND_GROUPS = (
 )
 
 
-def _room_titles(services: Any) -> dict[str, str]:
-    """Vignette room id → its space name, in config/vignettes.yaml order ({} when that file can't be read)."""
-    try:
-        from conductor.vignettes import VignetteService
-
-        rooms = VignetteService.of(services).rooms.rooms
-    except Exception:  # noqa: BLE001 - a bad vignettes.yaml is already a "Needs attention" line
-        return {}
-    return {room_id: (getattr(room, "space", None) or room_id) for room_id, room in rooms.items()}
-
-
 def device_groups(services: Any, entries: list[Any]) -> list[dict]:
-    """The /ops device list's sections: canopy modules, bench, spares (strands: module page, bench, head count),
-    then each vignette room (its /vignette/<room>/ page)."""
+    """The /ops device list's sections: canopy modules, bench, spares (strands: module page, bench, head count)."""
     groups = []
     for role, key, title in STRAND_GROUPS:
         ids = [e.id for e in entries if e.role == role]
@@ -204,22 +189,6 @@ def device_groups(services: Any, entries: list[Any]) -> list[dict]:
             ids = [e.id for e in sorted((e for e in entries if e.role == role), key=lambda e: e.module or "")]
         if ids:
             groups.append({"id": key, "title": title, "strand": True, "link": None, "devices": ids})
-    titles = _room_titles(services)
-    rooms = list(titles) + sorted(
-        {e.vignette for e in entries if e.role == "vignette" and e.vignette} - set(titles)
-    )
-    for room in rooms:
-        ids = [e.id for e in entries if e.role == "vignette" and e.vignette == room]
-        if ids:
-            groups.append(
-                {
-                    "id": f"vignette-{room}",
-                    "title": titles.get(room) or room,
-                    "strand": False,
-                    "link": f"/vignette/{room}/",
-                    "devices": ids,
-                }
-            )
     placed = {d for g in groups for d in g["devices"]}
     rest = [e.id for e in entries if e.id not in placed]
     if rest:
@@ -269,10 +238,7 @@ def runtime_problems(services: Any) -> list[str]:
 
 
 def device_page(entry: Any) -> str:
-    """Where /ops sends staff for one device (D34): a vignette device's room page, never the module page — opening
-    that would take the device's exclusive lock away from the room's tablet (review V1). Strands get the module page."""
-    if entry.role == "vignette":
-        return f"/vignette/{entry.vignette}/" if entry.vignette else "/ops/"
+    """Where /ops sends staff for one device (D34): its module page (every registered device is a strand, D67)."""
     return f"/ops/module/?device={entry.id}"
 
 

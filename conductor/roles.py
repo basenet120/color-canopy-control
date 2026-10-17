@@ -1,7 +1,7 @@
 """Roles, one-time enrollment links and cookie sessions (07 §2; contract in `conductor/roles_api.py`, D5).
 
 Rules implemented here:
-- Ops creates a one-time link for a kiosk, vignette tablet or tester phone. The link is valid for
+- Ops creates a one-time link for a kiosk (the guest iPad) or a tester phone. The link is valid for
   ENROLLMENT_TTL_S (24 h) and works once. Redeeming it creates a session; the session id goes into the HttpOnly
   `cc_session` cookie and lasts SESSION_TTL_S (30 days, the cookie's Max-Age).
 - Only sha256 hashes of link tokens and session ids are kept — in memory and on disk — so reading
@@ -11,6 +11,9 @@ Rules implemented here:
   to `<data>/roles/sessions.json` and `<data>/roles/enrollments.json`. With no data dir the store is in-memory.
 - A corrupt file never stops the Conductor from starting: it is set aside as `*.corrupt`, the store starts
   empty (enrolled devices must be re-enrolled) and `problem` says so for /ops.
+- A record of a role that no longer exists (the vignette tablets, D67) is old data, not corruption: it is skipped
+  (logged once with its role and fingerprint, listed in `skipped`), the other records load, and the next save of
+  that file leaves it out. So the guest iPad's kiosk session survives the canopy-only deploy.
 - `path_allowed` is the path table from `roles_api.py`, applied to cookie principals by the auth middleware.
   Anything not in the table is denied, and so is any path that isn't already in normal form (dot segments,
   empty segments, encoded characters, backslashes) — browsers never send those, so only a trick would.
@@ -38,8 +41,9 @@ log = logging.getLogger(__name__)
 SESSION_TTL_S = 30 * 24 * 3600  # matches the cc_session cookie's Max-Age
 FINGERPRINT_LEN = 12
 NAME_MAX = 80
-GRANT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")  # registry / vignette id shape
-ENROLLABLE = (Role.KIOSK, Role.VIGNETTE, Role.TESTER)  # ops signs in with the Basic credential, never a link
+GRANT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")  # registry id shape
+ENROLLABLE = (Role.KIOSK, Role.TESTER)  # ops signs in with the Basic credential, never a link
+ROLE_VALUES = frozenset(r.value for r in Role)
 READ_METHODS = frozenset({"GET", "HEAD"})
 
 # Paths every enrolled role may use (read-only).
@@ -117,9 +121,7 @@ def _validate(role: Role | str, name: str, grants: Iterable[str]) -> tuple[Role,
     try:
         role = Role(role)
     except ValueError:
-        raise RoleError(
-            f"{role!r} isn't a role that can be enrolled. Use kiosk, vignette or tester."
-        ) from None
+        raise RoleError(f"{role!r} isn't a role that can be enrolled. Use kiosk or tester.") from None
     if role not in ENROLLABLE:
         raise RoleError("Ops can't be enrolled with a link: ops devices sign in with the ops password.")
     name = " ".join(str(name or "").split())
@@ -131,15 +133,13 @@ def _validate(role: Role | str, name: str, grants: Iterable[str]) -> tuple[Role,
     bad = sorted(g for g in cleaned if not GRANT_PATTERN.fullmatch(g))
     if bad:
         raise RoleError(
-            "These ids don't look like device or vignette ids (lower-case letters, digits and dashes): "
+            "These ids don't look like device ids (lower-case letters, digits and dashes): "
             + ", ".join(repr(b[:50]) for b in bad)
         )
     if role is Role.KIOSK and cleaned:
         raise RoleError("A kiosk link doesn't take grants: the kiosk only ever drives the canopy.")
     if role is Role.TESTER and not cleaned:
         raise RoleError("A tester link needs at least one device id the tester may open, e.g. bench-kit.")
-    if role is Role.VIGNETTE and not cleaned:
-        raise RoleError("A vignette link needs at least one vignette id.")
     return role, name or role.value, cleaned
 
 
@@ -155,6 +155,8 @@ class RoleStore:
         self.clock = clock or RealClock()
         self.dir = Path(data_dir) / "roles" if data_dir is not None else None
         self.problem = ""  # plain English for /ops when a file couldn't be read
+        # (file, role, fingerprint) of records skipped as old data: a role that no longer exists (D67)
+        self.skipped: list[tuple[str, str, str]] = []
         self._lock = threading.Lock()
         self._enrollments: dict[str, _Record] = self._load("enrollments.json")
         self._sessions: dict[str, _Record] = self._load("sessions.json")
@@ -299,7 +301,7 @@ class RoleStore:
         path = self.dir / name
         try:
             raw = json.loads(path.read_bytes())
-            records = [_Record.from_json(r) for r in raw["records"]]
+            records = [_Record.from_json(r) for r in raw["records"] if not self._removed_role(name, r)]
         except FileNotFoundError:
             return {}
         except (ValueError, KeyError, TypeError) as e:
@@ -310,11 +312,26 @@ class RoleStore:
                 log.exception("could not set aside %s", path)
             self.problem = (
                 f"The saved {name.removesuffix('.json')} file couldn't be read ({type(e).__name__}), so it was "
-                f"set aside as {aside.name}. Enrolled kiosks, tablets and tester phones need new links."
+                f"set aside as {aside.name}. The enrolled guest iPad and tester phones need new links."
             )
             log.error("%s", self.problem)
             return {}
         return {r.digest: r for r in records}
+
+    def _removed_role(self, name: str, raw: object) -> bool:
+        """A record whose role no longer exists (D67) is skipped, never a corrupt file. Only that: an unreadable
+        record of a role that does exist still sets the whole file aside."""
+        if not isinstance(raw, dict) or not isinstance(raw.get("role"), str) or raw["role"] in ROLE_VALUES:
+            return False
+        role, fingerprint = raw["role"][:40], str(raw.get("digest", ""))[:FINGERPRINT_LEN]
+        self.skipped.append((name, role, fingerprint))
+        log.warning(
+            "roles: skipped a saved %s record of the removed role %r (%s); the next save drops it (D67)",
+            name.removesuffix(".json"),
+            role,
+            fingerprint or "no fingerprint",
+        )
+        return True
 
     def _save(self, name: str, records: dict[str, _Record]) -> None:
         if self.dir is None:
@@ -373,10 +390,6 @@ def path_allowed(principal: Principal, method: str, path: str) -> bool:
     grants = principal.grants
     if principal.role is Role.KIOSK:
         return (read and _under(normal, "/kiosk")) or normal.startswith("/api/kiosk/")
-    if principal.role is Role.VIGNETTE:
-        return (read and _granted_target(normal, "/vignette", grants)) or _granted_target(
-            normal, "/api/vignette", grants
-        )
     if principal.role is Role.TESTER:
         if read and (_under(normal, "/ops/module") or normal == "/api/module"):
             return True
@@ -390,6 +403,4 @@ def home_path(principal: Principal) -> str:
         return "/kiosk/"
     if principal.role is Role.TESTER:
         return "/ops/module/"
-    if principal.role is Role.VIGNETTE and principal.grants:
-        return f"/vignette/{min(principal.grants)}/"
     return "/"

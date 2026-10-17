@@ -1,12 +1,105 @@
 # Status
 
-_Last updated: 2026-10-17 (Design Lab Slice C integrated as #27 `claude/design-lab-motion`; all three Lab slices built; see the PR stack). Before that 2026-10-16.
+_Last updated: 2026-10-17 evening (PR A `claude/canopy-only`: the Conductor controls the canopy only, D67; the Studio is
+screen only; see the block below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
+`claude/design-lab-motion`; all three Lab slices built; see the PR stack), 2026-10-16.
 **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
 Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
 test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR A — canopy only (D67), `claude/canopy-only` → `main` (Oct 17; plan `docs/live-lab/PLAN.md` §1, stream R)
+Alon on site, Oct 17: "remove all the stuff that isn't the canopy control". **Merge this before PR B** (the live
+Lab); both target `main`; merge commits, not squash.
+- **What went** (all in git history at `6ce971b`): the four vignette rooms (`conductor/vignettes.py`, the routes and
+  pages, `config/vignettes.yaml`, their 15 registry entries and four accounts, the `vignette` role, enrollment and
+  WebSocket topic, the synthesized vignette sim profiles, Gate R's "vignette accounts clean" criterion and report
+  section); the Ubuntu venue box (`deploy/venue/**`, `scripts/release.sh`, the Chromium resting page,
+  `venue-box.md`, `tests/test_deploy.py` — its env-doc check and the `deploy/` secret scan moved to
+  `tests/test_mac_box.py`); the VWBD workshop kit and Paris's tooling (`workshop/`, `conductor/workshop.py`, the kit
+  builder, `scripts/dev_guest_panel.py`, `tools/`, TEST-CENTER and its inventory docs, the root hand-off docs); the
+  guest panel's workshop target (one target now: the canopy engine) and `make guest-dev`; `/` → the visualizer
+  everywhere. **The Studio is screen only (Alon's override of the plan):** every live shop-kit control went —
+  Connect, Apply scene gradient, Apply selected solid, brightness/power, the module select and "Both modules", the
+  "Not connected" indicator, the fine-tune looks/colour/white/effect tools, Show saved Custom 3, the motion demo's
+  live run, `/api/studio/pair/*` with `module/pair.py` and `module/scene_gradient.py`. It keeps the scene preview
+  (the show's own design over the full canopy, tour, angle, module/head level, palette chips, an illustration
+  brightness) and the Lab panel, and says the Lab is the only live control. `/ops/module` is untouched.
+- **Old data on the live Mac is tolerated, not migrated** (§1.5): a saved session/enrollment of the removed role is
+  skipped per record (the guest iPad's kiosk session survives; an unreadable record of a role that exists still sets
+  the file aside); a registry-overlay entry for a removed vignette device (`REMOVED_DEVICE_IDS`, 15 ids, or any
+  `role: vignette` entry) and a `vignette`/`kind` key on a surviving entry are ignored with a "Needs attention" line
+  and pruned by the next /ops registry edit (`save_overlay_patch`); `overlay_diff` ignores them too.
+  **`conductor/preflight.py`** (offline, read-only, binds nothing): settings, registry, the role store from a temp
+  copy; `deploy/mac/run-conductor.sh --check` runs it, so `canopy-mac install` (which runs `--check` after `uv sync`
+  and before it removes the hold or reloads launchd) never restarts the show onto code that can't load its data.
+- **Contract text:** 07 §1/§2/§8/§10, 05 #3/#11/#13 (+ diagram), 04/06/01/03 notes, D67, and CLAUDE.md's opening line
+  and show-accounts rule (lead's instruction: applied here for Alon to review in the PR). Runbooks are Mac-only now
+  (`release-and-freeze.md` rewritten: a release is a tag; deploy = the paste block below; rollback = the previous
+  commit + `canopy-mac install`).
+- **Verified (sim, macOS):** `nice -n 15 uv run --offline pytest -q` (no `--ignore` any more: `tests/test_deploy.py` is gone): 2236 passed, 5 skipped, 44 subtests;
+  `uv run --offline ruff check . && uv run --offline ruff format --check .`; `node --test tests/*.test.mjs` 123/123;
+  `nice -n 15 uv run --offline python -m conductor.soak` exit 0, 21 PASS rows, the only FAIL the non-gating
+  "(reported)" D65 landing spread (p95 2.78 s), as in #27.
+  `tests/test_canopy_only.py` (20 tests): the removed surfaces 404 for ops; no conductor module imports what went
+  (AST); no vignette role/account/device, `len(REMOVED_DEVICE_IDS) == 15`; a vignette enrollment → 400 "…Use kiosk or
+  tester."; WebSocket topics; **old data**: a kiosk + vignette `sessions.json` loads the kiosk (its cookie opens the
+  panel through the app), nothing set aside; an overlay with a removed-id patch, a full `role: vignette` entry,
+  `bench-kit: {kind}` and a full spare with `vignette`/`kind` loads, the app starts (`/healthz` 200), `/ops` names
+  them, the next `save_overlay_patch` prunes them and `overlay_diff().problem == ""`; the guest panel's target is the
+  engine with `CONDUCTOR_ENV=workshop-sim`; the preflight passes over that data and names it, fails (exit 1) over an
+  overlay naming an unknown id, a session file the store would set aside, or a bad `CONDUCTOR_MODE`, and never
+  changes the data dir's bytes; the Studio makes no request but `GET /api/canopy/design`. `tests/test_mac_box.py`:
+  `--check` runs `python -m conductor.preflight` from the checkout over the pinned data folder, and a failing
+  preflight stops `--check` and `canopy-mac install` before the agents are written. **20 mutants, each killed by its
+  named test** (the `_merge` id tolerance and key pop, both `save_overlay_patch` prunes, the `overlay_diff` skip, the
+  `_load` per-record skip and a widened skip, a vignette route back, the WS topic, the Needs-attention line, the
+  preflight's temp copy / roles failure / registry check, the `--check` preflight call and its `die`, a Fernet-shaped
+  string in `canopy-mac`, an undocumented env variable, a Studio module call / Connect button back, the workshop home
+  back). `python -m conductor.preflight` over a scratch data dir with old data: exit 0, names the 1 removed device,
+  the 2 entries' removed fields and the skipped session record. Browser (own dev server, `scripts/dev_design_lab.py
+  --port 8213`, 1440×900 and 1180×820): the Studio loads with no console error, 270 lights painted from the show's
+  design, no "Both"/module select/Connect, Golden Hour head-by-head ↔ module level, angle, tour; its only requests
+  are `GET /api/canopy/design`; the Lab opens on `#lab` and its stage draws 270 lights; `/ops` offers kiosk and
+  tester only and lists canopy, bench, spares.
+- **The final grep** (`git grep -n -i -E
+  'vignette|workshop|PAIR_IDS|scene_gradient|module\.pair|TEST-CENTER|deploy/venue|dev_guest_panel|kiosk-resting|venue[- ]box|canopy-status|systemctl|chrony|docker compose|guest-dev|VWBD-HANDOFF|shop-string-1'
+  -- . ':!research'`) leaves only this **allowlist**: history docs (`docs/BUILD_PLAN.md`,
+  `docs/ULTRACODE_BUILD_PROMPT.md`, `docs/CLOUD_SESSION_PROMPT.md`, `docs/design-lab/PLAN.md` + `PROMPT.md`,
+  `docs/live-lab/PLAN.md`, `docs/DECISIONS.md`, this file's history); the §1.0 evidence files
+  (`docs/current-live-test-session.md`, `docs/live-workshop-2026-09-28.test-center.json`); `.gitignore`'s
+  `workshop.env`/`workshop-data*` lines; `conductor/gate.py`'s pinned "venue box" strings (and `tests/test_gate.py`'s
+  match on them); the removal tolerance and its D67 notes (`conductor/config.py` `REMOVED_*`, `roles.py`,
+  `roles_api.py`, `services.py`, `preflight.py`, `rehearsal.py`'s docstring); D67 scope notes in README and
+  `docs/context/01/03/04/05/06/07`, `install-day-commissioning.md`; the strip/negative tests
+  (`tests/test_canopy_only.py`, `test_roles.py`, `test_guest_panel.py`, `test_studio_routes.py`,
+  `test_interface_structure.py`, `test_surfaces_review_fixes.py`, `test_ops_routes.py`, `test_stepped_rehearsal.py`,
+  `test_review3_fixes.py`, `test_dev_design_lab.py` / `test_lab_review_fixes.py` proving `CONDUCTOR_ENV=workshop` is
+  stripped); `tests_e2e/test_kiosk.py`'s `kiosk-resting.png` (the guest panel's own resting state). `shop-string-1`
+  is left only in tests (the old shop-kit overlay shape); the Studio's geometry no longer carries the shop kits.
+- **Merge notes:** `tests/test_lab_static.py` and `tests/test_lab_router.py` pin `studio.js?v=screen-1` on the lines
+  next to `lab.js?v=lab-5`, and `web/ops/showcase/index.html`'s `studio.js` line sits next to the `lab.js` line: when
+  stream U bumps the Lab to `lab-6`, take both sides. 05 #3 is one line that P's B1 clause also edits: take both.
+- **Deploy (Alon, on the Mac, after merging; coordinate with anyone on the iPad) — PR A on its own:**
+  ```
+  canopy-mac backup
+  git -C ~/canopy-show status --short                     # must print nothing
+  git -C ~/canopy-show rev-parse HEAD | tee ~/canopy-prev-sha.txt
+  # (the Oct 19 registry undo first, exactly as below, under the code already running, then verify it)
+  git -C ~/canopy-show fetch --tags origin
+  git -C ~/canopy-show checkout --detach <A tag or merge sha>
+  ~/canopy-show/deploy/mac/canopy-mac install            # uv sync, then --check runs conductor.preflight; a failure
+                                                         # stops here, before the restart (the old process keeps running)
+  canopy-mac status; git -C ~/canopy-show describe --tags --always
+  #  /ops "Needs attention": at most the "removed vignette devices/fields" lines; the kiosk iPad's panel still loads
+  # Rollback: git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)" && ~/canopy-show/deploy/mac/canopy-mac install
+  # Data restore only if the box won't start:  canopy-mac restore <file from the backup above> --yes
+  ```
+- **Needs the real box:** the deploy itself (the preflight over the live data folder, which nobody here may read);
+  that the iPad's kiosk session survives; that `/ops` shows at most the D67 "removed vignette" lines and that the
+  first registry edit clears them from the overlay (the line goes at the next restart).
 
 ## PR stack (merge order — merge commits, not squash)
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
@@ -193,6 +286,9 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     `make lint`.
 - **Merged:** PR #18, `claude/mac-show-box` (D61), as `9c4c7aa` on Oct 13.
 - **Items 1–6 below are older and all merged** (#11–#16); kept for their notes.
+0i. **PR A `claude/canopy-only` → `main`, after #27** (D67, canopy only; the block at the top of this file has
+    what went, the old-data tolerance, what was verified and how, and the deploy paste block). Merge before PR B
+    (the live Lab); merge commits, not squash.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
      (`1eb8551`);
@@ -520,6 +616,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+0a. **Alon (PR A, D67):** review CLAUDE.md's two changed lines in the PR (the lead asked stream R to apply them),
+    merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above, after
+    the Oct 19 registry undo. Then PR B (the live Lab).
 0. **Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge #24 (it carries #20–#23 to
    `main`; merge commit); then between demos `git -C ~/canopy-show switch main && git -C
    ~/canopy-show pull --ff-only && ~/canopy-show/deploy/mac/canopy-mac install` (restarts; the sign-in survives). (c)

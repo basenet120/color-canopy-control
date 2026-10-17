@@ -7,9 +7,9 @@ Sunset pink → #FF8FBF, linear 30°, brightness 90; Coastal Tides: 60°, Aqua �
 → #CDEBE6) and a rename, an added colour, a removed colour and a reorder (each changes recipes.yaml's keys). A
 failure here is an approved-value pin still in a test: move it onto the fixture's `_pins` (§3.7).
 
-The scratch copy is `git init`ed and committed first, so `git apply` and test_workshop's `git ls-files` work there.
+The scratch copy is `git init`ed and committed first, so `git apply` and any `git ls-files` work there.
 The suite runs with this interpreter (`python -m pytest`; pytest's `pythonpath = ["."]` makes the copy's own
-`conductor/` the one imported), on the same flags as `make test` on the Mac (`--ignore=tests/test_deploy.py`)."""
+`conductor/` the one imported), on the same flags as `make test`."""
 
 from __future__ import annotations
 
@@ -76,7 +76,6 @@ def test_an_edited_export_passes_the_whole_suite(case, tmp_path):
         "-m",
         "pytest",
         "-q",
-        "--ignore=tests/test_deploy.py",
         "--ignore=tests/test_lab_roundtrip.py",
         "-p",
         "no:cacheprovider",

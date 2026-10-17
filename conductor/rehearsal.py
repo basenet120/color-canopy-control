@@ -2,7 +2,7 @@
 
     /ops "Rehearse…" ──confirm sentence (modules, minutes)──▶ POST /api/canopy/stepped-rehearsal
         ──▶ CanopyEngine.rehearse(mode, minutes, source="ops") ──▶ one stepped run of that mode, run_s = minutes·60
-                                │ telemetry (attempt / command / alert / token / governor / program)
+                                │ telemetry (attempt / command / alert / governor / program)
                                 ▼
             Rehearsal (this module) counts the window ──▶ report: telemetry "rehearsal" + <data>/bench/rehearsals/*.json
 
@@ -32,11 +32,12 @@ Rules (binding text: docs/runbooks/stepped-rehearsal.md; 07 §1, §6, §8, §9):
     `superseded`: step writes replaced by a newer one before they finished; `skipped_steps`: steps the runner skipped
     because they came due late;
   - `verification_s`: send → verified readback, p50 / p95, over the rehearsal's applied commands;
-  - `governor_trips`, `outages`;
-  - `vignette`: the vignette accounts' attempts, 429/403s, failed commands, token problems and warn/error alerts.
+  - `governor_trips`, `outages`.
+  The venue IP's other Hubspace traffic is now only the bench account's (the vignettes are outside this system,
+  D67), so the report no longer has a `vignette` section.
 - **Verdict** (Gate R's pass criteria): the run went its full length, no command failed throttled after retries,
   throttled attempts < `MAX_THROTTLED_SHARE`, no 403, the rehearsal's accounts within the cap in every 60 s
-  (`max_writes_60s` ≤ `cap_writes_per_min`), vignette accounts clean. In the simulator the verdict is
+  (`max_writes_60s` ≤ `cap_writes_per_min`). In the simulator the verdict is
   labelled SIMULATED and never counts for Gate R. Only Alon flips `motion.stepped.live_enabled`.
 - The report file is written atomically under `<data>/bench/rehearsals/` (07 §8), beside the bench results but not
   among them (the bench page lists only `<data>/bench/*.json`).
@@ -71,11 +72,10 @@ WINDOW_S = 60.0  # max_writes_60s
 REPORT_GRACE_S = 20.0  # wait at most this long for the writes still in flight when the run ends
 THROTTLE_STATUSES = frozenset({429, 403})
 OUTAGE_HTTP_STATUSES = frozenset({503, 504})
-PROBLEM_LEVELS = frozenset({"warn", "warning", "error"})
 REHEARSAL_DIR = "rehearsals"  # under <data>/bench
 SIMULATED_NOTE = (
     "SIMULATED: the simulator's latencies and faults, not Hubspace's. This never counts for Gate R; run it on the real "
-    "kits from the venue box (docs/runbooks/stepped-rehearsal.md)."
+    "kits from the show box (docs/runbooks/stepped-rehearsal.md)."
 )
 
 
@@ -161,8 +161,6 @@ class Rehearsal:
         self._then: Callable[[], Any] | None = None
         self._unsubscribe: Callable[[], Any] | None = None
         self._outages0 = len(engine.stats.get("outages") or [])
-        registry = engine.deps.registry()
-        self._vignette_accounts = sorted({e.account for e in registry.by_role("vignette") if e.account})
         # counters
         self.attempts = 0
         self.puts = 0
@@ -176,9 +174,6 @@ class Rehearsal:
         self._last_attempt: dict[str, tuple[str, int | None]] = {}  # address → (outcome, http status)
         # account → monotonic send times of the writes that left the process
         self._sent: dict[str, list[float]] = {}
-        self.vignette = {"attempts": 0, "throttled_429": 0, "forbidden_403": 0, "failed_commands": 0}
-        self.vignette_tokens: list[str] = []
-        self.vignette_alerts: list[str] = []
         self.alerts: list[dict] = []
 
     # ---- the window ---------------------------------------------------------------------------------------------
@@ -217,9 +212,6 @@ class Rehearsal:
             self._on_command(event)
         elif kind == "alert":
             self._on_alert(event)
-        elif kind == "token":
-            if event.get("account") in self._vignette_accounts and event.get("outcome") != str(Outcome.OK):
-                self.vignette_tokens.append(f"{event.get('account')}: {event.get('outcome')}")
         elif kind == "governor":
             self.governor_trips += 1
         elif kind == "program" and event.get("action") == "end":  # the run ended (only this look's runs here)
@@ -240,10 +232,6 @@ class Rehearsal:
             self.puts += left
             self.throttled_429 += status == 429
             self.forbidden_403 += status == 403
-        if entry is not None and entry.role == "vignette":
-            self.vignette["attempts"] += 1
-            self.vignette["throttled_429"] += status == 429
-            self.vignette["forbidden_403"] += status == 403
         if status == 403:  # the engine stops the run at the first one (once: later ones find it ended)
             self.forbidden_any.append(account)
             self._call_soon(lambda: self.engine._rehearsal_403(self, account))
@@ -264,21 +252,11 @@ class Rehearsal:
             timings = event.get("timings") or {}
             if status == str(CommandStatus.APPLIED) and timings.get("sent_at") and timings.get("verified_at"):
                 self.verified.append(float(timings["verified_at"]) - float(timings["sent_at"]))
-            return
-        entry = self._entry(address)
-        if entry is not None and entry.role == "vignette" and status == str(CommandStatus.FAILED):
-            self.vignette["failed_commands"] += 1
 
     def _on_alert(self, event: dict) -> None:
         level = str(event.get("level") or "info")
         message = str(event.get("message") or "")
         self.alerts.append({"t": event.get("t"), "level": level, "message": message})
-        entry = self._entry(str(event.get("device_id"))) if event.get("device_id") else None
-        vignette = event.get("account") in self._vignette_accounts or (
-            entry is not None and entry.role == "vignette"
-        )
-        if vignette and level in PROBLEM_LEVELS:
-            self.vignette_alerts.append(message)
 
     def _call_soon(self, fn: Callable[[], Any]) -> None:
         """Act after the event that triggered it (never from inside the executor's or the runner's bookkeeping)."""
@@ -361,13 +339,6 @@ class Rehearsal:
     def build_report(self) -> dict:
         runner = self.runner
         share = (self.throttled_429 + self.forbidden_403) / self.attempts if self.attempts else 0.0
-        vignette_clean = not (
-            self.vignette["throttled_429"]
-            or self.vignette["forbidden_403"]
-            or self.vignette["failed_commands"]
-            or self.vignette_tokens
-            or self.vignette_alerts
-        )
         cap = self.engine.deps.settings.motion.stepped.account_writes_per_min
         most = self.max_writes()
         over = {a: n for a, n in most.items() if a in self.accounts and n > cap}
@@ -406,12 +377,6 @@ class Rehearsal:
                     f"{a}: {most.get(a, 0)}{' (over)' if a in over else ''}" for a in self.accounts
                 )
                 or "no writes",
-            },
-            {
-                "id": "vignettes_clean",
-                "title": "Vignette accounts clean",
-                "ok": vignette_clean,
-                "detail": "clean" if vignette_clean else "see vignette",
             },
         ]
         verdict = "pass" if all(c["ok"] for c in criteria) else "fail"
@@ -467,13 +432,6 @@ class Rehearsal:
             },
             "governor_trips": self.governor_trips,
             "outages": len(self.engine.stats.get("outages") or []) - self._outages0,
-            "vignette": {
-                "accounts": self._vignette_accounts,
-                **self.vignette,
-                "token_problems": self.vignette_tokens,
-                "alerts": self.vignette_alerts,
-                "clean": vignette_clean,
-            },
             "alerts": self.alerts,
             "criteria": criteria,
             "verdict": verdict,

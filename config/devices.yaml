@@ -9,15 +9,7 @@ accounts:
   bench:
     label: Bench kit account
   canopy:
-    label: Canopy account (venue box only)
-  entry:
-    label: Entryway account (venue box only)
-  living:
-    label: Holiday living room account (venue box only)
-  bedroom:
-    label: Bedroom account (venue box only)
-  garden:
-    label: Glow Garden account (venue box only)
+    label: Canopy account (show box only)
 
 device_defaults:
   canopy_module:
@@ -56,29 +48,3 @@ devices:
   - {id: spare-1, role: spare, account: canopy, label: Spare kit 1, model: SQHDK03, profile: sqhdk03-sim, expected_heads: 30}
   - {id: spare-2, role: spare, account: canopy, label: Spare kit 2, model: SQHDK03, profile: sqhdk03-sim, expected_heads: 30}
   - {id: spare-3, role: spare, account: canopy, label: Spare kit 3, model: SQHDK03, profile: sqhdk03-sim, expected_heads: 30}
-
-  # ---- Vignettes (P4) -------------------------------------------------------------------------------------------
-  # PLACEHOLDER census (docs/context/06 #18) until the final device list lands: change labels, counts and kinds
-  # here when it does. Each room is its own Hubspace account. `kind` picks the controls on /vignette/<room>/
-  # (bulb | plug | lock | fan | string | path); `profile` is the simulator profile — the vignette ones are
-  # synthesized from aioafero 9.3.0's controller source and UNVERIFIED until a real dump (conductor/sim/profiles.py).
-  # Real metadevice ids go in the ops overlay only, after the room's account is connected on the venue box.
-  - {id: entry-deadbolt, role: vignette, vignette: entry, kind: lock, account: entry, label: Front door deadbolt, model: Defiant Wi-Fi deadbolt, profile: defiant-deadbolt, writable: true}
-
-  - {id: living-lamp-1, role: vignette, vignette: living, kind: bulb, account: living, label: Table lamp, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: living-lamp-2, role: vignette, vignette: living, kind: bulb, account: living, label: Floor lamp, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: living-lamp-3, role: vignette, vignette: living, kind: bulb, account: living, label: Wash left, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: living-lamp-4, role: vignette, vignette: living, kind: bulb, account: living, label: Wash right, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: living-plug, role: vignette, vignette: living, kind: plug, account: living, label: Tree and garland, model: "Defiant outdoor plug, 2 outlets", profile: outdoor-plug-2, writable: true}
-
-  - {id: bedroom-lamp-1, role: vignette, vignette: bedroom, kind: bulb, account: bedroom, label: Bedside left, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: bedroom-lamp-2, role: vignette, vignette: bedroom, kind: bulb, account: bedroom, label: Bedside right, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: bedroom-lamp-3, role: vignette, vignette: bedroom, kind: bulb, account: bedroom, label: Uplight left, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: bedroom-lamp-4, role: vignette, vignette: bedroom, kind: bulb, account: bedroom, label: Uplight right, model: EcoSmart A19 color, profile: ecosmart-a19-rgb, writable: true}
-  - {id: bedroom-plug, role: vignette, vignette: bedroom, kind: plug, account: bedroom, label: Humidifier, model: Defiant smart plug, profile: indoor-plug, writable: true}
-  # "Possible ceiling fan" (01): disabled until the census confirms it (06 #18). Set enabled: true to show it.
-  - {id: bedroom-fan, role: vignette, vignette: bedroom, kind: fan, account: bedroom, label: Ceiling fan, model: Hampton Bay ceiling fan, profile: ceiling-fan, writable: true, enabled: false}
-
-  - {id: garden-string, role: vignette, vignette: garden, kind: string, account: garden, label: String lights, model: Hampton Bay string light (20 segments), profile: string-20seg, writable: true}
-  - {id: garden-path, role: vignette, vignette: garden, kind: path, account: garden, label: Path lights, model: Path light set, profile: path-lights, writable: true}
-  - {id: garden-plug, role: vignette, vignette: garden, kind: plug, account: garden, label: Fountain and spare, model: "Defiant outdoor plug, 2 outlets", profile: outdoor-plug-2, writable: true}

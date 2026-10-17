@@ -1,17 +1,17 @@
-# Install-day commissioning — accounts, modules, slots, kiosk and tablets
+# Install-day commissioning — accounts, modules, slots and the kiosk iPad
 
 **Who:** Alon, with VWBD's crew for the physical side and the second on-duty tech watching (they'll need to do
 parts of this alone later). **When:** Oct 20–22, after the canopy is hung and powered; finished before Fri Oct 23.
 **How long:** about 4 hours for nine modules and three spares (onboarding ~45 min, gates ~1 h, calibration ~1 h,
 commissioning and checks ~30 min, enrollment ~20 min).
 
-Nothing here happens on staging: show accounts are only ever signed in on the venue box.
+Nothing here happens on staging: show accounts are only ever signed in on the show box (the Mac mini).
 
 ---
 
 ## Before you start
 
-- [ ] The venue box is built, frozen on the release tag and healthy (`venue-box.md`, `sudo canopy-status`).
+- [ ] The show box is set up, on the release tag and healthy (`mac-show-box.md`, `canopy-mac status`).
 - [ ] **Home Depot's written authorization** is in hand, or Alon has said go (`06` #20). Until then: no writes to
       show accounts.
 - [ ] The canopy Hubspace account exists, MFA **off**, its email is in `HUBSPACE_ACCOUNT_ALLOWLIST`, and whoever
@@ -40,16 +40,16 @@ One at a time, about 2–5 minutes each, phone next to the controller:
 
 ## 3. Connect the canopy account on the box (5 min)
 
-On the box (keyboard, or `ssh` over Tailscale):
+On the show box (keyboard, or Screen Sharing / `ssh` over Tailscale), in Terminal:
 ```
-sudo docker exec -it canopy-conductor python -m conductor.auth login --account canopy
+canopy-mac login --account canopy
 ```
 It asks for the email, the password (not shown) and, if Hubspace emails one, the 6-digit code. The password is used
 once and never stored; the box keeps only an encrypted sign-in. `/ops` → **Hubspace accounts** shows it connected.
 
 ## 4. Register the modules and spares (15 min)
 
-- [ ] `/ops/accounts/` → Canopy account → **Show devices**. Every kit shows up as *Not registered* and *Read-only*. (Ignore the page's note about adding ids to `HUBSPACE_DEVICE_ALLOWLIST` and restarting: the venue box uses `registry`, so no restart is needed.)
+- [ ] `/ops/accounts/` → Canopy account → **Show devices**. Every kit shows up as *Not registered* and *Read-only*. (Ignore the page's note about adding ids to `HUBSPACE_DEVICE_ALLOWLIST` and restarting: the show box uses `registry`, so no restart is needed.)
 - [ ] For each module: **Register as** → `Module N (canopy-rXcY)` → **Register** → confirm. Use the name you gave it
       in the app to match numbers. For the spares: `Spare kit K (spare-K)`.
 - [ ] `HUBSPACE_DEVICE_ALLOWLIST=registry` (already in `conductor.env`) makes every registered kit writable at once:
@@ -111,19 +111,17 @@ On `/ops/bench/` → pick **Module N**, film the module with the clock page if A
 - [ ] Walk under the canopy: all 270 heads light (a string that lights only 12 pucks is a known fault: check the
       connector, power-cycle that controller — never cut the strings).
 
-## 9. Enroll the kiosk and the vignette tablets (20 min)
+## 9. Enroll the kiosk iPad (10 min)
 
-- [ ] Kiosk: `/ops` → **Set up a device** → **Kiosk**, name "Canopy kiosk" → **Create setup link** → **Copy**. On the
-      box: `sudo canopy-kiosk-enroll`, paste, tap **Set up this device** on the touchscreen, press Enter.
-- [ ] Each vignette iPad: **Set up a device** → **Vignette**, name it ("Living room iPad"), its vignette id →
-      **Create setup link**. Open the link **on that iPad** (AirDrop or a message to it), using the box's address
-      (`http://192.168.50.10:8000/…`), tap **Set up this device**. Then turn on Guided Access.
-      (If the vignettes run the stock Hubspace app instead — `06` #11, decided in `docs/STATUS.md` — skip this.)
-- [ ] `/ops` → **Set-up devices** lists them all. A lost tablet: **Revoke** there.
+- [ ] `/ops` → **Set up a device** → **Kiosk**, name "Guest iPad" → **Create setup link**. Open the link **on the
+      guest iPad** (AirDrop or a message to it), using the show box's address (`http://<address>:8000/…`), tap **Set
+      up this device**. Then turn on Guided Access on `/kiosk/`.
+- [ ] `/ops` → **Set-up devices** lists it. A lost iPad: **Revoke** there.
+- The vignettes are outside this system (D67): they run on the stock Hubspace app, set up by whoever owns them.
 
 ## 10. Wrap up (5 min)
 
-- [ ] `sudo canopy-backup` and copy the newest backup to the USB stick.
+- [ ] `canopy-mac backup` and copy the newest backup to the USB stick.
 - [ ] Hubspace app on the staff phones: signed out of the canopy account again, or at least closed (hands off during
       public hours — `show-operation.md`).
 - [ ] Tell Alon the counts: modules registered, gates passed, slots written. Update `docs/STATUS.md`.
@@ -145,8 +143,8 @@ Tell Alon at once if Gate C fails. Then, per module:
 - Hand-painted slots are never rewritten: if one changes (someone edits it in the app), `/ops` alerts and the slot
   checklist fails — repaint it in the app, then record it again. Commissioning skips them too. To go back to
   Conductor-written frames for a slot later, remove its entries under `slot_hashes` / `slot_origin` / `slot_effects`
-  for that module in the overlay (`/data/overrides/registry.yaml` inside the container, volume `canopy-data`),
-  restart, then press Commission slots.
+  for that module in the overlay (`~/Library/Application Support/ColorCanopy/data/overrides/registry.yaml` on
+  the show box), `canopy-mac restart`, then press Commission slots.
 
 ---
 

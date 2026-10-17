@@ -1,8 +1,8 @@
 # The Mac show box — set up, look after, replace
 
-**Who:** Alon (set up); the second on-duty tech (look after). **What:** the show runs on a Mac mini (Apple silicon)
-instead of the Ubuntu mini PC in `venue-box.md` (D61). Everything else is unchanged: one Conductor, live mode,
-the only place the show's Hubspace accounts are signed in, the lights reached through the Hubspace cloud.
+**Who:** Alon (set up); the second on-duty tech (look after). **What:** the show runs on a Mac mini (Apple silicon),
+the show box (D61): one Conductor, live mode, the only place the show's Hubspace accounts are signed in, the lights
+reached through the Hubspace cloud. The Conductor controls the canopy only (D67).
 The guest panel is the iPad (`/kiosk/`), so the Mac doesn't need a kiosk screen.
 
 ---
@@ -24,7 +24,7 @@ Tip: `alias canopy-mac=~/canopy-show/deploy/mac/canopy-mac` in `~/.zshrc`.
 
 ## 1. The Mac itself (Alon, 20 min, needs the admin password)
 
-- [ ] **Wired Ethernet** to the show router, with a **DHCP reservation** so the address never changes. Tablets and
+- [ ] **Wired Ethernet** to the show router, with a **DHCP reservation** so the address never changes. The guest iPad and
       staff phones open `http://<address>:8000/`. (The Mac also works on Wi-Fi, but don't run the show on it.)
 - [ ] **Never sleep, start after a power cut:** System Settings → Energy → *Prevent automatic sleeping when the
       display is off* on, *Start up automatically after a power failure* on, *Wake for network access* on. Or in
@@ -48,18 +48,18 @@ Tip: `alias canopy-mac=~/canopy-show/deploy/mac/canopy-mac` in `~/.zshrc`.
 - [ ] **UPS** for the Mac, the show router and its switch. A USB UPS needs no software: System Settings → Energy
       (or Battery) → *UPS* shows it, and the Mac shuts down cleanly before the battery runs out and starts again
       with the power (*Start up automatically* above).
-- [ ] **Remote access:** Tailscale (as in `venue-box.md` §2) or macOS Screen Sharing/SSH for Alon and the second
+- [ ] **Remote access:** Tailscale (signed in with the show's own account) or macOS Screen Sharing/SSH for Alon and the second
       tech. **Never route the Mac's internet through an exit node or a VPN:** the traffic to Hubspace must come from
       the venue's own connection (never rotate IPs, CLAUDE.md).
 - [ ] **Two Conductors never run at once.** Stop any Conductor on another laptop that could sign in to the same
-      accounts (a workshop kit, `make run`): they would fight over the lights and over the sign-in.
+      accounts (a laptop's `make run`): they would fight over the lights and over the sign-in.
 
 ## 2. Install (10 min)
 
 ```
 git clone https://github.com/basenet120/color-canopy-control.git ~/canopy-show
 cd ~/canopy-show && git fetch --tags && git checkout <release tag>      # release-and-freeze.md
-deploy/mac/canopy-mac install --accounts canopy@…,entry@…,living@…,bedroom@…,garden@…
+deploy/mac/canopy-mac install --accounts canopy@…
 ```
 
 `install` creates the settings file (it **generates** the ops login and the encryption key itself, so no secret is
@@ -75,25 +75,24 @@ Then:
 - [ ] Restart the Mac (Apple menu → Restart): after login the Conductor answers again within a minute.
 - [ ] Pull the Mac's power plug, plug it back: it starts by itself (and logs in by itself if FileVault is off).
 
-## 3. Accounts, modules, slots, kiosk and tablets
+## 3. Accounts, modules, slots and the kiosk iPad
 
-Follow `install-day-commissioning.md`, with one change: where it says
-`sudo docker exec -it canopy-conductor python -m conductor.auth login --account canopy`, run
-`canopy-mac login --account canopy` in Terminal on the Mac. It asks for the email, the password (not shown) and the
+Follow `install-day-commissioning.md`. To sign in, run `canopy-mac login --account canopy` in Terminal on the
+Mac. It asks for the email, the password (not shown) and the
 emailed code if Hubspace sends one; the password goes once to the running Conductor and is never stored.
 **Home Depot's written authorization (06 #20) comes before any write to a show account.**
 
 ## 4. Look after it
 
-| On the venue box | On the Mac |
+| What | On the Mac |
 |---|---|
-| `sudo canopy-status` | `canopy-mac status` |
-| `sudo canopy-restart conductor` | `canopy-mac restart` |
-| `sudo canopy-stop --yes` / `sudo canopy-start` (break-glass) | `canopy-mac stop --yes` / `canopy-mac start` |
-| `sudo canopy-logs conductor --follow` | `canopy-mac logs -f` |
-| `sudo canopy-backup` / `--list` | `canopy-mac backup` / `--list` |
-| `sudo canopy-restore FILE [--skip-tokens]` | `canopy-mac restore FILE [--skip-tokens] --yes` |
-| `sudo canopy-restart box` | Apple menu → Restart |
+| Status (Conductor, watchdog, backups, clock, preflight) | `canopy-mac status` |
+| Restart the Conductor | `canopy-mac restart` |
+| Break-glass hold / hand back | `canopy-mac stop --yes` / `canopy-mac start` |
+| Logs | `canopy-mac logs -f` |
+| Backup / list them | `canopy-mac backup` / `--list` |
+| Restore | `canopy-mac restore FILE [--skip-tokens] --yes` |
+| Restart the box | Apple menu → Restart |
 
 `stop --yes` is the break-glass hold: the Conductor stops and stays stopped, even after a restart or a login, until
 `canopy-mac start`. The lights keep their last look (`break-glass.md`).
@@ -102,8 +101,15 @@ emailed code if Hubspace sends one; the password goes once to the running Conduc
 
 ```
 cd ~/canopy-show && git fetch --tags && git checkout <tag>
-deploy/mac/canopy-mac install          # re-syncs the Python environment and restarts; settings and data are kept
+deploy/mac/canopy-mac install          # re-syncs the Python environment, runs the preflight, restarts; settings
+                                       # and data are kept
 ```
+
+`install` runs `run-conductor.sh --check` before it restarts anything, and `--check` runs `python -m
+conductor.preflight`: the new checkout's code loads the live data folder (settings, the registry overlay, the saved
+iPad session), offline and read-only. If it can't, install stops there and the running Conductor keeps the show
+going (D67). The full paste block, with the backup and the previous commit recorded first, is in
+`release-and-freeze.md`.
 
 Rollback is the same with the previous tag. Never point the show at the development checkout or at a branch.
 
@@ -115,7 +121,7 @@ card). Then `canopy-mac stop --yes` so it is held and can't run next to the main
 
 Take over: unplug the main Mac's network; on the spare restore the newest backup **without the sign-ins**
 (`canopy-mac restore <file> --skip-tokens --yes`; sign-ins are never copied between machines), sign in to each
-account again (`canopy-mac login --account …`), re-enroll the kiosk iPad and tablets if their addresses changed,
+account again (`canopy-mac login --account …`), re-enroll the kiosk iPad if its address changed,
 and run the 7 am checklist.
 
 ## 7. Remove it

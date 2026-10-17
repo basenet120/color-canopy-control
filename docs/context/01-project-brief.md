@@ -23,6 +23,9 @@
 
 Each vignette gets one staff-operated control tablet; the canopy gets a guest-facing kiosk.
 
+> **Scope (Oct 17, D67):** the Conductor controls the canopy only; the four vignettes run on the stock Hubspace
+> app, outside this system. The vignette lines below are the brief's history.
+
 ## What Home Depot's product team told us (product call, Sep 2026)
 - Hubspace devices can be grouped; no per-account device limit other than what the Wi-Fi can handle.
 - **Use separate Hubspace accounts per vignette** so a guest playing with one room can't change another.
@@ -31,7 +34,7 @@ Each vignette gets one staff-operated control tablet; the canopy gets a guest-fa
 - Fountain via the outdoor smart plug.
 
 ## Scope decisions already made (by Alon)
-- Control surfaces: one device at each of the 4 vignettes + a special canopy display (5 surfaces) + an ops dashboard for the tech team.
+- Control surfaces: one device at each of the 4 vignettes + a special canopy display (5 surfaces) + an ops dashboard for the tech team. *(Oct 17, D67: the Conductor serves only the canopy's guest iPad and the staff tools; the vignettes use the stock Hubspace app.)*
 - v1 stays tethered to features the stock Hubspace app already offers (on/off, brightness, color, white temperature, built-in effects/presets). Fancier interactions are phase 2.
 - Built as a show tool now, architected to be productized later (config-driven, white-label-able).
 - Every bulb/fixture a guest can see or touch is genuine Hubspace hardware; kiosk copy must accurately describe the Hubspace functionality being demonstrated.

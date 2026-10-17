@@ -210,7 +210,7 @@ cmd_install() {
 		*) die "install doesn't take $1 (see --help)" ;;
 		esac
 	done
-	[ "$(uname -s)" = Darwin ] || [ $no_load -eq 1 ] || die "This is the Mac show box; use deploy/venue/ on Linux."
+	[ "$(uname -s)" = Darwin ] || [ $no_load -eq 1 ] || die "This is the Mac show box's helper; it runs only on macOS."
 	case $ROOT in
 	"$HOME/Desktop"* | "$HOME/Documents"* | "$HOME/Downloads"*)
 		die "macOS keeps LaunchAgents out of Desktop, Documents and Downloads. Clone the repo somewhere else (e.g. ~/canopy-show)."

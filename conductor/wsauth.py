@@ -1,6 +1,6 @@
 """WebSocket authentication: single-use tickets sent as the first message, plus an Origin check (07 §2).
 
-iOS Safari (every vignette iPad) is unreliable with Basic auth on WebSocket upgrades, so browser sockets don't
+iOS Safari (the guest iPad) is unreliable with Basic auth on WebSocket upgrades, so browser sockets don't
 rely on it. A page fetches `GET /api/ws-ticket` (an ordinary authenticated request — Basic or a role cookie),
 opens the socket, and sends `{"type": "auth", "ticket": "..."}` as its first message. Tickets are never put in
 URLs (URLs land in logs), live 30 s, and work once. The ticket carries the caller's role and grants, so the

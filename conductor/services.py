@@ -173,6 +173,24 @@ def _record_lock(telemetry: Telemetry, event: LockEvent) -> None:
     telemetry.record("lock", **fields)
 
 
+def registry_problems(registry: Registry) -> list[str]:
+    """The "Needs attention" lines for old registry-overlay data the canopy-only code ignored (D67)."""
+    problems = []
+    if registry.dropped:
+        problems.append(
+            "The registry overlay still names removed vignette devices "
+            f"({', '.join(sorted(registry.dropped))}); they were ignored (D67). The next registry edit on /ops "
+            "removes them from the overlay (this line goes at the next restart)."
+        )
+    if registry.dropped_fields:
+        problems.append(
+            "The registry overlay had removed vignette fields (kind/vignette) on "
+            f"{', '.join(sorted(registry.dropped_fields))}; they were ignored (D67). The next registry edit on "
+            "/ops removes them from the overlay."
+        )
+    return problems
+
+
 def build_services(
     env: Mapping[str, str] = os.environ,
     *,
@@ -189,7 +207,7 @@ def build_services(
     data = data_dir(env)
     settings = load_settings(config_dir)
     registry = load_registry(config_dir, data)
-    problems: list[str] = []
+    problems: list[str] = registry_problems(registry)
 
     holder: dict[str, Registry] = {"registry": registry}
     gate = LiveGate(gate_settings, lambda: holder["registry"].writable_metadevice_ids(), clock)

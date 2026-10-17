@@ -3,7 +3,8 @@
 # ~/Library/Application Support/ColorCanopy/conductor.env (never sourced: KEY=value lines only), pins the data folder,
 # rotates the log, and becomes the Conductor (exec, so launchd's stop signal reaches uvicorn directly).
 #   run-conductor.sh          run the Conductor (launchd does this; you normally use `canopy-mac start`)
-#   run-conductor.sh --check  check the settings and print the non-secret ones, then exit
+#   run-conductor.sh --check  check the settings, print the non-secret ones and run `python -m conductor.preflight`
+#                             (this checkout's code over the data folder, offline, read-only), then exit
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -29,7 +30,7 @@ case $(file_mode "$ENV_FILE") in
 *) die "$ENV_FILE must be readable by you only. Run: chmod 600 \"$ENV_FILE\"" ;;
 esac
 
-# Drop anything the parent might have set, so only the file decides (same list as conductor.workshop._apply).
+# Drop anything the parent might have set, so only the file decides (the variables a parent shell might leak).
 unset CONDUCTOR_AUTH CONDUCTOR_ENGINE CONDUCTOR_SIM_SPEED RAILWAY_ENVIRONMENT_NAME RAILWAY_GIT_COMMIT_SHA \
 	FORWARDED_ALLOW_IPS CONDUCTOR_ACCOUNT_CONNECT
 
@@ -67,6 +68,12 @@ if [ "${1:-}" = "--check" ]; then
 	done
 	printf '%-26s %s\n' CONDUCTOR_BASIC_AUTH "set (user ${CONDUCTOR_BASIC_AUTH%%:*})"
 	printf '%-26s %s\n' CONDUCTOR_SECRET_KEY set
+	# Can this checkout's code load the live data folder (registry overlay, saved sessions, settings)? Offline,
+	# read-only, binds no port. `canopy-mac install` runs --check before it restarts the show (D67), so new code
+	# that can't load the data stops here and the running Conductor keeps going.
+	[ -x "$PYTHON" ] || die "No Python environment at $ROOT/.venv. Run: deploy/mac/canopy-mac install"
+	(cd "$ROOT" && "$PYTHON" -m conductor.preflight) ||
+		die "conductor.preflight: this checkout can't load the data in $CONDUCTOR_DATA_DIR (see above). Nothing was restarted."
 	exit 0
 fi
 

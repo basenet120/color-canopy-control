@@ -1436,7 +1436,7 @@ async def stale_clock_put(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     return JobResult(
         Verdict.NEEDS_EYES,
         f"A write stamped {STALE_LAG_S / 60:g} minutes in the past was answered HTTP {facts['http_status']} and "
-        f"silently DROPPED; the same select with a current stamp was stored. A lagging venue-box clock would "
+        f"silently DROPPED; the same select with a current stamp was stored. A lagging show-box clock would "
         "lose writes without any error: NTP sync is a hard requirement (07 §10).",
         obs,
         [fill(Q_STALE_DROPPED, {"slot": target})],

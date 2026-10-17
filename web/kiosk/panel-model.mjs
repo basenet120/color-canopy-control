@@ -219,7 +219,7 @@ export const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 
 /**
  * The Now-showing card: `{name, description, lit, scene}` when the server sends the canopy's picture (`state.lit`,
  * conductor/canopy_view.py: per panel what may truthfully be claimed; canopy-preview.mjs draws it), else the 30-light
- * serpentine fallback `{name, description, frame, scene}` (the workshop strands, or no look yet). The serpentine draws
+ * serpentine fallback `{name, description, frame, scene}` (no look yet, or an older server). The serpentine draws
  * what is lit: every light of the scene, or, when the server says the strands took the one-colour fallback
  * (`state.look === "solid"`), the scene's solid colour on every light. The kiosk copy must be true, and a picture is
  * copy too.

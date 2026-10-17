@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -242,8 +242,7 @@ def load_settings(config_dir: Path = CONFIG_DIR) -> ConductorSettings:
 
 
 # ---- registry ----------------------------------------------------------------------------------------------------
-Role = Literal["bench", "canopy_module", "vignette", "spare"]
-VIGNETTE_KINDS = ("bulb", "plug", "lock", "fan", "string", "path")
+Role = Literal["bench", "canopy_module", "spare"]
 Corner = Literal["top-left", "top-right", "bottom-left", "bottom-right"]
 SlotOrigin = Literal["api", "app"]
 
@@ -287,8 +286,6 @@ class DeviceEntry(_Strict):
     model: str = ""
     profile: str | None = None  # simulator profile name
     module: str | None = Field(None, pattern=r"^r\dc\d$")  # canopy position, e.g. r1c2
-    vignette: str | None = None  # vignette room id for role=vignette
-    kind: str | None = None  # vignette device kind: bulb, plug, lock, fan, string, path
     metadevice_id: str | None = None  # the Afero id; set only in the ops overlay
     expected_heads: int | None = Field(None, ge=1, le=90)
     framebuffer_mapping: FramebufferMapping | None = None
@@ -377,13 +374,6 @@ class RegistryFile(_Strict):
                     raise ValueError(f"two enabled devices claim canopy position {d.module}")
                 if d.enabled:
                     modules.add(d.module)
-            if d.role == "vignette":
-                if not d.vignette:
-                    raise ValueError(f"vignette device {d.id!r} needs `vignette:` (the room id, e.g. living)")
-                if d.kind not in VIGNETTE_KINDS:
-                    raise ValueError(
-                        f"vignette device {d.id!r} needs `kind:` set to one of {', '.join(VIGNETTE_KINDS)}"
-                    )
         ids = [d.metadevice_id for d in self.devices if d.metadevice_id]
         if len(ids) != len(set(ids)):
             raise ValueError("the same metadevice_id is assigned to two devices")
@@ -399,6 +389,10 @@ class Registry:
     file: RegistryFile
     overlay: OverlayFile
     overlay_path: Path | None
+    # Old data tolerated, not migrated (D67): overlay entries for the removed vignette devices, ignored …
+    dropped: list[str] = field(default_factory=list)
+    # … and removed fields (`vignette`, `kind`) found on surviving entries, ignored: device id → field names.
+    dropped_fields: dict[str, list[str]] = field(default_factory=dict)
 
     # -- queries
     @property
@@ -434,11 +428,62 @@ class Registry:
         return self.file.accounts
 
 
-def _merge(base: dict, overlay: Mapping[str, dict[str, Any]], path: Path | str) -> dict:
+# The Conductor controls the canopy only (D67). These are the vignette devices config/devices.yaml listed until then
+# (6ce971b): an overlay entry for one of them — or any entry that says `role: vignette` — is old data from before
+# the removal. It is ignored (a "Needs attention" line on /ops says so) and pruned by the next ops registry edit,
+# never a failed start: launchd would restart a Conductor that refuses its own data folder forever.
+REMOVED_DEVICE_IDS = frozenset(
+    {
+        "entry-deadbolt",
+        "living-lamp-1",
+        "living-lamp-2",
+        "living-lamp-3",
+        "living-lamp-4",
+        "living-plug",
+        "bedroom-lamp-1",
+        "bedroom-lamp-2",
+        "bedroom-lamp-3",
+        "bedroom-lamp-4",
+        "bedroom-plug",
+        "bedroom-fan",
+        "garden-string",
+        "garden-path",
+        "garden-plug",
+    }
+)
+REMOVED_ROLES = frozenset({"vignette"})
+# Device fields that went with the vignettes; on a surviving entry (e.g. a spare copied from an older overlay) they are
+# ignored rather than refused by `extra="forbid"`.
+REMOVED_FIELDS = ("vignette", "kind")
+
+
+@dataclass
+class Dropped:
+    """What `_merge` ignored from the overlay as old data (D67)."""
+
+    ids: list[str] = field(default_factory=list)  # whole entries: removed device ids or role: vignette
+    fields: dict[str, list[str]] = field(default_factory=dict)  # device id → removed field names
+
+
+def _is_removed(device_id: str, patch: Mapping[str, Any]) -> bool:
+    return device_id in REMOVED_DEVICE_IDS or patch.get("role") in REMOVED_ROLES
+
+
+def _merge(base: dict, overlay: Mapping[str, dict[str, Any]], path: Path | str) -> tuple[dict, Dropped]:
     merged = dict(base)
     by_id = {d["id"]: dict(d) for d in merged.get("devices", [])}
     order = [d["id"] for d in merged.get("devices", [])]
-    for device_id, patch in overlay.items():
+    dropped = Dropped()
+    for device_id, raw_patch in overlay.items():
+        if _is_removed(device_id, raw_patch):
+            dropped.ids.append(device_id)
+            continue
+        patch = dict(raw_patch)
+        gone = [k for k in REMOVED_FIELDS if k in patch]
+        for key in gone:
+            patch.pop(key)
+        if gone:
+            dropped.fields[device_id] = gone
         if device_id in by_id:
             by_id[device_id].update(patch)
         elif "role" in patch and "account" in patch:
@@ -450,7 +495,7 @@ def _merge(base: dict, overlay: Mapping[str, dict[str, Any]], path: Path | str) 
                 "(a new device needs at least role and account). Remove it or fix the id."
             )
     merged["devices"] = [by_id[i] for i in order]
-    return merged
+    return merged, dropped
 
 
 def _apply_defaults(raw: dict) -> dict:
@@ -469,13 +514,14 @@ def load_registry(config_dir: Path = CONFIG_DIR, data: Path | None = None) -> Re
         overlay = OverlayFile.model_validate(_read_yaml(overlay_path) if overlay_path else {})
     except ValidationError as e:
         raise ConfigError(_explain(overlay_path, e)) from None
-    merged = _apply_defaults(_merge(raw, overlay.devices, overlay_path or base_path))
+    combined, dropped = _merge(raw, overlay.devices, overlay_path or base_path)
+    merged = _apply_defaults(combined)
     try:
         file = RegistryFile.model_validate(merged)
     except ValidationError as e:
         src = f"{base_path} + {overlay_path}" if overlay_path else str(base_path)
         raise ConfigError(_explain(src, e, merged)) from None
-    return Registry(file, overlay, overlay_path)
+    return Registry(file, overlay, overlay_path, dropped=dropped.ids, dropped_fields=dropped.fields)
 
 
 def save_overlay_patch(
@@ -488,9 +534,17 @@ def save_overlay_patch(
         )
     devices = {k: dict(v) for k, v in registry.overlay.devices.items()}
     devices[device_id] = {**devices.get(device_id, {}), **patch}
-    candidate = {"devices": devices}
     raw = _read_yaml(config_dir / "devices.yaml")
-    proposed = _apply_defaults(_merge(raw, devices, registry.overlay_path))
+    combined, dropped = _merge(raw, devices, registry.overlay_path)
+    # The first ops edit after the canopy-only deploy prunes the old data `_merge` ignored (D67), so the written
+    # overlay is exactly what the registry uses and the "Needs attention" line clears.
+    for gone in dropped.ids:
+        devices.pop(gone, None)
+    for kept, keys in dropped.fields.items():
+        for key in keys:
+            devices[kept].pop(key, None)
+    candidate = {"devices": devices}
+    proposed = _apply_defaults(combined)
     try:
         RegistryFile.model_validate(proposed)
     except ValidationError as e:
@@ -549,6 +603,10 @@ def overlay_diff(registry: Registry, config_dir: Path = CONFIG_DIR) -> OverlayDi
     expected: dict[str, dict] = {}
     appended: list[str] = []
     for device_id, patch in sorted(registry.overlay.devices.items()):
+        if device_id in registry.dropped:
+            continue  # old data the registry ignores (D67): never offered to git
+        ignored = set(registry.dropped_fields.get(device_id, ()))  # removed fields the registry ignores (D67)
+        patch = {k: v for k, v in patch.items() if k not in ignored}
         clean = {k: v for k, v in patch.items() if k not in NOT_FOR_GIT}
         if len(clean) != len(patch):
             left_out.append(device_id)

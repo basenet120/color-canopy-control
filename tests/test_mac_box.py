@@ -19,12 +19,13 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
+from conductor.anonymize import check_clean
+
 ROOT = Path(__file__).resolve().parent.parent
 MAC = ROOT / "deploy" / "mac"
 HELPER = MAC / "canopy-mac"
 RUNNER = MAC / "run-conductor.sh"
 EXAMPLE = MAC / "conductor.env.example"
-VENUE_EXAMPLE = ROOT / "deploy" / "venue" / "conductor.env.example"
 BASH = shutil.which("bash")
 
 pytestmark = pytest.mark.skipif(BASH is None, reason="needs bash")
@@ -39,17 +40,37 @@ def _active(text: str) -> dict[str, str]:
     return out
 
 
+def _stub_python(path: Path, calls: Path, exit_code: int = 0) -> Path:
+    """A stand-in for the checkout's Python: records how it was run (args, cwd, the data folder) and exits."""
+    path.write_text(
+        f'#!/bin/sh\necho "ARGS $* CWD $(pwd) DATA $CONDUCTOR_DATA_DIR" >> "{calls}"\n'
+        f'[ "$1 $2" = "-m conductor.preflight" ] && echo "preflight stub output"\nexit {exit_code}\n'
+    )
+    path.chmod(0o755)
+    return path
+
+
 @pytest.fixture
 def box(tmp_path: Path) -> dict:
     home = tmp_path / "home"
+    calls = tmp_path / "python-calls.txt"
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(tmp_path),
         "CANOPY_MAC_HOME": str(home / "ColorCanopy"),
         "CANOPY_MAC_AGENTS": str(tmp_path / "agents"),
         "CANOPY_MAC_LOG_DIR": str(tmp_path / "logs"),
+        # --check runs the checkout's `python -m conductor.preflight`; here a stub (the preflight itself is tested
+        # in-process by tests/test_canopy_only.py, never with the show box's settings exported)
+        "CANOPY_MAC_PYTHON": str(_stub_python(tmp_path / "stub-python", calls)),
     }
-    return {"tmp": tmp_path, "env": env, "home": home / "ColorCanopy", "agents": tmp_path / "agents"}
+    return {
+        "tmp": tmp_path,
+        "env": env,
+        "home": home / "ColorCanopy",
+        "agents": tmp_path / "agents",
+        "python_calls": calls,
+    }
 
 
 def run(cmd: list, env: dict, **kw) -> subprocess.CompletedProcess:
@@ -88,17 +109,45 @@ def test_example_is_the_live_show_box_with_no_secrets():
         assert unsafe not in values, unsafe
 
 
-def test_example_matches_the_venue_box_where_they_overlap():
-    venue = _active(VENUE_EXAMPLE.read_text())
-    mac = _active(EXAMPLE.read_text())
-    for key in (
-        "CONDUCTOR_MODE",
-        "HUBSPACE_LIVE",
-        "HUBSPACE_DEVICE_ALLOWLIST",
-        "HUBSPACE_LIVE_UNTIL",
-        "CONDUCTOR_ENV",
-    ):
-        assert mac[key] == venue[key], key
+def _documented(text: str) -> set[str]:
+    """Every KEY=... the file shows, set or commented out."""
+    return set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", text, flags=re.MULTILINE))
+
+
+ENV_ACCESS = re.compile(
+    r"""(?:environ(?:\.get)?|getenv|\benv(?:\.get)?)\s*[\[(]\s*["']([A-Z][A-Z0-9_]*)["']"""
+)
+PREFIXED = re.compile(r"""["']((?:CONDUCTOR|HUBSPACE|RAILWAY)_[A-Z0-9_]+)["']""")
+# Read by the image rather than by conductor/: the Dockerfile's CMD (PORT) and uvicorn (FORWARDED_ALLOW_IPS).
+IMAGE_VARIABLES = {"PORT", "FORWARDED_ALLOW_IPS"}
+
+
+def _variables_the_code_reads() -> set[str]:
+    names = set(IMAGE_VARIABLES)
+    for path in (ROOT / "conductor").rglob("*.py"):
+        text = path.read_text()
+        names |= set(ENV_ACCESS.findall(text)) | set(PREFIXED.findall(text))
+    return names
+
+
+def test_env_example_documents_every_variable_the_code_reads():
+    """Moved here from tests/test_deploy.py (D67): the show box's template names every variable, set or commented."""
+    read = _variables_the_code_reads()
+    assert {"CONDUCTOR_MODE", "HUBSPACE_LIVE", "CONDUCTOR_SECRET_KEY", "CONDUCTOR_ACCOUNT_CONNECT"} <= read
+    missing = read - _documented(EXAMPLE.read_text())
+    assert not missing, f"document these in {EXAMPLE.name}: {sorted(missing)}"
+
+
+def test_deploy_files_hold_nothing_secret_or_identifying():
+    """Moved here from tests/test_deploy.py (D67): nothing under deploy/ holds a key, a password or an identifier."""
+    files = [p for p in (ROOT / "deploy").rglob("*") if p.is_file()]
+    assert HELPER in files and EXAMPLE in files
+    fernet = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}=(?![A-Za-z0-9_=-])")
+    for path in files:
+        text = path.read_text()
+        assert check_clean(text) == [], path
+        assert not fernet.search(text), f"{path} contains something shaped like a Fernet key"
+        assert not re.search(r"^(CONDUCTOR_BASIC_AUTH|CONDUCTOR_SECRET_KEY)=\S", text, re.MULTILINE), path
 
 
 # ---- install --------------------------------------------------------------------------------------------------------
@@ -156,6 +205,30 @@ def test_runner_check_prints_no_secrets(box):
     assert values["CONDUCTOR_BASIC_AUTH"].split(":", 1)[1] not in result.stdout
     assert "CONDUCTOR_MODE             live" in result.stdout
     assert f"data       {box['home'] / 'data'}" in result.stdout
+
+
+def test_runner_check_runs_the_preflight_from_the_checkout_over_the_pinned_data_folder(box):
+    install(box)
+    box["python_calls"].unlink()  # install --no-load ran --check once already
+    result = run([RUNNER, "--check"], box["env"])
+    assert result.returncode == 0, result.stderr
+    assert "preflight stub output" in result.stdout
+    calls = box["python_calls"].read_text().splitlines()
+    assert calls == [f"ARGS -m conductor.preflight CWD {ROOT} DATA {box['home'] / 'data'}"]
+
+
+def test_runner_check_stops_when_the_preflight_fails_and_install_goes_no_further(box):
+    install(box)
+    failing = _stub_python(box["tmp"] / "failing-python", box["python_calls"], exit_code=1)
+    env = {**box["env"], "CANOPY_MAC_PYTHON": str(failing)}
+    result = run([RUNNER, "--check"], env)
+    assert result.returncode != 0
+    assert "conductor.preflight" in result.stderr and "Nothing was restarted" in result.stderr
+    # canopy-mac install runs --check before it writes the agents, removes the hold or reloads launchd
+    (box["agents"] / "com.colorcanopy.conductor.plist").unlink()
+    again = run([HELPER, "install", "--no-load"], env)
+    assert again.returncode != 0
+    assert not (box["agents"] / "com.colorcanopy.conductor.plist").exists()
 
 
 def test_runner_refuses_missing_settings(box):

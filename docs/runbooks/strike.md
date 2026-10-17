@@ -17,21 +17,22 @@ accounts and clear the box.
 
 - [ ] **Telemetry for the case study** (the command log: times, results, readbacks; no passwords or sign-ins):
       ```
-      sudo canopy-backup --telemetry-only --to /media/<usb stick>
+      cp -R ~/Library/Application\ Support/ColorCanopy/data/telemetry /Volumes/<usb stick>/canopy-telemetry
       ```
       The case-study permission is still pending: **publish nothing** and share it with no one outside the team
       until it exists. It contains Hubspace device ids; anonymize before any use outside the team.
 - [ ] **Full data backup** (registry overlay, calibration, slot hashes, telemetry; the sign-ins inside are
-      encrypted and stop working in step 3): `sudo canopy-backup --to /media/<usb stick>`. The stick goes to Alon.
+      encrypted and stop working in step 3): `canopy-mac backup`, then copy the newest file from
+      `~/Library/Application Support/ColorCanopy/backups/` to the stick. The stick goes to Alon.
 - [ ] Bench results worth keeping: `/ops/bench/` → **Copy anonymized JSON** for each.
 - [ ] `/ops` → Pages → **Download ops edits** (the overlay plus a diff against `config/devices.yaml` without real
       ids). It goes to Alon with the stick; the diff part is what gets committed to git.
 
 ## 3. Sign the box out (10 min)
 
-- [ ] `/ops` → **Set-up devices** → **Revoke** the kiosk and every tablet.
+- [ ] `/ops` → **Set-up devices** → **Revoke** the kiosk iPad and every tester phone.
 - [ ] `/ops/accounts/` → **Disconnect** each account: this deletes the box's stored sign-in for it.
-- [ ] Stop the Conductor for good: `sudo canopy-stop --yes`. The lights keep their look until switched off.
+- [ ] Stop the Conductor for good: `canopy-mac stop --yes`. The lights keep their look until switched off.
 - [ ] Hubspace app → each show account → **Sign out of all other devices** (now it's what we want: it ends every
       other sign-in), and change the account passwords if the accounts stay with us.
 
@@ -39,21 +40,21 @@ accounts and clear the box.
 
 Per Home Depot's instructions for the hardware (their kits, their call):
 - [ ] Switch the canopy off: the app's **Canopy** group → off, or VWBD switches the modules off as they de-rig.
-- [ ] Hubspace app → canopy account → remove each module and spare kit from the account. Same for the vignette
-      devices on their accounts.
+- [ ] Hubspace app → canopy account → remove each module and spare kit from the account.
 - [ ] Factory-reset each controller if Home Depot asks: hold power about 10 s until three red flashes.
 - [ ] Hand the QR cards back with the kits.
 
 ## 5. Clear the box (10 min)
 
+On the show box (the Mac mini), once step 2's copies are safe off the box:
 ```
-sudo systemctl disable --now canopy-watchdog.timer canopy-backup.timer canopy-conductor.service
-sudo docker rm -f canopy-conductor
-sudo docker volume rm canopy-data
-sudo shred -u /etc/canopy/conductor.env
-sudo rm -rf /var/backups/canopy/*
-sudo tailscale logout
+canopy-mac backup                      # one last one; copy it off the box with the others
+canopy-mac stop --yes
+canopy-mac uninstall                   # removes the LaunchAgents
+rm -rf ~/Library/Application\ Support/ColorCanopy    # settings (the ops login, the key), sign-ins, data, backups
+tailscale logout                       # if Tailscale was used
 ```
+(`mac-show-box.md` §7. The data folder holds the backups too: delete it only after step 2's copies are safe.)
 - [ ] Remove the box from the Tailscale admin console.
 - [ ] Delete the backups on the USB stick once the case-study data and the overlay are kept safely elsewhere (Alon's
       call); the telemetry export stays until the case-study decision.
@@ -62,6 +63,6 @@ sudo tailscale logout
 ## 6. Return the hardware
 
 - [ ] Kits and spares to Home Depot / VWBD as agreed, dead kits labelled.
-- [ ] The box, the touchscreen, the tablets (Guided Access off), the router, the UPS, the staff phones (turn app
+- [ ] The box, the guest iPad (Guided Access off), the router, the UPS, the staff phones (turn app
       updates back on).
 - [ ] Update `docs/STATUS.md`: strike done, where the telemetry and backups are.

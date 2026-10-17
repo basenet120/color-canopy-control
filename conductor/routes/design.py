@@ -22,7 +22,7 @@ are 2-D designs now (D63), so it asks the Conductor for the design instead and p
     modules-first scenes, so the Studio opens those at module level).
 
 It reads config only: no engine, no device, no registry (a position draws the design whether or not a device is
-registered there). Ops only: the auth middleware already keeps kiosk, tester and vignette out of /api/canopy/*.
+registered there). Ops only: the auth middleware already keeps kiosk and tester out of /api/canopy/*.
 """
 
 from __future__ import annotations
