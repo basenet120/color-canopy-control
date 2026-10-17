@@ -25,7 +25,6 @@ import inspect
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from pathlib import Path
 from typing import Any
 
 from conductor import canopy_view
@@ -33,7 +32,7 @@ from conductor.clock import Clock
 from conductor.engine_api import CanopyPhase, CanopyState, ModeRefused, PlanError
 from conductor.gate import Purpose
 from conductor.routes import kiosk as K
-from conductor.scenes import Scene, SceneCatalog, load_scenes
+from conductor.scenes import Scene, SceneCatalog
 from conductor.show import registered_canopy_ids
 
 log = logging.getLogger(__name__)
@@ -509,7 +508,9 @@ class GuestPanel:
         return panel
 
     def scenes(self) -> SceneCatalog:
-        return load_scenes(Path(self.services.config_dir))
+        from conductor.looks.live import live_trio  # the live catalog (D68): approved or published
+
+        return live_trio(self.services).scenes
 
     async def target(self) -> EngineTarget:
         """The one target: the canopy engine, on every runtime (D67)."""

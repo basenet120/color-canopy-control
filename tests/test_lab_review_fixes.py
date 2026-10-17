@@ -243,21 +243,28 @@ def test_the_lab_names_the_reached_colours_in_stop_order():
 
 
 # ---- the T1 lock (findings: untested on save; a rename refused with a false sentence) ----------------------------------
-def _locked_golden(lab, scene_id):
-    if scene_id != "golden-hour":
-        return {"locked": False, "simulated": False, "slot": None, "positions": [], "sentence": None}
-    return {
-        "locked": True,
-        "simulated": False,
-        "slot": "custom-3",
-        "positions": ["r0c0"],
-        "sentence": f"Golden Hour: {P.T1_LOCKED}.",
-    }
+def _app_painted_golden(monkeypatch):
+    """Golden Hour's custom-3 hand-painted in the app on Module 1 (the app lock, D68 §2.6.0); nothing else recorded."""
+    real = P.slot_records
+
+    def records(lab, slot):
+        api, app, total = real(lab, slot)
+        if slot != "custom-3":
+            return api, app, total
+        entry = lab.services.registry.get("canopy-r0c0")
+        return [], [entry], total
+
+    monkeypatch.setattr(P, "slot_records", records)
 
 
 def test_the_t1_lock_refuses_a_save_naming_the_field(app_client, monkeypatch):
-    monkeypatch.setattr(P, "t1_lock", _locked_golden)
-    locked = {"detail": f"Golden Hour: {P.T1_LOCKED}.", "field": "palette"}
+    _app_painted_golden(monkeypatch)
+    sentence = (
+        "Golden Hour's slot is hand-painted in the Hubspace app on 1 module (Module 1); publishing a new design would "
+        "make the iPad describe colours the lights don't show. Repaint it in the app and record it on the module "
+        "page's Slots tab first, or publish only its brightness, copy or timing."
+    )
+    locked = {"detail": sentence, "field": "palette"}
     r = route_save(app_client, {"golden-hour": pink_json()})
     assert r.status_code == 409 and r.json() == locked
     assert r.headers["cache-control"] == "no-store"
@@ -286,7 +293,7 @@ def test_the_t1_lock_refuses_a_save_naming_the_field(app_client, monkeypatch):
 def test_the_t1_lock_and_needs_slot_repaint_agree(tmp_path, case):
     from test_lab_preview import _commissioned, make_lab
 
-    lab = make_lab(tmp_path, simulated=False, registry=_commissioned())
+    lab = make_lab(tmp_path, simulated=False, registry=_commissioned(origin="app"))
     data = D.seed_draft(TRIO, "golden-hour").model_dump(mode="json")
     palette = data["palette"]
     if case == "rename":
@@ -309,7 +316,7 @@ def test_the_t1_lock_and_needs_slot_repaint_agree(tmp_path, case):
     draft = D.SceneDraft.model_validate(data)
     repaint = D.draft_changes(TRIO, draft, canopy=lab.canopy)["needs_slot_repaint"]
     try:
-        P.check_t1_lock(lab, draft)
+        P.check_app_lock(lab, draft)
         refused = False
     except P.T1Locked:
         refused = True

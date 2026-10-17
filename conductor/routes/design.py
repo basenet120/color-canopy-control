@@ -48,7 +48,17 @@ _SLOT = "custom-3"  # any slot: only the frame's entries matter to the per-head 
 
 
 def _context(services: Any) -> CompileContext:
-    return CompileContext(registry=[], capabilities={}, config_dir=services.config_dir)
+    """The design context over the show's live looks (D68: approved or published), read once per request."""
+    from conductor.looks.live import live_trio
+
+    trio = live_trio(services)
+    return CompileContext(
+        registry=[],
+        capabilities={},
+        modes=trio.modes,
+        recipes=trio.recipes,
+        config_dir=services.config_dir,
+    )
 
 
 def _design_canvas(mode: Any) -> tuple[Any, str | None]:

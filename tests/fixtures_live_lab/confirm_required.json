@@ -1,0 +1,15 @@
+{
+  "detail": "Publish “Client Oct 22 v3 – warmer sunset” to the show, replacing “Client Oct 22 v2”: Golden Hour changes. The canopy shows it now on 2 modules (Module 1, Module 2) and after every restart.",
+  "confirm_required": true,
+  "confirm": "Publish “Client Oct 22 v3 – warmer sunset” to the show, replacing “Client Oct 22 v2”: Golden Hour changes. The canopy shows it now on 2 modules (Module 1, Module 2) and after every restart.",
+  "cost": "sends 2 writes now (one per module); no slot repaint",
+  "replaces": {"id": "p0002", "name": "Client Oct 22 v2"},
+  "changes": [
+    {"scene": "golden-hour", "name": "Golden Hour", "what": ["palette", "layout"], "needs_d59": true, "to": "published"}
+  ],
+  "repaint": [],
+  "ends_trial": false,
+  "show_offer": null,
+  "notes": ["The canopy is off (guest power) — publishing doesn't turn it on."],
+  "warnings": ["Golden Hour: reads as stripes at module level (D63)"]
+}

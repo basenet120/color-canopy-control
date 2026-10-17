@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 from conductor.config import ConductorSettings, ConfigError, RecipesFile, _explain, load_recipes
 from conductor.looks import field as F
 from conductor.looks import scene_rules
+from conductor.looks.live import ConfigTrio
 from conductor.looks.schema import (
     MOTION_PHRASES,
     MOTION_WORDS,
@@ -190,18 +191,7 @@ with warnings.catch_warnings():
 
 
 # ---- the trio and its problems ---------------------------------------------------------------------------------------
-@dataclass(frozen=True)
-class ConfigTrio:
-    scenes: SceneCatalog
-    modes: ModesFile
-    recipes: RecipesFile
-
-    def dump(self) -> dict:
-        return {
-            "scenes": self.scenes.model_dump(mode="json"),
-            "modes": self.modes.model_dump(mode="json"),
-            "recipes": self.recipes.model_dump(mode="json"),
-        }
+# ConfigTrio lives with the show's live looks (conductor/looks/live.py, D68); re-exported here for the Lab.
 
 
 @dataclass(frozen=True)
