@@ -50,6 +50,7 @@ const CAPTIONS = {
   canvas: "Painted · all 270 lights",
   modules: "Module level · one colour per strand",
   strand: "Strand · one colour on every strand",
+  stepped: "Module level, stepped · one colour per strand, a step at a time",
 };
 const HEX6 = /^#[0-9a-f]{6}$/i;
 const rgbObj = (a) => ({ r: a[0], g: a[1], b: a[2] });
@@ -186,13 +187,39 @@ function spillOf(heads, colours, width) {
  * `{error}` (lab.js then paints every head UNLIT and shows the reason).
  * - canvas / modules: demo-model's `designPaint(preview.design, 'heads' | 'modules')`;
  * - strand: every head the strand tier's solid;
- * - today / showBox: `paintFor(lit.modules[pos], k)` per head (the guest panel's rule); dark, off and unknown → UNLIT.
+ * - today / showBox: `paintFor(lit.modules[pos], k)` per head (the guest panel's rule); dark, off and unknown → UNLIT;
+ * - stepped (Slice C): `step` = {colours: {pos: "#RRGGBB"}, positions: [pos] | null} — one of the SERVER's compiled
+ *   steps (PreviewJSON.stepped.steps[i].colours), each module its step colour through `designPaint(…, 'modules')`;
+ *   a position outside `positions` (the show box's two kits) or with no colour is UNLIT;
+ * - `landed` (a Set of positions: the ripple preview): any view, with the modules not landed yet UNLIT.
  */
-export function viewPainter(preview, view, { heads = CANOPY.heads, width = CANOPY.width } = {}) {
+export function viewPainter(preview, view, { heads = CANOPY.heads, width = CANOPY.width, step = null, landed = null } = {}) {
+  const painter = basePainter(preview, view, { heads, width, step });
+  if (painter.error || !(landed instanceof Set)) return painter;
+  const colours = heads.map((h) => (landed.has(h.module) ? painter.head(h) : UNLIT_RGB));
+  const byKey = new Map(heads.map((h, i) => [headKey(h.module, h.x, h.y), colours[i]]));
+  return { ...painter, head: (h) => byKey.get(headKey(h.module, h.x, h.y)) || UNLIT_RGB, spill: spillOf(heads, colours, width) };
+}
+
+function steppedPainter(preview, step, heads, width) {
+  if (!step || !step.colours || typeof step.colours !== "object") return { error: "There is no step to draw." };
+  const lit = Array.isArray(step.positions) ? new Set(step.positions) : null;
+  const modules = [...new Set(heads.map((h) => h.module))].map((pos) => {
+    const hex = step.colours[pos];
+    const on = HEX6.test(String(hex || "")) && (!lit || lit.has(pos));
+    return { module: pos, rgb: rgbFromHex(on ? hex : UNLIT) };
+  });
+  const paint = designPaint({ ladder: ["stepped"], modules }, "modules", heads, width);
+  if (!paint) return { error: "This step can't be drawn." };
+  return { head: paint.head, spill: paint.spill, level: preview.brightness, caption: CAPTIONS.stepped };
+}
+
+function basePainter(preview, view, { heads, width, step }) {
   if (!preview || typeof preview !== "object") return { error: "Loading the preview…" };
   if (preview.error) return { error: String(preview.error) };
   const design = preview.design;
   const caption = tierCaption(view, preview);
+  if (view === "stepped") return steppedPainter(preview, step, heads, width);
   if (view === "canvas" || view === "modules") {
     if (!design) return { error: "The server sent no design for this draft." };
     if (design.error) return { error: String(design.error) };
@@ -973,4 +1000,253 @@ export function trialStageNote(view, preview, trial, sceneId) {
   const today = todayOf(view, preview);
   if (view !== "canvas" && !(today && today.heads === "approved")) return "";
   return `During the try-on the lights show the tried draft ${TIER_PHRASE[trial.tier] || TIER_PHRASE.modules}, not this picture.`;
+}
+
+// ---- motion (Slice C: PLAN §7) ---------------------------------------------------------------------------------------
+// Stepped waves (D65) and the ripple (D64), on the screen only. Every step and every pace comes from the server
+// (PreviewJSON.stepped: the real compiler's steps, and `pace`, the ProgramRunner's own step for nine modules and for the
+// show box's kits); nothing here estimates a pace or mixes a colour. On the real lights stepped looks stay refused until
+// Gate R passes and Alon sets motion.stepped.live_enabled, and the ripple stays off until he signs it off (D64): the Lab
+// says both and has no control for either. The timeline follows conductor/sequence.py: step n (n = 0 … count − 1, step 0
+// is the still look) shows steps[n mod cycle] from n × step, count = ⌊run_s / step⌋, then the still look holds.
+
+export const STEP_S_STEP = 0.5; // step time and run length move in half seconds
+export const FAST_FACTOR = 4; // the optional fast preview: clearly labelled as sped up
+export const RIPPLE_STAGGER_MAX_S = 1.2; // RIPPLE_SPAN_MAX_S 2.4 / (RIPPLE_MAX_WAVES 3 − 1), conductor/config.py
+export const RIPPLE_STAGGER_STEP_S = 0.1;
+export const RIPPLE_DEFAULT_S = 0.6;
+export const RIPPLE_HOLD_S = 1.5; // the landed look stays this long, then the stage goes back to its view
+export const STEPPED_DEFAULT_LIMITS = Object.freeze({ steps_per_cycle: [3, 12], step_s: [4, 12], run_s_max: 180 });
+export const MOTION_COPY = Object.freeze({
+  live: "Stepped motion is off on the real lights until Gate R passes; Alon sets motion.stepped.live_enabled",
+  liveOn: "Stepped motion is on for the real lights (motion.stepped.live_enabled is set); only Alon changes that, never the Lab.",
+  ripple: "Screen preview only — the canopy's ripple is off (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)",
+  effects: "Effects — not enabled: no code has passed the bench (06 #4)",
+  effectsOn: "Effects — the Lab doesn't offer Hubspace's on-device effects; enabling a benched code is Alon's call (06 #4)",
+  effectsNote: "Hubspace's on-device effects (motionEffect, brightnessEffect) on a custom slot stay off until a code passes the bench.",
+  fast: `Fast preview: ${FAST_FACTOR}× faster than the lights would step — not the real pace`,
+  noSteps: "The server sent no stepped steps for this draft, so there is nothing to play (this server may not have the stepped preview yet).",
+  waiting: "Waiting for the server's steps…",
+  noRings: "The server sent no ripple rings for this draft, so the ripple can't be previewed here.",
+  idle: "This is the idle look: the canopy's resting look stays still, so it never steps.",
+  none: "This scene has no stepped rung: it stays still at module level. Adding one is a modes.yaml change for Alon (D65).",
+  noDraft: "This draft carries no stepped timing; Revert to approved brings the approved timing back.",
+  design: "Moves the scene's own layout (the same design as every rung): change it under Layout.",
+  direction: "Forward flows the way the layout reads; reverse flows back.",
+  cycle: "Steps per cycle: how many steps it takes the design to move by one full repeat.",
+});
+const EPS = 1e-6;
+const COUNT_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+
+/** 7.5 → "7.5", 6 → "6" (whole milliseconds, as the runner rounds). */
+export function fmtS(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "";
+}
+
+const countWord = (n) => COUNT_WORDS[n] || String(n);
+const capital = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+const positive = (v) => (v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+const pairOf = (v, d) => (Array.isArray(v) && v.length === 2 && v.every((x) => Number.isFinite(Number(x))) ? v.map(Number) : [...d]);
+const snap = (v, step) => Math.round(Number(v) / step) * step;
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** CatalogJSON.limits.stepped with the schema's defaults where it says nothing: {steps_per_cycle, step_s, run_s_max}. */
+export function steppedLimits(limits) {
+  const s = (limits && limits.stepped) || {};
+  return {
+    steps_per_cycle: pairOf(s.steps_per_cycle, STEPPED_DEFAULT_LIMITS.steps_per_cycle),
+    step_s: pairOf(s.step_s, STEPPED_DEFAULT_LIMITS.step_s),
+    run_s_max: positive(s.run_s_max) || STEPPED_DEFAULT_LIMITS.run_s_max,
+  };
+}
+
+/** The Motion section's controls for a scene (a CatalogJSON scene) and its working draft: {editable, reason} plus, when
+ * editable, the direction and the three number controls with their bounds (SteppedTechnique + show._check_stepped). */
+export function steppedControls(scene, draft, limits) {
+  if (!scene || !scene.stepped) return { editable: false, reason: scene && scene.idle ? MOTION_COPY.idle : MOTION_COPY.none };
+  const s = draft && draft.stepped;
+  if (!s) return { editable: false, reason: MOTION_COPY.noDraft };
+  const b = steppedLimits(limits);
+  const stepS = Number(s.step_s);
+  return {
+    editable: true,
+    reason: "",
+    direction: s.direction === "reverse" ? "reverse" : "forward",
+    steps: { min: b.steps_per_cycle[0], max: b.steps_per_cycle[1], step: 1, value: Number(s.steps_per_cycle) },
+    step_s: { min: b.step_s[0], max: b.step_s[1], step: STEP_S_STEP, value: stepS },
+    run_s: { min: Math.min(stepS, b.run_s_max), max: b.run_s_max, step: STEP_S_STEP, value: Number(s.run_s) },
+    runLimit: `Run length: ${fmtS(b.run_s_max)} s at most (a run ends within 180 s and before the kiosk's idle return, kiosk.idle_return_s), and at least one step.`,
+  };
+}
+
+/** A new draft with its stepped timing patched and held inside the bounds: whole steps, half-second times, and a run
+ * never shorter than one step (raising the step time past the run raises the run with it). */
+export function setStepped(draft, patch, limits) {
+  if (!draft || !draft.stepped) return draft;
+  const d = clone(draft);
+  const b = steppedLimits(limits);
+  const s = { ...d.stepped, ...patch };
+  s.direction = s.direction === "reverse" ? "reverse" : "forward";
+  s.steps_per_cycle = clampTo(Math.round(Number(s.steps_per_cycle) || b.steps_per_cycle[0]), ...b.steps_per_cycle);
+  s.step_s = clampTo(snap(Number(s.step_s) || b.step_s[0], STEP_S_STEP), ...b.step_s);
+  s.run_s = clampTo(snap(Number(s.run_s) || s.step_s, STEP_S_STEP), s.step_s, Math.max(s.step_s, b.run_s_max));
+  d.stepped = s;
+  return d;
+}
+
+/** PreviewJSON.stepped, checked: {steps, cycle, stepsPerCycle, designStepS, runS, direction, moving, pace: {nine, today,
+ * todayModules}, liveSentence}, or {error} (null on a server without the stepped preview; missing or broken steps). */
+export function steppedOf(preview) {
+  if (!preview || typeof preview !== "object") return { error: MOTION_COPY.waiting };
+  const s = preview.stepped;
+  if (!s || typeof s !== "object") return { error: preview.fromCatalog ? MOTION_COPY.waiting : MOTION_COPY.noSteps };
+  let steps = (Array.isArray(s.steps) ? s.steps : []).filter((st) => st && st.colours && typeof st.colours === "object");
+  if (!steps.length) return { error: MOTION_COPY.noSteps };
+  if (steps.every((st) => Number.isFinite(Number(st.index)))) steps = [...steps].sort((a, b) => Number(a.index) - Number(b.index));
+  const pace = s.pace && typeof s.pace === "object" ? s.pace : {};
+  return {
+    steps,
+    cycle: steps.length,
+    stepsPerCycle: positive(s.steps_per_cycle) || steps.length,
+    designStepS: positive(s.design_step_s),
+    runS: positive(s.run_s),
+    direction: s.direction === "reverse" ? "reverse" : "forward",
+    moving: typeof s.moving_feature === "string" && s.moving_feature ? s.moving_feature : null,
+    pace: { nine: positive(pace.nine), today: positive(pace.today), todayModules: positive(pace.today_modules) },
+    liveSentence: typeof s.live_sentence === "string" && s.live_sentence ? s.live_sentence : null,
+  };
+}
+
+/** The pace toggle: "Nine modules (7.5 s)" and "Show box today (two modules, 6 s)", from the server's numbers only. */
+export function paceOptions(st) {
+  if (!st || st.error) return [];
+  const out = [];
+  if (st.pace.nine) out.push({ key: "nine", stepS: st.pace.nine, label: `Nine modules (${fmtS(st.pace.nine)} s)` });
+  if (st.pace.today) {
+    const n = st.pace.todayModules;
+    const mods = n ? `${countWord(n)} module${n === 1 ? "" : "s"}, ` : "";
+    out.push({ key: "today", stepS: st.pace.today, label: `Show box today (${mods}${fmtS(st.pace.today)} s)` });
+  }
+  return out;
+}
+
+/** The run at a pace (`nine` | `today`; the first the server sent when that one is missing): {pace, label, stepS,
+ * count, cycle, runS, totalS} or {error}. count = ⌊run_s / step⌋, as ProgramRunner.count_for. */
+export function stepTimeline(st, paceKey) {
+  if (!st || st.error) return { error: (st && st.error) || MOTION_COPY.noSteps };
+  const options = paceOptions(st);
+  const opt = options.find((o) => o.key === paceKey) || options[0];
+  if (!opt) return { error: "The server sent no pace for these steps, so they can't be played at the real pace." };
+  if (!st.runS) return { pace: opt.key, error: "The server sent no run length for these steps, so they can't be played." };
+  const count = Math.floor(st.runS / opt.stepS + EPS);
+  if (count < 1) {
+    return { pace: opt.key, error: `Its run (${fmtS(st.runS)} s) is shorter than one ${fmtS(opt.stepS)} s step, so the lights would hold still.` };
+  }
+  return { pace: opt.key, label: opt.label, stepS: opt.stepS, count, cycle: st.cycle, runS: st.runS, totalS: count * opt.stepS };
+}
+
+/** Where the run is `elapsedS` seconds in (the lights' seconds): {n, index (into steps), done, nextAtS}; after the
+ * last step {done: true, index: 0}: the still look (step 0's colours) holds. Null for a timeline with an error. */
+export function stepAt(tl, elapsedS) {
+  if (!tl || tl.error) return null;
+  const e = Math.max(0, Number(elapsedS) || 0);
+  const n = Math.floor(e / tl.stepS + EPS);
+  if (n >= tl.count) return { n: tl.count, index: 0, done: true, nextAtS: null };
+  return { n, index: n % tl.cycle, done: false, nextAtS: (n + 1) * tl.stepS };
+}
+
+/** The step counter: "12 steps of 7.5 s (90 s), then the still look holds" before it plays, "Step 3 of 12 · every 7.5 s"
+ * (· paused, · sped up 4×) while it does, "Run over after 12 steps (90 s): the still look holds" at the end. */
+export function stepCounter(tl, at, { state = "idle", fast = false } = {}) {
+  if (!tl) return "";
+  if (tl.error) return tl.error;
+  if (state === "idle" || !at) return `${plural(tl.count, "step")} of ${fmtS(tl.stepS)} s (${fmtS(tl.totalS)} s), then the still look holds`;
+  if (at.done) return `Run over after ${plural(tl.count, "step")} (${fmtS(tl.totalS)} s): the still look holds`;
+  const parts = [`Step ${at.n + 1} of ${tl.count}`, `every ${fmtS(tl.stepS)} s`];
+  if (state === "paused") parts.push("paused");
+  if (fast) parts.push(`sped up ${FAST_FACTOR}×`);
+  return parts.join(" · ");
+}
+
+/** The moving sentence, only while the steps play (the schema-checked moving_feature); "" otherwise. */
+export function movingLine(st, state, at) {
+  if (!st || st.error || state !== "playing" || !at || at.done) return "";
+  return st.moving || "";
+}
+
+/** The modules a step lights at a pace: the show box's driven kits for `today` (the rest dark), every module for
+ * `nine`. → {positions: [pos] | null, note}. */
+export function stepPositions(preview, paceKey) {
+  if (paceKey !== "today") return { positions: null, note: "" };
+  const box = preview && preview.show_box_today;
+  const driven = box && box.positions && Array.isArray(box.positions.driven) ? box.positions.driven : null;
+  if (!driven) return { positions: null, note: "Which modules the show box drives isn't in this preview, so every module is drawn." };
+  return { positions: driven, note: `Paced as the show box today: ${moduleList(driven)} step, the rest stay dark (stepped stays off on the real lights).` };
+}
+
+/** One line on what the draft's timing comes to at each pace, once the server has answered for exactly this timing. */
+export function steppedRunLine(draftStepped, st) {
+  if (!draftStepped || !st || st.error) return "";
+  const same = st.runS === Number(draftStepped.run_s) && (st.designStepS === null || st.designStepS === Number(draftStepped.step_s));
+  if (!same) return "";
+  const parts = paceOptions(st).map((o) => {
+    const tl = stepTimeline(st, o.key);
+    return tl.error ? `${o.label}: holds still` : `${o.label}: ${plural(tl.count, "step")}`;
+  });
+  return parts.length ? `A ${fmtS(st.runS)} s run — ${parts.join(" · ")}; then the still look holds.` : "";
+}
+
+/** The live line: the Lab never flips motion.stepped.live_enabled, it only says where it stands. */
+export function steppedLiveLine(live, st = null) {
+  const on = !!(live && live.stepped_live_enabled === true) && !(st && !st.error && st.liveSentence);
+  return on ? MOTION_COPY.liveOn : MOTION_COPY.live;
+}
+
+/** The ripple preview's label: screen only, with the canopy's own setting (the Lab never changes it). */
+export function rippleLabel(live) {
+  const v = live ? Number(live.ripple_stagger_s) : 0;
+  if (!live || !Number.isFinite(v) || v === 0) return MOTION_COPY.ripple;
+  return `Screen preview only — the canopy's ripple is set to kiosk.ripple_stagger_s: ${fmtS(v)} s (D64); the Lab never changes it`;
+}
+
+export function effectsLine(live) {
+  return live && live.effects_enabled ? MOTION_COPY.effectsOn : MOTION_COPY.effects;
+}
+
+/** A stagger the slider can hold: 0–1.2 s in tenths. */
+export function clampStagger(v) {
+  if (v === null || v === undefined || v === "" || !Number.isFinite(Number(v))) return RIPPLE_DEFAULT_S;
+  return Math.round(clampTo(Number(v), 0, RIPPLE_STAGGER_MAX_S) * 10) / 10;
+}
+
+/** PreviewJSON.rings (the server's `field.bands` of the design, lowest t first) at a stagger: ring i lands at
+ * i × stagger. → {stagger, rings: [{ring, at, positions}], spanS}, or null with no rings. */
+export function rippleSchedule(rings, staggerS) {
+  if (!Array.isArray(rings)) return null;
+  const list = rings.filter((r) => Array.isArray(r) && r.length).map((r) => r.map(String));
+  if (!list.length) return null;
+  const stagger = clampStagger(staggerS);
+  const at = (i) => Math.round(i * stagger * 1000) / 1000;
+  return { stagger, rings: list.map((positions, i) => ({ ring: i, at: at(i), positions })), spanS: at(list.length - 1) };
+}
+
+/** The positions landed `elapsedS` seconds after the first ring. */
+export function rippleLanded(schedule, elapsedS) {
+  const out = new Set();
+  if (!schedule) return out;
+  const e = Number(elapsedS) || 0;
+  for (const r of schedule.rings) if (r.at <= e + EPS) r.positions.forEach((p) => out.add(p));
+  return out;
+}
+
+/** "Three rings, 0.6 s apart: the last lands 1.2 s after the first" (0 s: all at once, as the canopy does today). */
+export function rippleLine(schedule) {
+  if (!schedule) return MOTION_COPY.noRings;
+  const n = schedule.rings.length;
+  if (n === 1) return "One ring: every module lands together.";
+  const rings = `${capital(countWord(n))} rings`;
+  if (schedule.stagger === 0) return `${rings}, 0 s apart: every module lands at once, as the canopy does today.`;
+  return `${rings}, ${fmtS(schedule.stagger)} s apart: the last lands ${fmtS(schedule.spanS)} s after the first.`;
 }

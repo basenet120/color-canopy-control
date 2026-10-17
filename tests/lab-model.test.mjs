@@ -795,3 +795,189 @@ test("during a try-on the painted picture and the slots' approved 'today' say th
   assert.equal(M.draftState(golden(), golden(), t), "in try-on");
   assert.equal(M.stageState("today", slots, "in try-on"), "in try-on");
 });
+
+// ---- motion (Slice C, PLAN §7: PreviewJSON.stepped and .rings) --------------------------------------------------------
+
+const STEPPED_LIVE_OFF = "stepped looks are off on live hardware until the stepped rehearsal (Gate R) passes";
+// PLAN §7's stepped_preview: six steps, each one colour per position (step 0 = the hold = design.modules)
+function steppedJSON(extra = {}) {
+  const d = design();
+  const steps = Array.from({ length: 6 }, (_, n) => ({
+    index: n,
+    colours: Object.fromEntries(d.modules.map((m, i) => [m.module, hex(...d.modules[(i + n) % 9].rgb)])),
+  }));
+  return {
+    steps,
+    design_step_s: 6.0,
+    steps_per_cycle: 6,
+    run_s: 90.0,
+    direction: "forward",
+    moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the sunset's colours move out from one edge.",
+    pace: { nine: 7.5, today: 6.0, today_modules: 2 },
+    live_sentence: STEPPED_LIVE_OFF,
+    ...extra,
+  };
+}
+const RINGS = [["r0c0", "r1c0", "r2c0"], ["r0c1", "r1c1", "r2c1"], ["r0c2", "r1c2", "r2c2"]];
+const CATALOG_LIMITS = { palette: [2, 6], stepped: { steps_per_cycle: [3, 12], step_s: [4, 12], run_s_max: 180 } };
+const SCENE_GOLDEN = { id: "golden-hour", stepped: true, idle: false, painted: true };
+
+test("stepTimeline: the server's pace, ⌊run_s / step⌋ steps, then the still look holds", () => {
+  const st = M.steppedOf(preview({ stepped: steppedJSON() }));
+  assert.ok(!st.error);
+  const nine = M.stepTimeline(st, "nine");
+  assert.deepEqual([nine.stepS, nine.count, nine.cycle, nine.totalS, nine.label], [7.5, 12, 6, 90, "Nine modules (7.5 s)"]);
+  const today = M.stepTimeline(st, "today");
+  assert.deepEqual([today.stepS, today.count, today.label], [6, 15, "Show box today (two modules, 6 s)"]);
+  // step n shows steps[n mod cycle] from n × step; at the run's end the hold (step 0's colours)
+  assert.deepEqual(M.stepAt(nine, 0), { n: 0, index: 0, done: false, nextAtS: 7.5 });
+  assert.equal(M.stepAt(nine, 7.49).n, 0);
+  assert.equal(M.stepAt(nine, 7.5).n, 1);
+  assert.equal(M.stepAt(nine, 6 * 7.5).index, 0, "a new cycle starts at step 6");
+  assert.equal(M.stepAt(nine, 7 * 7.5 + 1).index, 1);
+  assert.deepEqual(M.stepAt(nine, 90), { n: 12, index: 0, done: true, nextAtS: null });
+  assert.equal(M.stepAt(nine, 89.99).n, 11);
+  // a missing pace falls back to the one the server did send; none at all is an error, never an estimate
+  assert.equal(M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ pace: { nine: 7.5 } }) })), "today").pace, "nine");
+  assert.match(M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ pace: {} }) })), "nine").error, /no pace/);
+  // a run shorter than one step holds still (ProgramRunner.count_for < 1)
+  const short = M.stepTimeline(M.steppedOf(preview({ stepped: steppedJSON({ run_s: 7.0 }) })), "nine");
+  assert.match(short.error, /shorter than one 7\.5 s step/);
+  assert.equal(M.stepAt(short, 3), null);
+});
+
+test("the step counter, and the moving sentence only while it plays", () => {
+  const st = M.steppedOf(preview({ stepped: steppedJSON() }));
+  const tl = M.stepTimeline(st, "nine");
+  assert.equal(M.stepCounter(tl, null), "12 steps of 7.5 s (90 s), then the still look holds");
+  assert.equal(M.stepCounter(tl, M.stepAt(tl, 16), { state: "playing" }), "Step 3 of 12 · every 7.5 s");
+  assert.equal(M.stepCounter(tl, M.stepAt(tl, 16), { state: "paused", fast: true }), `Step 3 of 12 · every 7.5 s · paused · sped up ${M.FAST_FACTOR}×`);
+  assert.equal(M.stepCounter(tl, M.stepAt(tl, 95), { state: "done" }), "Run over after 12 steps (90 s): the still look holds");
+  assert.equal(M.movingLine(st, "playing", M.stepAt(tl, 16)), steppedJSON().moving_feature);
+  for (const state of ["idle", "paused", "done"]) assert.equal(M.movingLine(st, state, M.stepAt(tl, 16)), "", state);
+  assert.equal(M.movingLine(st, "playing", M.stepAt(tl, 95)), "", "the run is over: the still look's copy");
+  assert.match(M.MOTION_COPY.fast, /faster than the lights would step — not the real pace/);
+});
+
+test("steppedOf degrades readably: no stepped (an older server), the catalog's first paint, broken steps", () => {
+  assert.equal(M.steppedOf(preview()).error, M.MOTION_COPY.noSteps, "Slice B servers send stepped: null");
+  assert.equal(M.steppedOf(preview({ stepped: undefined })).error, M.MOTION_COPY.noSteps);
+  assert.equal(M.steppedOf({ fromCatalog: true, design: design() }).error, M.MOTION_COPY.waiting);
+  assert.equal(M.steppedOf(null).error, M.MOTION_COPY.waiting);
+  assert.equal(M.steppedOf(preview({ stepped: steppedJSON({ steps: [] }) })).error, M.MOTION_COPY.noSteps);
+  assert.equal(M.steppedOf(preview({ stepped: steppedJSON({ steps: [{ index: 0 }] }) })).error, M.MOTION_COPY.noSteps);
+  // steps arrive in index order whatever the list order
+  const shuffled = steppedJSON();
+  shuffled.steps = [...shuffled.steps].reverse();
+  assert.deepEqual(M.steppedOf(preview({ stepped: shuffled })).steps.map((s) => s.index), [0, 1, 2, 3, 4, 5]);
+  const bare = M.steppedOf(preview({ stepped: steppedJSON({ moving_feature: null, live_sentence: null }) }));
+  assert.equal(bare.moving, null);
+  assert.equal(M.movingLine(bare, "playing", M.stepAt(M.stepTimeline(bare, "nine"), 1)), "");
+  assert.equal(M.stepTimeline(M.steppedOf(preview()), "nine").error, M.MOTION_COPY.noSteps);
+  assert.equal(M.stepCounter(M.stepTimeline(M.steppedOf(preview()), "nine"), null), M.MOTION_COPY.noSteps);
+});
+
+test("viewPainter('stepped') paints the server's step colours module by module; the show box's other modules UNLIT", () => {
+  const p = preview({ stepped: steppedJSON() });
+  const step = p.stepped.steps[2];
+  const all = M.viewPainter(p, "stepped", { step: { colours: step.colours, positions: null } });
+  assert.ok(!all.error);
+  assert.equal(all.level, 95, "brightness stays a level");
+  for (const h of CANOPY.heads) assert.deepEqual(all.head(h), rgb([1, 3, 5].map((i) => parseInt(step.colours[h.module].slice(i, i + 2), 16))));
+  assert.match(all.caption, /stepped/);
+  const where = M.stepPositions(p, "today");
+  assert.deepEqual(where.positions, ["r0c0", "r0c1"]);
+  assert.match(where.note, /Modules 1–2 step, the rest stay dark/);
+  const box = M.viewPainter(p, "stepped", { step: { colours: step.colours, positions: where.positions } });
+  for (const h of CANOPY.heads) {
+    if (h.module === "r0c0" || h.module === "r0c1") assert.notDeepEqual(box.head(h), UNLIT_RGB);
+    else assert.deepEqual(box.head(h), UNLIT_RGB, h.module);
+  }
+  assert.deepEqual(M.stepPositions(p, "nine"), { positions: null, note: "" });
+  assert.equal(M.stepPositions(preview({ show_box_today: null }), "today").positions, null);
+  // a step with a position missing or a bad hex makes no colour claim there
+  const holes = M.viewPainter(p, "stepped", { step: { colours: { ...step.colours, r2c2: "red", r1c1: undefined }, positions: null } });
+  for (const h of CANOPY.heads.filter((x) => x.module === "r2c2" || x.module === "r1c1")) assert.deepEqual(holes.head(h), UNLIT_RGB);
+  assert.ok(M.viewPainter(p, "stepped").error, "no step, no picture");
+});
+
+test("rippleSchedule: ring i lands at i × stagger, clamped to 0–1.2 s; screen only", () => {
+  const s = M.rippleSchedule(RINGS, 0.6);
+  assert.deepEqual(s.rings.map((r) => r.at), [0, 0.6, 1.2]);
+  assert.equal(s.spanS, 1.2);
+  assert.equal(M.rippleSchedule(RINGS, 5).stagger, M.RIPPLE_STAGGER_MAX_S);
+  assert.equal(M.RIPPLE_STAGGER_MAX_S, 1.2, "RIPPLE_SPAN_MAX_S / (RIPPLE_MAX_WAVES − 1)");
+  assert.equal(M.rippleSchedule(RINGS, -1).stagger, 0);
+  assert.equal(M.rippleSchedule(RINGS, 0.33).stagger, 0.3);
+  assert.equal(M.rippleSchedule(null, 0.6), null);
+  assert.equal(M.rippleSchedule([[], []], 0.6), null);
+  assert.deepEqual([...M.rippleLanded(s, 0)].sort(), RINGS[0].slice().sort());
+  assert.equal(M.rippleLanded(s, 0.7).size, 6);
+  assert.equal(M.rippleLanded(s, 1.2).size, 9);
+  assert.equal(M.rippleLine(s), "Three rings, 0.6 s apart: the last lands 1.2 s after the first.");
+  assert.match(M.rippleLine(M.rippleSchedule(RINGS, 0)), /0 s apart: every module lands at once, as the canopy does today/);
+  assert.equal(M.rippleLine(null), M.MOTION_COPY.noRings);
+  // the masked picture: modules not landed yet are UNLIT, the landed ones are the view's own colours
+  const p = preview({ rings: RINGS });
+  const ref = M.viewPainter(p, "modules");
+  const masked = M.viewPainter(p, "modules", { landed: M.rippleLanded(s, 0.1) });
+  for (const h of CANOPY.heads) assert.deepEqual(masked.head(h), RINGS[0].includes(h.module) ? ref.head(h) : UNLIT_RGB);
+  assert.equal(M.rippleLabel({ ripple_stagger_s: 0 }), "Screen preview only — the canopy's ripple is off (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)");
+  assert.equal(M.rippleLabel(null), M.MOTION_COPY.ripple);
+  assert.match(M.rippleLabel({ ripple_stagger_s: 0.4 }), /set to kiosk.ripple_stagger_s: 0.4 s \(D64\); the Lab never changes it/);
+});
+
+test("the stepped controls: SteppedTechnique's bounds, read-only with the reason where there is no stepped rung", () => {
+  const c = M.steppedControls(SCENE_GOLDEN, golden(), CATALOG_LIMITS);
+  assert.ok(c.editable);
+  assert.equal(c.direction, "forward");
+  assert.deepEqual(c.steps, { min: 3, max: 12, step: 1, value: 6 });
+  assert.deepEqual(c.step_s, { min: 4, max: 12, step: 0.5, value: 6 });
+  assert.deepEqual(c.run_s, { min: 6, max: 180, step: 0.5, value: 90 });
+  assert.match(c.runLimit, /180 s at most/);
+  const short = M.steppedControls(SCENE_GOLDEN, golden(), { stepped: { ...CATALOG_LIMITS.stepped, run_s_max: 150 } });
+  assert.equal(short.run_s.max, 150, "min(180, kiosk.idle_return_s) from the catalog");
+  assert.deepEqual(M.steppedControls(SCENE_GOLDEN, golden(), {}).steps, { min: 3, max: 12, step: 1, value: 6 }, "defaults when the catalog says nothing");
+  assert.deepEqual(M.steppedControls({ id: "lowcountry-calm", stepped: false, idle: true }, golden({ stepped: null }), CATALOG_LIMITS), { editable: false, reason: M.MOTION_COPY.idle });
+  assert.deepEqual(M.steppedControls({ id: "goodnight-glow", stepped: false, idle: false }, golden({ stepped: null }), CATALOG_LIMITS), { editable: false, reason: M.MOTION_COPY.none });
+  assert.equal(M.steppedControls(SCENE_GOLDEN, golden({ stepped: null }), CATALOG_LIMITS).reason, M.MOTION_COPY.noDraft);
+});
+
+test("setStepped keeps whole steps, half-second times and a run of at least one step; the input is never changed", () => {
+  const a = golden();
+  const before = JSON.stringify(a);
+  assert.equal(M.setStepped(a, { step_s: 6.3 }, CATALOG_LIMITS).stepped.step_s, 6.5);
+  assert.equal(M.setStepped(a, { step_s: 2 }, CATALOG_LIMITS).stepped.step_s, 4);
+  assert.equal(M.setStepped(a, { step_s: 20 }, CATALOG_LIMITS).stepped.step_s, 12);
+  assert.equal(M.setStepped(a, { steps_per_cycle: 2 }, CATALOG_LIMITS).stepped.steps_per_cycle, 3);
+  assert.equal(M.setStepped(a, { steps_per_cycle: 7.6 }, CATALOG_LIMITS).stepped.steps_per_cycle, 8);
+  assert.equal(M.setStepped(a, { steps_per_cycle: 40 }, CATALOG_LIMITS).stepped.steps_per_cycle, 12);
+  assert.equal(M.setStepped(a, { run_s: 500 }, CATALOG_LIMITS).stepped.run_s, 180);
+  assert.equal(M.setStepped(a, { run_s: 1 }, CATALOG_LIMITS).stepped.run_s, 6, "never shorter than one step");
+  const longStep = M.setStepped(M.setStepped(a, { run_s: 8 }, CATALOG_LIMITS), { step_s: 10 }, CATALOG_LIMITS);
+  assert.deepEqual([longStep.stepped.step_s, longStep.stepped.run_s], [10, 10], "a longer step takes the run with it");
+  assert.equal(M.setStepped(a, { direction: "reverse" }, CATALOG_LIMITS).stepped.direction, "reverse");
+  assert.equal(M.setStepped(a, { direction: "sideways" }, CATALOG_LIMITS).stepped.direction, "forward");
+  assert.equal(JSON.stringify(a), before);
+  const still = golden({ stepped: null });
+  assert.equal(M.setStepped(still, { step_s: 8 }, CATALOG_LIMITS), still, "no stepped rung, nothing to set");
+  assert.ok(M.draftEquals(M.setStepped(a, { step_s: 6 }, CATALOG_LIMITS), a));
+});
+
+test("the live line, the run line and the effects card: the Lab says where each stands and changes none", () => {
+  const st = M.steppedOf(preview({ stepped: steppedJSON() }));
+  const live = { stepped_live_enabled: false, stepped_live_sentence: STEPPED_LIVE_OFF, ripple_stagger_s: 0, effects_enabled: false };
+  assert.equal(M.steppedLiveLine(live, st), "Stepped motion is off on the real lights until Gate R passes; Alon sets motion.stepped.live_enabled");
+  assert.equal(M.steppedLiveLine(null), M.MOTION_COPY.live);
+  assert.equal(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, M.steppedOf(preview({ stepped: steppedJSON({ live_sentence: null }) }))), M.MOTION_COPY.liveOn);
+  assert.equal(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, st), M.MOTION_COPY.live, "the server's own live sentence wins");
+  assert.equal(M.effectsLine(live), "Effects — not enabled: no code has passed the bench (06 #4)");
+  assert.notEqual(M.effectsLine({ effects_enabled: true }), M.MOTION_COPY.effects);
+  assert.equal(M.steppedRunLine(golden().stepped, st), "A 90 s run — Nine modules (7.5 s): 12 steps · Show box today (two modules, 6 s): 15 steps; then the still look holds.");
+  assert.equal(M.steppedRunLine({ ...golden().stepped, run_s: 60 }, st), "", "not until the server answers for this timing");
+  assert.equal(M.steppedRunLine(golden().stepped, M.steppedOf(preview())), "");
+  assert.equal(M.fmtS(7.5), "7.5");
+  assert.equal(M.fmtS(6.0), "6");
+  // nothing in the page model offers a control for either switch: no setter names them
+  for (const name of Object.keys(M)) assert.ok(!/^(set|toggle|enable).*(live|ripple)/i.test(name), name);
+});
