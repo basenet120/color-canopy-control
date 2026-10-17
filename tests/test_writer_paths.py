@@ -5,7 +5,7 @@ that is registered and writable but NOT in HUBSPACE_DEVICE_ALLOWLIST. The runtim
 mode) with a real AferoDriver on the fake transport. The test fails if any PUT for that device reaches the wire.
 
 **Every new writer path must add itself here** (reconciler, idle hold, slot manager, bench jobs, module page,
-vignettes, ...). `test_every_writer_module_is_listed` fails when a module that submits commands isn't covered.
+the Lab's try-on, ...). `test_every_writer_module_is_listed` fails when a module that submits commands isn't covered.
 """
 
 from __future__ import annotations
@@ -174,168 +174,6 @@ async def _bench_runner_address_probe_safe(env: Env, address: str) -> str:
 
 async def _bench_runner_effect_probe(env: Env, address: str) -> str:
     return await _bench_runner_job(env, address, "effect_probe", {"duration_s": 2.0}, t1=True)
-
-
-async def _studio_pair(env: Env, address: str, action) -> str:
-    """/ops/showcase's paired routes (conductor/module/pair.py, scene_gradient.py) with `address` as String light 1.
-    Kingston, its partner, is an allowlisted kit in a separate fake cloud, so only the device under test is counted.
-    Each session is opened as the module page opens it (taking the lock), with Gate C and the kit's own map
-    recorded: only the gate and the lock can stop the pair."""
-    from fake_afero import raw_device_from_dump
-
-    from conductor.config import ConductorSettings, DeviceFlags, FramebufferMapping, load_recipes
-    from conductor.geometry import load_canopy_config
-    from conductor.module import ModuleSession, SessionDeps
-    from conductor.sim.profiles import load_profile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        partner = await make_world(Path(tmp) / "partner")
-        sessions = []
-        try:
-            for device_id, world, kit_env, md in (
-                ("bench-kit", partner, Env(partner), BENCH_MD),
-                ("shop-string-1", env.world, env, address),
-            ):
-                world.fake.devices[md] = raw_device_from_dump(md, load_profile("sqhdk03-sim"))  # 30 heads
-                entry = world.registry.logical_for(md).model_copy(
-                    update={
-                        "id": device_id,
-                        "flags": DeviceFlags(t1_frames=True),
-                        "flags_proven_on": md,
-                        "framebuffer_mapping": FramebufferMapping(
-                            frame_length=30, indices=list(range(30)), proven_on=md
-                        ),
-                    }
-                )
-                deps = SessionDeps(
-                    clock=world.clock,
-                    locks=kit_env.locks,
-                    telemetry=Telemetry(None, world.clock),
-                    settings=ConductorSettings(),
-                    recipes=load_recipes(),
-                    canopy=load_canopy_config(),
-                    entry=lambda _id, entry=entry: entry,
-                )
-                try:
-                    target = Target(device_id, md, world.driver, kit_env.executor)
-                    sessions.append(await ModuleSession.open(deps, target, owner="studio · test"))
-                except LockError:
-                    return "lock_refused"
-            result = await action(sessions, Path(tmp))
-            return str(result["modules"]["shop-string-1"]["result"]["status"])
-        finally:
-            for session in sessions:
-                await session.close()
-            await partner.driver.close()
-
-
-async def _studio_pair_whole(env: Env, address: str) -> str:
-    from conductor.module.pair import apply_pair
-
-    return await _studio_pair(env, address, lambda sessions, _data: apply_pair(sessions, {"power": True}))
-
-
-async def _studio_pair_gradient(env: Env, address: str) -> str:
-    from conductor.module import scene_gradient
-
-    colors = [[255 - 8 * i, 0, 8 * i] for i in range(30)]
-    return await _studio_pair(
-        env, address, lambda sessions, data: scene_gradient.apply(sessions, colors, 30, "writer path", data)
-    )
-
-
-class _TwoWorldLocks:
-    """`locks.holder` over the two fake clouds' lock managers (the guest panel asks who holds each module)."""
-
-    def __init__(self, by_address: dict):
-        self.by_address = by_address
-
-    def holder(self, address: str):
-        return self.by_address[address].holder(address)
-
-
-async def _guest_panel_workshop(env: Env, address: str, act, shown: str | None = None) -> str:
-    """The guest panel's workshop target (conductor/guest_panel.py) with `address` as String light 1. The target opens
-    both sessions itself, as "guest panel" and never stealing, then runs one guest action through its lane. As in
-    `_studio_pair`, Kingston is an allowlisted kit in a separate fake cloud, and Gate C and each kit's own map are
-    recorded: only the gate and the lock can stop it."""
-    from fake_afero import raw_device_from_dump
-
-    from conductor.config import ConductorSettings, DeviceFlags, FramebufferMapping, load_recipes
-    from conductor.geometry import load_canopy_config
-    from conductor.guest_panel import GuestRefused, WorkshopDeps, WorkshopTarget
-    from conductor.module import ModuleSession, SessionDeps
-    from conductor.sim.profiles import load_profile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        partner = await make_world(Path(tmp) / "partner")
-        kits = {}
-        for device_id, world, kit_env, md in (
-            ("bench-kit", partner, Env(partner), BENCH_MD),
-            ("shop-string-1", env.world, env, address),
-        ):
-            world.fake.devices[md] = raw_device_from_dump(md, load_profile("sqhdk03-sim"))  # 30 heads
-            entry = world.registry.logical_for(md).model_copy(
-                update={
-                    "id": device_id,
-                    "flags": DeviceFlags(t1_frames=True),
-                    "flags_proven_on": md,
-                    "framebuffer_mapping": FramebufferMapping(
-                        frame_length=30, indices=list(range(30)), proven_on=md
-                    ),
-                }
-            )
-            kits[device_id] = (world, kit_env, md, entry)
-
-        async def open_session(device_id: str) -> ModuleSession:
-            world, kit_env, md, entry = kits[device_id]
-            deps = SessionDeps(
-                clock=world.clock,
-                locks=kit_env.locks,
-                telemetry=Telemetry(None, world.clock),
-                settings=ConductorSettings(),
-                recipes=load_recipes(),
-                canopy=load_canopy_config(),
-                entry=lambda _id, entry=entry: entry,
-            )
-            return await ModuleSession.open(
-                deps, Target(device_id, md, world.driver, kit_env.executor), owner="guest panel"
-            )
-
-        target = WorkshopTarget(
-            WorkshopDeps(
-                clock=env.world.clock,
-                settings=ConductorSettings(),
-                data=Path(tmp),
-                locks=_TwoWorldLocks({k[2]: k[1].locks for k in kits.values()}),  # type: ignore[arg-type]
-                open_session=open_session,
-                address_of=lambda device_id: kits[device_id][2],
-            )
-        )
-        try:
-            try:
-                await act(target)
-            except GuestRefused:
-                return "lock_refused"
-            await target.wait_idle()
-            assert shown is None or target.shown == shown, (
-                target.last_job
-            )  # the gradient path, not the fallback
-            return str(target.sessions["shop-string-1"].results[0]["status"])
-        finally:
-            await target.close()
-            await partner.driver.close()
-
-
-async def _guest_panel_scene(env: Env, address: str) -> str:
-    from conductor.scenes import load_scenes
-
-    scene = load_scenes().get("coastal-tides")
-    return await _guest_panel_workshop(env, address, lambda t: t.scene(scene), shown="gradient")
-
-
-async def _guest_panel_power(env: Env, address: str) -> str:
-    return await _guest_panel_workshop(env, address, lambda t: t.power(True))
 
 
 async def _module_page_paint(env: Env, address: str) -> str:
@@ -583,38 +421,6 @@ async def _lab_trial(env: Env, address: str) -> str:
     return str(engine.last_status[address])
 
 
-async def _vignette_action(env: Env, address: str) -> str:
-    """/vignette/<room>: a staff tablet's action → one ENGINE command per device through the executor. (The fake
-    devices are 20-segment strings, so the room's device under test is the Glow Garden string.)"""
-    from conductor.config import OverlayFile, Registry, RegistryFile
-    from conductor.vignettes import RoomConfig, VignetteDeps, VignetteService, VignettesFile
-
-    registry = Registry(
-        RegistryFile.model_validate(
-            {
-                "accounts": {"bench": {"label": "Bench"}},
-                "devices": [
-                    {"id": "garden-string", "role": "vignette", "vignette": "garden", "kind": "string"}
-                    | {"account": "bench", "metadevice_id": address}
-                ],
-            }
-        ),
-        OverlayFile(),
-        None,
-    )
-    service = VignetteService(
-        VignetteDeps(
-            registry=lambda: registry,
-            target=lambda d, _purpose: Target(d, address, env.world.driver, env.executor),
-            rooms=VignettesFile(
-                rooms={"garden": RoomConfig(space="Glow Garden", title="Bring the garden to life")}
-            ),
-        )
-    )
-    report = await service.action("garden", device_id="garden-string", action="brightness", value=40)
-    return str(report["results"][0]["status"])
-
-
 WriterPath = Callable[[Env, str], Awaitable[str]]
 WRITER_PATHS: dict[str, WriterPath] = {
     "executor.submit (engine)": _executor_engine,
@@ -626,10 +432,6 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "bench runner (gate_c_safe, with restore)": _bench_runner_gate_c_safe,
     "bench runner (address_probe_safe, with restore)": _bench_runner_address_probe_safe,
     "bench runner (effect_probe, with restore)": _bench_runner_effect_probe,
-    "studio pair (whole module)": _studio_pair_whole,
-    "studio pair (scene gradient)": _studio_pair_gradient,
-    "guest panel (workshop scene gradient)": _guest_panel_scene,
-    "guest panel (workshop power)": _guest_panel_power,
     "module page (paint)": _module_page_paint,
     "module page (lowcountry preview)": _module_page_lowcountry_preview,
     "canopy engine (mode change)": _canopy_mode_change,
@@ -639,7 +441,6 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "program runner (stepped look)": _program_runner,
     "stepped rehearsal (Gate R)": _stepped_rehearsal,
     "lab try-on (module level)": _lab_trial,
-    "vignette action": _vignette_action,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
 COVERED_MODULES = {
@@ -649,7 +450,6 @@ COVERED_MODULES = {
     "conductor/canopy.py": "canopy engine (mode change)",
     "conductor/reconciler.py": "reconciler (re-assert)",
     "conductor/sequence.py": "program runner (stepped look)",  # sends through CanopyEngine.send
-    "conductor/vignettes.py": "vignette action",
     # the try-on's routes never write; every write is the engine's (the entry proves it on the wire). Listing a file
     # here exempts it from test_every_writer_module_is_listed's scan, so the Lab must stay a non-writer by its own
     # check: tests/test_lab_access.py test_no_lab_module_calls_a_writer (an AST walk over every Lab source).

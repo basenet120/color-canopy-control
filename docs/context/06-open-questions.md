@@ -20,8 +20,8 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 5. **Start skew and drift across controllers** for one 9-PUT burst.
    *Partly answered (2 kits, not 9):* Oct 2, Kingston + String light 1 were sent Rainbow Road in one paired burst (speed 0, 30 %): both showed a rainbow — PHYSICAL ("BOTH RAINBOW"); head-to-head phase unconfirmed ("hard to tell from their positions", package `VALIDATION-STATUS.json`, `CHANGELOG.txt`). Host send skew 0 ms at clock resolution, acks ~200 ms, readback 1.3–2.4 s — CLOUD/host timing, not hardware phase. A paired Fade 3 has cloud readback only; drift never measured (package `evidence/paired-*.json`).
    *Default:* ≤ 1.5 s start skew, free drift; a look with on-device motion re-triggers all nine on every selection (no show mode has one since D59). Stepped looks (D65) don't depend on controller phase: the Conductor sends each step, so skew shows as each step's landing spread (#27).
-6. **Real Afero limits** for 9-PUT bursts plus a stepped sweep on one account, alongside 4 vignette accounts behind one IP. Per account or per IP? 429s or silent drops?
-   *Default:* ≤ 1 write/s per device, bursts of 9 per change, hysteresis downgrade (`07` §6). Stepped looks: #27 (cadence and cap) and #28 (per account or per IP). Note: numbers measured from Railway reflect a datacenter IP — re-measure from the venue box (Gate R does, `04` gate 14).
+6. **Real Afero limits** for 9-PUT bursts plus a stepped sweep on one account, behind the venue's one IP (the Conductor holds only the canopy and bench accounts, D67). Per account or per IP? 429s or silent drops?
+   *Default:* ≤ 1 write/s per device, bursts of 9 per change, hysteresis downgrade (`07` §6). Stepped looks: #27 (cadence and cap) and #28 (per account or per IP). Note: numbers measured from Railway reflect a datacenter IP — re-measure from the show box (Gate R does, `04` gate 14).
 7. **Per-puck white and color recipes** through clear/frosted Mylar at show brightness.
    *Default:* recipes in config; start with RGB + warm-white blends for ivory and amber; tune on Prototype 01.
 8. **Power-loss behavior**: do slots, mode and speed survive? Is restore-values exposed? Does the profile change when the 12-puck fault happens?
@@ -32,7 +32,7 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 10. **Does the Keycloak refresh-token rotation invalidate older tokens?** *Default:* assume yes — persist every rotation (`07` §3).
 
 ## Decisions Alon owes (with dates)
-11. **Vignette control surface — by Oct 1.** Custom `/vignette/<id>` pages vs. the stock Hubspace app on each vignette iPad (Guided Access, one account per room — honest by construction, no build).
+11. **Closed — out of scope (D67, Oct 17):** the Conductor controls the canopy only; the vignettes run on the stock Hubspace app. Was: **Vignette control surface — by Oct 1.** Custom `/vignette/<id>` pages vs. the stock Hubspace app on each vignette iPad (Guided Access, one account per room — honest by construction, no build).
     *Default:* build thin custom pages in P4; if they aren't solid by Oct 12, ship the stock app on the vignette iPads.
 12. **Golden Hour technique — by Oct 5**, from bench footage: on-device motion burst vs. stepped sweep. *Default:* build one technique (on-device motion) first; the other is a seam.
     *Answered by the approved scenes (D59, Oct 11):* Golden Hour is a static five-colour gradient; no show mode uses motion. Motion stays a seam.
@@ -49,7 +49,7 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 15. **Orientation scheme**: deck p.14 (A/B/A across X) or the p.18 appendix (AAA/BBB/AAA)? Only p.14 keeps the 10″ pitch across seams. *Default:* p14.
 16. **Plenum**: controllers and PSUs hidden but reachable and ventilated (PSU indoor/dry only; manual forbids enclosed spaces above 40 °C); per-module switched power, ideally a LAN-controllable PDU. *Default:* no remote power control in software; the runbook says "power-cycle module N at its switch".
 17. **Puck openings**: pucks are hexagonal with screw ears (~2″) — measure a real puck first. *Default:* n/a to software.
-18. **Final vignette device census.** *Default (placeholders, clearly labeled in config):*
+18. **Closed — out of scope (D67, Oct 17):** the vignette devices left the registry. Was: **Final vignette device census.** *Default (placeholders, clearly labeled in config):*
     - `entry` — 1 Defiant Wi-Fi deadbolt
     - `living` — 4 EcoSmart A19 color bulbs + 1 dual-outlet outdoor plug (tree/garland)
     - `bedroom` — 4 EcoSmart A19 color bulbs + 1 plug (humidifier) + 1 ceiling fan (disabled until confirmed)
@@ -58,8 +58,8 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 ## Hearst / Home Depot
 19. **Golden Hour**: is "amber wash moving across the canopy" a hard requirement? Who approves the bench footage? *Default:* ship the best benched technique; kiosk copy matches what it actually does.
     *Now (D65):* the moving technique is module-level steps through the cloud, off live until Gate R; Paris or Alon can choose other scenes to move in `config/modes.yaml`. Until Gate R passes, Golden Hour is a still sun on real lights and the kiosk says so.
-20. **Authorization letter** from Home Depot for programmatic control of activation-owned Hubspace devices/accounts (Oct 15 – Nov 2). *Default:* no writes to show accounts from any runtime until it exists or Alon explicitly says go; show accounts only ever live on the venue box.
-21. **Accounts**: who creates and owns the canopy and vignette accounts. *Default:* Alon creates them; MFA off; staff don't open the Hubspace app on show accounts during public hours.
+20. **Authorization letter** from Home Depot for programmatic control of activation-owned Hubspace devices/accounts (Oct 15 – Nov 2). *Default:* no writes to show accounts from any runtime until it exists or Alon explicitly says go; show accounts only ever live on the show box.
+21. **Accounts**: who creates and owns the canopy account (the only show account the Conductor holds, D67). *Default:* Alon creates them; MFA off; staff don't open the Hubspace app on show accounts during public hours.
 22. **Kiosk branding and copy**: the Hubspace logo in the UI needs brand sign-off. *Default:* words-only "Hubspace" references.
 23. **Bedroom humidifier** (no Hubspace humidifier exists). *Default:* a standard humidifier on a Hubspace smart plug, on/off only.
     **Lock demo.** *Default:* lock and unlock from the tablet, with a confirm step.
@@ -89,10 +89,11 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     looks on that account still for 5 min. **Live off** (`live_enabled: false`) until a Gate R pass on the show kits
     (`04` gate 14); only Alon flips it. Each step's landing spread was p95 2.78 s in the simulator against 05's 2 s
     target: reported, not gating, until Alon signs off a per-step target.
-28. **Throttling: per account or per IP?** The canopy account and the four vignette accounts all write from the
-    venue box's one IP.
+28. **Throttling: per account or per IP?** The canopy account and the bench account write from the show box's one
+    IP (the vignettes are outside this system, D67; anything they do in the stock app comes from the same venue
+    network, so the per-IP question stays open).
     *Default:* assume per account. The executor's budgets (≤ 1 write/s per device, bounded concurrency per account),
-    the stepped cap and the governor all count per account. Gate R runs with the vignette accounts connected and
-    fails if any of them sees a 429/403, a failed command or a sign-in problem. If it turns out to be per IP, the
+    the stepped cap and the governor all count per account. Gate R watches the canopy and bench accounts (no
+    vignette criterion since D67). If it turns out to be per IP, the
     stepped cap would have to count every account's writes from the box, and stepped stays off until it does. Never
     rotate accounts or IPs to get around a limit.

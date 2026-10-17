@@ -1,6 +1,6 @@
 # Color Canopy control system
 
-Control software for the Home Depot × Hearst "Whole Home" activation in Charleston (install Oct 20–23 2026, tours Oct 23–25, event Oct 29, strike Nov 1): a guest touchscreen driving **The Color Canopy** (9 Hubspace permanent-light strands, 270 heads) plus staff control for four Hubspace vignettes, all through the Afero cloud.
+Control software for the Home Depot × Hearst "Whole Home" activation in Charleston (install Oct 20–23 2026, tours Oct 23–25, event Oct 29, strike Nov 1): a guest iPad panel driving **The Color Canopy** (9 Hubspace permanent-light strands, 270 heads) and staff tools (ops, bench, module page, the Design Lab, which publishes to the live show), all through the Afero cloud.
 
 ## Read before working
 1. `docs/STATUS.md` — where things stand, the PR stack, the next step
@@ -16,7 +16,7 @@ Evidence with sources: `research/` — read `research/ERRATA.md` first (preceden
 ## Rules
 - **Never commit secrets.** Passwords are never stored anywhere; refresh tokens live only encrypted under `CONDUCTOR_DATA_DIR`. If you see a credential in a diff, stop.
 - **Simulator by default.** Nothing calls the Afero cloud unless `HUBSPACE_LIVE=1`, and nothing writes to a device outside the allowlist (`07` §1). Tests never hit the network.
-- **Show accounts live only on the venue box** — never on Railway staging, in a cloud session, or in CI.
+- **Show accounts live only on the show box** (the Mac mini, D61) — never on Railway staging, in a cloud session, or in CI.
 - **Respect the rate budget**: ≤ 1 write/s per device, bounded concurrency per account. Never rotate accounts or IPs to get around throttling or a block.
 - **aioafero is pinned** and imported only inside the Afero adapter.
 - **Kiosk copy must be true** to what Hubspace is actually doing, at the tier actually in use.

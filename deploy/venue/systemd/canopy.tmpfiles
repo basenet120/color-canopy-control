@@ -1,3 +1,0 @@
-# Installed as /etc/tmpfiles.d/canopy.conf: the NTP flag folder the Conductor's container mounts read-only.
-d /run/canopy 0755 root root -
-d /run/canopy/timesync 0755 root root -

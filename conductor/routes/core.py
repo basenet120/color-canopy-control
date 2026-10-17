@@ -44,7 +44,6 @@ PAGE_HEADERS = {
 }
 ROLE_LABELS = {
     Role.KIOSK: "the canopy kiosk",
-    Role.VIGNETTE: "a vignette tablet",
     Role.TESTER: "a module tester's phone",
 }
 

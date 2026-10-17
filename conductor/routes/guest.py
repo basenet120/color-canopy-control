@@ -4,28 +4,28 @@ Who: an enrolled kiosk or ops, with the kiosk router's own checks (kiosk role or
 same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
 
 - `GET  /api/kiosk/panel`       `{target, target_label, simulated, viewer, scenes, capabilities, brightness_range, canopy,
-                                state, server_now}`. `target` is "workshop" (the two VWBD shop strands) or "canopy"
-                                (the engine). Each scene is `{id, name, mood, description, palette: [{name, hex}],
+                                state, server_now}`. `target` is always "canopy" (the engine, D67; the field stays
+                                so the iPad's code is unchanged). Each scene is `{id, name, mood, description, palette: [{name, hex}],
                                 frame: [[r, g, b] × 30], solid: "#RRGGBB", brightness_draft}`. `state` is `{power,
                                 brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit,
                                 waiting}`:
-                                power/brightness/scene are null when unknown; look is "gradient" | "solid" (what the
-                                lights show, so the preview is true) or null; phase is ready | changing | resting |
+                                power/brightness/scene are null when unknown; look is null (the engine's techniques
+                                aren't a 30-light frame: `lit` is what the lights show); phase is ready | changing | resting |
                                 paused | cooldown ("cooldown": the lights are steady and a new scene can be chosen in
                                 cooldown_remaining_s; brightness and power still work); message is a calm sentence for
                                 the guest (or ""); feature is the true Hubspace sentence for what is showing, or null;
                                 waiting is why every mood waits now — "try-on" (a Design Lab try-on, D66), "testing"
                                 (the stepped rehearsal) — or null (the panel drops a waiting toast once it is null).
 
-The canopy picture (`conductor/canopy_view.py`; the engine target only — the workshop target sends `canopy: null` and
-`state.lit: null`, and the panel draws its 30-light serpentine instead). A fixed contract:
+The canopy picture (`conductor/canopy_view.py`; an older server may send `canopy: null` and `state.lit: null`,
+and the panel then draws its 30-light serpentine instead). A fixed contract:
 
     canopy    = null | {width_in, height_in, module_w_in, module_h_in,
                         view: {mirror_x, rotate_deg: 0|90|180|270, dim_floor},          (kiosk.preview, set at install)
                         modules: [{pos: "r0c0"…"r2c2", row, col, heads: [[x, y] × 30]} × 9]}
                 (canopy inches, reflected-ceiling view, origin top-left; each module's heads top to bottom, then left
                 to right: its lattice order, never its wiring)
-    state.lit = null (no look yet, or the workshop)
+    state.lit = null (no look yet, or an older server)
               | {level: 1–100 | null (off),
                  modules: [{pos, state: off|dark|unknown|lit|changing,
                             color: "#RRGGBB" | null, colors: ["#RRGGBB" × 30 in lattice order] | null} × 9],

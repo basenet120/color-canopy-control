@@ -110,10 +110,10 @@ into the build session (see section 7).
    fastest. Each holds about 2 s. Film it and answer one question per look.
 9. **Stale clock — a write stamped 10 minutes ago** (07 §10). Film it with the clock in frame. It selects another
    slot (one whose pattern differs from what is showing) with every row's `lastUpdateTime` set **10 minutes in
-   the past** — what a venue box with a lagging clock would send — then reads back. If the cloud **stored** it, the
+   the past** — what a show box with a lagging clock would send — then reads back. If the cloud **stored** it, the
    result says so and asks whether the strand switched. If the cloud answered 200 but **dropped** it, a second
    select with a current stamp follows about 3 s later as the control, and the question is whether the lights
-   stayed put after the first write and switched only after the second. Either answer settles the venue-box NTP
+   stayed put after the first write and switched only after the second. Either answer settles the show-box NTP
    question; send the JSON.
 10. **Rewrite the showing slot — no reselect** (04 gate #6). A slot must be showing (after step 9 one usually
     is; if the result says none is, run the **Hue ramp** first). It rewrites the slot that is **showing** with a
@@ -149,7 +149,7 @@ same moment.
 
 ## 5a. What VWBD found on the real kit (Sep 28 – Oct 7, 2026)
 
-Paris ran these at VWBD from a local workshop server, not staging. Everything here is about **Kingston test**, the
+Paris ran these at VWBD from a local Conductor on a laptop, not staging. Everything here is about **Kingston test**, the
 kit registered as **bench-kit**, unless it says otherwise. The Sep 28 runs were made from another computer and matched
 to the same controller on Oct 2 by an id digest (`docs/bench-commissioning-proof.json`,
 `docs/vwbd-commissioning-transfer-2026-10-02.json`). PHYSICAL = seen on the lights by the person at VWBD; CLOUD =
@@ -180,7 +180,7 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
 - A 60-entry kit without its own map gets no per-puck painting; `/ops/module` says why.
 - No probe saves a map by itself. **Apply map** on an address probe's result card records it, from that kit's own
   two answered probes (decision D58; step 4 below). It replaces the offline `save_overlay_patch` edit with the server
-  stopped (`VWBD-HANDOFF.md`).
+  stopped (the Oct 2 hand-off, kept in git history at `6ce971b`).
 
 **The commissioning jobs VWBD added** (cards on `/ops/bench`; `conductor/bench/jobs.py`; decision D55)
 - **Gate C — bounded replay** (`gate_c_safe`). Replays a source slot (default Custom 3, only read) into Custom 1 or
@@ -222,19 +222,19 @@ Hubspace HTTP result or readback; SCREEN = on-screen preview only. Cloud or scre
    to the canopy again, now through the map. Any No, or markers anywhere else, means no map: tell Alon, and don't
    edit one in by hand. Changed your mind? Answering No on either run takes the map back, also from a module a
    controller swap carried it to.
-5. Only then any paired or gradient test.
 
 Never copy Kingston's flags or map to another controller. A whole-strand colour response or a 30-puck count is not
 a map. (The one exception is the same physical controller registered again: compare the SHA-256 digest of its id
 (UTF-8, whitespace stripped, no newline) with `device_id_sha256` in `docs/bench-commissioning-proof.json`, never
-printing the id, and take a fresh Gate A first — `VWBD-HANDOFF.md`.)
+printing the id, and take a fresh Gate A first — the Oct 2 hand-off, kept in git history at `6ce971b`.)
 
-Where the second shop module stands: **String light 1** (only in VWBD's private overlay, as `shop-string-1`) has no
+Where the second shop module stood: **String light 1** (only in VWBD's private overlay) had no
 physical Gate C pass and no map. Its latest `gate_c_safe` (Oct 6 evening, run `20261007T010607-gate_c_safe-30ed44`)
 matched in the cloud and restored exactly, with no physical answer yet; an earlier one got "No—it did something
-else… whitish pinkish" (Paris's package, `VALIDATION-STATUS.json`). The Studio's paired per-head gradient refuses
-until each kit has its own T1 proof and its own recorded map (`conductor/module/scene_gradient.py`; decision D56),
-so it has never been sent to real lights — only the on-screen preview has shown it (SCREEN).
+else… whitish pinkish" (Paris's package, `VALIDATION-STATUS.json`). The Studio's paired per-head gradient refused
+until each kit had its own T1 proof and its own recorded map (decision D56), so it never reached real lights — only
+the on-screen preview showed it (SCREEN). It went with the Studio's live controls (D67): the Studio is a screen
+preview now, and the Design Lab is the only live control.
 
 ## 6. Apply flags (after Gates B and C)
 
@@ -305,4 +305,4 @@ from `/ops` when Prototype 01 is done.
 3. Leave the Railway variables as they are between sessions (staging stops writing on its own after
    `HUBSPACE_LIVE_UNTIL`). Merging pull requests is fine again now.
 
-**Never connect the show accounts (canopy and vignettes) to staging.** They live only on the venue box.
+**Never connect the show account (canopy) to staging.** It lives only on the show box (the Mac mini).

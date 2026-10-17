@@ -4,7 +4,7 @@
 Oct 29. **How long:** the whole show; each action below takes seconds.
 
 `/ops` is `http://<box address>:8000/ops/` on the show Wi-Fi (the ops password), or over Tailscale
-(`venue-box.md`). It updates live; you don't need to reload it.
+(`mac-show-box.md`). It updates live; you don't need to reload it.
 
 ---
 
@@ -44,7 +44,7 @@ copy changes with it, so it stays true); it goes back after 5 clean minutes. Tha
 
 ## The Hubspace app: hands off during public hours
 
-- Nobody opens the Hubspace app on the **canopy** account (or a vignette account the Conductor drives) while guests
+- Nobody opens the Hubspace app on the **canopy** account while guests
   are in. Anything changed there is undone by the Conductor within about a minute — and slot edits break the
   painted looks until they're recommissioned.
 - **Never** tap *Sign out of all other devices* in the app: it signs the Conductor out within about 2 minutes

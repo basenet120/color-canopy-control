@@ -12,11 +12,7 @@ def test_devices_list_registry_targets_and_capabilities(app_client):
     body = app_client.get("/api/devices").json()
     assert body["simulated"] is True and body["mode"] == "sim"
     registry = app_client.app.state.services.registry
-    assert (
-        len(body["devices"])
-        == len(registry.devices)
-        == 10 + len(registry.by_role("spare")) + len(registry.by_role("vignette"))
-    )
+    assert len(body["devices"]) == len(registry.devices) == 10 + len(registry.by_role("spare"))
     kit = _device(body, "bench-kit")
     assert (
         kit["label"] and kit["role"] == "bench" and kit["account"] == "bench" and kit["expected_heads"] == 30

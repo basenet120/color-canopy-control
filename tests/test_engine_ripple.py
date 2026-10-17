@@ -716,7 +716,7 @@ def test_ripple_stagger_setting_is_validated(tmp_path):
 
 
 def test_the_shows_own_start_up_sends_its_first_look_as_one_burst_with_a_stagger_set():
-    """The venue box, staging and the sim server don't call `engine.start()` with the idle look: the show's wiring
+    """The show box, staging and the sim server don't call `engine.start()` with the idle look: the show's wiring
     (build_services + ShowWiring) starts the engine bare and sends the first look once the capability reads are back.
     That first look has no previous picture to ripple from, so it is one burst too, whatever the stagger."""
     from conductor import soak

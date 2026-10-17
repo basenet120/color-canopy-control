@@ -27,7 +27,6 @@ from conductor.routes import (
     kiosk,
     module,
     ops,
-    vignette,
 )
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -53,7 +52,6 @@ async def lifespan(app: FastAPI):
     await services.start()
     from conductor.show import ShowWiring
 
-    _start_vignettes(services)
     if os.environ.get("CONDUCTOR_ENGINE") != "off":  # tests only: run the app without the canopy engine
         services.extras["show"] = ShowWiring(services)
         await services.extras["show"].start()
@@ -61,20 +59,6 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await services.close()
-
-
-def _start_vignettes(services) -> None:
-    """The vignette tablets' service (P4): registers its WebSocket snapshot and tracker push now, so a tablet that
-    reconnects before anyone opened a room page still gets its room. A bad config/vignettes.yaml never stops the
-    canopy: it becomes a "Needs attention" line and the vignette pages answer 503 with a plain message."""
-    from conductor.config import ConfigError
-    from conductor.vignettes import VignetteService
-
-    try:
-        VignetteService.of(services)
-    except ConfigError as exc:
-        services.problems.append(f"Vignette pages are off: {exc}")
-        log.error("Needs attention: vignette pages are off: %s", exc)
 
 
 app = FastAPI(title="Color Canopy Conductor", version=__version__, lifespan=lifespan)
@@ -169,12 +153,9 @@ def canopy_layout(scheme: str | None = None) -> dict:
 
 
 @app.get("/", include_in_schema=False)
-def root(request: Request) -> RedirectResponse:
-    # The Studio is home only on the VWBD workshop laptop (CONDUCTOR_ENV=workshop, or workshop-sim in practice
-    # mode); the venue box, staging and a local run keep the visualizer.
-    services = getattr(request.app.state, "services", None)
-    environment = services.gate_settings.environment if services is not None else "local"
-    return RedirectResponse("/ops/showcase/" if environment.startswith("workshop") else "/visualizer/")
+def root() -> RedirectResponse:
+    # Home is the visualizer everywhere: the show box, staging and a local run (D67).
+    return RedirectResponse("/visualizer/")
 
 
 app.include_router(core.router)
@@ -187,7 +168,6 @@ app.include_router(guest.router)
 app.include_router(ops.router)
 app.include_router(design.router)
 app.include_router(design_lab.router)
-app.include_router(vignette.router)
 
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 app.mount("/ops", StaticFiles(directory=WEB_DIR / "ops", html=True), name="ops")

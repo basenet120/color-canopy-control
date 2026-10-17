@@ -41,5 +41,5 @@ and ideally passed Gates B and C then. If a spare wasn't onboarded, step 3 cover
    - [ ] **Run test mode change**: all nine Ready.
 9. **Resume guest input.**
 10. **Tidy up:** in the Hubspace app, remove the dead kit from the canopy account (otherwise it lingers as an
-    unregistered device). Keep the dead kit for Home Depot. `sudo canopy-backup`. Tell Alon which spare went where
+    unregistered device). Keep the dead kit for Home Depot. `canopy-mac backup`. Tell Alon which spare went where
     and update `docs/STATUS.md`.

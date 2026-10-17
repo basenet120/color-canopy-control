@@ -442,21 +442,19 @@ def test_f8_guest_panel_previews_what_is_lit_from_the_state():
     assert 'state.look === "solid"' in js and "scene.solid" in js
 
 
-# ---- (a) the /ops device list is grouped by role / room ------------------------------------------------------
-def test_devices_come_grouped_canopy_bench_spares_then_rooms(app_client):
+# ---- (a) the /ops device list is grouped by role ---------------------------------------------------------------
+def test_devices_come_grouped_canopy_bench_spares(app_client):
+    """Canopy modules, bench, spares — and nothing after them (D67: no vignette rooms)."""
     body = app_client.get("/api/devices").json()
     groups = body["groups"]
     ids = [g["id"] for g in groups]
-    assert ids[:3] == ["canopy", "bench", "spares"]
-    assert ids[3:] == ["vignette-entry", "vignette-living", "vignette-bedroom", "vignette-garden"]
+    assert ids == ["canopy", "bench", "spares"]
+    assert all(g["strand"] is True and g["link"] is None for g in groups)
     canopy = groups[0]
     assert canopy["strand"] is True and len(canopy["devices"]) == 9
     assert canopy["devices"][0] == "canopy-r0c0" and canopy["devices"][-1] == "canopy-r2c2"
-    living = next(g for g in groups if g["id"] == "vignette-living")
-    assert living["strand"] is False and living["link"] == "/vignette/living/"
-    assert living["title"] == "Holiday Living Room"
     by_id = {d["id"]: d for d in body["devices"]}
-    assert all(by_id[d]["vignette"] == "living" for d in living["devices"])
+    assert not any("vignette" in d or "kind" in d for d in body["devices"])
     placed = [d for g in groups for d in g["devices"]]
     assert sorted(placed) == sorted(by_id), "every device in exactly one group"
 
@@ -466,25 +464,27 @@ def test_ops_js_offers_module_page_and_bench_only_for_strands():
 
     js = (Path(__file__).resolve().parent.parent / "web" / "ops" / "ops.js").read_text()
     item = js[js.index("function deviceItem") : js.index("function renderDevices")]
-    assert "strand\n      ? h(" in item and "Open room page" in item
+    assert "strand\n      ? h(" in item and "Open room page" not in item
     assert "strand ? capsLine(d) : profileLine(d)" in item
     assert "strand && d.head_count_problem" in item
 
 
-# ---- (b) the 7 am clock check on the venue box -----------------------------------------------------------------
+# ---- (b) the 7 am clock check on a Linux host -----------------------------------------------------------------
 def test_clock_flag_folder_without_the_flag_means_not_synced(app_client, monkeypatch, tmp_path):
     folder = tmp_path / "timesync"
-    folder.mkdir()  # the venue box mounts the watchdog's folder here; no "synchronized" file in it
+    folder.mkdir()  # timesyncd's folder is there; no "synchronized" file in it
     monkeypatch.setattr(ops_routes, "TIMESYNC_FLAG", folder / "synchronized")
     monkeypatch.setattr(ops_routes, "ntp_status", REAL_NTP_STATUS)
     body = app_client.get("/api/ops/checklist").json()
     clock = next(i for i in body["items"] if i["id"] == "clock")
     assert clock["status"] == "fail"
     assert "not synced to internet time" in clock["detail"]
-    assert "chrony" in clock["fix"] and "network" in clock["fix"]
-    assert "mount" not in clock["fix"].lower() and "set-ntp" not in clock["fix"]
+    assert "canopy-mac status" in clock["fix"] and "internet" in clock["fix"]
+    assert (
+        "mount" not in clock["fix"].lower() and "set-ntp" not in clock["fix"] and "chrony" not in clock["fix"]
+    )
 
-    (folder / "synchronized").touch()  # the watchdog's flag: chrony says synced
+    (folder / "synchronized").touch()  # timesyncd's flag: synced
     body = app_client.get("/api/ops/checklist").json()
     clock = next(i for i in body["items"] if i["id"] == "clock")
     assert clock["status"] == "pass" and "synced to internet time" in clock["detail"]
@@ -497,4 +497,7 @@ def test_clock_that_cant_be_seen_never_asks_for_a_mount(app_client, monkeypatch,
     body = app_client.get("/api/ops/checklist").json()
     clock = next(i for i in body["items"] if i["id"] == "clock")
     assert clock["status"] == "warn"
-    assert "mount" not in clock["fix"].lower() and "chrony" in clock["fix"]
+    assert "mount" not in clock["fix"].lower() and "canopy-mac status" in clock["fix"]
+    assert (
+        "chrony" not in clock["fix"] and "canopy-status" not in clock["fix"]
+    )  # the Ubuntu tooling is gone (D67)

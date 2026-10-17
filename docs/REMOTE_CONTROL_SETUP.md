@@ -7,8 +7,8 @@ whichever device you're using.
 Docs: https://code.claude.com/docs/en/remote-control
 
 Unlike a cloud session (docs/CLOUD_SETUP.md), this one **can** reach the shop's devices, because it runs on the Mac
-mini. So the hard rules in CLAUDE.md apply in full, starting with "never set HUBSPACE_LIVE outside the workshop
-launcher's own runtime".
+mini. So the hard rules in CLAUDE.md apply in full: never set HUBSPACE_LIVE in a session, never bind port 8000 (the
+show Conductor's), and never touch `~/canopy-show` or the show's data folder.
 
 ## One-time setup on the Mac mini (about 15 minutes)
 
@@ -37,29 +37,15 @@ launcher's own runtime".
    session shows with a green dot. Server mode lets you start several sessions on the Mac mini from there.
 
 **Permissions:** keep the default (approve as you go). Don't run it with bypass-permissions: this machine can reach
-real lights and holds the workshop's Hubspace sign-in.
+real lights and holds the show's Hubspace sign-in.
 
 ## Running the live program on the Mac mini
 
-The workshop launcher holds the Hubspace sign-in in `workshop.env` and `workshop-data/` inside the repo folder, both
-gitignored:
+The Mac mini **is** the show box (D61). The live Conductor runs from its own checkout, `~/canopy-show`, at a release
+tag, under launchd, with its settings and sign-ins in `~/Library/Application Support/ColorCanopy/`: see
+`docs/runbooks/mac-show-box.md` (set up, look after) and `docs/runbooks/release-and-freeze.md` (the deploy paste
+block). A Remote Control session works in the development checkout (`~/color-canopy-control` or a worktree) on the
+simulator only: dev servers on other ports (`scripts/dev_design_lab.py --port 82xx`), never port 8000.
 
-```bash
-uv run python -m conductor.workshop setup
-```
-
-```bash
-uv run python -m conductor.workshop run
-```
-
-- **Setup:** you type the account email; sign in on `/ops/accounts` yourself.
-- **Run:** from a remote session, ask Claude to start it in a terminal tab, or add it as its own LaunchAgent.
-
-Only one control program may drive the shop panels at a time, so stop the one on any laptop first.
-
-## Is the Mac mini also the show machine?
-
-Not yet. The venue box the project was built and tested for is a **Linux** mini PC: `deploy/venue` (systemd services,
-watchdog, Chromium kiosk, installer) and docs/runbooks/venue-box.md are Linux-only. Using the Mac mini at the venue
-means porting that deployment to macOS (launchd, the kiosk browser, the watchdog, UPS/NTP checks), plus a dry run
-before install on Oct 20. That decision is needed now: install is a week away.
+Only one control program may drive the lights at a time: never start a second Conductor that could sign in to a
+show account.

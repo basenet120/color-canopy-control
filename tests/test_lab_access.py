@@ -1,6 +1,6 @@
 """Who may use the Design Lab, and what it may never do (PLAN §4, §8 "Hard limits"; 07 §2).
 
-- `/api/lab/*` is ops only: the auth middleware's path table keeps kiosk, tester and vignette devices out, and the
+- `/api/lab/*` is ops only: the auth middleware's path table keeps kiosk and tester devices out, and the
   router's own `require_ops` keeps them out even if the table ever let them through.
 - Every write is same-site JSON (`routes/ops.py` `_no_cross_site`): 415 for anything but JSON, 403 cross-site.
 - Saves, restores, deletes and exports are recorded in telemetry (`kind="lab"`).
@@ -53,7 +53,7 @@ STUDIO_PAGES = [
     "/ops/showcase/lab.css",
     "/ops/showcase/lab-model.mjs",
 ]
-ENROLLED = [("kiosk", []), ("tester", ["bench-kit"]), ("vignette", ["living"])]
+ENROLLED = [("kiosk", []), ("tester", ["bench-kit"])]
 
 
 @pytest.fixture
@@ -129,7 +129,7 @@ def test_every_lab_route_is_ops_only(app_client_auth, fakes):
 
 def test_every_lab_route_requires_ops_past_the_path_table(app_client_auth, fakes, monkeypatch):
     """The router's own guard, not only the auth middleware's path table: with the table opened to everyone, an
-    enrolled kiosk, tester or vignette is still refused 403 by `require_ops` on every route."""
+    enrolled kiosk or tester is still refused 403 by `require_ops` on every route."""
     from fastapi.routing import APIRoute
 
     from conductor.app import app

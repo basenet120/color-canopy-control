@@ -133,7 +133,7 @@ def test_on_a_partial_canopy_the_moving_copy_counts_its_strands_and_claims_no_la
 
 # ---- live safety ---------------------------------------------------------------------------------------------------
 class _Addressed:
-    """The registry as the venue box sees it: every canopy position has a device on the driver (an Afero metadevice id
+    """The registry as the show box sees it: every canopy position has a device on the driver (an Afero metadevice id
     live, the sim address in sim), no bench flag proven, no slot commissioned."""
 
     def __init__(self, registry):

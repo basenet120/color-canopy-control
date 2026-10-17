@@ -439,7 +439,7 @@ def test_kiosk_page_serves_every_module_it_imports_and_draws_the_canopy(app_clie
     html = (KIOSK_DIR / "index.html").read_text()
     svg = re.search(r'<svg class="canopy-preview" id="canopy-preview"[^>]*>', html)
     assert svg and 'role="img"' in svg.group(0) and "aria-label=" in svg.group(0)
-    assert 'id="snake"' in html  # the fallback when there is no picture (the workshop strands, no look yet)
+    assert 'id="snake"' in html  # the fallback when there is no picture (no look yet)
 
 
 def test_kiosk_title_matches_the_signage_plan():

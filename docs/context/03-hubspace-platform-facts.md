@@ -40,6 +40,8 @@ Condensed from the Sep 19 2026 research pass and corrected after the Sep 26 revi
 - Largest known public deployment: 143 devices. Our 9 canopy strands + ~15–25 vignette devices is comfortably inside known territory.
 
 ## Device facts relevant to vignettes
+*Out of scope since Oct 17 (D67): the Conductor controls the canopy only; the vignettes run on the stock Hubspace
+app. Kept as background.*
 - EcoSmart A19 RGB (12A19060WRGBWH1): `color-rgb {r,g,b}` 0–255, brightness 1–100, `color-mode` white/color/sequence, `color-temperature`, **no transition/fade parameter**, on-bulb effects (fade-3/7, jump-3/7, named presets, speed −10…+10), `restore-values` power-restore setting. (UNVERIFIED for this exact model: these come from A21 dumps; no 12A19060 dump exists.)
 - Defiant Wi-Fi deadbolts: `lock-control` lock/unlock only (no PIN management through aioafero).
 - Defiant outdoor plug HPPA52CWB: two independently switchable outlets.

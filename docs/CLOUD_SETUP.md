@@ -9,13 +9,13 @@ Claude app on a phone. All of these run the same session, so you can start on on
 Docs: https://code.claude.com/docs/en/claude-code-on-the-web and https://code.claude.com/docs/en/cloud-environments
 
 **What a cloud session can and can't do here:**
-- **Can:** read and change the code, run `make test`, `make lint`, `make soak` and `make guest-dev`, all on the
+- **Can:** read and change the code, run `make test`, `make lint`, `make soak` and `make lab-dev`, all on the
   simulator; push `claude/*` branches; open pull requests.
 - **Can't:** control real lights. A cloud machine can't reach the shop's Wi-Fi.
 - **Must never:** be given Hubspace credentials, `HUBSPACE_LIVE`, or any show account (CLAUDE.md, 07 §1–§3).
 
-Live work stays on a laptop next to the panels. That laptop runs the workshop launcher (`workshop/README.md`) with its
-own private `workshop.env`.
+Live work happens only on the Mac show box (D61, `docs/runbooks/mac-show-box.md`), the one runtime that holds show
+accounts.
 
 ## One-time setup (about 10 minutes)
 
@@ -58,8 +58,6 @@ which runs `uv sync --frozen --all-extras`. On your own computer that script doe
 
 - 4 vCPUs, 16 GB RAM. A single command can run up to 10 minutes; the full test suite takes about 4 minutes and the
   soak about 30 seconds.
-- `tests/test_deploy.py` is Linux-only, so it passes in the cloud (the cloud machine is Ubuntu, like CI) but fails on a
-  Mac.
 - `make e2e` needs the Playwright browser that `uv.lock` pins. Trusted network access can't download it (its CDN isn't
   on the list), so e2e stays a local or CI job unless you add Playwright's download host under Custom network access.
 - An idle session pauses, and its machine may be reclaimed. Reopening it restores the conversation; the setup and the
@@ -67,13 +65,6 @@ which runs `uv sync --frozen --all-extras`. On your own computer that script doe
 
 ## Live hardware (not in the cloud)
 
-On the shop laptop:
-
-```bash
-git pull
-uv sync --frozen --all-extras
-uv run python -m conductor.workshop run
-```
-
-Keep its `workshop.env` and `workshop-data/` (the private sign-in, never in git). Only one control program should
-drive the shop panels at a time.
+Only on the Mac show box, from its dedicated checkout `~/canopy-show` at a release tag, with `canopy-mac`
+(`docs/runbooks/mac-show-box.md`, `docs/runbooks/release-and-freeze.md`). Only one Conductor may drive the lights at a
+time.

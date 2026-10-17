@@ -119,26 +119,21 @@
 
       <section class="card" id="enroll-card" aria-labelledby="enroll-h">
         <h2 id="enroll-h">Set up a device</h2>
-        <p>Give the kiosk, a vignette tablet or a tester's phone its own access — no ops password. The link works
+        <p>Give the kiosk (the guest iPad) or a tester's phone its own access — no ops password. The link works
           once, on the device that opens it.</p>
         <form id="enroll-form" class="stack">
           <fieldset class="seg-field">
             <legend>What is it?</legend>
             <div class="seg" id="enroll-role">
               <label><input type="radio" name="role" value="kiosk" checked> Kiosk</label>
-              <label><input type="radio" name="role" value="vignette"> Vignette</label>
               <label><input type="radio" name="role" value="tester"> Tester</label>
             </div>
           </fieldset>
           <div>
             <label for="enroll-name">Name</label>
-            <input id="enroll-name" name="name" maxlength="80" placeholder="e.g. Canopy kiosk" required>
+            <input id="enroll-name" name="name" maxlength="80" placeholder="e.g. Guest iPad" required>
           </div>
           <p class="muted small" id="enroll-kiosk-note">The kiosk only ever drives the canopy's six modes.</p>
-          <div id="enroll-vignette" hidden>
-            <label for="enroll-vignettes">Vignette ids</label>
-            <input id="enroll-vignettes" placeholder="e.g. living-room, bedroom" autocomplete="off">
-          </div>
           <fieldset class="checks" id="enroll-devices" hidden>
             <legend>Devices they may test</legend>
           </fieldset>

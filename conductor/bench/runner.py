@@ -260,7 +260,7 @@ class BenchRunner:
     def devices(self) -> list[dict[str, Any]]:
         """Every device a bench job could target, with the driver it would use and who holds its lock."""
         out = []
-        entries = [d for d in self.services.registry.devices if d.role != "vignette"]
+        entries = list(self.services.registry.devices)
         entries.sort(key=lambda d: (d.role != "bench", d.role != "spare", d.id))
         for entry in entries:
             row: dict[str, Any] = {

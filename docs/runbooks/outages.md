@@ -54,24 +54,24 @@ Causes: someone tapped *Sign out of all other devices* in the Hubspace app (it k
 about 2 minutes), the password changed, Hubspace expired it, or a restore brought back an old one.
 
 - [ ] Find one of the two people above. Have the account's inbox open (Hubspace may email a 6-digit code).
-- [ ] On the box (keyboard, or `ssh` over Tailscale):
+- [ ] On the show box (keyboard, or Screen Sharing / `ssh` over Tailscale), in Terminal:
       ```
-      sudo docker exec -it canopy-conductor python -m conductor.auth login --account canopy
+      canopy-mac login --account canopy
       ```
-      (vignette accounts: `--account living`, `bedroom`, `garden`, `entry`). It asks for the email, the password
-      (not shown) and the code. The Conductor never retries a dead sign-in by itself.
+      It asks for the email, the password (not shown) and the code. The Conductor never retries a dead sign-in by itself.
 - [ ] `/ops` → the account shows connected; **Re-assert all**; **Run** the 7 am checklist.
 - [ ] Wrong code: it asks again. Too many attempts, or no code arrives: wait 5 minutes and start over.
-- [ ] Nobody signs in on staging or a laptop: show accounts only ever sign in on the venue box.
+- [ ] Nobody signs in on staging or a laptop: show accounts only ever sign in on the show box (the Mac mini).
 
 ## The box itself
 
-- **Power cut:** the UPS rides through short ones. A long one: the box boots by itself when power returns (BIOS
-  setting) and everything starts again in about 2–3 minutes (the kiosk shows "resting" once the desktop is up,
-  until the Conductor answers), then the Conductor puts Lowcountry Calm on every
+- **Power cut:** the UPS rides through short ones. A long one: the Mac starts by itself when power returns
+  (*Start up automatically after a power failure*, `mac-show-box.md` §1) and logs in by itself, and everything starts
+  again in about 2–3 minutes (the iPad shows "resting" until the Conductor answers), then the Conductor puts
+  Lowcountry Calm on every
   module. (What a module shows by itself right after losing power — its last look or a default — is
   **UNVERIFIED** until the bench's power test.)
-- **Conductor crashed or hung:** the watchdog restarts it after three failed checks (about 90 s). `sudo canopy-status`
-  → Watchdog shows it. More than twice in an hour: `sudo canopy-logs service --since 2h` (the Conductor's output
-  across restarts; `canopy-logs conductor` starts again at every restart, so it can't show why), call Alon.
-- **Box dead:** `venue-box.md` → The cold spare.
+- **Conductor crashed or hung:** the watchdog restarts it after three failed checks (about 90 s). `canopy-mac status`
+  → Watchdog shows it. More than twice in an hour: `canopy-mac logs` (the Conductor's output across restarts), call
+  Alon.
+- **Box dead:** `mac-show-box.md` §6 → The cold spare.

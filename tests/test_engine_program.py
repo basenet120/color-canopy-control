@@ -315,7 +315,7 @@ def test_under_the_pinned_faults_a_run_never_takes_the_account_past_the_cap(seed
 
 
 def test_a_step_that_would_take_the_account_past_the_cap_is_held_back():
-    """Writes from elsewhere on the account (a vignette, a mood chosen mid-run) leave too little room: the step is
+    """Writes from elsewhere on the account (the module page, a mood chosen mid-run) leave too little room: the step is
     held back — nothing is sent and the step shown stays the last one sent — and the next step goes out once there
     is room again."""
 

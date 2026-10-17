@@ -59,7 +59,7 @@ def _json(data: Any, status_code: int = 200) -> JSONResponse:
 
 
 def _same_site_json(request: Request) -> None:
-    """Refuse a cross-site or non-JSON write (403/415), as the module, ops and vignette routes do."""
+    """Refuse a cross-site or non-JSON write (403/415), as the module and ops routes do."""
     headers = request.headers
     if ("origin" in headers or "referer" in headers) and not same_origin(headers):
         raise HTTPException(status_code=403, detail="Refused: this request came from another site.")

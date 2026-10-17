@@ -218,7 +218,7 @@ def test_the_studio_and_ops_link_to_the_lab(app_client):
     assert html.index('id="lab-link"') < html.index('id="guest-panel-link"')
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert html.index('id="lab" class="lab"') < html.index("</main>")
-    assert html.index('src="./studio.js?v=show-design-3"') < html.index('src="./lab.js?v=lab-5"')
+    assert html.index('src="./studio.js?v=screen-1"') < html.index('src="./lab.js?v=lab-5"')
     for asset in ("lab.js", "lab.css", "lab-model.mjs"):
         assert app_client.get(f"/ops/showcase/{asset}").status_code == 200, asset
     ops = app_client.get("/ops/").text

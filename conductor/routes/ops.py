@@ -27,7 +27,7 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `GET  /api/ops/logs[?since=&limit=]`  the log tail (redacted; see conductor/logring.py)
 - `GET  /api/ops/overlay[?part=all|yaml|diff]`  the ops overlay (07 §8), as an attachment: the overlay's YAML (to
   restore under <data>/overrides/registry.yaml) plus a unified diff folding it into config/devices.yaml, to commit
-  back to git. The YAML keeps real metadevice ids (ops only; tester, kiosk and vignette never reach it); the diff
+  back to git. The YAML keeps real metadevice ids (ops only; tester and kiosk never reach it); the diff
   leaves them out, because devices.yaml never holds real ids.
 
 Every POST must be JSON from this site (same rule as the module page, D17): a cross-site form can't pause the
@@ -113,9 +113,8 @@ TOKEN_STALE_S = (
     600  # a live sign-in that hasn't refreshed for this long is suspect (it refreshes ~every 2 min)
 )
 THROTTLE_WINDOW_S = 600
-# systemd-timesyncd creates this file once the clock is synced; on the venue box the watchdog keeps a copy in step
-# with chrony and the compose file mounts its folder here (deploy/venue/lib/watchdog.sh). Folder there, file absent =
-# not synced.
+# systemd-timesyncd creates this file once the clock is synced (a Linux host such as Railway). Folder there, file
+# absent = not synced. The Mac show box has neither: `canopy-mac status` shows its clock (D61).
 TIMESYNC_FLAG = Path("/run/systemd/timesync/synchronized")
 LOG_LIMIT_MAX = 500
 
@@ -900,9 +899,7 @@ async def ntp_status() -> tuple[bool | None, str]:
     try:
         if TIMESYNC_FLAG.exists():
             return True, "the box reports its clock synced to internet time"
-        if (
-            TIMESYNC_FLAG.parent.is_dir()
-        ):  # the flag's folder is there (venue box mount, or timesyncd): no flag
+        if TIMESYNC_FLAG.parent.is_dir():  # the flag's folder is there (timesyncd): no flag
             return False, "the box reports its clock is not synced to internet time"
     except OSError:
         pass
@@ -948,10 +945,10 @@ async def _check_clock(services: Any, client_ms: float | None) -> dict:
     parts.append(f"(How we know: {how}.)")
     detail = " ".join(parts)
     ntp_fix = (
-        "The box keeps its clock with chrony, over the internet. Check the box's network first (is the internet "
-        "up?). Then on the box run `chronyc tracking` (Leap status should say Normal) or `timedatectl` (System "
-        "clock synchronized: yes); if not, `sudo systemctl restart chrony`, wait 2 minutes and press Run again. A "
-        "clock that is off may get Hubspace writes accepted and then dropped (unverified), so fix it before doors."
+        "On the show box run `canopy-mac status` (the Clock line shows the offset from Apple time). If it's off, "
+        "check the internet, then System Settings → General → Date & Time → Set time automatically, and press Run "
+        "again. A clock that is off may get Hubspace writes accepted and then dropped (unverified), so fix it before "
+        "doors."
     )
     if synced is False:
         return _item("clock", title, "fail", detail, ntp_fix)
@@ -973,9 +970,9 @@ async def _check_clock(services: Any, client_ms: float | None) -> dict:
             title,
             "warn",
             detail,
-            "Check the box's clock yourself: on the venue box run `sudo canopy-status` (Box → NTP synchronized) or "
-            "`timedatectl`. If it isn't synced, check the internet, then `sudo systemctl restart chrony`. (A staging "
-            "server can't report this; nothing to do there.)",
+            "On the show box run `canopy-mac status` (the Clock line shows the offset from Apple time). If it's "
+            "off, check the internet, then System Settings → General → Date & Time → Set time automatically, and "
+            "press Run again. (A staging server can't report this; nothing to do there.)",
         )
     if small:
         return _item(

@@ -292,7 +292,7 @@ def test_checklist_clock_compares_with_the_browser(app_client, monkeypatch):
 
     monkeypatch.setattr(ops_routes, "ntp_status", unknown)
     clock = _items(app_client.get(f"/api/ops/checklist?client_ms={time.time() * 1000}").json())["clock"]
-    assert clock["status"] == "warn" and "check the box's clock" in clock["fix"].lower()
+    assert clock["status"] == "warn" and "canopy-mac status" in clock["fix"]
     clock = _items(app_client.get(f"/api/ops/checklist?client_ms={far}").json())["clock"]
     assert clock["status"] == "fail"
 
@@ -301,7 +301,11 @@ def test_checklist_clock_compares_with_the_browser(app_client, monkeypatch):
 
     monkeypatch.setattr(ops_routes, "ntp_status", unsynced)
     clock = _items(app_client.get("/api/ops/checklist").json())["clock"]
-    assert clock["status"] == "fail" and "chrony" in clock["fix"]
+    assert (
+        clock["status"] == "fail"
+        and "Set time automatically" in clock["fix"]
+        and "chrony" not in clock["fix"]
+    )
     assert "not synced to internet time" in clock["detail"]
 
 
