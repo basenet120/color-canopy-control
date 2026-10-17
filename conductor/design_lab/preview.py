@@ -13,7 +13,8 @@ Truth rules:
   never the Studio's `SCENES`): a hex edit shows the new colour at every tier, a renamed colour still compiles.
 - "Today" walks the patched ladder the way the running show would (`ShowWiring.tier_allowed`, the show's registry,
   capabilities, flags, addresses and D62 left-outs) and lights only what that tier lights. At a painted tier the
-  slots hold the APPROVED design, so its heads are compiled from the approved trio and say so.
+  slots hold the APPROVED design, so its heads are compiled from the approved trio and say so. While a try-on of
+  the scene runs, "today" is the plan the engine installed for it (module level or strand), with TRYING_ON_NOTE.
 - Brightness is a level (`brightness`, `lit.level`), never multiplied into a colour (D59).
 
 Owners: `design_registry`, `design_caps`, `T1_LOCKED` and `T1Locked` are the contracts commit (L); the bodies are
@@ -67,6 +68,12 @@ SHOW_BOX_NOTE = (
 )
 # The stepped clause comes from the gate itself, so the note never says stepped is off while the view steps.
 SHOW_BOX_STEPPED_ON = "Stepped looks are enabled on live hardware (motion.stepped.live_enabled)."
+TRYING_ON_NOTE = (
+    "A try-on of this scene is on the lights now, {how}: this is the draft that was applied, as the engine installed "
+    "it. Edits made since reach the lights only when applied."
+)
+TRYING_ON_HOW = {Tier.T3: "at module level", Tier.STRAND: "as one colour on every strand"}
+TRYING_ON_PAINTED = "The painted design isn't on the lights."
 SIM_LOCK_SENTENCE = (
     "In the simulator the slots are commissioned at start-up; on the show box this scene's painted design is "
     "read-only once commissioned."
@@ -229,6 +236,9 @@ def today_view(lab: LabService, patched: ConfigTrio, scene_id: str) -> dict:
     # ShowWiring.context passes no recipes, so without the replace the draft's T3 colours would come from git's
     # recipes: a hex edit would show the approved colour, and a renamed colour would fail modules and drop to strand.
     ctx = dataclasses.replace(wiring.context(modes=patched.modes), recipes=patched.recipes)
+    trying = _trial_view(lab, wiring, title, scene_id, patched)
+    if trying is not None:
+        return trying
     plan, reasons = _first_plan(
         scene_id, patched.modes, ctx, lambda tier: wiring.tier_allowed(scene_id, tier)
     )
@@ -259,6 +269,39 @@ def today_view(lab: LabService, patched: ConfigTrio, scene_id: str) -> dict:
         heads="draft",
         positions=positions,
         note=_left_out_note(plan),
+    )
+
+
+def _trial_view(lab: LabService, wiring: Any, title: str, scene_id: str, patched: ConfigTrio) -> dict | None:
+    """While a try-on of `scene_id` runs, "today" is the plan the engine installed for it (D66 Slice B: module level
+    or strand, compiled from the applied draft), never a painted rung the lights aren't showing."""
+    engine = lab.engine()
+    trial = getattr(engine, "trial", None) if engine is not None else None
+    if trial is None or trial.mode_id != scene_id:
+        return None
+    plan = engine.current_plan()
+    if plan is None or plan.mode_id != scene_id:
+        return None
+    ctx = wiring.context()
+    modes = trial.modes if trial.modes is not None else patched.modes
+    level = modes.mode(scene_id).techniques.modules.sample.brightness  # type: ignore[union-attr]
+    painted = lab.approved.modes.mode(scene_id).slot is not None
+    note = " ".join(
+        n
+        for n in (
+            TRYING_ON_NOTE.format(how=TRYING_ON_HOW.get(plan.tier, f"at the {plan.tier} tier")),
+            TRYING_ON_PAINTED if painted else "",
+            _left_out_note(plan),
+        )
+        if n
+    )
+    return _view(
+        title,
+        plan,
+        lit=_lit(ctx.canopy or lab.canopy, ctx.devices, plan, level),
+        heads="draft",
+        positions=_positions(ctx.devices, plan),
+        note=note,
     )
 
 

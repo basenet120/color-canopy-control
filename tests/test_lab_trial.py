@@ -1215,3 +1215,42 @@ def test_the_apply_gate_reserves_and_releases():
     assert gate.reserve(103.0) == 5.0 and gate.remaining(103.0) == 5.0
     gate.release()  # the apply at 100 was refused after all: no gap
     assert gate.reserve(103.0) == 0.0 and gate.reserve(110.0) == 1.0 and gate.reserve(111.0) == 0.0
+
+
+def test_today_during_a_try_on_shows_the_installed_plan_not_the_painted_slots():
+    """The preview's "today" must be true while a try-on runs: in the simulator a painted scene's today is the
+    painted rung (the slots' approved design), but during its try-on the lights are at module level from the applied
+    draft. Another scene's today is untouched, and "Back to approved" puts the painted rung back."""
+    from conductor.design_lab import preview as P
+
+    async def main():
+        w = await show()
+        d = golden_pink()
+        before = P.today_view(w.lab, patched(w, d), GOLDEN)
+        await try_on(w, d)
+        plan = w.engine.current_plan()
+        during = P.today_view(w.lab, patched(w, d), GOLDEN)
+        other = P.today_view(w.lab, D.load_trio(CONFIG_DIR), CALM)
+        await w.engine.end_trial(source="test")
+        await w.engine.wait_idle()
+        after = P.today_view(w.lab, patched(w, d), GOLDEN)
+        out = (before, plan, during, other, after, w.lab.canopy, list(w.services.registry.canopy_modules()))
+        await w.close()
+        return out
+
+    before, plan, during, other, after, canopy, modules = run_virtual(main)
+    assert before["tier"] == "canvas" and before["heads"] == "approved"
+    assert plan.tier is Tier.T3
+    assert during["tier"] == "modules" and during["heads"] == "draft"
+    assert during["note"].startswith(P.TRYING_ON_NOTE.format(how="at module level"))
+    assert P.TRYING_ON_PAINTED in during["note"]
+    from conductor.canopy_view import module_colours
+
+    by_pos = {m["pos"]: m for m in during["lit"]["modules"]}
+    for entry in modules:
+        hexes = module_colours(canopy, entry, plan.modules[entry.id].colors)
+        shown = by_pos[entry.module]
+        assert shown["state"] == "lit"
+        assert (shown["colors"] or [shown["color"]] * len(hexes)) == hexes
+    assert P.TRYING_ON_NOTE.split("{")[0] not in (other["note"] or "")
+    assert after["tier"] == "canvas" and after["heads"] == "approved"

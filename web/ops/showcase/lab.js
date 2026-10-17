@@ -196,6 +196,13 @@ function workingPreview(sceneId = L.scene) {
   return { preview: catalogPreview(draft), fresh: false, failed };
 }
 
+/** A try-on started, ended or changed tier: every cached preview's "today" (what the lights show) is out of date, so
+ * drop the cache and ask again for the scene on screen. The server's today_view reports the try-on's installed plan. */
+function invalidateToday() {
+  L.cache.clear();
+  schedulePreview();
+}
+
 function schedulePreview() {
   clearTimeout(L.timer);
   const now = Date.now();
@@ -1436,8 +1443,10 @@ async function refreshTrial() {
   T.ending = false;
   if (before && !T.trial && T.api === "ready") setNotice(`The try-on of ${before.label || before.scene_id} ended.`);
   const changed = !before !== !T.trial || (before && T.trial && (before.scene_id !== T.trial.scene_id || before.applies !== T.trial.applies || before.tier !== T.trial.tier));
-  if (changed) renderAll();
-  else renderTrial();
+  if (changed) {
+    invalidateToday();
+    renderAll();
+  } else renderTrial();
 }
 
 /** GET /api/lab/state: the engine's flags (running, paused, commissioning, outage) and the store, for the panel. */
@@ -1544,6 +1553,7 @@ async function applyTrial({ confirm = null } = {}) {
     if (answer && answer.state && answer.state.engine) L.state = answer.state;
     setAlert("trial", null);
     setNotice(T.trial ? `Applied to the lights: ${T.trial.draft_name || T.trial.label || sceneName(scene)}.` : "Applied.");
+    invalidateToday();
   } catch (err) {
     const out = M.startOutcome(err);
     if (out.kind === "confirm") {
@@ -1586,6 +1596,7 @@ async function stopTrial() {
     if (answer && answer.state && answer.state.engine) L.state = answer.state;
     setAlert("trial", null);
     setNotice(was ? `Back to approved: the lights show ${was.label || sceneName(was.scene_id)}’s approved look.` : "No try-on was running.");
+    invalidateToday();
   } catch (err) {
     const out = M.startOutcome(err);
     if (out.kind === "missing") T.api = "missing";
