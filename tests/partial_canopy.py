@@ -10,9 +10,8 @@ plain helper module rather than conftest.py so it never conflicts with the share
 
 from __future__ import annotations
 
-import time
-
 from fastapi.testclient import TestClient
+from show_started import past_startup
 
 LIVE = ("canopy-r0c0", "canopy-r0c1")  # the two shop kits registered at canopy positions
 
@@ -50,12 +49,6 @@ def partial_show(monkeypatch, tmp_path, registered, *, t3_only: bool = True) -> 
 
 
 def showing(c, timeout: float = 30.0):
-    """The engine once its first look is out and startup commissioning is over (a partial canopy never reads
-    READY on /ops: the modules left out keep it at needs attention)."""
-    engine = c.app.state.services.extras["canopy"]
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if engine.current_plan() is not None and not engine.commissioning:
-            return engine
-        time.sleep(0.05)
-    raise AssertionError(f"the canopy never showed a look: {engine.state()}")
+    """The engine once its first look is out and startup commissioning is over (`show_started.past_startup`; a
+    partial canopy never reads READY on /ops: the modules left out keep it at needs attention)."""
+    return past_startup(c, timeout)
