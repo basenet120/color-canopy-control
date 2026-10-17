@@ -1106,6 +1106,8 @@ export function steppedOf(preview) {
   if (!steps.length) return { error: MOTION_COPY.noSteps };
   if (steps.every((st) => Number.isFinite(Number(st.index)))) steps = [...steps].sort((a, b) => Number(a.index) - Number(b.index));
   const pace = s.pace && typeof s.pace === "object" ? s.pace : {};
+  const runs = s.runs && typeof s.runs === "object" ? s.runs : {};
+  const stillOf = (k) => (runs[k] && typeof runs[k].still === "string" && runs[k].still ? runs[k].still : null);
   return {
     steps,
     cycle: steps.length,
@@ -1115,7 +1117,10 @@ export function steppedOf(preview) {
     direction: s.direction === "reverse" ? "reverse" : "forward",
     moving: typeof s.moving_feature === "string" && s.moving_feature ? s.moving_feature : null,
     pace: { nine: positive(pace.nine), today: positive(pace.today), todayModules: positive(pace.today_modules) },
+    // the server's own reason a pace holds still (ProgramRunner: a step past max_step_s, or a run shorter than a step)
+    still: { nine: stillOf("nine"), today: stillOf("today") },
     liveSentence: typeof s.live_sentence === "string" && s.live_sentence ? s.live_sentence : null,
+    liveNote: typeof s.live_note === "string" && s.live_note ? s.live_note : null,
   };
 }
 
@@ -1140,6 +1145,8 @@ export function stepTimeline(st, paceKey) {
   const opt = options.find((o) => o.key === paceKey) || options[0];
   if (!opt) return { error: "The server sent no pace for these steps, so they can't be played at the real pace." };
   if (!st.runS) return { pace: opt.key, error: "The server sent no run length for these steps, so they can't be played." };
+  const still = st.still && st.still[opt.key];
+  if (still) return { pace: opt.key, error: `${capital(still)}.` };
   const count = Math.floor(st.runS / opt.stepS + EPS);
   if (count < 1) {
     return { pace: opt.key, error: `Its run (${fmtS(st.runS)} s) is shorter than one ${fmtS(opt.stepS)} s step, so the lights would hold still.` };
@@ -1200,12 +1207,18 @@ export function steppedRunLine(draftStepped, st) {
 
 /** The live line: the Lab never flips motion.stepped.live_enabled, it only says where it stands. */
 export function steppedLiveLine(live, st = null) {
-  const on = !!(live && live.stepped_live_enabled === true) && !(st && !st.error && st.liveSentence);
+  // the server's own sentence (show.STEPPED_LIVE_OFF) and note win, word for word (PLAN §7)
+  if (st && !st.error && st.liveSentence) {
+    const note = st.liveNote || (live && typeof live.stepped_live_note === "string" && live.stepped_live_note) || "";
+    return note ? `${capital(st.liveSentence)}. ${note}` : capital(st.liveSentence);
+  }
+  const on = !!(live && live.stepped_live_enabled === true);
   return on ? MOTION_COPY.liveOn : MOTION_COPY.live;
 }
 
 /** The ripple preview's label: screen only, with the canopy's own setting (the Lab never changes it). */
 export function rippleLabel(live) {
+  if (live && typeof live.ripple_note === "string" && live.ripple_note) return live.ripple_note; // the server's, word for word
   const v = live ? Number(live.ripple_stagger_s) : 0;
   if (!live || !Number.isFinite(v) || v === 0) return MOTION_COPY.ripple;
   return `Screen preview only — the canopy's ripple is set to kiosk.ripple_stagger_s: ${fmtS(v)} s (D64); the Lab never changes it`;

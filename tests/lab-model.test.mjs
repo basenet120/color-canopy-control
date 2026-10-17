@@ -967,10 +967,17 @@ test("setStepped keeps whole steps, half-second times and a run of at least one 
 test("the live line, the run line and the effects card: the Lab says where each stands and changes none", () => {
   const st = M.steppedOf(preview({ stepped: steppedJSON() }));
   const live = { stepped_live_enabled: false, stepped_live_sentence: STEPPED_LIVE_OFF, ripple_stagger_s: 0, effects_enabled: false };
-  assert.equal(M.steppedLiveLine(live, st), "Stepped motion is off on the real lights until Gate R passes; Alon sets motion.stepped.live_enabled");
+  const off = "Stepped looks are off on live hardware until the stepped rehearsal (Gate R) passes. Alon sets motion.stepped.live_enabled after Gate R";
+  assert.equal(M.steppedLiveLine(live, M.steppedOf(preview({ stepped: steppedJSON({ live_note: "Alon sets motion.stepped.live_enabled after Gate R" }) }))), off, "the server's STEPPED_LIVE_OFF and note, word for word");
+  assert.equal(M.steppedLiveLine({ ...live, stepped_live_note: "Alon sets motion.stepped.live_enabled after Gate R" }, st), off, "the catalog's note when the preview has none");
   assert.equal(M.steppedLiveLine(null), M.MOTION_COPY.live);
   assert.equal(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, M.steppedOf(preview({ stepped: steppedJSON({ live_sentence: null }) }))), M.MOTION_COPY.liveOn);
-  assert.equal(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, st), M.MOTION_COPY.live, "the server's own live sentence wins");
+  assert.match(M.steppedLiveLine({ ...live, stepped_live_enabled: true }, st), /^Stepped looks are off on live hardware/, "the server's own live sentence wins");
+  assert.equal(M.rippleLabel({ ripple_stagger_s: 0, ripple_note: "the server's note" }), "the server's note", "the server's ripple note, word for word");
+  // a pace the server says holds still (ProgramRunner: past max_step_s) can't be played, and says why
+  const held = M.steppedOf(preview({ stepped: steppedJSON({ runs: { nine: { still: "stepping 9 modules … the still design holds instead" }, today: { still: null } } }) }));
+  assert.equal(M.stepTimeline(held, "nine").error, "Stepping 9 modules … the still design holds instead.");
+  assert.ok(!M.stepTimeline(held, "today").error);
   assert.equal(M.effectsLine(live), "Effects — not enabled: no code has passed the bench (06 #4)");
   assert.notEqual(M.effectsLine({ effects_enabled: true }), M.MOTION_COPY.effects);
   assert.equal(M.steppedRunLine(golden().stepped, st), "A 90 s run — Nine modules (7.5 s): 12 steps · Show box today (two modules, 6 s): 15 steps; then the still look holds.");
