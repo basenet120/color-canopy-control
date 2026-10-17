@@ -7,12 +7,15 @@ same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
                                 state, server_now}`. `target` is "workshop" (the two VWBD shop strands) or "canopy"
                                 (the engine). Each scene is `{id, name, mood, description, palette: [{name, hex}],
                                 frame: [[r, g, b] × 30], solid: "#RRGGBB", brightness_draft}`. `state` is `{power,
-                                brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit}`:
+                                brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit,
+                                waiting}`:
                                 power/brightness/scene are null when unknown; look is "gradient" | "solid" (what the
                                 lights show, so the preview is true) or null; phase is ready | changing | resting |
                                 paused | cooldown ("cooldown": the lights are steady and a new scene can be chosen in
                                 cooldown_remaining_s; brightness and power still work); message is a calm sentence for
-                                the guest (or ""); feature is the true Hubspace sentence for what is showing, or null.
+                                the guest (or ""); feature is the true Hubspace sentence for what is showing, or null;
+                                waiting is why every mood waits now — "try-on" (a Design Lab try-on, D66), "testing"
+                                (the stepped rehearsal) — or null (the panel drops a waiting toast once it is null).
 
 The canopy picture (`conductor/canopy_view.py`; the engine target only — the workshop target sends `canopy: null` and
 `state.lit: null`, and the panel draws its 30-light serpentine instead). A fixed contract:

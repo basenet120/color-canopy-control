@@ -99,11 +99,14 @@ def _count(n: int, one: str, many: str) -> str:
 
 
 def confirm_sentence(lab: LabService, draft: SceneDraft, modules: list[Any], bound_s: float) -> str:
-    """What ops confirms before a try-on: the draft, the scene, the tier, every module written to and the bound."""
+    """What ops confirms before a try-on: the draft, the scene, the tier, every module written to and the bound. The
+    draft is named only when it renames the scene ("Try on Calm evening for Lowcountry Calm …"); a draft that keeps
+    the name is "your draft of Golden Hour", never "Golden Hour for Golden Hour"."""
     scene = lab.approved.scenes.get(draft.scene_id).name
     labels = ", ".join((m.label or m.id) for m in modules) or "none"
+    who = f"{draft.name} for {scene}" if draft.name != scene else f"your draft of {scene}"
     sentence = (
-        f"Try on {draft.name} for {scene} at module level on {_count(len(modules), 'module', 'modules')} "
+        f"Try on {who} at module level on {_count(len(modules), 'module', 'modules')} "
         f"({labels}) for up to {bound_s:g} s."
     )
     return f"{sentence} {PAINTED_SUFFIX}" if painted(lab, draft.scene_id) else sentence
@@ -185,7 +188,8 @@ def trial_json(lab: LabService) -> dict | None:
     now_mono = clock.monotonic()
     return {
         "scene_id": trial.mode_id,
-        "label": mine.label if mine is not None else trial.label,
+        # the approved scene's name: the installed plan's label is the draft's (it is compiled from the patched modes)
+        "label": _approved_name(lab, trial.mode_id),
         "version": trial.version,
         "draft_name": trial.label,
         "started_at": trial.started_at,
@@ -200,6 +204,13 @@ def trial_json(lab: LabService) -> dict | None:
         "cost": cost_line(len(modules)),
         "next_apply_in_s": apply_gate(lab).remaining(now_mono),
     }
+
+
+def _approved_name(lab: LabService, scene_id: str) -> str:
+    try:
+        return lab.approved.scenes.get(scene_id).name
+    except (KeyError, LookupError):
+        return scene_id
 
 
 def _modules_why(lab: LabService, scene_id: str) -> str:

@@ -259,6 +259,22 @@ export function refusalToast(err) {
   return { text: detail, retryAfterS: Number.isFinite(retry) && retry > 0 ? retry : 0 };
 }
 
+/** A refusal toast that asks the guest to wait for staff: a 503 with a retry (a try-on or the stepped rehearsal on
+ * the canopy). Its countdown is the server's upper bound, so the panel drops it once the wait is over. */
+export function isWaitRefusal(err) {
+  return !!err && err.status === 503 && refusalToast(err).retryAfterS > 0;
+}
+
+/** Hide a waiting toast? `waitToast` is `{at}` (local ms the refusal landed) or null; `state` a panel state read that
+ * started at `readStartedAt` (local ms). Only a read begun after the refusal counts (an older one predates the
+ * wait), only a state that carries `waiting` (an older server never says), and never on "resting": a canopy being
+ * set up or resting keeps the server's own retry. */
+export function waitToastOver(waitToast, state, readStartedAt) {
+  if (!waitToast || !state || typeof state !== "object" || !("waiting" in state)) return false;
+  if (!(readStartedAt >= waitToast.at)) return false;
+  return state.waiting == null && phaseOf(state) !== "resting";
+}
+
 // ---- debug -----------------------------------------------------------------------------------------------------
 export const FRAME_SIZES = [
   { id: "1180x820", w: 1180, h: 820, label: "1180×820" },

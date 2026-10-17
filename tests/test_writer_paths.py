@@ -650,9 +650,10 @@ COVERED_MODULES = {
     "conductor/reconciler.py": "reconciler (re-assert)",
     "conductor/sequence.py": "program runner (stepped look)",  # sends through CanopyEngine.send
     "conductor/vignettes.py": "vignette action",
-    # the try-on's routes and trial builder never write; every write is the engine's (the entry proves it on the wire)
+    # the try-on's routes never write; every write is the engine's (the entry proves it on the wire). Listing a file
+    # here exempts it from test_every_writer_module_is_listed's scan, so the Lab must stay a non-writer by its own
+    # check: tests/test_lab_access.py test_no_lab_module_calls_a_writer (an AST walk over every Lab source).
     "conductor/routes/design_lab.py": "lab try-on (module level)",
-    "conductor/design_lab/trial.py": "lab try-on (module level)",
 }
 ALLOWED = {"denied", "lock_refused", "locked"}
 

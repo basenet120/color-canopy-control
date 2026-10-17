@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -264,6 +265,26 @@ def test_no_lab_module_imports_a_writer():
         bad = sorted(m for m in imported if m.startswith(WRITER_MODULES))
         assert bad == [], f"{path.name} imports a device writer: {bad}"
         assert [c for c in WRITER_CALLS if c in text] == [], path.name
+
+
+# methods that write (or install a look) on any receiver: a local alias (`drv = ….engine_driver; drv.write(…)`)
+# slips past a substring scan, never past this
+WRITER_ATTRS = frozenset({"write", "write_rows", "submit", "burst", "send", "_show", "_install"})
+
+
+def test_no_lab_module_calls_a_writer():
+    """No Lab source calls a writing method on anything, whatever the receiver is called (the Lab's writes are the
+    engine's: start_trial / end_trial), and none matches the writer-path scan of tests/test_writer_paths.py."""
+    scan = re.compile(r"\.(submit|burst)\(|driver\.write\(|\.write\(\s*address")
+    for path in _lab_sources():
+        text = path.read_text()
+        calls = [
+            (n.func.attr, n.lineno)
+            for n in ast.walk(ast.parse(text))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in WRITER_ATTRS
+        ]
+        assert calls == [], f"{path.name} calls a writer: {calls}"
+        assert scan.search(text) is None, path.name
 
 
 def test_the_writer_check_sees_the_lab_files():

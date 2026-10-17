@@ -25,6 +25,8 @@ import {
   phaseOf,
   reconcile,
   refusalToast,
+  isWaitRefusal,
+  waitToastOver,
   sceneLabel,
   snakeLayout,
   stripGradient,
@@ -152,6 +154,25 @@ test("refusals show the server's calm detail; anything else reads as reconnectin
   for (const e of [err(0, null), err(500, { detail: "Traceback" }), err(422, { detail: "Send {level}" }), err(403, { detail: "x" })]) {
     assert.deepEqual(refusalToast(e), { text: COPY.reconnecting, retryAfterS: 0 });
   }
+});
+
+test("a try-on's waiting toast is dropped by the first read after it that says nothing waits", () => {
+  const TRYING_ON = "Staff are trying a new look. It will be back shortly.";
+  const wait = { status: 503, body: { detail: TRYING_ON, retry_after_s: 60 } };
+  assert.equal(isWaitRefusal(wait), true);
+  assert.equal(isWaitRefusal({ status: 503, body: { detail: TRYING_ON, retry_after_s: null } }), false);
+  assert.equal(isWaitRefusal({ status: 429, body: { detail: "Enjoy this one.", retry_after_s: 6 } }), false); // cooldown
+  assert.equal(isWaitRefusal({ status: 0, body: null }), false);
+  const shown = { at: 1000 };
+  // during the try-on a fresh read is "ready" with an empty message: only `waiting` tells the two apart
+  assert.equal(waitToastOver(shown, ready({ waiting: "try-on" }), 3000), false);
+  assert.equal(waitToastOver(shown, ready({ waiting: "testing" }), 3000), false);
+  assert.equal(waitToastOver(shown, ready({ waiting: null }), 3000), true); // Back to approved, the bound, ops
+  assert.equal(waitToastOver(shown, ready({ phase: "changing", waiting: null }), 3000), true); // a guest's scene
+  assert.equal(waitToastOver(shown, ready({ waiting: null }), 999), false); // a read begun before the refusal
+  assert.equal(waitToastOver(shown, ready(), 3000), false); // a state without `waiting` (an older server)
+  assert.equal(waitToastOver(shown, ready({ phase: "resting", waiting: null }), 3000), false); // being set up
+  assert.equal(waitToastOver(null, ready({ waiting: null }), 3000), false); // no waiting toast up
 });
 
 test("during a try-on the guest sees the server's trying-on sentence with its retry, never 'unavailable'", () => {

@@ -36,6 +36,7 @@ from pydantic import ValidationError
 from conductor import rows as R
 from conductor.canopy import (
     COMMISSIONING_MESSAGE,
+    RECOMPILE_SOURCES,
     RESTING_MESSAGE,
     STOPPED_MESSAGE,
     TRIAL_MESSAGE,
@@ -325,6 +326,29 @@ def test_the_bound_task_never_cancels_itself_and_stop_awaits_it():
     assert ends == ["it reached its time limit (20 s)", "the canopy engine stopped"]
 
 
+def test_stop_awaits_the_bound_task_itself():
+    """stop() cancels AND awaits the bound task: with nothing else left to yield (the burst drained, a reconciler
+    stop that never yields), the task is finished the moment stop() returns."""
+
+    async def main():
+        w, _ = await started_world()
+        engine = w.engine
+        await engine.start_trial(trial_of("sunset", w.clock.monotonic(), bound=20))
+        await engine.wait_idle()
+        task = engine._trial_task
+
+        async def quiet_stop() -> None:
+            return None
+
+        engine.reconciler.stop = quiet_stop
+        await engine.stop()
+        out = (task.done(), task.cancelled(), engine.trial, engine._trial_task)
+        await w.executor.close()
+        return out
+
+    assert run_virtual(main) == (True, True, None, None)
+
+
 def test_a_stale_bound_task_ignores_a_new_session():
     async def main():
         w, _ = await started_world()
@@ -359,6 +383,57 @@ def test_a_failed_reapply_keeps_the_running_trial():
     assert st.refused
     assert trial is not None and trial.label == "A" and trial.applies == 1  # as it was
     assert same_plan and armed
+
+
+def test_a_first_start_refused_by_the_engine_leaves_no_trial():
+    """The override is set before `_request`; when the engine then refuses (neither module level nor strand
+    compiles: T1/T2/stepped are skipped for the trial scene), a FIRST start clears it again: no trial, no bound task,
+    the approved look as it was, and guests aren't told a try-on runs."""
+
+    async def main():
+        w, compiles = await started_world()
+        engine = w.engine
+        plan = engine.current_plan()
+        compiles.fail[("sunset", Tier.T3)] = 1
+        compiles.fail[("sunset", Tier.STRAND)] = 1
+        st = await engine.start_trial(trial_of("sunset", w.clock.monotonic()))
+        after = (engine.trial, engine._trial_task, engine.current_plan() is plan, engine.trial_active)
+        lab = w.events("lab")
+        await w.run_for(30)  # past kiosk.cooldown_s
+        kiosk = await engine.request_mode("holiday", source="kiosk")
+        await w.close()
+        return st, after, lab, kiosk
+
+    st, (trial, task, same_plan, active), lab, kiosk = run_virtual(main)
+    assert st.refused
+    assert trial is None and task is None and same_plan and active is False
+    assert [e["action"] for e in lab] == ["trial_end"]
+    assert lab[0]["why"].startswith("it couldn't start")
+    assert kiosk.message != TRIAL_MESSAGE and not kiosk.refused
+
+
+@pytest.mark.parametrize("source", sorted(RECOMPILE_SOURCES))
+def test_a_re_pick_keeps_the_trial(source):
+    """A re-pick (the reconciler after new capabilities, recovery, start-up) compiles the current mode again: it is
+    not another source choosing a look, so it keeps the try-on (PLAN §6.2; D66 lists what ends one)."""
+
+    async def main():
+        w, _ = await started_world()
+        engine = w.engine
+        await engine.start_trial(trial_of("sunset", w.clock.monotonic()))
+        await engine.wait_idle()
+        before = engine.trial
+        st = await engine.request_mode("sunset", source=source)
+        await engine.wait_idle()
+        out = (st, before, engine.trial, engine.current_plan(), w.events("lab"))
+        await w.close()
+        return out
+
+    st, before, trial, plan, lab = run_virtual(main)
+    assert not st.refused
+    assert trial is not None and trial.session == before.session and trial.ends_mono == before.ends_mono
+    assert from_trial(plan) and plan.tier is Tier.T3
+    assert "trial_end" not in [e["action"] for e in lab]
 
 
 def test_the_kiosk_is_refused_by_the_engine_during_a_trial():
@@ -543,7 +618,11 @@ class Show:
             shutil.rmtree(self.data, ignore_errors=True)
 
 
-async def show(*, live: bool = False, monkeypatch=None, data: Path | None = None, prepare=None) -> Show:
+async def show(
+    *, live: bool = False, monkeypatch=None, data: Path | None = None, prepare=None, quiet: bool = True
+) -> Show:
+    """The show on virtual time; `quiet=False` returns right after `ShowWiring.start()`, before any capability read
+    (and so before the start-up idle look)."""
     from conductor.alerts import AlertBoard
     from conductor.services import build_services
     from conductor.show import ShowWiring
@@ -567,7 +646,8 @@ async def show(*, live: bool = False, monkeypatch=None, data: Path | None = None
     lab = SVC.LabService(services)
     services.extras[SVC.KEY] = lab
     w = Show(services, wiring, engine, lab, data, owned)
-    await w.run_for(QUIET_S)
+    if quiet:
+        await w.run_for(QUIET_S)
     return w
 
 
@@ -741,6 +821,37 @@ def test_a_trial_never_steps():
 
     st, tier, runner, program = run_virtual(main)
     assert not st.refused and tier is Tier.T3 and runner is None and program is None
+
+
+def test_a_capability_re_read_on_the_show_keeps_the_trial():
+    """A module whose profile changes (it came back power-cycled) makes the show re-pick the current mode with source
+    "reconciler" through the real capability loop: the try-on stays, at module level with the draft's colours, until
+    its bound ends it."""
+
+    async def main():
+        w = await show()
+        d = golden_pink()
+        await try_on(w, d)
+        before = w.engine.trial
+        w.wiring.caps.pop(DEV)  # the next read is "changed"
+        w.wiring.request_refresh([DEV])
+        await w.run_for(5)
+        await w.engine.wait_idle()
+        during = (w.engine.trial, w.engine.current_plan(), [e for e in w.events("mode")])
+        ends_during = [e["why"] for e in w.events("lab") if e["action"] == "trial_end"]
+        await w.run_for(150)
+        await w.engine.wait_idle()
+        ends = [e["why"] for e in w.events("lab") if e["action"] == "trial_end"]
+        out = (before, during, ends_during, ends, draft_rows(w, d, Tier.T3))
+        await w.close()
+        return out
+
+    before, (trial, plan, modes), ends_during, ends, drafted = run_virtual(main)
+    assert [m for m in modes if m.get("source") == "reconciler"], "the capability change re-picked the mode"
+    assert trial is not None and trial.session == before.session
+    assert plan.tier is Tier.T3 and rows_of(plan) == drafted
+    assert ends_during == []
+    assert ends == ["it reached its time limit (150 s)"]
 
 
 def test_a_calm_trial_then_the_safe_look_shows_approved_calm():
@@ -966,8 +1077,9 @@ def client_of(w: Show) -> httpx.AsyncClient:
 
 @pytest.fixture
 def no_threads(monkeypatch):
-    """The Lab's threadpool calls run inline (after one yield, so a second request can interleave): the virtual loop
-    would otherwise jump its clock while a worker thread computes."""
+    """The Lab's threadpool calls run inline (after one yield): the virtual loop would otherwise jump its clock while a
+    worker thread computes. One yield is NOT enough for a second request to reach the route meanwhile; a test that
+    needs two requests to overlap gives the build virtual time (test_two_concurrent_starts_give_one_200_and_one_409)."""
     from conductor.routes import design_lab as routes
 
     async def inline(fn, *args, **kwargs):
@@ -1015,7 +1127,7 @@ def test_the_server_side_apply_gap_holds(no_threads):
         and body["cost"] == "sends 9 writes now, up to ~36 over the next 10 s"
     )
     assert body["confirm"].startswith(
-        "Try on Golden Hour for Golden Hour at module level on 9 modules (Module 1,"
+        "Try on your draft of Golden Hour at module level on 9 modules (Module 1,"
     )
     assert body["confirm"].endswith("for up to 150 s. The painted design isn't on the lights.")
     assert asked.headers["cache-control"] == "no-store"
@@ -1033,7 +1145,18 @@ def test_the_server_side_apply_gap_holds(no_threads):
     assert starts == ["trial_start", "trial_apply"]
 
 
-def test_two_concurrent_starts_give_one_200_and_one_409(no_threads):
+def test_two_concurrent_starts_give_one_200_and_one_409(no_threads, monkeypatch):
+    """The two POSTs really overlap: the build takes virtual time, so the second request reaches the gate while the
+    first is still inside build_trial (a gap checked before the build and stamped after it lets both through)."""
+    from conductor.routes import design_lab as routes
+
+    async def slow(fn, *args, **kwargs):
+        await asyncio.sleep(0.05)  # the virtual loop runs every ready request before it moves the clock
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_in_threadpool", slow)
+    monkeypatch.setattr(SVC, "run_in_threadpool", slow)
+
     async def main():
         w = await show()
         async with client_of(w) as c:
@@ -1119,17 +1242,33 @@ def test_a_restart_mid_trial_comes_up_clean(no_threads):
                 looks = (data / "overrides" / "looks.yaml").read_bytes()
                 started = await confirmed(c, golden_pink())
             await w.close()  # the Conductor goes down mid-try-on
-            w2 = await show(data=data)
+            w2 = await show(data=data, quiet=False)
+            # before the first capability round, whose idle look would clear (and so hide) a carried-over trial
+            async with client_of(w2) as c:
+                boot = (w2.engine.trial, (await c.get("/api/lab/state")).json()["trial"])
+            await w2.run_for(QUIET_S)
             async with client_of(w2) as c:
                 state = (await c.get("/api/lab/state")).json()
-            out = (saved, started, looks, w2.engine.trial, w2.engine.current_plan().mode_id, state)
+            ends = [e for e in w2.events("lab") if e["action"] == "trial_end"]
+            out = (
+                saved,
+                started,
+                looks,
+                w2.engine.trial,
+                w2.engine.current_plan().mode_id,
+                state,
+                boot,
+                ends,
+            )
             out += ((data / "overrides" / "looks.yaml").read_bytes(),)
             await w2.close()
             return out
         finally:
             shutil.rmtree(data, ignore_errors=True)
 
-    saved, started, looks, trial, mode, state, looks_after = run_virtual(main)
+    saved, started, looks, trial, mode, state, boot, ends, looks_after = run_virtual(main)
+    assert boot == (None, None), "the restarted engine came up with a try-on"
+    assert ends == [], "the second process ended a try-on it should never have had"
     assert saved.status_code == 201 and started.status_code == 200
     assert started.json()["trial"]["version"] == saved.json()["id"]  # the try-on was of the saved version
     assert trial is None and mode == CALM  # the idle look, no override
@@ -1170,6 +1309,77 @@ def test_the_kiosk_is_refused_during_a_trial_with_retry_after(no_threads):
     assert trial is not None and mode == GOLDEN  # the try-on carries on
 
 
+@pytest.mark.parametrize("how", ["back to approved", "bound", "ops look"])
+def test_the_ipad_stops_saying_try_on_once_the_try_on_ends(no_threads, how):
+    """A guest's brightness during a try-on is refused on the lane with TRYING_ON (the panel shows it under the
+    title, and `waiting` says why guests wait). Once the try-on ends — Back to approved, its bound, an ops look —
+    neither stays: the canopy is the guests' again (kiosk copy must be true). An accepted scene clears any older
+    lane refusal too."""
+    from conductor.guest_panel import NOT_REACHED, GuestPanel
+    from conductor.routes.kiosk import TRYING_ON
+
+    async def main():
+        w = await show()
+        async with client_of(w) as c:
+            assert (await confirmed(c, golden_pink())).status_code == 200
+            await w.run_for(10)
+            level = await c.post("/api/kiosk/brightness", json={"level": 50})
+            await w.run_for(3)
+            during = (await c.get("/api/kiosk/panel")).json()["state"]
+            if how == "back to approved":
+                assert (await c.post("/api/lab/trial/stop", json={})).status_code == 200
+            elif how == "bound":
+                await w.run_for(150)
+            else:
+                assert not (await w.engine.request_mode("coastal-tides", source="ops")).refused
+            await w.engine.wait_idle()
+            await w.run_for(2)
+            after = (await c.get("/api/kiosk/panel")).json()["state"]
+            await w.run_for(30)
+            target = await GuestPanel.of(w.services).target()
+            target.message = NOT_REACHED  # an older lane refusal
+            scene = await c.post("/api/kiosk/scene", json={"scene": "garden-gathering"})
+            await w.engine.wait_idle()
+            await w.run_for(10)
+            later = (await c.get("/api/kiosk/panel")).json()["state"]
+        out = (level, during, after, w.engine.trial, scene, later)
+        await w.close()
+        return out
+
+    level, during, after, trial, scene, later = run_virtual(main)
+    assert level.status_code == 200  # the lane takes it; the engine refuses it
+    assert (during["phase"], during["message"], during["waiting"]) == ("ready", TRYING_ON, "try-on")
+    assert trial is None
+    assert after["phase"] == "ready" and after["message"] == "" and after["waiting"] is None, after
+    assert scene.status_code == 200, scene.text
+    assert later["scene"] == "garden-gathering" and later["message"] == "" and later["waiting"] is None, later
+
+
+def test_the_ipad_stops_saying_testing_once_the_rehearsal_ends(no_threads):
+    """The same for the stepped rehearsal's TESTING: true while it runs, gone once it stops."""
+    from conductor.routes.kiosk import TESTING
+
+    async def main():
+        w = await show()
+        async with client_of(w) as c:
+            await w.engine.rehearse(GOLDEN, 1, source="ops")
+            await w.run_for(5)
+            level = await c.post("/api/kiosk/brightness", json={"level": 50})
+            await w.run_for(3)
+            during = (await c.get("/api/kiosk/panel")).json()["state"]
+            w.engine.stop_rehearsal(source="ops")
+            await w.run_for(10)
+            after = (await c.get("/api/kiosk/panel")).json()["state"]
+        out = (level, during, after, w.engine.rehearsal_active)
+        await w.close()
+        return out
+
+    level, during, after, rehearsing = run_virtual(main)
+    assert level.status_code == 200
+    assert (during["message"], during["waiting"]) == (TESTING, "testing")
+    assert not rehearsing and after["message"] == "" and after["waiting"] is None, after
+
+
 def test_the_trial_routes_need_an_engine(app_client):
     for method, path, body in (
         ("GET", "/api/lab/trial", None),
@@ -1198,7 +1408,7 @@ def test_the_confirm_sentence_names_the_driven_modules_and_the_cost_line():
     modules = T.driven_modules(lab)
     assert [m.id for m in modules] == ["canopy-r0c0", "canopy-r0c1"]
     assert T.confirm_sentence(lab, golden_pink(), modules, 150) == (
-        "Try on Golden Hour for Golden Hour at module level on 2 modules (Module 1, Module 2) for up to 150 s. "
+        "Try on your draft of Golden Hour at module level on 2 modules (Module 1, Module 2) for up to 150 s. "
         "The painted design isn't on the lights."
     )
     renamed = draft(CALM, name="Calm evening")
@@ -1207,6 +1417,22 @@ def test_the_confirm_sentence_names_the_driven_modules_and_the_cost_line():
     )
     assert T.cost_line(2) == "sends 2 writes now, up to ~8 over the next 10 s"
     assert T.cost_line(1) == "sends 1 write now, up to ~4 over the next 10 s"
+
+
+def test_a_renamed_drafts_trial_json_names_the_approved_scene_and_the_draft():
+    """TrialJSON's `label` is the approved scene's name (what "Back to approved" puts back), `draft_name` the
+    draft's: the installed plan is compiled from the patched modes, whose label is the draft's name."""
+
+    async def main():
+        w = await show()
+        await try_on(w, draft(GOLDEN, name="Pinker Hour"))
+        out = (T.trial_json(w.lab), w.engine.current_plan().label)
+        await w.close()
+        return out
+
+    body, plan_label = run_virtual(main)
+    assert plan_label == "Pinker Hour"  # why `label` can't be the installed plan's
+    assert (body["label"], body["draft_name"], body["tier"]) == ("Golden Hour", "Pinker Hour", "modules")
 
 
 def test_the_apply_gate_reserves_and_releases():
