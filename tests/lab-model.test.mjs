@@ -584,3 +584,214 @@ test("the client-copy notes and the show box's tab label", () => {
   assert.deepEqual(M.copyNotes(preview()), []);
   assert.equal(M.viewLabel("showBox", preview()), "Show box today");
 });
+
+// ---- the try-on (Slice B: PLAN §4 TrialJSON, §6.4) ------------------------------------------------------------------------
+
+// TrialJSON exactly as PLAN §4 shapes it (the INSTALLED plan's tier; the server's own message and cost).
+function trialJSON(extra = {}) {
+  return {
+    scene_id: "golden-hour",
+    label: "Golden Hour",
+    version: "v0007",
+    draft_name: "Client Oct 17 v3 – warmer sunset",
+    started_at: 1792270800.0,
+    ends_at: 1792270950.0,
+    left_s: 150.0,
+    bound_s: 150.0,
+    modules: ["canopy-r0c0", "canopy-r0c1"],
+    positions: ["r0c0", "r0c1"],
+    applies: 1,
+    tier: "modules",
+    message: "Trying on at module level: one colour per strand; the painted design isn't on the lights.",
+    cost: "sends 2 writes now, up to ~8 over the next 10 s",
+    next_apply_in_s: 8.0,
+    ...extra,
+  };
+}
+const CONFIRM =
+  "Try on Client Oct 17 v3 – warmer sunset for Golden Hour at module level on 2 modules (Module 1, Module 2) for up to 150 s. The painted design isn't on the lights.";
+const engineOk = { running: true, simulated: true, commissioning: false, paused: false, outage: false };
+
+test("the trial is read from GET /trial (TrialJSON | null) and from start/stop's {trial, state}", () => {
+  const t = trialJSON();
+  assert.equal(M.trialFromAnswer(t), t);
+  assert.equal(M.trialFromAnswer(null), null);
+  assert.equal(M.trialFromAnswer({ trial: t, state: { engine: engineOk, trial: t } }), t);
+  assert.equal(M.trialFromAnswer({ trial: null, state: { engine: engineOk, trial: null } }), null);
+  assert.equal(M.trialFromAnswer({}), null);
+  assert.equal(M.trialFromAnswer("null"), null);
+});
+
+test("a missing or stubbed trial route reads as 'not on this server', a 503 as no engine", () => {
+  assert.equal(M.trialApiFromError({ status: 404, body: { detail: "Not Found" } }), "missing"); // FastAPI: no route
+  assert.equal(M.trialApiFromError({ status: 405, body: { detail: "Method Not Allowed" } }), "missing");
+  assert.equal(M.trialApiFromError({ status: 501, body: { detail: "Not built yet: B1: build_trial.", not_built: true } }), "missing");
+  assert.equal(M.trialApiFromError({ status: 404, body: { detail: "No try-on is running." } }), "none");
+  assert.equal(M.trialApiFromError({ status: 503, body: { detail: "The canopy engine isn't running." } }), "no-engine");
+  assert.equal(M.trialApiFromError({ status: 0, body: null }), "unreachable");
+  assert.equal(M.trialApiFromError({ status: 500, body: { detail: "boom" } }), "error");
+});
+
+test("the panel's controls show only when the trial API exists and the engine runs", () => {
+  for (const api of ["loading", "missing", "no-engine", "unreachable", "error"]) {
+    const a = M.trialAvailability({ api, engine: engineOk });
+    assert.equal(a.controls, false, api);
+    assert.equal(a.canApply, false, api);
+    assert.ok(a.reason, `${api} says why`);
+  }
+  assert.equal(M.trialAvailability({ api: "missing" }).reason, M.TRIAL_COPY.missing);
+  assert.equal(M.trialAvailability({ api: "no-engine" }).reason, M.TRIAL_COPY.noEngine);
+  const stopped = M.trialAvailability({ api: "ready", engine: { ...engineOk, running: false } });
+  assert.deepEqual(stopped, { controls: false, canApply: false, canStop: false, reason: M.TRIAL_COPY.stopped });
+  assert.deepEqual(M.trialAvailability({ api: "ready", engine: engineOk }), { controls: true, canApply: true, canStop: false, reason: "" });
+  // a pause, commissioning or an outage: the server refuses a start, so Apply is off with the reason; a running
+  // try-on can still be ended
+  for (const [flag, reason] of [
+    ["commissioning", M.TRIAL_COPY.commissioning],
+    ["paused", M.TRIAL_COPY.paused],
+    ["outage", M.TRIAL_COPY.outage],
+  ]) {
+    const a = M.trialAvailability({ api: "ready", engine: { ...engineOk, [flag]: true }, trial: trialJSON() });
+    assert.deepEqual(a, { controls: true, canApply: false, canStop: true, reason }, flag);
+  }
+  // a draft the server refused can't be tried on
+  assert.equal(M.trialAvailability({ api: "ready", engine: engineOk, problems: 2 }).canApply, false);
+  // before /state answers, the server decides
+  assert.equal(M.trialAvailability({ api: "ready", engine: undefined }).canApply, true);
+});
+
+test("the scope lines are true to a module-level try-on: painted and stepped scenes say what they lose", () => {
+  const painted = M.trialScopeLines({ id: "golden-hour", painted: true, stepped: true });
+  assert.ok(painted.includes(M.TRIAL_COPY.painted));
+  assert.ok(painted.includes(M.TRIAL_COPY.stepped));
+  assert.match(painted[0], /module level only: one colour per strand/);
+  const plain = M.trialScopeLines({ id: "lowcountry-calm", painted: false, stepped: false });
+  assert.ok(!plain.includes(M.TRIAL_COPY.painted) && !plain.includes(M.TRIAL_COPY.stepped));
+  assert.match(M.TRIAL_COPY.painted, /painted design isn’t on the lights/);
+});
+
+test("the cost line: one write per module now, up to four per module over the next 10 s", () => {
+  assert.equal(M.costLine(2), "sends 2 writes now, up to ~8 over the next 10 s"); // = PLAN §4's example
+  assert.equal(M.costLine(9), "sends 9 writes now, up to ~36 over the next 10 s");
+  assert.equal(M.costLine(1), "sends 1 write now, up to ~4 over the next 10 s");
+  assert.equal(M.EARLY_REASSERT_LIMIT, 3);
+  // before the first apply: the running show's driven modules, from the preview's today
+  const est = M.trialEstimate(preview());
+  assert.deepEqual(est, { positions: ["r0c0", "r0c1"], modules: "Modules 1–2", cost: "sends 2 writes now, up to ~8 over the next 10 s" });
+  assert.equal(M.trialEstimate(preview({ today: { title: "x", tier: null, note: "The canopy engine isn't running here." } })), null);
+  assert.equal(M.trialEstimate(null), null);
+});
+
+test("the time left counts the server's left_s down on this clock, never the wall-clock ends_at", () => {
+  const t = trialJSON({ left_s: 150, ends_at: 1 }); // a skewed ends_at changes nothing
+  assert.equal(M.trialLeft(t, 10_000, 10_000), 150);
+  assert.equal(M.trialLeft(t, 10_000, 40_500), 119.5);
+  assert.equal(M.trialLeft(t, 10_000, 500_000), 0);
+  assert.equal(M.trialLeft(t, 10_000, 5_000), 150, "a clock that went back never adds time");
+  assert.equal(M.trialLeft(null, 0, 0), null);
+  assert.equal(M.formatLeft(150), "2:30 left");
+  assert.equal(M.formatLeft(119.5), "2:00 left");
+  assert.equal(M.formatLeft(59.2), "1:00 left");
+  assert.equal(M.formatLeft(45), "45 s left");
+  assert.equal(M.formatLeft(0), "ending…");
+  assert.equal(M.formatLeft(null), "");
+  assert.equal(M.trialBadge(t, 125), "In try-on · Client Oct 17 v3 – warmer sunset · 2:05 left");
+  assert.equal(M.trialBadge(trialJSON({ draft_name: null }), 30), "In try-on · Golden Hour · 30 s left");
+  assert.equal(M.trialBadge(null, 30), "");
+  // "screen only" is said only where no try-on can reach the lights
+  assert.equal(M.labEyebrow("missing", null), "DESIGN LAB · SCREEN ONLY");
+  assert.equal(M.labEyebrow("no-engine", null), "DESIGN LAB · SCREEN ONLY");
+  assert.equal(M.labEyebrow("ready", null), "DESIGN LAB · SCREEN ONLY UNTIL YOU APPLY");
+  assert.equal(M.labEyebrow("ready", t), "DESIGN LAB · A TRY-ON IS ON THE LIGHTS");
+});
+
+test("the status lines are the server's: its message and the tier the engine actually installed", () => {
+  const lines = M.trialStatusLines(trialJSON());
+  assert.equal(lines[0], "On the lights now: Client Oct 17 v3 – warmer sunset (Golden Hour), at module level (one colour per strand).");
+  assert.equal(lines[1], trialJSON().message);
+  assert.equal(lines[2], "Writing to Modules 1–2.");
+  assert.equal(lines.length, 3);
+  const strand = M.trialStatusLines(
+    trialJSON({ tier: "strand", message: "Trying on as one colour on every strand (module level couldn't be compiled: no colour named sea-glass).", applies: 3 }),
+  );
+  assert.match(strand[0], /as one colour on every strand\.$/);
+  assert.match(strand[1], /module level couldn't be compiled/);
+  assert.match(strand[3], /Applied 3 times; re-applying never extends the time limit/);
+  assert.deepEqual(M.trialStatusLines(null), []);
+});
+
+test("Apply ignores a double tap, a tap while one is on its way, and a tap inside the server's gap", () => {
+  assert.deepEqual(M.applyReady({ nowMs: 1000 }), { ok: true, waitS: 0, why: null });
+  assert.equal(M.applyReady({ busy: true, nowMs: 1000 }).why, "busy");
+  assert.equal(M.applyReady({ lastTapMs: 1000, nowMs: 1000 + M.DOUBLE_TAP_MS - 1 }).why, "double-tap");
+  assert.equal(M.applyReady({ lastTapMs: 1000, nowMs: 1000 + M.DOUBLE_TAP_MS }).ok, true);
+  // accepted at t = 0 with next_apply_in_s 8 (kiosk.cooldown_s): 3 s later wait 5 s; at 8 s it may send
+  const gap3 = M.applyReady({ acceptedAtMs: 0, nextApplyInS: 8, nowMs: 3000 });
+  assert.equal(gap3.why, "gap");
+  assert.equal(gap3.waitS, 5);
+  assert.equal(M.applyReady({ acceptedAtMs: 0, nextApplyInS: 8, nowMs: 8000 }).ok, true);
+  assert.equal(M.applyLabel({}), "Apply to the lights");
+  assert.equal(M.applyLabel({ reapply: true }), "Apply again");
+  assert.equal(M.applyLabel({ waitS: 4.2, reapply: true }), "Apply again in 5 s");
+  assert.equal(M.applyLabel({ busy: true }), "Sending…");
+});
+
+test("a refused start is classified from the §4 bodies: confirm, problems, engine refusal, gap, no engine, missing", () => {
+  const confirm = M.startOutcome({
+    status: 409,
+    body: { detail: CONFIRM, confirm_required: true, confirm: CONFIRM, cost: "sends 2 writes now, up to ~8 over the next 10 s" },
+  });
+  assert.deepEqual(confirm, { kind: "confirm", sentence: CONFIRM, cost: "sends 2 writes now, up to ~8 over the next 10 s" });
+  assert.match(confirm.sentence, /Module 1, Module 2/, "the confirm sentence names the modules it writes to");
+  const gap = M.startOutcome({ status: 409, body: { detail: "Wait 5 s between try-ons.", retry_after_s: 5 } });
+  assert.deepEqual(gap, { kind: "refused", text: "Wait 5 s between try-ons.", retryAfterS: 5 });
+  const commissioning = M.startOutcome({ status: 409, body: { detail: "The canopy is being set up. Try again in a minute.", retry_after_s: 30 } });
+  assert.equal(commissioning.kind, "refused");
+  assert.equal(commissioning.retryAfterS, 30);
+  const paused = M.startOutcome({ status: 409, body: { detail: M.TRIAL_COPY.paused, retry_after_s: null } });
+  assert.deepEqual(paused, { kind: "refused", text: M.TRIAL_COPY.paused, retryAfterS: 0 });
+  const problems = [{ path: "draft → palette → 1 → hex", field: "palette.1.hex", message: "Not a colour" }];
+  assert.deepEqual(M.startOutcome({ status: 422, body: { detail: "The draft has 1 problem(s).", problems } }), {
+    kind: "problems",
+    problems,
+    text: "The draft has 1 problem(s).",
+  });
+  assert.equal(M.startOutcome({ status: 503, body: { detail: "No canopy engine." } }).kind, "no-engine");
+  assert.equal(M.startOutcome({ status: 404, body: { detail: "Not Found" } }).kind, "missing");
+  assert.equal(M.startOutcome({ status: 501, body: { detail: "Not built yet: B1.", not_built: true } }).kind, "missing");
+  assert.equal(M.startOutcome({ status: 0, body: null, message: "Can't reach" }).kind, "unreachable");
+  assert.equal(M.startOutcome({ status: 500, body: { detail: "boom" } }).text, "boom");
+});
+
+test("the start body is the normalised working draft, with the confirm sentence once asked", () => {
+  const d = golden({ palette: [{ name: "Soft gold", hex: "#ffdb9b" }, ...golden().palette.slice(1)] });
+  const body = M.trialStartBody("golden-hour", d);
+  assert.deepEqual(Object.keys(body), ["scene_id", "draft"]);
+  assert.equal(body.draft.palette[0].hex, "#FFDB9B");
+  assert.equal(d.palette[0].hex, "#ffdb9b", "the working draft isn't changed");
+  assert.equal(M.trialStartBody("golden-hour", d, CONFIRM).confirm, CONFIRM);
+});
+
+test("after an apply, an edit says the lights still show the applied draft", () => {
+  const applied = golden({ brightness: 80 });
+  const t = trialJSON();
+  assert.equal(M.editedSinceApply(t, "golden-hour", golden({ brightness: 80 }), applied), "");
+  assert.match(M.editedSinceApply(t, "golden-hour", golden({ brightness: 70 }), applied), /until you apply again/);
+  assert.equal(M.editedSinceApply(t, "coastal-tides", golden({ brightness: 70 }), applied), "", "another scene's try-on");
+  assert.equal(M.editedSinceApply(null, "golden-hour", golden(), applied), "");
+});
+
+test("during a try-on the painted picture and the slots' approved 'today' say they aren't what the lights show", () => {
+  const t = trialJSON();
+  assert.match(M.trialStageNote("canvas", preview(), t, "golden-hour"), /at module level \(one colour per strand\), not this picture/);
+  const slots = preview({ today: { ...today(design()), tier: "canvas", heads: "approved" } });
+  assert.match(M.trialStageNote("today", slots, t, "golden-hour"), /not this picture/);
+  assert.match(M.trialStageNote("canvas", preview(), trialJSON({ tier: "strand" }), "golden-hour"), /as one colour on every strand/);
+  assert.equal(M.trialStageNote("modules", preview(), t, "golden-hour"), "");
+  assert.equal(M.trialStageNote("today", preview(), t, "golden-hour"), "", "today drawing modules needs no note");
+  assert.equal(M.trialStageNote("canvas", preview(), t, "coastal-tides"), "");
+  assert.equal(M.trialStageNote("canvas", preview(), null, "golden-hour"), "");
+  // and the badge: the trial's scene is In try-on wherever it shows
+  assert.equal(M.draftState(golden(), golden(), t), "in try-on");
+  assert.equal(M.stageState("today", slots, "in try-on"), "in try-on");
+});

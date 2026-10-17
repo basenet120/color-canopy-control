@@ -24,6 +24,7 @@ import {
   POWER_HOLD_MS,
   SAME_CARD_DEBOUNCE_MS,
   attractDue,
+  cardsKey,
   cardState,
   cardTap,
   clampLevel,
@@ -198,7 +199,7 @@ function hideToast() {
 // ---- building ----------------------------------------------------------------------------------------------------
 let builtFor = "";
 function buildCards(scenes) {
-  const key = scenes.map((s) => s.id).join(",");
+  const key = cardsKey(scenes); // contents, not only ids: a changed catalog redraws its cards
   if (key === builtFor) return;
   builtFor = key;
   const grid = $("grid");

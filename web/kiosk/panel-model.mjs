@@ -163,6 +163,23 @@ export function cardTap(sceneId, state, { pendingId = null, cooldownS = 0 } = {}
   return { send: true };
 }
 
+/** The scene cards' build key: everything a card draws (id, name, mood, solid, the palette's names and hexes, the
+ * strip's frame), so a catalog whose contents change under the same ids (a deploy, a new approved look) rebuilds the
+ * cards instead of keeping the old names and colours. PLAN §6.5 named id, name, mood, solid and the hexes; the colour
+ * names (the card's accessible name) and the frame (its strip) are drawn too, so they are in the key. */
+export function cardsKey(scenes) {
+  return JSON.stringify(
+    (scenes || []).map((s) => [
+      s.id,
+      s.name,
+      s.mood,
+      s.solid ?? null,
+      (s.palette || []).map((p) => [p.name, p.hex]),
+      Array.isArray(s.frame) ? s.frame : null,
+    ]),
+  );
+}
+
 /** The card's accessible name. */
 export function sceneLabel(scene) {
   const colors = (scene.palette || []).map((p) => p.name).join(", ");
