@@ -6,9 +6,9 @@
 // through lab-model's viewPainter (the server's design via demo-model's designPaint, or today's lit modules via the
 // guest panel's paintFor); it never uses the Studio's handoff palette. Screen only: nothing here writes to a light.
 
-import { api, copyJSON } from "/static/app.js";
+import { api as baseApi, copyJSON } from "/static/app.js";
 import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-3";
-import * as M from "./lab-model.mjs?v=lab-1";
+import * as M from "./lab-model.mjs?v=lab-2";
 
 const API = "/api/lab";
 const UI_KEY = "lab-ui"; // remembered scene / view / angle (not a draft key: staleDraftKeys never matches it)
@@ -76,7 +76,21 @@ const L = {
   notice: "",
   stages: {}, // side → {key, view (buildCanopy's), el}
   present: null,
+  saving: false, // a save is on its way: Save and Export wait (a double tap never saves twice)
+  configChanged: false, // the Conductor answered from another approved config than the one this page loaded
 };
+
+/** Every Lab call: the shared api() plus a look at which approved config the Conductor answered from. */
+function api(path, opts = {}) {
+  return baseApi(path, { ...opts, onResponse: checkConfig });
+}
+
+function checkConfig(response) {
+  const sha = response && response.headers ? response.headers.get("X-Lab-Config-Sha") : null;
+  if (L.configChanged || !L.catalog || !M.configChanged(L.catalog.config_sha, sha)) return;
+  L.configChanged = true; // stop keeping drafts under the old config's keys: the next load would clear them
+  setAlert("config", M.CONFIG_CHANGED);
+}
 const order = () => (L.catalog ? L.catalog.scenes.map((s) => s.id) : []);
 const sceneOf = (id) => (L.catalog ? L.catalog.scenes.find((s) => s.id === id) : null) || null;
 const sceneName = (id) => (L.working[id] && L.working[id].name) || (sceneOf(id) && sceneOf(id).name) || id;
@@ -273,6 +287,7 @@ function loadWorkingFromBrowser() {
 }
 
 function persist(id) {
+  if (L.configChanged) return;
   const key = M.draftStoreKey(L.catalog.config_sha, id);
   if (M.draftEquals(L.working[id], L.base[id])) store((s) => s.removeItem(key));
   else store((s) => s.setItem(key, JSON.stringify(L.working[id])));
@@ -299,6 +314,7 @@ function edit(fn, { coalesce = false } = {}) {
   if (!coalesce || now - L.lastUndoAt > 800) L.undo[id] = M.undoPush(L.undo[id], before);
   L.lastUndoAt = coalesce ? now : 0;
   L.working[id] = after;
+  setAlert("save", null); // the last failed save was about another draft
   persist(id);
   schedulePreview();
   syncEditor();
@@ -317,6 +333,7 @@ function undo() {
   L.undo[id] = stack;
   L.working[id] = state;
   L.lastUndoAt = 0;
+  setAlert("save", null);
   persist(id);
   rebuildEditor();
   schedulePreview();
@@ -332,6 +349,8 @@ function revertToApproved() {
   if (!M.draftEquals(L.working[id], L.base[id]) && !window.confirm(`Revert ${sceneName(id)} to approved? Your unsaved changes to it are kept in Undo.`)) return;
   L.undo[id] = M.undoPush(L.undo[id], L.working[id]);
   L.working[id] = clone(L.approved[id]);
+  setAlert("save", null);
+  setNotice(`${sceneName(id)} reverted to approved (Undo brings your edit back).`);
   persist(id);
   rebuildEditor();
   schedulePreview();
@@ -382,6 +401,7 @@ async function openVersion(id) {
     L.selected = answer.current || null;
     if (L.selected) L.versionDrafts[L.selected] = Object.fromEntries(Object.entries(answer.drafts || {}).filter(([sid, d]) => !M.draftEquals(d, L.approved[sid])));
     setAlert("versions", null);
+    setAlert("save", null);
     setNotice(L.selected ? `Opened ${M.entryLabel(L.selected, L.versions)}.` : "Back to all approved.");
   } catch (err) {
     const problems = err && err.body && err.body.problems;
@@ -398,8 +418,21 @@ async function backToPrevious() {
   await openVersion(v && v.parent ? v.parent : M.APPROVED);
 }
 
-/** Save the working drafts that differ from approved as a new version. Resolves the saved VersionJSON or null. */
+/** Save the working drafts that differ from approved as a new version. Resolves the saved VersionJSON or null. One
+ * save at a time: a second tap while one is on its way does nothing (Save and Export are disabled meanwhile). */
 async function saveVersion(note) {
+  if (L.saving) return null;
+  L.saving = true;
+  renderVersionsBar();
+  try {
+    return await saveVersionNow(note);
+  } finally {
+    L.saving = false;
+    renderAll();
+  }
+}
+
+async function saveVersionNow(note) {
   const drafted = M.draftedScenes(L.working, L.approved, order());
   const body = {
     drafts: Object.fromEntries(drafted.map((id) => [id, M.normaliseDraft(L.working[id])])),
@@ -411,7 +444,7 @@ async function saveVersion(note) {
     saved = await api(`${API}/versions`, { method: "POST", body });
   } catch (err) {
     const problems = (err && err.body && err.body.problems) || [];
-    const lines = problems.slice(0, 4).map((p) => `${p.field}: ${p.message}`);
+    const lines = M.saveProblemLines(problems, Object.fromEntries(order().map((sid) => [sid, sceneName(sid)])));
     setAlert("save", [M.alertFor(err) || (err.body && err.body.detail) || "The version wasn't saved.", ...lines].join(" "));
     if (problems.length && err.status === 422) L.problems[L.scene] = problems.filter((p) => !p.path || String(p.path).includes(L.scene));
     renderAll();
@@ -470,6 +503,7 @@ async function compareAs(side, id) {
 
 // ---- export -------------------------------------------------------------------------------------------------------------
 async function exportCurrent() {
+  if (L.saving) return;
   const unsaved = M.unsavedScenes(L.working, L.base, order()).length > 0;
   const drafted = M.draftedScenes(L.working, L.approved, order()).length > 0;
   let id = L.selected;
@@ -495,7 +529,8 @@ async function openExport(id) {
   } catch (err) {
     const b = (err && err.body) || {};
     const items = [h("p", { class: "lab-export-refused", text: M.alertFor(err) || b.detail || "No patch is offered." })];
-    for (const w of b.warnings || []) items.push(h("p", { class: "lab-warning", text: `${w.mode || ""} ${w.message || w.rule}`.trim() }));
+    // a D63 refusal's detail already says each warning with its scene's name: list them only when it doesn't
+    if (!b.detail) for (const w of b.warnings || []) items.push(h("p", { class: "lab-warning", text: `${w.mode || ""} ${w.message || w.rule}`.trim() }));
     for (const p of b.problems || []) items.push(h("p", { class: "lab-warning", text: `${p.field}: ${p.message}` }));
     body.replaceChildren(...items);
   }
@@ -524,7 +559,11 @@ function renderExport(x) {
     parts.push(h("div", { class: "lab-row" }, copyBtn, dl));
     parts.push(h("p", { class: "lab-muted", text: `Files: ${(x.files || []).join(", ")} · scenes: ${(x.scenes || []).join(", ")}` }));
   }
-  const warn = [...(x.approved_changes || []).map((t) => `D59 — needs the client's sign-off and a D59 update: ${t}`), ...(x.layout_changes || []).map((t) => `D63 — Paris reviews: ${t}`)];
+  const warn = [
+    ...(x.approved_changes || []).map((t) => `D59 — needs the client's sign-off and a D59 update: ${t}`),
+    ...(x.layout_changes || []).map((t) => `D63 — Paris reviews: ${t}`),
+    ...(x.stepped_changes || []).map((t) => `D65 — stepped timing, live off until Gate R: ${t}`),
+  ];
   if (warn.length) parts.push(h("ul", { class: "lab-export-warnings" }, warn.map((t) => h("li", { text: t }))));
   if ((x.review_notes || []).length) parts.push(h("h3", { text: "Review notes" }), h("ul", {}, x.review_notes.map((t) => h("li", { text: t }))));
   if (x.decision) parts.push(h("h3", { text: "Decision draft" }), h("pre", { class: "lab-pre lab-decision", text: x.decision }));
@@ -640,8 +679,7 @@ function buildLab() {
     renderAll();
   });
   $("#lab-angle").addEventListener("click", () => {
-    L.angle = L.angle === "plan" ? "perspective" : "plan";
-    L.stages = {};
+    L.angle = L.angle === "plan" ? "perspective" : "plan"; // the angle is in each stage's key: stageEl rebuilds in place
     rememberUi();
     renderStage();
   });
@@ -693,7 +731,9 @@ function renderVersionsBar() {
   $("#lab-back").hidden = !L.selected;
   $("#lab-all-approved").hidden = !L.selected && !drafted;
   const readOnly = !!(L.state && L.state.store && L.state.store.read_only);
-  for (const b of document.querySelectorAll("#lab-save button, #lab-back, #lab-all-approved")) b.disabled = readOnly;
+  for (const b of document.querySelectorAll("#lab-back, #lab-all-approved")) b.disabled = readOnly;
+  for (const b of document.querySelectorAll("#lab-save button")) b.disabled = readOnly || L.saving;
+  exp.disabled = L.saving;
   $("#lab-version-summary").textContent = `Saved versions (${L.versions.length})`;
   const ol = $("#lab-versions-ol");
   ol.replaceChildren(
@@ -760,6 +800,9 @@ function stageEl(side, entry) {
     h("p", { class: "lab-stage-note" }),
   );
   const view = buildCanopy(canopy, { scope: "canopy", device: "both", maps: {}, angle: L.angle });
+  // a rebuilt stage (a new angle, a saved or deleted version for the picker) replaces the old one where it stands:
+  // the old figure never stays on the stage, frozen above the live one
+  if (st && st.el.isConnected) st.el.replaceWith(el);
   L.stages[side] = { key, el, view, entry };
   return L.stages[side];
 }
@@ -773,7 +816,7 @@ function sidePicker(side) {
   return sel;
 }
 
-function paintStage(st, preview, view, { fresh = true, failed = false } = {}) {
+function paintStage(st, preview, view, { fresh = true, failed = false, notes = [] } = {}) {
   const painter = M.viewPainter(preview, view);
   const p = painter.error ? M.unlitPainter(painter.error) : painter;
   const level = Number.isFinite(Number(p.level)) ? Number(p.level) : 100;
@@ -784,6 +827,7 @@ function paintStage(st, preview, view, { fresh = true, failed = false } = {}) {
   else if (!fresh && failed) parts.push(preview && preview.fromCatalog ? "Showing the approved design from the catalog: the preview didn't answer." : "Showing the last valid draft.");
   else if (!fresh) parts.push("Updating…");
   if (preview && preview.fromCatalog && view !== "canvas" && view !== "modules" && view !== "strand") parts.push("Waiting for the server's preview…");
+  if (!painter.error) parts.push(...notes.filter(Boolean));
   note.textContent = parts.join(" ");
   st.el.classList.toggle("is-error", !!painter.error);
   return painter;
@@ -808,11 +852,14 @@ function renderStage() {
     if (!st.el.isConnected) box.append(st.el);
     const { preview, fresh, failed } = previewFor(entry, L.scene);
     const v = M.availableViews(preview).includes(view) ? view : M.pickView(preview, view);
-    paintStage(st, preview, v, { fresh, failed });
+    // under the picture: why "today" shows what it shows, and (for the working draft) a D63 warning the last edit
+    // raised, wherever that edit was made
+    const notes = [M.todayNote(v, preview), ...(entry === M.WORKING && fresh ? M.warningLines(preview) : [])];
+    paintStage(st, preview, v, { fresh, failed, notes });
     const picker = $("select", st.el);
     if (picker && document.activeElement !== picker) picker.value = entry;
     const draft = draftFor(entry, L.scene);
-    const state = draft ? M.draftState(L.approved[L.scene], draft, trial()) : "approved";
+    const state = M.stageState(v, preview, draft ? M.draftState(L.approved[L.scene], draft, trial()) : "approved");
     $(".lab-stage-label", st.el).textContent = L.ab.on ? `${side.toUpperCase()} · ${M.tierCaption(v, preview)}` : M.tierCaption(v, preview);
     const badge = $(".lab-badge", st.el);
     badge.className = `lab-badge ${state.replace(/\s/g, "-")}`;
@@ -848,6 +895,13 @@ function renderTabs(preview, views, current) {
       }),
     ),
   );
+  // a row that scrolls (iPad): the selected tab is never left cut off at the edge
+  const sel = tabs.querySelector('[aria-selected="true"]');
+  if (sel && tabs.scrollWidth > tabs.clientWidth) {
+    const left = sel.offsetLeft - tabs.offsetLeft;
+    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+    else if (left + sel.offsetWidth > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = left + sel.offsetWidth - tabs.clientWidth;
+  }
 }
 
 function renderTiers(preview, view) {
@@ -870,8 +924,7 @@ function renderTiers(preview, view) {
   }
   const today = view === "showBox" ? preview && preview.show_box_today : preview && preview.today;
   if (today && (view === "today" || view === "showBox")) {
-    const pos = today.positions || {};
-    const lines = [today.feature ? `As the iPad shows it: ${today.feature}` : null, today.note, pos.driven ? `Driven: ${pos.driven.join(", ") || "none"}${pos.left_out && pos.left_out.length ? ` · left out: ${pos.left_out.join(", ")}` : ""}` : null].filter(Boolean);
+    const lines = [today.feature ? `As the iPad shows it: ${today.feature}` : null, today.note, M.positionsLine(today.positions)].filter(Boolean);
     if (lines.length) items.unshift(h("li", { class: "lab-today" }, lines.map((t) => h("span", { text: t }))));
   }
   if (!items.length) items.push(h("li", { class: "lab-muted", text: preview && preview.fromCatalog ? "Each tier's sentence shows once the server answers the preview." : "" }));
@@ -952,7 +1005,7 @@ function rebuildEditor() {
       h("h3", { text: "Client copy" }),
       field("Name", h("input", { id: "lab-name", class: "lab-input", maxlength: L.catalog.limits.name || 40, oninput: (e) => edit((x) => M.setField(x, "name", e.target.value), { coalesce: true }) }), "name"),
       field("Mood", h("input", { id: "lab-mood", class: "lab-input", maxlength: L.catalog.limits.mood || 60, oninput: (e) => edit((x) => M.setField(x, "mood", e.target.value), { coalesce: true }) }), "mood"),
-      field("Description", h("textarea", { id: "lab-description", class: "lab-input", rows: 3, maxlength: L.catalog.limits.description || 200, oninput: (e) => edit((x) => M.setField(x, "description", e.target.value), { coalesce: true }) }), "description"),
+      field("Description", h("textarea", { id: "lab-description", class: "lab-input", rows: 3, maxlength: L.catalog.limits.description || 200, oninput: (e) => edit((x) => M.setField(x, "description", e.target.value), { coalesce: true }) }), "description", h("p", { id: "lab-copy-notes", class: "lab-hint" })),
       h("div", { class: "lab-copy" }, h("span", { class: "eyebrow", text: "MODULE-LEVEL SENTENCE (READ ONLY)" }), h("p", { id: "lab-copy-modules" }), h("small", { id: "lab-copy-modules-why" })),
       scene && scene.stepped ? h("div", { class: "lab-copy" }, h("span", { class: "eyebrow", text: "MOVING SENTENCE (READ ONLY)" }), h("p", { id: "lab-copy-stepped" }), h("small", { id: "lab-copy-stepped-why" })) : null,
       h("p", { class: "lab-problem", dataset: { for: "copy" } }),
@@ -994,7 +1047,7 @@ function renderLayoutControls(d, locked) {
     if (c.centre) {
       const setCentre = (axis, v) =>
         edit((x) => {
-          const cur = Array.isArray(x.layout.centre_in) ? [...x.layout.centre_in] : [0, 60];
+          const cur = Array.isArray(x.layout.centre_in) ? [...x.layout.centre_in] : [...M.SWEEP_DEFAULT_CENTRE];
           cur[axis] = v;
           return M.setLayout(x, { centre_in: cur, centres_in: undefined });
         }, { coalesce: true });
@@ -1055,7 +1108,8 @@ function renderPalette(d, locked) {
       ...d.palette.map((c, i) => {
         const swatch = h("input", { type: "color", class: "lab-swatch", dataset: { i, role: "swatch" }, disabled: locked, "aria-label": `Colour ${i + 1}` });
         swatch.addEventListener("input", () => edit((x) => M.setColour(x, i, { hex: swatch.value.toUpperCase() }), { coalesce: true }));
-        const name = h("input", { class: "lab-input", dataset: { i, role: "name" }, maxlength: 40, disabled: locked, "aria-label": `Colour ${i + 1} name (client copy)` });
+        // a name stays editable under the T1 lock: a rename keeps the frames and the slot hash (no repaint)
+        const name = h("input", { class: "lab-input", dataset: { i, role: "name" }, maxlength: 40, "aria-label": `Colour ${i + 1} name (client copy)` });
         name.addEventListener("input", () => edit((x) => M.setColour(x, i, { name: name.value }), { coalesce: true }));
         const hex = h("input", { class: "lab-input hex", dataset: { i, role: "hex" }, maxlength: 7, spellcheck: "false", autocapitalize: "characters", disabled: locked, "aria-label": `Colour ${i + 1} hex` });
         hex.addEventListener("input", () => {
@@ -1125,7 +1179,7 @@ function syncEditor() {
   if (locked) {
     lockEl.hidden = false;
     lockEl.className = "lab-lock on";
-    lockEl.textContent = `${scene ? scene.name : id}: ${M.T1_LOCKED}. Palette and layout are read-only; brightness, solid, copy and stepped timing stay editable.`;
+    lockEl.textContent = `${scene ? scene.name : id}: ${M.T1_LOCKED}. The colours’ hexes, their order and count, and the layout are read-only; colour names, brightness, solid, copy and stepped timing stay editable.`;
   } else if (lock && lock.sentence && scene && scene.painted) {
     lockEl.hidden = false;
     lockEl.className = "lab-lock";
@@ -1150,6 +1204,7 @@ function syncEditor() {
   ]
     .filter(Boolean)
     .join(" ");
+  $("#lab-copy-notes").textContent = M.copyNotes(preview).join(" ");
   const copy = (preview && preview.copy) || {};
   const approvedCopy = (scene && scene.copy) || {};
   $("#lab-copy-modules").textContent = (copy.modules && copy.modules.sentence) || approvedCopy.modules || "";
@@ -1212,6 +1267,10 @@ function openPresent() {
   const compare = M.compareSet(L.versions, { unsaved });
   const version = unsaved ? M.WORKING : L.selected && compare.includes(L.selected) ? L.selected : M.APPROVED;
   L.present = { scenes: order(), compare, scene: L.scene, version, ab: false, fs: false, stages: {}, touch: null };
+  const box = $("#lab-present-stages");
+  box.replaceChildren(); // a new Present has new stages: never one left from the last time it opened
+  delete box.dataset.sides;
+  delete box.dataset.angle;
   const el = $("#lab-present");
   el.hidden = false;
   document.documentElement.classList.add("lab-presenting");
@@ -1305,7 +1364,7 @@ function renderPresent() {
       requestPreview(draft).then(() => L.present && renderPresent());
     }
     const view = M.pickView(preview, L.view);
-    paintStage(st, preview, view, { fresh: true });
+    paintStage(st, preview, view, { fresh: true, notes: [M.todayNote(view, preview)] });
     $(".lab-present-side", st.el).textContent = P.ab ? M.entryLabel(entry, L.versions, { unsaved: true }) : "";
     if (entry === P.version) {
       shownDraft = draft;
@@ -1317,7 +1376,7 @@ function renderPresent() {
   $("#lab-present-name").textContent = (shownDraft && shownDraft.name) || (scene && scene.name) || P.scene;
   $("#lab-present-sub").textContent = [M.entryLabel(P.version, L.versions, { unsaved: true }), shownDraft && shownDraft.mood].filter(Boolean).join(" · ");
   $("#lab-present-caption").textContent = M.tierCaption(shownView, shownPreview) || "Loading…";
-  const state = shownDraft ? M.draftState(L.approved[P.scene], shownDraft, trial()) : "approved";
+  const state = M.stageState(shownView, shownPreview, shownDraft ? M.draftState(L.approved[P.scene], shownDraft, trial()) : "approved");
   const badge = $("#lab-present-badge");
   badge.className = `lab-badge ${state.replace(/\s/g, "-")}`;
   badge.textContent = M.BADGE_TEXT[state];
@@ -1343,8 +1402,7 @@ function wireKeys() {
         e.preventDefault();
         closePresent();
       } else if (e.key === "v" || e.key === "V") {
-        L.angle = L.angle === "plan" ? "perspective" : "plan";
-        L.stages = {};
+        L.angle = L.angle === "plan" ? "perspective" : "plan"; // in every stage's key: each rebuilds in place
         renderPresent();
       } else if (e.key === "b" || e.key === "B") {
         L.present.ab = !L.present.ab;

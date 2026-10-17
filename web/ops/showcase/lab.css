@@ -4,6 +4,8 @@
    and number input is 16px so iPad Safari never zooms the page on focus; every target is at least 44px. */
 
 body.lab-open main > :not(#lab) { display: none !important; }
+/* the Studio's shop-kit lease pill ("Not connected") says nothing about the Lab, and reads as "the canopy is off" */
+body.lab-open #connection { display: none; }
 body.lab-open main { max-width: 1520px; padding: 0 32px 48px; }
 
 .lab { --lab-card: #fcfcf7; --lab-line: #dce1d3; --lab-stage: #20382e; --lab-tap: 44px; padding-top: 22px; color: var(--ink); }
@@ -74,6 +76,7 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-badge { align-self: center; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: #e4eadc; color: #3d5b3f; white-space: nowrap; }
 .lab-badge.draft { background: #fbe6d6; color: #8a4a1f; }
 .lab-badge.in-try-on { background: #25372f; color: #f4f2eb; }
+.lab-badge.approved-design { background: #e4eadc; color: #3d5b3f; }
 
 /* the stage (the Studio's dark card around its light canopy view) */
 .lab-stage-col { background: var(--lab-stage); border-radius: 12px; color: #edf1df; padding: 14px 14px 16px; min-width: 0; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
@@ -157,7 +160,7 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-copy small { font-size: 12px; color: var(--muted); }
 
 /* export */
-.lab-dialog { width: min(960px, 94vw); max-height: 90vh; border: 1px solid var(--lab-line); border-radius: 10px; padding: 18px; background: var(--paper); color: var(--ink); }
+.lab-dialog { width: min(960px, 94vw); max-width: min(960px, 94vw); max-height: 90vh; border: 1px solid var(--lab-line); border-radius: 10px; padding: 18px; background: var(--paper); color: var(--ink); }
 .lab-dialog::backdrop { background: #14241ecc; }
 .lab-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .lab-dialog h3 { font-size: 17px; margin: 14px 0 6px; }
@@ -165,6 +168,7 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-decision { white-space: pre-wrap; }
 .lab-export-warnings li { color: #8a4a1f; font-size: 14px; margin: 4px 0; }
 .lab-export-refused { font-size: 15px; color: #8a3724; }
+.lab-export-refused, .lab-dialog .lab-warning, .lab-export-warnings li { overflow-wrap: anywhere; }
 
 /* Present: the canopy as large as fits, the scene name large, always the tier caption and the badge */
 html.lab-presenting, html.lab-presenting body { overflow: hidden; overscroll-behavior: none; }
@@ -189,7 +193,7 @@ html.lab-presenting, html.lab-presenting body { overflow: hidden; overscroll-beh
   .lab-grid { grid-template-columns: minmax(0, 1fr) 340px; }
   .lab-scenes { grid-column: 1 / -1; position: static; }
   .lab-scenes ul { display: flex; overflow-x: auto; gap: 8px; padding-bottom: 4px; }
-  .lab-scenes li { flex: 0 0 236px; }
+  .lab-scenes li { flex: 0 0 244px; }
   .lab { padding-top: 12px; }
   .lab-head { padding-bottom: 8px; }
   .lab-head h1 { font-size: 24px; }
@@ -201,7 +205,7 @@ html.lab-presenting, html.lab-presenting body { overflow: hidden; overscroll-beh
   .lab-stage-col { padding-top: 10px; }
   .lab-stage-bar { margin-bottom: 4px; }
   .lab-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .lab-tab { white-space: nowrap; flex: none; }
+  .lab-tab { white-space: nowrap; flex: none; padding: 0 8px; }
   .lab-editor { max-height: calc(100vh - 120px); overflow: auto; position: sticky; top: 8px; }
 }
 @media (max-width: 860px) {

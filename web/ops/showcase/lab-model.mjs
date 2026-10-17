@@ -32,14 +32,19 @@ export const D63_LOCKS = Object.freeze({
 export const CANOPY_IN = Object.freeze({ width: 225, height: 120 });
 export const CENTRE_STEP = 2.5; // every approved centre, module centre, edge middle and corner is a multiple of 2.5
 export const LINEAR_DEFAULT_DEG = 45; // 0° reads as stripes at module level (a D63 warning)
-export const SWEEP_DEFAULT_CENTRE = Object.freeze([0, 60]); // never a module centre (schema.py refuses those)
+// Inside the canopy, so the sweep goes all the way round ("around one spot"): on an edge it covers half the circle and
+// on a corner a quarter, so some palette colours would never reach a strand. Never a module centre (schema.py refuses).
+export const SWEEP_DEFAULT_CENTRE = Object.freeze([75, 60]);
+export const HEADS_APPROVED_CAPTION = "the approved design (the slots hold it)";
+export const CONFIG_CHANGED =
+  "The approved config changed (the Conductor restarted on a new config). Save your changes as a version, then reload the Lab; edits made now aren’t kept in this browser.";
 
 const VIEW_LABELS = {
   canvas: "Painted (all 270)",
   modules: "Module level (one per strand)",
   strand: "Strand (one colour)",
   today: "Today",
-  showBox: "Show box today (Modules 1–2)",
+  showBox: "Show box today", // the caption carries "(Modules 1–2, module level)"
 };
 const CAPTIONS = {
   canvas: "Painted · all 270 lights",
@@ -80,13 +85,66 @@ export function availableViews(preview) {
   return out;
 }
 
-/** The caption that always sits with a picture, so a painted design is never read as what module level shows. */
+function todayOf(view, preview) {
+  return view === "today" ? preview && preview.today : view === "showBox" ? preview && preview.show_box_today : null;
+}
+
+/** The caption that always sits with a picture, so a painted design is never read as what module level shows. When
+ * "today" paints the approved design (the slots hold it), the caption says so: the picture isn't the draft. */
 export function tierCaption(view, preview) {
   if (CAPTIONS[view]) return CAPTIONS[view];
-  const today = view === "today" ? preview && preview.today : view === "showBox" ? preview && preview.show_box_today : null;
+  const today = todayOf(view, preview);
   if (!today) return "";
   const title = today.title || viewLabel(view, preview);
-  return today.label ? `${title} · ${today.label}` : title;
+  const caption = today.label ? `${title} · ${today.label}` : title;
+  return today.heads === "approved" ? `${caption} · ${HEADS_APPROVED_CAPTION}` : caption;
+}
+
+/** The stage's badge for what is actually drawn: "approved design" when today's view paints the slots' approved
+ * design (whatever the draft), else the draft's own state. */
+export function stageState(view, preview, draftStateValue) {
+  const today = todayOf(view, preview);
+  if (today && today.heads === "approved" && draftStateValue !== "in try-on") return "approved design";
+  return draftStateValue;
+}
+
+/** The note under a "today" picture (the server's own sentence: why it shows what it shows), else "". */
+export function todayNote(view, preview) {
+  const today = todayOf(view, preview);
+  return (today && typeof today.note === "string" && today.note) || "";
+}
+
+/** "Module 5" for "r1c1": the canopy's own numbering (row by row, 1–9), as the canopy view labels them. */
+export function moduleLabel(pos) {
+  const m = /^r(\d)c(\d)$/.exec(String(pos));
+  return m ? `Module ${Number(m[1]) * 3 + Number(m[2]) + 1}` : String(pos);
+}
+
+/** "Modules 1–2", "Modules 1, 3 and 5", "Module 4", "none": positions in the canopy's numbering, runs collapsed. */
+export function moduleList(positions) {
+  const ns = [...new Set((positions || []).map((p) => Number(moduleLabel(p).replace("Module ", ""))).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!ns.length) return "none";
+  const runs = [];
+  for (const n of ns) {
+    const last = runs[runs.length - 1];
+    if (last && n === last[1] + 1) last[1] = n;
+    else runs.push([n, n]);
+  }
+  const parts = runs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`));
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return ns.length === 1 ? `Module ${list}` : `Modules ${list}`;
+}
+
+/** The "today" view's positions as one line for the client: "Lit: Modules 1, 2 · dark: Modules 3–9". */
+export function positionsLine(positions) {
+  if (!positions || !Array.isArray(positions.driven)) return "";
+  const lit = `Lit: ${moduleList(positions.driven)}`;
+  return positions.left_out && positions.left_out.length ? `${lit} · dark: ${moduleList(positions.left_out)}` : lit;
+}
+
+/** True when an answer came from a Conductor holding another approved config than the one the page loaded. */
+export function configChanged(loadedSha, answeredSha) {
+  return !!(loadedSha && answeredSha && loadedSha !== answeredSha);
 }
 
 /** The view to open on: `wanted` when this preview has it, else the level the show tries first for the scene. */
@@ -291,7 +349,7 @@ export function draftState(approvedDraft, draft, trial) {
   return "draft";
 }
 
-export const BADGE_TEXT = { approved: "Approved", draft: "Draft", "in try-on": "In try-on" };
+export const BADGE_TEXT = { approved: "Approved", draft: "Draft", "in try-on": "In try-on", "approved design": "Approved design" };
 
 /** True when colour `i` of `draft` renames or rehexes the approved colour at that index (D59: needs sign-off). */
 export function changesApprovedColour(approvedDraft, draft, i) {
@@ -398,7 +456,7 @@ export function onModuleCentre(point) {
 }
 
 /** Switch the layout's kind, keeping invert, transform and cycles. Linear opens at 45° (0° stripes, D63); radial keeps
- * a centre it had (or the canopy's middle); sweep opens at [0, 60] (the left edge's middle, never a module centre). */
+ * a centre it had (or the canopy's middle); sweep opens at SWEEP_DEFAULT_CENTRE (inside, never a module centre). */
 export function withLayoutKind(layout, kind) {
   const base = layout || {};
   if (base.kind === kind) return { ...base };
@@ -486,6 +544,22 @@ export function layoutWords(preview) {
 /** The D63 warnings for the layout line (they never block the preview; they block only the export). */
 export function warningLines(preview) {
   return ((preview && preview.warnings) || []).map((w) => String(w.message || w.rule || "D63 warning"));
+}
+
+/** The notes on the free client copy (a description the colours or layout moved under): never a refusal. */
+export function copyNotes(preview) {
+  return ((preview && preview.copy_notes) || []).map(String);
+}
+
+/** The #lab-alert lines of a refused save: each problem with the scene it belongs to (its path names it), so a
+ * problem in a scene that isn't on screen still says where it is. */
+export function saveProblemLines(problems, sceneNames = {}, limit = 4) {
+  return (problems || []).slice(0, limit).map((p) => {
+    const path = String((p && p.path) || "");
+    const id = Object.keys(sceneNames).find((sid) => path.includes(sid));
+    const where = id ? `${sceneNames[id]}, ` : "";
+    return `${where}${(p && p.field) || "draft"}: ${(p && p.message) || "invalid"}`;
+  });
 }
 
 /** A read-only summary of the stepped rung (its editor is Slice C). */

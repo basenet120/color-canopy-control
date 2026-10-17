@@ -332,8 +332,11 @@ test("withLayoutKind linear defaults to 45 and sweep never sits on a module cent
   const lin = M.withLayoutKind(radial, "linear");
   assert.deepEqual(lin, { kind: "linear", transform: "mirror", invert: true, cycles: 1, angle_deg: 45 });
   const sweep = M.withLayoutKind(radial, "sweep");
-  assert.deepEqual(sweep.centre_in, [0, 60]);
+  // inside the canopy, so the sweep goes all the way round: on an edge only half the palette's circle reaches a strand
+  assert.deepEqual(sweep.centre_in, [75, 60]);
   assert.ok(!M.onModuleCentre(sweep.centre_in));
+  const [x, y] = sweep.centre_in;
+  assert.ok(x > 0 && x < M.CANOPY_IN.width && y > 0 && y < M.CANOPY_IN.height, "not on an edge or a corner");
   assert.ok(M.onModuleCentre(radial.centre_in), "112.5, 60 is r1c1's centre");
   assert.equal(sweep.invert, true);
   assert.equal(M.withLayoutKind(lin, "radial").centre_in.length, 2);
@@ -522,4 +525,62 @@ test("presentDraft: the working draft, a version's draft, or approved where the 
   assert.equal(M.presentDraft("v0003", "coastal-tides", ctx).scene_id, "coastal-tides");
   assert.equal(M.presentDraft("v0009", "golden-hour", ctx), null, "not loaded yet");
   assert.equal(M.previewKey(golden()), M.previewKey(golden({ palette: golden().palette.map((c) => ({ ...c, hex: c.hex.toLowerCase() })) })));
+});
+
+// ---- review fixes (2026-10-16) ------------------------------------------------------------------------------------------
+
+test("today painting the slots' approved design says so in its caption, its badge and its note", () => {
+  const p = preview();
+  const approvedHeads = { ...p, today: { ...p.today, heads: "approved", note: "The slots hold the approved painted design; …" } };
+  assert.equal(
+    M.tierCaption("today", approvedHeads),
+    `What this simulator shows · Module level (one colour per strand) · ${M.HEADS_APPROVED_CAPTION}`,
+  );
+  assert.equal(M.stageState("today", approvedHeads, "draft"), "approved design");
+  assert.equal(M.BADGE_TEXT[M.stageState("today", approvedHeads, "draft")], "Approved design");
+  assert.equal(M.todayNote("today", approvedHeads), "The slots hold the approved painted design; …");
+  // the draft's own heads: the caption and the badge are the draft's
+  const draftHeads = { ...p, today: { ...p.today, heads: "draft" } };
+  assert.equal(M.tierCaption("today", draftHeads), "What this simulator shows · Module level (one colour per strand)");
+  assert.equal(M.stageState("today", draftHeads, "draft"), "draft");
+  assert.equal(M.stageState("canvas", approvedHeads, "draft"), "draft", "the painted view draws the draft");
+  assert.equal(M.todayNote("canvas", approvedHeads), "");
+});
+
+test("module positions read in the canopy's own numbering, never as ids", () => {
+  assert.equal(M.moduleLabel("r0c0"), "Module 1");
+  assert.equal(M.moduleLabel("r1c2"), "Module 6");
+  assert.equal(M.moduleList(["r0c0", "r0c1"]), "Modules 1–2");
+  assert.equal(M.moduleList(["r0c0", "r0c2", "r1c1"]), "Modules 1, 3 and 5");
+  assert.equal(M.moduleList(["r2c2"]), "Module 9");
+  assert.equal(M.moduleList([]), "none");
+  const line = M.positionsLine({ driven: ["r0c0", "r0c1"], left_out: GRID.slice(2) });
+  assert.equal(line, "Lit: Modules 1–2 · dark: Modules 3–9");
+  assert.ok(!/r\dc\d/.test(line));
+  assert.equal(M.positionsLine({ driven: GRID, left_out: [] }), "Lit: Modules 1–9");
+});
+
+test("a Conductor answering from another approved config is noticed", () => {
+  assert.equal(M.configChanged("258e9ce39859", "c84d64205b3d"), true);
+  assert.equal(M.configChanged("258e9ce39859", "258e9ce39859"), false);
+  assert.equal(M.configChanged("258e9ce39859", null), false, "an answer without the header says nothing");
+  assert.equal(M.configChanged(null, "c84d64205b3d"), false, "before the catalog loads");
+});
+
+test("a refused save's lines say which scene each problem is in", () => {
+  const lines = M.saveProblemLines(
+    [
+      { path: "drafts → coastal-tides → name", field: "name", message: "String should have at least 1 character" },
+      { path: "mode 'golden-hour' → description", field: "description", message: "no" },
+      { path: "", field: "draft", message: "general" },
+    ],
+    { "golden-hour": "Golden Hour", "coastal-tides": "Coastal Tides" },
+  );
+  assert.deepEqual(lines, ["Coastal Tides, name: String should have at least 1 character", "Golden Hour, description: no", "draft: general"]);
+});
+
+test("the client-copy notes and the show box's tab label", () => {
+  assert.deepEqual(M.copyNotes({ copy_notes: ["The description still names lavender …"] }), ["The description still names lavender …"]);
+  assert.deepEqual(M.copyNotes(preview()), []);
+  assert.equal(M.viewLabel("showBox", preview()), "Show box today");
 });
