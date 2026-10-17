@@ -30,6 +30,12 @@
   brightness) stepped at the D65 defaults, with moving copy that says staff are testing and names the flow
   (`motion_words`). It is checked by the same schema and copy rules as modes.yaml, and only used while the
   rehearsal of that mode runs: then the mode's ladder has the stepped rung first (`ladder`, `compile`).
+- **The Design Lab's try-on (D66 Slice B)** is the only other override: while `engine.trial` is of a mode, that
+  mode's `modules` and `strand` tiers compile from the trial's patched modes and recipes (`compile`); the engine never
+  asks for any other tier of it then (`compile_best` skips T1/T2/stepped). `ladder`, `tier_allowed`, `_record` and
+  every T1 compile keep the git design, so the slot checks never see a try-on. A capability re-pick that would ADD a
+  module to the try-on's plan (one registered, or newly read, mid-try-on: its confirm never covered it) ends the
+  try-on instead (`_joining_trial`): the approved look goes to every module; a re-pick that keeps the set keeps it.
 - In sim, the slots are commissioned automatically once every module's capabilities are read, so demos run T1
   exactly as the show would after install-day commissioning. On hardware commissioning is an explicit ops action.
 """
@@ -325,7 +331,41 @@ class ShowWiring:
         if plan is None:  # the first look: one burst, never a ripple (the engine sends a first look that way)
             await engine.request_mode(self.services.settings.kiosk.idle_mode, source="idle")
         elif not first:
+            joined = self._joining_trial(plan)
+            if joined:
+                # A module the try-on's confirm never named would get the draft: end it instead. Every module (the new
+                # one too) gets the approved look; ops applies again and confirms the new set (D66).
+                names = ", ".join(joined)
+                await engine.end_trial(
+                    source="the show's capability loop",
+                    why=f"a canopy module joined the look mid-try-on ({names}; registered or newly read), and its "
+                    "confirm didn't cover it",
+                )
+                return
             await engine.request_mode(plan.mode_id, source="reconciler")
+
+    def _joining_trial(self, plan: Any) -> list[str]:
+        """The modules a re-pick would ADD to the running try-on's plan (labels), else []. A re-pick that keeps the
+        set, or shrinks it, keeps the try-on: every module it writes was in its confirm."""
+        engine = self.engine
+        trial = getattr(engine, "trial", None)
+        if trial is None or plan.mode_id != trial.mode_id:
+            return []
+        try:
+            again, _why = engine.compile_best(plan.mode_id)
+        except Exception:  # noqa: BLE001 - the re-pick itself reports the failure
+            return []
+        if again is None:
+            return []
+        added = [d for d in again.modules if d not in plan.modules]
+        labels = []
+        for device_id in added:
+            try:
+                entry = self.services.registry.get(device_id)
+                labels.append(entry.label or device_id)
+            except (KeyError, LookupError):
+                labels.append(device_id)
+        return labels
 
     def _on_event(self, event: dict) -> None:
         """A module that comes back online gets its profile read again (it may have been power-cycled: the head
@@ -346,7 +386,9 @@ class ShowWiring:
         self.request_refresh()
 
     # ---- compiling -----------------------------------------------------------------------------------------------
-    def context(self, modes: Any = None) -> Any:
+    def context(self, modes: Any = None, recipes: Any = None) -> Any:
+        """The compile context from the live registry. `modes`/`recipes`: another modes file / recipes (the
+        rehearsal's design, a Design Lab try-on's patch); None = the show's own (git)."""
         from conductor.looks import CompileContext
 
         services = self.services
@@ -367,6 +409,7 @@ class ShowWiring:
             slot_readback=self.slot_readback,
             flags=flags,
             modes=modes if modes is not None else self.modes_file,
+            recipes=recipes,  # None: CompileContext loads the git recipes (cached)
             config_dir=services.config_dir,
             addresses=addresses,
         )
@@ -378,7 +421,18 @@ class ShowWiring:
         # when no module has been read does compile_mode refuse (PlanError).
         if tier is Tier.STEPPED and self._rehearsing(mode_id):
             return self.rehearsal_plan(mode_id)
+        # The Design Lab's try-on (D66 Slice B): its scene's module-level and strand rungs only, from the draft's own
+        # patched modes AND recipes. Every other tier — T1 above all, so t1_target, slot_expectations and stale_slot
+        # keep judging the slots by the git design — and the ladder, tier_allowed and records stay on git.
+        trial = self._trial_for(mode_id)
+        if trial is not None and tier in (Tier.T3, Tier.STRAND):
+            return compile_mode(mode_id, tier, self.context(trial.modes, trial.recipes))
         return compile_mode(mode_id, tier, self.context())
+
+    def _trial_for(self, mode_id: str) -> Any | None:
+        """The engine's try-on when it is of `mode_id` (None otherwise)."""
+        trial = getattr(self.engine, "trial", None) if self.engine is not None else None
+        return trial if trial is not None and trial.mode_id == mode_id else None
 
     def ladder(self, mode_id: str) -> list[Tier]:
         from conductor.looks import ladder

@@ -24,7 +24,8 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
 Plain refusals (never an error code on the guest's screen — the page turns these into calm copy):
   cooldown → 429 {detail, retry_after_s} (+ Retry-After) · guest input paused → 423 · unknown mode → 404 ·
   no tier of that mode can be shown → 409 · no engine / engine stopped / outage / commissioning → 503
-  "The canopy is resting…" (+ Retry-After when the engine says when to try again).
+  "The canopy is resting…" (+ Retry-After when the engine says when to try again) · the stepped rehearsal or a
+  Design Lab try-on running → 503 with its own sentence (+ Retry-After).
 
 The engine lives at `services.extras["canopy"]` (engine_api.CanopyEngineAPI). conductor/canopy.py reports a refusal
 as a `CanopyState` with `refused=True` (never an exception); older engines and the fakes raise
@@ -74,6 +75,7 @@ UNKNOWN = "That mood isn't one of the canopy's choices."
 UNAVAILABLE = "That mood isn't available right now. Choose another."
 BEING_SET_UP = "The canopy is being set up. It will be back shortly."
 TESTING = "The canopy is being tested. It will be back shortly."
+TRYING_ON = "Staff are trying a new look. It will be back shortly."
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]  # the kiosk illustration's module order
 MAX_RETRY_AFTER_S = 60.0  # a guest never waits longer than this, whatever a bad clock says
 
@@ -413,6 +415,8 @@ def refusal_for_state(engine: Any, st: CanopyState, now: float) -> Refusal:
         return 423, PAUSED, {}
     if _flag(engine, "rehearsal_active") is True:  # staff are running the stepped rehearsal: every mood waits
         return 503, TESTING, _retry(st.retry_after_s)
+    if _flag(engine, "trial_active") is True:  # staff are trying a Design Lab look on (D66): every mood waits
+        return 503, TRYING_ON, _retry(st.retry_after_s)
     wait = _remaining(st.cooldown_until, now)
     if wait > 0:
         return cooldown_refusal(wait)

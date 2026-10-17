@@ -683,3 +683,119 @@ defaults, in `config/modes.yaml` (Alon can change them there):
   on a stepped rung: from Golden Hour's per-head sun (or its slot) it passes over the stepped rung to the still
   modules rung, and the floor lifts back past it, so easing off never starts a run (`CanopyEngine.downgrade` /
   `upgrade`).
+
+## 2026-10-16 — the Design Lab
+
+**D66 — The Design Lab: edit the scenes on screen, try them on at module level, approve through git (a freeze
+exception; Slices A, B and C built).** Alon asked for a pattern and animation admin so he can iterate the canopy's colours and styles with the
+client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 feature freeze
+(`docs/runbooks/release-and-freeze.md`); this is the exception, granted by asking for it. Brief and plan:
+`docs/design-lab/PROMPT.md`, `docs/design-lab/PLAN.md`.
+- **Slice A (built; screen only; no show-path file touched).** A Lab panel in the Studio (`/ops/showcase/#lab`, ops
+  only; `/api/lab/*`). A draft is a patch over the parsed `scenes.yaml` / `modes.yaml` / `recipes.yaml` that moves
+  every rung of one scene's mode in lockstep (T1 canvas, slot brightness, module sample, stepped design, strand solid,
+  preview, recipes); ids, ladders, slot ownership and `lowcountry-calm` never move. The preview goes through the real
+  compiler with the draft's own recipes (`mode_design`, `compile_mode`) and shows each tier plus "what this simulator
+  shows" / "what the lights can show today" from the running show's registry and bench flags, and a pinned "Show box
+  today (Modules 1–2)" view until the Oct 19 undo. Versions are named `Client <Mon D> v<N> – <note>` (a number is
+  never reissued) and kept in `<data>/overrides/looks.yaml` (validated, history copies, atomic 0600). A corrupt,
+  oversized or unreadable file is set aside and flagged on /ops; the show never reads the file. Export is a reviewed
+  git patch of exactly four files (`config/scenes.yaml`, `modes.yaml`, `recipes.yaml`,
+  `tests/fixtures_scene_frames.json`), rewritten in place (comments and anchors kept), re-read through the real
+  loaders before it is offered, with a drafted DECISIONS entry. Approved looks reach the show only through git →
+  merge → `canopy-mac install`; nothing hot-applies config to a running show.
+- **Defaults taken** (the three questions Alon hadn't answered): an approved palette colour (D59) can change, as a
+  labelled draft whose export says "changes an approved colour — needs the client's sign-off and a D59 update"; Present
+  runs in Alon's laptop browser as ops (the Test iPad stays the guest panel); version names as above.
+- **Copy stays true and is never free text.** Each kiosk sentence is the approved one while the design is unchanged,
+  else generated from the layout's own words and the colours some strand actually shows. The client copy (name, mood,
+  description) refuses motion words and light counts ("270", "nine"), because nothing rewrites those for a partial
+  canopy (D62); a description the colours moved under gets a note, never a refusal.
+- **Locked to D63 in v1:** a design's `cycles` (1) and the module sample (`at: centre`), which the suite pins. On live
+  hardware, once a painted scene is commissioned its design is read-only in the Lab ("changing this needs a slot
+  repaint at commissioning", 07 §6); its brightness, solid, copy and stepped timing stay editable. In the simulator the
+  lock is off and the Lab says what would happen. D63's design-quality rules (`two-d`, `kits-differ`) warn in the
+  preview and block only the export. An export that changes a painted scene's design says "Deploy only in a
+  commissioning window" (slot repaint).
+- **Approved-value pins** in the tests moved to `tests/fixtures_scene_frames.json` (`_pins`), which the export
+  regenerates (or `make scene-pins` after a hand edit), so an approved edit passes the suite with only that fixture
+  changed; compiler tests compile against frozen copies of the Oct 16 scene recipes.
+- **Where a client session runs:** Alon's laptop (`make lab-dev`, sim, port 8200); Railway staging with an
+  ops-signed-in iPad once this is on main; the show box only after the deploy.
+- **Cut (follow-ups):** the Studio's own scene tiles and shop-kit buttons still read `demo-model.mjs` `SCENES`; each
+  export's review notes name a colour that would go stale there.
+- **Option for Alon, not built:** a read-only "client viewer" role for Present on the client's own device. It would
+  change the binding 07 §2 role table.
+- **Out of scope for v1:** hot-applying config, slot repaints and firmware presets from the Lab.
+- **Slice B (built Oct 16; try-on at module level through the engine).** One tap tries a draft of one scene on the real
+  lights: `POST /api/lab/trial/start` builds an engine `Trial` from deep copies of the show's own trio patched by the
+  draft (its own modes **and** recipes), and `CanopyEngine.start_trial` shows it with `request_mode` source `"lab"`,
+  one burst (no ripple, whatever `kiosk.ripple_stagger_s` says). `ShowWiring.compile` uses the draft only for that
+  scene's `modules`/`strand` rungs, and `compile_best` skips T1/T2/stepped for it while the try-on stands, so a painted
+  scene is tried on at module level and says so. The ladder, every T1 compile, `t1_target`, `slot_expectations`,
+  `stale_slot`, `adopt_slot`, `rewrite_slot` and commissioning keep the git config: no slot is written or judged
+  stale because of a try-on. Ops confirms a sentence naming every driven module and the bound (409
+  `confirm_required` until `confirm` equals it) and sees the cost ("sends N writes now, up to ~4N over the next
+  10 s"); the server keeps accepted applies at least `kiosk.cooldown_s` (8 s) apart (a double tap is refused with
+  `retry_after_s`). A try-on ends at `min(lab.trial_max_s, kiosk.idle_return_s)` (150 s; the setting is validated
+  ≤ `idle_return_s`; re-applies never extend it), on **Back to approved**, and before any other source's look is
+  compiled (ops, idle, the safe look, commissioning, a rehearsal); pause, stop and commissioning clear it, and a clear
+  whose own look then fails puts the approved look back. It is never persisted: a restart comes up clean. It is
+  refused while the engine is stopped, commissioning, paused, resting (outage) or rehearsing. Guests are refused with
+  "Staff are trying a new look. It will be back shortly." (503 + `retry_after_s`) on mood, brightness and power; the
+  sentence is true only while the try-on runs: the guest panel's state carries `waiting: "try-on" | "testing" | null`,
+  a lane refusal under the title is dropped once its flag lifts (and on an accepted scene), and the iPad drops a
+  waiting toast at the first read after it that says nothing waits (review fix, Oct 17). A re-pick (the reconciler
+  after new capabilities) keeps the try-on, unless it would ADD a module to the try-on's plan (one registered, or
+  newly read, mid-try-on: the confirm never named it): then the try-on ends and every module gets the approved look
+  (second review fix, Oct 17). A re-apply keeps the running session's bound, so it is confirmed against the time left
+  ("… for the 110 s left of the running try-on (a re-apply never extends it)"; a sentence shown up to 30 s earlier
+  still matches; the cost line adds "the running try-on still ends in N s"), and it is refused (409, `retry_after_s`
+  = the time left, nothing sent, the gap not used up) with less than `kiosk.cooldown_s` of the bound left, or when
+  the session it was confirmed against ended or another began while it was built. An exception (not a refusal)
+  while a try-on starts or ends clears the override and its bound task, puts the approved look back (the safe look
+  if that raises too), raises an alert, and the route answers a plain 500. The confirm sentence names the draft only when it renames the scene
+  ("Try on your draft of Golden Hour …"); TrialJSON's `label` is the approved scene's name and `draft_name` the
+  draft's. The Lab's preview "today" shows the try-on's installed plan while it runs. Every write goes through the engine and the
+  executor; `reconciler.py`, `executor.py` and the drivers are unchanged, and the Lab never flips
+  `motion.stepped.live_enabled` or `kiosk.ripple_stagger_s`. The try-on doesn't apply the T1 lock (it never writes a
+  slot), so a locked painted design can still be tried on at module level. The iPad's scene cards now rebuild when a
+  card's contents change (`cardsKey`), not only its id. Telemetry `kind="lab"`: the engine records `trial_start`,
+  `trial_apply`, `trial_end` (with `why`); the route records `trial_refused` and `trial_stop`.
+- **Slice C (the motion editor; built Oct 17 from C1 server and C2 page, screen only, no show-path file touched).** For Coastal Tides
+  and Golden Hour (the two scenes with a stepped rung) a draft edits the direction, `steps_per_cycle` 3–12, `step_s`
+  4–12 in half seconds and `run_s` from one step to `min(180, kiosk.idle_return_s)`; each bound is refused with its
+  field (`stepped.<name>`). The other four scenes refuse a stepped edit (no rung to add), and the idle look says it
+  never steps. The preview's `stepped` is the compiled stepped plan exactly (`compile_mode(scene, Tier.STEPPED, …)`
+  over the design context) with its real pace: `pace.nine` 7.5 s and `pace.today` 6.0 s on the show box's two kits
+  at the 6 s design (`stepped.effective_step_s`: the runner's rule, copied because `sequence.py` is a show-path file,
+  and pinned equal to a real `ProgramRunner` on the engine for nine and two modules, designed and edited steps, four
+  budgets and a ripple). Its moving copy is the mode's schema-checked `moving_feature` (approved, or
+  `STEPPED_TEMPLATE` when the design or the flow moved; the two-kit view gets D62's count). It shows
+  `STEPPED_LIVE_OFF` and "Alon sets motion.stepped.live_enabled after Gate R", and has no control for it. `rings`
+  are the show's own ripple bands (`field.bands` of `design_field(mode, T3)`, equal to every tier's plan `waves`
+  and the engine's `_rings`), for a screen-only animation at a 0–1.2 s stagger labelled "the canopy's ripple is off
+  (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)". The catalog adds the editor's limits, the live lines and
+  "Effects — not enabled: no code has passed the bench (06 #4)". An exported stepped timing's D65 line names the
+  pace ("nine strands on one account step every 10 s (6 steps, then the still design holds)"), and modes.yaml's
+  `step_s` comment follows the new pace. The Lab still never changes `motion.stepped.live_enabled` or
+  `kiosk.ripple_stagger_s` (route, AST and config checks).
+  **The page (C2):** the editor's Motion section has direction, steps per cycle, step time and run length (bounded
+  as above, a run never shorter than a step), a run line ("A 90 s run — Nine modules (7.5 s): 12 steps · Show box
+  today (two modules, 6 s): 15 steps; then the still look holds"), the live line and the greyed effects card; a
+  scene without a stepped rung shows why, read only. Under the picture, **Play the steps** plays the server's
+  compiled steps at the server's pace as `ProgramRunner` schedules them (step n shows `steps[n mod cycle]` from
+  n × step, ⌊run_s / step⌋ steps, then the still look holds), with pause, stop and a step counter; a toggle picks
+  the nine-module pace or the show box's (only Modules 1–2 lit, the rest dark); a 4× fast preview is labelled "not
+  the real pace" wherever it shows; the client never estimates a pace, and a pace the server says would hold still
+  (`runs.*.still`, which includes a run that fits only step 0, the still design itself) is not played. The moving
+  sentence shows only while the steps play (on the stage, the tier list and Present; at the show box's pace the
+  stage and Present show the partial canopy's, D62, and the tier list shows both, each labelled). Golden Hour's
+  Motion card, editor and Present say it steps only where its painted rungs can't run (the server's `steps_when`).
+  In A/B the run ends when the longest side's does. An approved `step_s` off the half second (valid for the
+  schema) loads; only an edit moves in half seconds. **Play the ripple** lands the server's rings at a
+  0–1.2 s stagger slider on the screen only, under "Screen preview only — the canopy's ripple is off
+  (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)". The live line is the server's `STEPPED_LIVE_OFF` and note
+  word for word, and once Alon sets `motion.stepped.live_enabled` every Lab line (live line, show-box pace note,
+  the export's D65 section) says it is on. Present plays the steps too (button or Space).
+  `docs/reports/sim-acceptance.md` is regenerated and committed with this slice (plan §1).

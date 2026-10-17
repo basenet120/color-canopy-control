@@ -43,8 +43,9 @@ function describe(status, body) {
 /**
  * JSON fetch against the Conductor. Resolves to the parsed body (or null for an empty one).
  * Throws ApiError with a readable message on network failures and non-2xx responses.
+ * `onResponse(response)`, when given, sees every answer (2xx or not) before its body is read.
  */
-export async function api(path, { method = "GET", body, signal, headers = {} } = {}) {
+export async function api(path, { method = "GET", body, signal, headers = {}, onResponse } = {}) {
   const init = {
     method,
     signal,
@@ -62,6 +63,13 @@ export async function api(path, { method = "GET", body, signal, headers = {} } =
   } catch (err) {
     if (err && err.name === "AbortError") throw err;
     throw new ApiError("Can't reach the Conductor. Check the connection and try again.", 0);
+  }
+  if (onResponse) {
+    try {
+      onResponse(response); // e.g. a page reading a response header (never fails the call)
+    } catch {
+      // ignored
+    }
   }
   const text = await response.text();
   let parsed = null;
