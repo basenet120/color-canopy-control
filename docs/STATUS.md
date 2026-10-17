@@ -9,22 +9,14 @@ across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before th
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
 ## PR stack (merge order — merge commits, not squash)
-0a. **#19 `claude/partial-canopy` → `main`** (D62): unregistered canopy positions are left out of every look; partial
-    copy counts the lit strands; nothing registered → the canopy rests. Verified (sim): 1200 passed, lint, JS 35/35,
-    soak 9/9.
-0b. **#20 `claude/partial-truth` → after #19** (P1, P2): the iPad's Changing/Ready and feature line follow the driven
-    strands (`look_phase`); every /ops count says registered of nine; the 7 am test stays Fail while a position is
-    unregistered. Verified (sim): 1228 passed, lint, JS 39/39, soak 9/9.
-0c. **#21 `claude/canopy-field` → after #20** (P3–P7, D63, D64): one 2-D design field over canopy inches drives T1 and
-    T3; the six scenes as 2-D designs (drafts for Paris); the iPad's Now showing draws the true 3×3 canopy of 270
-    lights from what was sent; the ripple arrival (off). Verified (sim): 1395 passed, lint, JS 51/51, soak 9/9 +
-    ripple scenario; checked in the browser on port 8200.
-0d. **#22 `claude/studio-design` → after #21** (P12): the Studio paints the show's 2-D design (ops-only
-    `/api/canopy/design`). Verified (sim): 1408 passed, lint, JS 62/62.
-0e. **#23 `claude/stepped-motion` → after #22** (P8–P11, P8b, P13, D65): stepped waves through the cloud at module
-    level — compiler, runner with budget reserve and throttle governor, kiosk/ops surfaces, soak scenario, the
-    operator-started Gate R rehearsal; Coastal Tides and Golden Hour get a stepped rung; context docs 02/04/06. Live
-    off (`motion.stepped.live_enabled: false`). Verified: see the PR.
+0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
+   `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
+   trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
+   motion + Gate R (D65), and neither does the show box, which deploys from `main`. **#24 `claude/stack-to-main` →
+   `main`** carries them over: `claude/studio-design` (#23's merge, tree identical to #23's tip `1ce3de5`) plus
+   `origin/main` (only #17's cloud/Remote Control docs were missing; clean merge). Verified (macOS): 1594 passed,
+   lint, JS 67/67. **Every PR below targets `main`; merge them in number order, #24 first.** (#20 P1/P2, #21
+   canopy-field, #22 studio-design and #23 stepped-motion are described in their PRs and in the D63–D65 section below.)
 0f. **#25 `claude/design-lab` → `main`, after #24 `claude/stack-to-main`** (Design Lab Slice A, screen only; plan
     `docs/design-lab/PLAN.md`): drafts over the parsed config, `/api/lab/*` (catalog, state, preview, versions,
     restore, export), the corrupt-store safety, the Studio's Lab panel (tier views, today / show-box views, A/B,
@@ -62,7 +54,7 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     of them fail on f2a2f6d) plus 17 mutants killed; a Playwright walk (system Chrome, 1440×900 and 1180×820 touch,
     own dev server on 8209) 29/29 on the fixes, 20 of its checks failing on f2a2f6d. **Not re-run:** `make
     lab-roundtrip` (the gated export round trip).
-0g. **#26 `claude/design-lab-trial` → stacked on #25** (Design Lab Slice B, the try-on; D66's Slice B line; plan
+0g. **#26 `claude/design-lab-trial` → `main`, after #25** (Design Lab Slice B, the try-on; D66's Slice B line; plan
     §6). **Show-path edits:** `conductor/canopy.py` (the trial seam), `conductor/show.py` (`_trial_for`,
     `context(recipes=)`, the trial compile at T3/strand only), `conductor/config.py` + `config/conductor.yaml`
     (`lab.trial_max_s: 150`), one `trial_active` branch in `conductor/routes/kiosk.py`; **not** `reconciler.py`,
@@ -133,7 +125,7 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
     ```
     If the stack isn't merged before the Oct 19 undo, the kit try-on happens in the Hubspace app or on `/ops/module`
     and the Lab stays screen-only until after it.
-0h. **#27 `claude/design-lab-motion` → `main`, stacked on #26** (Design Lab Slice C, the motion editor; D66's
+0h. **#27 `claude/design-lab-motion` → `main`, after #26** (Design Lab Slice C, the motion editor; D66's
     Slice C line; plan §7). **No show-path file touched:** `show.py`, `canopy.py`, `reconciler.py`, `executor.py`,
     `sequence.py`, the drivers and `config/` are unchanged; `motion.stepped.live_enabled` and
     `kiosk.ripple_stagger_s` are never written (route, AST and config checks). Server (C1):
@@ -518,15 +510,15 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-0. **Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge the stack in order
-   #19 → #20 → #21 → #22 → #23 (merge commits); then between demos `git -C ~/canopy-show switch main && git -C
+0. **Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge #24 (it carries #20–#23 to
+   `main`; merge commit); then between demos `git -C ~/canopy-show switch main && git -C
    ~/canopy-show pull --ff-only && ~/canopy-show/deploy/mac/canopy-mac install` (restarts; the sign-in survives). (c)
    Decide D63 (layouts, with Paris), D64 (ripple on: `kiosk.ripple_stagger_s: 1.2`) and D65 (which scenes move); run
    Gate R on the two test kits before the undo. (d) Release tag for the freeze. (e) On the Mac: show accounts when
    they exist, automatic login, wired + reserved address, restart and pull the plug once (`mac-show-box.md` §1–§2).
    Signing in a show account waits for Home Depot's authorization (06 #20).
-   (f) **Design Lab:** merge #24 → #25 → #26 → #27 in that order, each targeting main (retarget each to main
-   before merging; merge commits, not squash), then run #26's deploy block (in the PR stack above) when Paris can
+   (f) **Design Lab:** merge #24 → #25 → #26 → #27 in that order (each already targets main;
+   merge commits, not squash), then run #26's deploy block (in the PR stack above) when Paris can
    spare the box; a kit try-on on Modules 1–2 needs it before the Oct 19 undo. All three Lab slices are built;
    before the client session, open `make lab-dev` on the laptop and walk Golden Hour (colour, layout, brightness,
    save, compare, Present, export) and Coastal Tides' Motion section once. Stepped live and the ripple stay off
