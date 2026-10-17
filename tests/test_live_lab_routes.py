@@ -9,7 +9,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from live_lab import GOLDEN, TIDES, ask, brighter, client_of, install_no_threads, publish, save, show
+from live_lab import (
+    GOLDEN,
+    TIDES,
+    ask,
+    brighter,
+    client_of,
+    install_no_threads,
+    pinker_hour,
+    publish,
+    save,
+    show,
+)
 
 from conductor.clock import run_virtual
 
@@ -185,3 +196,81 @@ def test_the_live_routes_are_ops_only_and_same_origin(app_client_auth):
         "/api/lab/publish", json={"version": "approved", "expected_live": "approved"}, auth=ops
     )
     assert none.status_code == 503 and "nothing can be published" in none.json()["detail"]
+
+
+def test_the_lab_pages_fixtures_match_the_real_answers(no_threads):
+    """Stream U built the Lab page against its own §2.11 examples (`live_*.json`, `publish_*.json`,
+    `catalog_additions.json`, `state_additions.json`; pinned key for key by tests/lab-model.test.mjs): every key the
+    page reads is in the real server's answer, with the same JSON type. (`live_repainting.json` and `repaint.json` are
+    B2's RepaintJSON: LiveJSON.repaint is null until then, which shape_problems accepts.)"""
+
+    async def main():
+        w = await show()
+        out = {}
+        async with client_of(w) as c:
+            await w.engine.request_mode(TIDES, source="ops")
+            await w.engine.wait_idle()
+            out["live approved"] = (await c.get("/api/lab/live")).json()
+            vid = await save(c, {TIDES: brighter(TIDES)})
+            out["confirm"] = (await ask(c, vid)).json()
+            first = await ask(c, vid)
+            out["publish"] = (await publish(c, vid, who="Alon")).json()
+            # the same dialog confirmed after someone else published: the conflict
+            v2 = await save(c, {TIDES: brighter(TIDES), GOLDEN: pinker_hour()})
+            await publish(c, v2, who="B")
+            stale = await ask(c, vid, expected_live="approved", confirm=first.json()["confirm"])
+            out["conflict"] = (stale.status_code, stale.json())
+            out["live held"] = (await c.get("/api/lab/live")).json()
+            out["catalog"] = (await c.get("/api/lab/catalog")).json()
+            out["state"] = (await c.get("/api/lab/state")).json()
+        await w.close()
+        return out
+
+    out = run_virtual(main)
+    for name, key in (
+        ("live_approved", "live approved"),
+        ("live_published", "live held"),
+        ("live_held", "live held"),
+    ):
+        assert shape_problems(fixture(f"{name}.json"), out[key]) == [], name
+    assert any(s["held"] for s in out["live held"]["scenes"]), "the painted Pinker Hour runs held in the sim"
+    assert shape_problems(fixture("publish_confirm_required.json"), out["confirm"]) == []
+    # `state` in a publish answer is the engine's CanopyState, as in the try-on's answers (the page takes a Lab
+    # StateJSON from it only when it has `engine`, so it ignores this one and reads GET /api/lab/state itself)
+    ok = {k: v for k, v in fixture("publish_ok.json").items() if k != "state"}
+    assert shape_problems(ok, out["publish"]) == []
+    assert "engine" not in out["publish"]["state"] and "phase" in out["publish"]["state"]
+    assert shape_problems(fixture("publish_report.json"), out["publish"]["report"]) == []
+    status, body = out["conflict"]
+    assert status == 409 and body.get("conflict") is True, body
+    assert shape_problems(fixture("publish_conflict.json"), body) == []
+    additions = fixture("catalog_additions.json")
+    golden = next(s for s in out["catalog"]["scenes"] if s["id"] == GOLDEN)
+    # the layout is a union keyed by `kind` (the example's is radial; Pinker Hour's is linear)
+    example = {
+        **additions["scene"],
+        "live_look": {k: v for k, v in additions["scene"]["live_look"].items() if k != "layout"},
+    }
+    assert shape_problems(example, golden) == []
+    assert golden["live_look"]["layout"]["kind"] == "linear" and golden["live_source"] == "published"
+    assert shape_problems(additions["show_looks"], out["catalog"]["show_looks"]) == []
+    assert shape_problems(fixture("state_additions.json"), out["state"]) == []
+
+
+def test_the_lab_pages_fallback_fixture_matches_the_real_answer(tmp_path, no_threads):
+    from live_lab import write_document
+
+    write_document(
+        tmp_path, {"format": 1, "current": {"kind": "version"}}
+    )  # unusable: the show runs approved
+
+    async def main():
+        w = await show(data=tmp_path)
+        async with client_of(w) as c:
+            live = (await c.get("/api/lab/live")).json()
+        await w.close()
+        return live
+
+    live = run_virtual(main)
+    assert live["fallback"] is True and live["problem"], live
+    assert shape_problems(fixture("live_fallback.json"), live) == []

@@ -862,7 +862,9 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
   doesn't match, or one `validate_trio` refuses) is the approved looks plus an /ops line and a warn alert — never a
   failed start — and is left exactly as it was. A published trio that equals git is followed as git (persisted as
   `current: {kind: approved, name: "approved (in git)"}`), so a later deploy is never masked; one that differs from a
-  changed git raises an /ops warn ("… masks config/ changes deployed since …").
+  changed git raises an /ops warn ("… masks config/ changes deployed since …"). `conductor.preflight` (run by
+  `canopy-mac install` before the restart) reads the file with the new code and names one it can't use, without
+  failing the deploy (the show would start on the approved looks).
 - **Painted scenes: copy stays true.** A painted scene whose commissioned (api) slots don't hold the live design runs
   below T1 (`CanopyEngine._t1_hold`, skipped in `compile_best`, never in `tier_allowed`, so the reconciler still
   sees the slot as stale and rewrites it) until a slot record makes it current, then one T1 re-pick; the hold is

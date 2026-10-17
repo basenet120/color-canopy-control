@@ -1,7 +1,8 @@
 # Status
 
-_Last updated: 2026-10-17 evening (PR A `claude/canopy-only`: the Conductor controls the canopy only, D67; the Studio is
-screen only; see the block below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
+_Last updated: 2026-10-17 night (PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A
+`claude/canopy-only`: the Conductor controls the canopy only, D67; the Studio is screen only; see the two blocks
+below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
 `claude/design-lab-motion`; all three Lab slices built; see the PR stack), 2026-10-16.
 **The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
 Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
@@ -10,33 +11,74 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
-## PR B (B1, the live Lab — server part; `claude/live-lab`; plan `docs/live-lab/PLAN.md` §2) — built Oct 17–18
-**Merge #A (canopy only) first; PR B targets `main` too (merge commits).** The Design Lab publishes to the live show
-(D68): `conductor/looks/live.py` (the `overrides/show-looks.yaml` overlay — load with alias/size/depth refusal and a
-broad fallback that never fails the start and never moves the file, `validate_trio`, `install_looks` = the §2.4
-checklist, `config_sha`/`ConfigTrio` moved here and re-exported by the Lab), `build_live_looks` in the lifespan right
-after the AlertBoard, the engine seams (`LOOKS_SOURCE` in `RECOMPILE_SOURCES`, `looks_refusal`, `reload_looks`, the
-`_t1_hold` skipped in `compile_best`, lifted by a slot record, seeded at every capability apply; the refused-re-pick
-safe look; `repick_after_rollback`), `ShowWiring.recipes`/`install_looks`/`repaint_plan`, and every live reader on the
-live trio (kiosk modes incl. the per-mode `pattern` specs, guest panel catalog, ops `mode_list`, alert labels, the
-design route, the module page and its open sessions, the Lab's try-on, catalog and state). `conductor/design_lab/
-publish.py`: publish / Revert / Undo, the refusal matrix (Lab sentences), the confirm sentence + cost, the
-`expected_live` + generation conflict guard, one synchronous section (checks → write → install → re-pick), rollback.
-Routes `GET /api/lab/live`, `POST /api/lab/publish`, DELETE of the live version → 409; the §2.11 shapes are pinned
-against `tests/fixtures_live_lab/*.json`. The D66 T1 lock became the **app lock** (a design change over a
-hand-painted slot is refused everywhere) plus, **on hardware only**, the B1 api lock at publish (Revert/Undo exempt);
-**in the simulator a painted design change publishes** (held at module level, then the reconciler's stale rewrite),
-as D66's lock was off there — a deviation from the plan's §5.2 wording, recorded in D68. Text: D68, 07 §8's overlay
-paragraph, 05 #3's clause. **Not in B1:** the operator repaint job (B2), `conductor/preflight.py`'s looks line (that
-file is stream R's: `conductor.looks.live.preflight_line(config_dir, data, settings)` is ready for it), the Lab page
-(stream U). **Verified (sim, macOS, `nice -n 15 uv run --offline pytest -q --ignore=tests/test_deploy.py`):** the
-whole suite; `ruff check` + `ruff format --check`; `node --test tests/*.test.mjs`; new `tests/test_live_looks.py`,
-`tests/test_lab_publish.py` (the checklist, one case per §2.4 row; no live reader on the git defaults; one-burst
-re-pick keeping guest brightness; the T1 hold over 20 virtual minutes and after a restart; every refusal writes and
-sends nothing; conflict, busy, Undo after a deleted version, Revert, try-on, rollback byte for byte, write failure),
-`tests/test_live_lab_routes.py`; 31 mutants of the B1 guards, each killed by its named test. **Needs the show box:**
-the deploy (§8.1 step 3), a publish of a non-painted scene on the two kits, then Revert. **Not run here:** the soak
-and `make lab-roundtrip` (integrator, §5.4).
+## PR B — the live Lab (D68), `claude/live-lab` → `main` (built Oct 17; plan `docs/live-lab/PLAN.md` §2–§3)
+Alon, Oct 17: "make the test lab work on the live system so that I can just think of everything as one system".
+**Merge PR A (`claude/canopy-only`) first; PR B targets `main` too (memory: target main, not stacked bases); merge
+commits, not squash.** `claude/live-lab` = PR A + stream P's B1 (server) + stream U (the Lab page), merged in that
+order. Not in PR B: the operator slot repaint (B2, `claude/live-lab-repaint`, after bench item 6 on a show kit).
+- **Server (B1).** `conductor/looks/live.py`: the `overrides/show-looks.yaml` overlay (load with alias/size/depth
+  refusal and a broad fallback that never fails the start and never moves the file, `validate_trio`,
+  `install_looks` = the §2.4 checklist; `config_sha`/`ConfigTrio` moved here and re-exported by the Lab),
+  `build_live_looks` in the lifespan right after the AlertBoard, the engine seams (`LOOKS_SOURCE` in
+  `RECOMPILE_SOURCES`, `looks_refusal`, `reload_looks`, the `_t1_hold` skipped in `compile_best`, lifted by a slot
+  record, seeded at every capability apply; the refused-re-pick safe look), `ShowWiring.recipes`/`install_looks`/
+  `repaint_plan`, and every live reader on the live trio (kiosk modes incl. the per-mode `pattern` specs, the guest
+  panel catalog, ops `mode_list`, alert labels, the design route, the module page and its open sessions, the Lab's
+  try-on, catalog and state). `conductor/design_lab/publish.py`: publish / Revert / Undo, the refusal matrix (Lab
+  sentences), the confirm sentence + cost, the `expected_live` + generation conflict guard, one synchronous section
+  (checks → write → install → re-pick), rollback. Routes `GET /api/lab/live`, `POST /api/lab/publish`; DELETE of the
+  live version → 409. The D66 T1 lock became the **app lock** (a design change over a hand-painted slot is refused
+  everywhere) plus, **on hardware only**, the B1 api lock at publish (Revert/Undo exempt). **In the simulator a
+  painted design change publishes** (held at module level, then the reconciler's stale rewrite), as D66's lock was
+  off there — a deviation from the plan's §5.2 wording, recorded in D68 (one condition in `plan_publish` if Alon wants
+  the sim locked too).
+- **The Lab page (U).** `lab.js` / `lab-model.mjs` / `lab.css` (`?v=lab-6`): the show bar (live / published,
+  simulator vs hardware, the fallback line, held scenes, git-changed), the two badges per scene (Live: Approved /
+  Published, and Live / Draft / In try-on against the **live** look), working drafts seeded from the live look,
+  Publish to the show / Save & publish / Live now, the confirm dialog with the server's sentence verbatim and the
+  publisher's name, Undo last publish, Revert the show to approved, History, the conflict re-ask, Download version /
+  Open a version file, the 5 s poll. It degrades readably on a server without the live routes.
+- **Integration glue (lead).** `conductor.preflight` gained the read-only published-looks check
+  (`looks.live.preflight_line`): a file the new code can't use is **named, not fatal** (the show would start on the
+  approved looks with an /ops alert), so `canopy-mac install` still restarts; test
+  `test_live_looks.py::test_conductor_preflight_names_the_published_looks_and_never_fails_or_writes_for_them`
+  (mutation: the check dropped from `CHECKS` → it fails). `tests/test_live_lab_routes.py` now also checks **U's**
+  fixtures (`live_*.json`, `publish_*.json`, `catalog_additions.json`, `state_additions.json`, `live_fallback.json`)
+  against the real answers — every key the page reads is there with its type. Two known differences, both harmless:
+  a publish answer's `state` is the engine's CanopyState (as in the try-on answers; the page only takes a Lab state
+  that has `engine`, so it ignores it and reads `/api/lab/state`), and the layout example is the radial union arm.
+  `guest_panel.py` lost its now-unused `pathlib` import. Merge conflicts: 05 #3 (both edits kept), DECISIONS (D67
+  then D68), this file (B above A), the Studio's `index.html` and the two version pins (R's `studio.js?v=screen-1`,
+  U's `lab.js?v=lab-6`), `tests/fixtures_live_lab/repaint_info.json` (B1's, the one checked against the real answer).
+- **Verified (lead, macOS, sim, on the merged `claude/live-lab`):** `nice -n 15 uv run --offline pytest -q` (no
+  `--ignore`) → 2333 passed, 5 skipped, 44 subtests (9 m 45 s); `ruff check` + `ruff format --check` clean; `node --test tests/*.test.mjs` → 144/144.
+  **Smoke on a dev server** (`scripts/dev_design_lab.py --port 8213`, throwaway `--data`, killed afterwards; port
+  8000 untouched): `GET /api/lab/live` (approved, simulated); Golden Hour showing at T1; a Golden Hour colour edit
+  (Peach `#FFB69D → #FF7A4D`) saved as v0001 through `POST /api/lab/versions`; `POST /api/lab/publish` → 409
+  `confirm_required` with the simulator sentence and cost → confirmed → 200 `p0001`, 9 writes, Golden Hour held;
+  `/api/canopy/state` then showed Golden Hour at module level (T1 held; the colours per module are in
+  `/api/canopy/heads` and `/api/kiosk/modes`' `module_colours`, which now carry the new peach), the guest panel's
+  catalog and `/api/kiosk/modes`' preview had `#FF7A4D`; **restart over the same data dir** → `source: published`,
+  `p0001`, the kiosk catalog still `#FF7A4D`, T1 again (the sim recommissions from the live trio), no /ops problem;
+  **a hand-corrupted `show-looks.yaml`** (truncated + bad YAML) → the server started, `/healthz` 200, `fallback:
+  true` with the YAML reason, the kiosk back on git's `#FFB69D`, the /ops "Needs attention" line and the warn alert,
+  the file's bytes unchanged. Then in the Lab page (browser, 1440×900) against that same real server: the red
+  fallback line, Publish to this simulator → the server's sentence in the dialog → published (the old file kept as a
+  history copy, the /ops line gone), Revert this simulator to approved, Undo last publish — no page errors.
+  `nice -n 15 uv run --offline python -m conductor.soak` → exit 0, 21 PASS rows; the only FAIL is the non-gating
+  "(reported)" D65 landing spread (p95 2.78 s), as on #27 and PR A (`docs/reports/sim-acceptance.md` only changed its
+  timestamp, so it was reverted). **Not run:** `make lab-roundtrip` (five full suites, ~50 min, too heavy on the live
+  box tonight; the export path changed by one sentence, whose pin B1 updated) and the e2e suite (no Playwright
+  browser here).
+- **Notes for review.** (1) The page's `index.html` is served without `Cache-Control`, so a browser that opened the
+  Studio before the deploy can show the old Lab (`lab.js?v=lab-5`) until a reload — reload the Lab once after the
+  deploy. (2) After a fallback from a file that isn't YAML at all, nothing of it parses, so publication ids restart
+  at `p0001` (the old file is kept in `overrides/history/`). (3) `ShowWiring._apply_new_caps` now seeds the T1 hold
+  on every capability apply: a painted mode whose api record differs from what the live trio compiles to runs at
+  module level until the reconciler rewrites its slot (truthful).
+- **Needs the show box:** the deploy (§8.1 step 3: note the Lab's show bar before; after, the same name or "the
+  approved looks" and no "Published looks: … couldn't be used" line), a publish of a non-painted scene on the two
+  kits, then Revert.
 
 ## PR A — canopy only (D67), `claude/canopy-only` → `main` (Oct 17; plan `docs/live-lab/PLAN.md` §1, stream R)
 Alon on site, Oct 17: "remove all the stuff that isn't the canopy control". **Merge this before PR B** (the live
@@ -317,6 +359,8 @@ Lab); both target `main`; merge commits, not squash.
 0i. **PR A `claude/canopy-only` → `main`, after #27** (D67, canopy only; the block at the top of this file has
     what went, the old-data tolerance, what was verified and how, and the deploy paste block). Merge before PR B
     (the live Lab); merge commits, not squash.
+0j. **PR B `claude/live-lab` → `main`, after PR A** (D68, the live Lab: B1 server + the Lab page; the PR B block at
+    the top). Both target `main`; "merge #A first"; merge commits. Deploy it on its own, after PR A is deployed.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
      (`1eb8551`);
@@ -646,7 +690,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 ## Next step
 0a. **Alon (PR A, D67):** review CLAUDE.md's two changed lines in the PR (the lead asked stream R to apply them),
     merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above, after
-    the Oct 19 registry undo. Then PR B (the live Lab).
+    the Oct 19 registry undo. Then PR B (the live Lab): merge after A, deploy on its own (PR B block, "Needs the
+    show box"), reload the Lab once after the deploy.
 0. **Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge #24 (it carries #20–#23 to
    `main`; merge commit); then between demos `git -C ~/canopy-show switch main && git -C
    ~/canopy-show pull --ff-only && ~/canopy-show/deploy/mac/canopy-mac install` (restarts; the sign-in survives). (c)
