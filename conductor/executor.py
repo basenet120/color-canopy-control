@@ -56,7 +56,7 @@ from conductor.drivers.base import TELEMETRY_CLASSES, DeviceDriver, Outcome, Rea
 from conductor.executor_api import Command, CommandResult, CommandStatus, CommandTimings
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager, LockError
-from conductor.rows import compare
+from conductor.rows import FRAME_CLASS, compare
 from conductor.telemetry import Telemetry
 
 log = logging.getLogger(__name__)
@@ -476,10 +476,10 @@ class CommandExecutor:
             job.result.readback = rr
             if not rr.ok:
                 last_error = _describe(rr.outcome, rr.http_status, rr.error)
-                self._record_readback(cmd, rr, None)
+                self._record_readback(cmd, rr, None, n=i + 1)
                 continue
             mismatches = compare(expect, rr.rows)
-            self._record_readback(cmd, rr, len(mismatches), sorted({m.function_class for m in mismatches}))
+            self._record_readback(cmd, rr, len(mismatches), mismatches, n=i + 1)
             if not mismatches:
                 job.result.mismatches = []
                 job.result.timings.verified_at = self.clock.now()
@@ -642,8 +642,9 @@ class CommandExecutor:
         }
 
     def _record_readback(
-        self, cmd: Command, rr: ReadResult, mismatches: int | None, classes: list[str] | None = None
+        self, cmd: Command, rr: ReadResult, mismatches: int | None, found: list | None = None, *, n: int = 1
     ) -> None:
+        found = found or []
         self.telemetry.record(
             "readback",
             device_id=cmd.device_id,
@@ -651,8 +652,21 @@ class CommandExecutor:
             outcome=str(rr.outcome),
             http_status=rr.http_status,
             elapsed_s=round(rr.elapsed_s, 3),
+            n=n,  # which verification GET of this command (1 = the first, after readback_delay_s)
             mismatches=mismatches,
-            mismatched=classes or [],  # function classes that differ (the engine's early re-assert reads it)
+            mismatched=sorted({m.function_class for m in found}),  # (the engine's early re-assert reads it)
+            # Sent vs read for the small rows (never a slot object): tells cloud echo lag (the old value) from a
+            # device that stores something else (a clamped or rounded value).
+            differs=[
+                {
+                    "class": m.function_class,
+                    "instance": m.function_instance,
+                    "sent": m.expected,
+                    "read": m.reported,
+                }
+                for m in found
+                if m.function_class != FRAME_CLASS
+            ],
             available=rr.available,
             error=rr.error,
             simulated=rr.simulated,

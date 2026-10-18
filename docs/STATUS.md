@@ -1,6 +1,7 @@
 # Status
 
-_Last updated: 2026-10-18 afternoon (PR C `claude/panel-latency`: input to reaction on the guest panel, D69; see its
+_Last updated: 2026-10-18 late afternoon (PR D `claude/readback-echo-lag`: the first readback's echo lag, D70; see its
+block. PR C #31 is merged and live on the show box at `0f8f38c`). Before that 2026-10-18 afternoon (PR C `claude/panel-latency`: input to reaction on the guest panel, D69; see its
 block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
 blocks below still read as before the merge. Before that 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
 `claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
@@ -15,6 +16,28 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR D — the first readback's echo lag (D70), `claude/readback-echo-lag` → `main` (Oct 18)
+Cut from `main` at `0f8f38c` (after #31); stands alone. The findings are in
+`docs/reports/readback-echo-lag-2026-10-18.md`, from a read-only pass over the live telemetry (Oct 17–18, Modules 1–2).
+- **Found:** about 1.2 s after the ack, the first verification GET still shows the previous scene's brightness
+  and/or colour on 33 of 56 scene changes and both guest brightness changes. That is cloud echo lag, not a clamp:
+  identical re-sends read back right, and the same transitions sometimes read fresh. The engine's early re-send cut
+  every one of those 35 commands short (no command got its own 2nd readback), so each cost an extra PUT and ~2.75 s
+  to "ready". On Oct 17, back-to-back re-sends stayed stale up to 3 times (5.7 s).
+- **Changed (sim-tested):** a change's first early re-send waits for the command's 2nd readback that still differs;
+  later re-sends in the same change go on the first readback, as before (3 drops in a row still heal ≤ 10 s).
+  Readback telemetry now carries `n` and `differs` (sent vs read, non-slot rows).
+- **Verified (sim, macOS):** `nice -n 15 uv run pytest -q` → 2453 passed, 5 skipped, 44 subtests (11 min); ruff
+  check / format clean. New `tests/test_readback_echo_lag.py`: with device-side readback lagging 1.3–1.6 s, a 60 → 70
+  scene change costs one PUT per module, no early re-send, first GET stale, second matched, and `differs` reads
+  `sent 70, read 60`. **Mutation-checked:** with the threshold back at 1, it fails (9 re-sends). The 3-drops-in-a-row
+  self-heal test is what forced "later re-sends go on the first readback" (11.0 s without it). The stepped-drop test
+  now expects a re-send 2.0–3.6 s after a drop (was ≤ 2.6 s). The live numbers come from read-only scripts over the
+  show box's telemetry; nothing touched `~/canopy-show` or a device.
+- **Needs hardware (bench step in the report):** confirm `read` = the old scene's value on live scene changes;
+  measure the echo lag by polling GET every 0.25 s; shorten `readback_interval_s` only if p95 < 1.5 s.
+- **Deploy:** Alon's call, after merging (the usual paste block). Nothing was deployed or written to a device.
 
 ## PR C — input to reaction on the guest panel (D69), `claude/panel-latency` → `main` (Oct 18)
 Alon: "minimize delay between input and reaction on the panels". Cut from `main` at `96b31ad` (after #28–#30); one

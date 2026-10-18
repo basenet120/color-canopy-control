@@ -31,11 +31,13 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   `outage_probe_interval_s` and, on the first good readback, re-applies the current mode to every module in one
   burst. Ops requests during an outage become the current mode and go out on recovery. A driver's optional
   `on_recovery` list (the Afero adapter's watchdog) triggers an immediate probe.
-- **Early re-assert.** When a verification readback of the current command already differs from what was sent in a
+- **Early re-assert.** When a verification readback of the current command still differs from what was sent in a
   row a re-send can fix (the cloud stored nothing: a silent drop), the module is re-sent at once instead of after the
   executor's remaining readbacks — at most `EARLY_REASSERT_LIMIT` times per module per change. A motion plan
-  re-triggers every module as one burst instead, once per change. A command that ends MISMATCH is re-asserted at the
-  next reconciler tick; one that ends FAILED after `reassert_after_s`.
+  re-triggers every module as one burst instead, once per change. A change's first re-send waits for the command's
+  second readback (`EARLY_REASSERT_FROM_READBACK`): live, a differing first readback is usually the cloud still
+  echoing the old value (D70); later re-sends in the same change go on the first. A command that ends MISMATCH is
+  re-asserted at the next reconciler tick; one that ends FAILED after `reassert_after_s`.
 - **Commissioning.** `commission()` writes each T1 mode's slot content (the slot object only, one PUT per module,
   header copied from the device's own readback of that slot, verified on the slot row) and records the canonical
   hash of the readback per (device, slot), with origin "api" and the header's effect fields, through `record_slot`
@@ -187,6 +189,11 @@ COMMISSION_ROUNDS = (
 )
 PUBLISH_MIN_INTERVAL_S = 0.25  # state pushes are coalesced to at most 4 per second
 EARLY_REASSERT_LIMIT = 3  # per module per change
+# The verification readback (1 = first) from which a change's first early re-send may fire. On Oct 17–18 the first
+# readback (≈ 1.2 s after the ack) still showed the previous scene's brightness/colour on 33 of 56 live scene changes,
+# while re-sends of the same rows read back correct at once: cloud echo lag, not a drop (D70,
+# docs/reports/readback-echo-lag-2026-10-18.md).
+EARLY_REASSERT_FROM_READBACK = 2
 HEADER_READ_ATTEMPTS = 3  # the readback a slot write copies its header from
 # The guest-input pause, kept across restarts, under EngineDeps.state_dir (<data>/state).
 GUEST_INPUT_FILE = "guest_input.json"
@@ -2577,11 +2584,12 @@ class CanopyEngine:
         outcome = event.get("outcome")
         if outcome == str(Outcome.OK):
             self._bad_streak.clear()
-            # A verification readback that differs in a row a re-send can fix (not only a slot's stored pattern,
-            # which is drift): the cloud didn't store the write.
+            # A verification readback that still differs in a row a re-send can fix (not only a slot's stored
+            # pattern, which is drift) after the first: the cloud didn't store the write. The first readback alone
+            # isn't evidence — live, it's usually the cloud still echoing the old value (D70).
             differs = [c for c in event.get("mismatched") or () if c != R.FRAME_CLASS]
             if kind == "readback" and differs:
-                self._maybe_early_reassert(address)
+                self._maybe_early_reassert(address, event.get("n") or 1)
         elif (
             is_outage_signal(outcome, event.get("http_status")) and self._outage is None and not self._stopped
         ):
@@ -2592,7 +2600,7 @@ class CanopyEngine:
                     f"{len(self._bad_streak)} module(s)."
                 )
 
-    def _maybe_early_reassert(self, address: str) -> None:
+    def _maybe_early_reassert(self, address: str, readback: int = 1) -> None:
         plan = self._plan
         cmd = self._latest.get(address)
         if plan is None or cmd is None or self._outage is not None or self.quiet:
@@ -2604,7 +2612,12 @@ class CanopyEngine:
         # at most EARLY_REASSERT_LIMIT times per change (a module that keeps disagreeing falls back to the
         # reconciler's slower cadence and, eventually, the hysteresis downgrade).
         key = "*" if plan.motion else address
-        if self._early_counts.get(key, 0) >= (1 if plan.motion else EARLY_REASSERT_LIMIT):
+        count = self._early_counts.get(key, 0)
+        if count >= (1 if plan.motion else EARLY_REASSERT_LIMIT):
+            return
+        # The first re-send of a change waits for a second readback that still differs (the first is usually echo
+        # lag); once a module has been re-sent this change, a differing first readback is enough (≤ 10 s self-heal).
+        if count == 0 and readback < EARLY_REASSERT_FROM_READBACK:
             return
         self._early_counts[key] = self._early_counts.get(key, 0) + 1
         self.stats["early_reasserts"] += 1

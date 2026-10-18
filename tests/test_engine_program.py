@@ -500,8 +500,8 @@ def test_each_steps_silent_drop_gets_its_own_early_re_send():
 
     dropped, resends = run_virtual(main)
     assert len(dropped) == 4  # steps 1–4
-    for t in dropped:  # each drop is re-sent at its first verification readback, not after three
-        assert any(t < r <= t + 2.6 for r in resends), (t, resends)
+    for t in dropped:  # each drop is re-sent at its second verification readback (D70), not after the third
+        assert any(t + 2.0 < r <= t + 3.6 for r in resends), (t, resends)
 
 
 # ---- pauses and folding -------------------------------------------------------------------------------------------
