@@ -40,6 +40,10 @@ kiosk:
   guest_brightness_min: 10       # the guest panel can't dim the canopy below this (D60)
   idle_reset_s: 300              # no guest input this long → guest brightness/off cleared: on, designed brightness
   idle_scene: null               # optionally also return to this mood on that reset (null = stay on the current one)
+  # The iPad's scene menu (D76): a scene listed here leaves the guest cards, the attract screen and both kiosk choose
+  # routes; ops can still choose it, the Design Lab still edits it, and the idle scene can't be hidden. /ops "Show on
+  # the iPad" writes <data>/overrides/settings.yaml, which replaces this list; the /ops overlay download folds it here.
+  hidden_scenes: []
   # The guest panel's picture of the 270 lights: the reflected-ceiling view of config/canopy.yaml (looking up, origin
   # at the canopy's top-left). SET AT INSTALL so the iPad matches what a guest at the stand sees overhead.
   preview:

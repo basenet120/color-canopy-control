@@ -20,11 +20,15 @@ from typing import Any
 from conductor.clock import Clock, RealClock
 from conductor.config import (
     CONFIG_DIR,
+    SETTINGS_OVERLAY_KEY,
+    SETTINGS_OVERLAY_PATH,
     ConductorSettings,
     Registry,
+    apply_settings_overlay,
     data_dir,
     load_registry,
     load_settings,
+    load_settings_overlay,
     save_overlay_patch,
 )
 from conductor.drivers.base import DeviceDriver
@@ -206,6 +210,16 @@ def build_services(
     gate_settings = GateSettings.from_env(env)
     data = data_dir(env)
     settings = load_settings(config_dir)
+    # The iPad's scene menu as /ops last set it (D76): replaces kiosk.hidden_scenes in place, never a failed start
+    # (a file that can't be used leaves git's list in force; ipad_menu.problem_lines puts it on /ops).
+    settings_overlay = load_settings_overlay(data)
+    apply_settings_overlay(settings, settings_overlay)
+    if settings_overlay.problem:
+        log.warning(
+            "%s couldn't be used (%s); git's kiosk.hidden_scenes is in force",
+            SETTINGS_OVERLAY_PATH,
+            settings_overlay.problem,
+        )
     registry = load_registry(config_dir, data)
     problems: list[str] = registry_problems(registry)
 
@@ -260,6 +274,8 @@ def build_services(
         accounts=accounts,
         problems=problems,
     )
+    # Never rebind services.settings: the engine keeps this object (EngineDeps), and /ops changes hidden_scenes in it.
+    services.extras[SETTINGS_OVERLAY_KEY] = settings_overlay
 
     # The registry can change at runtime (ops edits); everything reads it through the services object.
     registry_now = lambda: services.registry
