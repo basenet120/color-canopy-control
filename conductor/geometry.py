@@ -7,8 +7,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from math import dist
 from pathlib import Path
+from typing import Any
 
-import yaml
+from conductor.config import ConfigError, _read_yaml
+from conductor.fins import load_fin_map, parse_vwbd_panels
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "canopy.yaml"
 
@@ -25,8 +27,64 @@ class Head:
 
 
 def load_canopy_config(path: Path = CONFIG_PATH) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)["canopy"]
+    """canopy.yaml's `canopy` mapping, checked. Every device path loads the canopy through here.
+
+    Besides the file's own keys (unchanged), the mapping carries:
+    - `fins` (with a `fins:` section): the checked section as a plain dict, e.g.
+      {'file': 'fins.json', 'apron_in': 6.0, 'fin_width_in': 5.0};
+    - `fin_map`: the `conductor.fins.FinMap` of the file it names, next to canopy.yaml (D74);
+    - `vwbd_panels` (with a `vwbd_panels:` section): VWBD's panel number per canopy position, all nine.
+
+    ConfigError, naming the file and the fix, when canopy.yaml is missing, isn't valid YAML or has no `canopy:`
+    section, when the fins section, its file or the panel numbers are wrong (`conductor.fins`), or when
+    `orientation_scheme` isn't one the file lists while it has either section. A broken fins.json therefore stops
+    the start and the deploy preflight. A canopy.yaml without the two sections loads exactly as before.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise ConfigError(f"{path} is missing. The canopy's geometry lives there; restore it from git.")
+    data = _read_yaml(path)  # bad YAML: a ConfigError naming the file, the line and the column
+    cfg = data.get("canopy") if isinstance(data, dict) else None
+    if not isinstance(cfg, dict):
+        raise ConfigError(f"{path} has no canopy: section (the canopy's geometry). Restore it from git.")
+    if "fins" in cfg:
+        _check_scheme(path, cfg)
+        cfg["fins"], cfg["fin_map"] = load_fin_map(
+            path, cfg["fins"], cfg["width_in"], cfg["height_in"], lattice_heads(cfg)
+        )
+    if "vwbd_panels" in cfg:
+        _check_scheme(path, cfg)
+        cfg["vwbd_panels"] = parse_vwbd_panels(path, cfg["vwbd_panels"], _positions(cfg))
+    return cfg
+
+
+def _check_scheme(path: Path, cfg: dict[str, Any]) -> None:
+    orientations = cfg.get("orientations")
+    known = orientations if isinstance(orientations, dict) else {}
+    scheme = cfg.get("orientation_scheme")
+    if scheme not in known:
+        raise ConfigError(f"{path} → canopy → orientation_scheme {scheme!r} isn't one of {sorted(known)}")
+
+
+def _positions(cfg: dict[str, Any]) -> list[str]:
+    """Every canopy position from the scheme grid, row-major: r0c0, r0c1, …"""
+    grid = cfg["orientations"][cfg["orientation_scheme"]]
+    return [f"r{r}c{c}" for r, row in enumerate(grid) for c in range(len(row))]
+
+
+def lattice_heads(cfg: dict) -> list[tuple[float, float]]:
+    """Every head's canopy point, module by module in row-major order, each module's panel lattice in its scheme
+    orientation (B = A rotated 180°). Unlike `build_layout` it doesn't depend on the wiring: the same set of points."""
+    mw, mh = float(cfg["module"]["width_in"]), float(cfg["module"]["height_in"])
+    lattice = panel_lattice(cfg)
+    out: list[tuple[float, float]] = []
+    for r, grid_row in enumerate(cfg["orientations"][cfg["orientation_scheme"]]):
+        for c, orientation in enumerate(grid_row):
+            for px, py in lattice:
+                if orientation == "B":
+                    px, py = mw - px, mh - py
+                out.append((c * mw + px, r * mh + py))
+    return out
 
 
 def panel_positions(cfg: dict) -> list[tuple[float, float]]:
