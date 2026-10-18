@@ -737,7 +737,7 @@ test("Apply ignores a double tap, a tap while one is on its way, and a tap insid
   assert.equal(M.applyReady({ busy: true, nowMs: 1000 }).why, "busy");
   assert.equal(M.applyReady({ lastTapMs: 1000, nowMs: 1000 + M.DOUBLE_TAP_MS - 1 }).why, "double-tap");
   assert.equal(M.applyReady({ lastTapMs: 1000, nowMs: 1000 + M.DOUBLE_TAP_MS }).ok, true);
-  // accepted at t = 0 with next_apply_in_s 8 (kiosk.cooldown_s): 3 s later wait 5 s; at 8 s it may send
+  // accepted at t = 0 with next_apply_in_s 8 (lab.apply_min_gap_s): 3 s later wait 5 s; at 8 s it may send
   const gap3 = M.applyReady({ acceptedAtMs: 0, nextApplyInS: 8, nowMs: 3000 });
   assert.equal(gap3.why, "gap");
   assert.equal(gap3.waitS, 5);

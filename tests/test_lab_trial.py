@@ -12,7 +12,7 @@ Two harnesses:
 What must hold (PLAN §6, D66): the try-on compiles the draft (its own modes AND recipes) only at the modules and
 strand tiers of its scene; every slot path keeps the git config, so no slot is written or judged stale; it is one
 burst; it is refused while stopped, commissioning, paused, resting or rehearsing; the server keeps applies
->= kiosk.cooldown_s apart; guests are refused with a true sentence; it ends at min(lab.trial_max_s,
+>= lab.apply_min_gap_s apart; guests are refused with a true sentence; it ends at min(lab.trial_max_s,
 kiosk.idle_return_s), on "Back to approved", and before anything else compiles its own look; a failed clear puts the
 approved look back; it is never persisted; and the show's cached config is never mutated.
 """
@@ -409,7 +409,7 @@ def test_a_first_start_refused_by_the_engine_leaves_no_trial():
         st = await engine.start_trial(trial_of("sunset", w.clock.monotonic()))
         after = (engine.trial, engine._trial_task, engine.current_plan() is plan, engine.trial_active)
         lab = w.events("lab")
-        await w.run_for(30)  # past kiosk.cooldown_s
+        await w.run_for(30)  # past lab.apply_min_gap_s
         kiosk = await engine.request_mode("holiday", source="kiosk")
         await w.close()
         return st, after, lab, kiosk
@@ -1542,7 +1542,7 @@ def test_a_compile_error_at_start_leaves_no_override_and_no_trial_plan(mode):
         with pytest.raises(RuntimeError):
             await engine.start_trial(trial_of(mode, w.clock.monotonic()))
         after = (engine.trial, engine._trial_task, engine.current_plan(), alerts_of(w))
-        await w.run_for(30)  # past kiosk.cooldown_s
+        await w.run_for(30)  # past lab.apply_min_gap_s
         kiosk = await engine.request_mode("holiday", source="kiosk")
         await w.close()
         return plan, after, kiosk
@@ -1696,7 +1696,7 @@ def lab_sends(w: Show) -> int:
 
 
 def test_a_reapply_near_the_bound_is_refused_and_never_uses_up_the_gap(no_threads):
-    """With less than kiosk.cooldown_s of the bound left, a re-apply would land a moment before the bound puts the
+    """With less than lab.apply_min_gap_s of the bound left, a re-apply would land a moment before the bound puts the
     approved look back (8 of 9 draft writes superseded): it is refused with a true sentence and Retry-After, nothing
     is sent, and the gap isn't stamped. Once the try-on has ended, an apply starts a fresh one."""
 

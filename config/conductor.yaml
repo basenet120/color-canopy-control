@@ -23,7 +23,12 @@ reconciler:
   outage_probe_interval_s: 10
 
 kiosk:
-  cooldown_s: 8                  # after any accepted guest input (a mood, brightness or on/off)
+  # Guest pacing (D70): after an accepted guest input (a mood, brightness or on/off) the next one waits until the
+  # guests' write budget has paid for it — one write per driven module (most on one account) × 60 / guest_writes_per_min
+  # — and never less than cooldown_min_s. Two strands: 2 s; nine modules: 7.5 s. The budget is the account cap
+  # (motion.stepped.account_writes_per_min, 90, unmeasured until Gate R) less the same 20% reserve the steps keep.
+  cooldown_min_s: 2
+  guest_writes_per_min: 72
   idle_return_s: 180
   idle_mode: lowcountry-calm
   guest_brightness_min: 10       # the guest panel can't dim the canopy below this (D60)
@@ -69,6 +74,7 @@ lab:
   # installs at once, shows the scene at module level and queues the repaint; Revert and Undo are never refused). The
   # reconciler's own drift rewrite stays at reconciler.slot_rewrite_min_interval_s.
   repaint_min_interval_s: 120
+  apply_min_gap_s: 8             # the try-on's gap between accepted applies (was kiosk's fixed cooldown before D70)
 
 effects:
   # motionEffect / brightnessEffect codes the bench has enabled. Every code starts disabled (06 #4).

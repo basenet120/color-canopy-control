@@ -207,7 +207,7 @@ def test_engine_scene_asks_the_engine_and_reports_its_feature(app_client):
     state = r.json()["state"]
     assert state["scene"] == "rainbow-row-sunset" and state["phase"] == "changing"
     assert state["feature"] is None  # not until the new scene is showing
-    r = app_client.post("/api/kiosk/scene", json={"scene": GOLDEN.id})  # the engine's 8 s cooldown
+    r = app_client.post("/api/kiosk/scene", json={"scene": GOLDEN.id})  # the (fake) engine's 8 s cooldown
     assert r.status_code == 429 and 7 < r.json()["retry_after_s"] <= 8
     assert engine.calls == [("rainbow-row-sunset", "kiosk")]
 

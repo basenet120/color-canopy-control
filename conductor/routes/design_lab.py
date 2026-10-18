@@ -673,7 +673,7 @@ async def trial_start(body: TrialStartBody, lab: Lab) -> JSONResponse:
     # is left that it would land a moment before the bound puts the approved look back (nothing sent, gap kept).
     running = getattr(engine, "trial", None)
     left = max(0.0, running.ends_mono - clock.monotonic()) if running is not None else None
-    floor = float(lab.settings.kiosk.cooldown_s)
+    floor = float(lab.settings.lab.apply_min_gap_s)
     if left is not None and left < floor:
         _record(lab, "trial_refused", why="too close to its time limit", **refused)
         wait = round(max(left, 0.01), 2)

@@ -114,7 +114,13 @@ class PreviewSettings(_Strict):
 
 
 class KioskSettings(_Strict):
-    cooldown_s: float = 8
+    # Guest pacing (D70; replaces D21's fixed 8 s cooldown): after an accepted guest input (a mood, a brightness or an
+    # on/off) the next waits until the guests' share of the account's write budget has paid for this one — one write
+    # per module the look drives (the most on any one account) at `guest_writes_per_min` — and never less than
+    # `cooldown_min_s`. Two strands: 2 s; the nine-module canopy: 7.5 s (9 × 60 / 72). Ops bypass it. Never above the
+    # account's cap (`motion.stepped.account_writes_per_min`): a lower cap there lowers the guests' budget with it.
+    cooldown_min_s: float = Field(2.0, ge=1.0, le=30.0)
+    guest_writes_per_min: float = Field(72.0, gt=0)
     idle_return_s: float = 180
     idle_mode: str = "lowcountry-calm"
     # Guest brightness / power (D60): the lowest brightness a guest can set, and how long after the last guest input
@@ -209,6 +215,9 @@ class LabSettings(_Strict):
     # often (a sooner publish installs at once and queues the repaint; a revert is never blocked). The reconciler's
     # own drift/stale rewrite stays at reconciler.slot_rewrite_min_interval_s.
     repaint_min_interval_s: float = Field(120, ge=60, le=600)
+    # The try-on's own minimum gap between accepted applies, and how much of the bound a re-apply needs left (D66;
+    # it was kiosk's 8 s cooldown until D70 made that a budget).
+    apply_min_gap_s: float = Field(8.0, ge=1.0, le=60.0)
 
 
 class ConductorSettings(_Strict):

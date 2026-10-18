@@ -1,6 +1,7 @@
 # Status
 
-_Last updated: 2026-10-18 afternoon (PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
+_Last updated: 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
+PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
 merged as #31 and deployed on the show box at `0f8f38c`; see its block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
 blocks below still read as before the merge. Before that 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
 `claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
@@ -15,6 +16,31 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR D — guests paced by the write budget, not a fixed 8 s (D70), `claude/guest-budget` → `main` (Oct 18)
+**Merge #32 (`claude/panel-latency-deploy`, STATUS only) first** — this branch carries it (a merge commit), so its
+STATUS edits sit on #32's. Alon: is the 8 s between presets required by the API, and can it be cut for everything?
+Not an API rule (Afero publishes none; ~1 write/s per device is the only guidance, and the account cap is our
+unmeasured 90/min). Now the gap after a guest input (mood, brightness, on/off) = one write per driven module (most on
+one account) × 60 / 72, never under 2 s: **2 s on today's two kits, 7.5 s on all nine.** Ops bypass it; the Lab's
+try-on keeps its 8 s gap (`lab.apply_min_gap_s`); the soak keeps its seeded schedule. Settings: `kiosk.cooldown_min_s`
+(2), `kiosk.guest_writes_per_min` (72, capped by `motion.stepped.account_writes_per_min`); `kiosk.cooldown_s` is gone
+(the show box has no settings overlay that sets it). 07 §6's kiosk-constant line is rewritten for Alon's review.
+- **Verified (sim, macOS):** `nice -n 15 uv run --offline pytest -q` → 2458 passed, 5 skipped, 44 subtests (11 min, on the
+  final tree); ruff check / format clean; `node --test tests/*.test.mjs` 151/151; `python -m conductor.soak` exit 0,
+  21 PASS rows, the only FAIL the non-gating D65 stepped spread (p95 2.78 s, as before); the mash now accepts a few
+  more kiosk taps (38 refused, at a 7.5 s gap) and every row stays inside its target. **`tests/test_guest_budget.py`**
+  (8 tests): the gap is 2 s for 0–2 modules, 2.5 s for 3, 7.5 s for 9; the account carrying the most modules sets it
+  (5 + 4 → 4.17 s); a lower account cap lowers it (cap 40 → 13.5 s) and the floor is a floor; on the engine (virtual
+  time) the next guest choice is refused 0.3 s before the gap and accepted 0.05 s after it, ops never wait, for two
+  strands (2 s) and nine (7.5 s); brightness and on/off buy the same 2 s; two minutes of a guest hitting every control
+  every 0.25 s on nine modules: accepted inputs ≥ 7.5 s apart and the account ≤ 90 writes in any 60 s; the Lab keeps
+  8 s. Pinned-8 s tests updated (5.5 s left 2 s into a 7.5 s gap). **Mutation-checked:** `guest_gap_s` returning a
+  fixed 8 s → 6 of the 8 fail. **Browser** (sim dev server, port 8200): a scene on the nine-module simulator →
+  `cooldown_remaining_s` 7.496; a second scene 0.4 s later → 429, retry 7.09 s.
+- **Deploy:** the usual paste block, on its own; no iPad reload needed (no page change).
+- **Needs the real box:** on the two kits, a scene then another 2 s later — both land and the chip counts 2 s; the
+  account's real cap (Gate R) before all nine kits run at 7.5 s.
 
 ## PR C — input to reaction on the guest panel (D69), `claude/panel-latency` → `main` (Oct 18)
 **Merged (#31) and deployed Oct 18 12:06 on the Mac show box: `0f8f38c`** (Alon asked; the PR's paste block run from
@@ -425,7 +451,8 @@ Lab); both target `main`; merge commits, not squash.
 
 ## PR stack (merge order — merge commits, not squash)
 00. **Oct 18:** #28 (PR A), #29 (PR B), #30 (PR B2) and #31 (PR C, D69) are merged into `main`; the show box runs
-    `0f8f38c` (main after #31).
+    `0f8f38c` (main after #31). **Open: #32** (STATUS: PR C deployed), then **PR D `claude/guest-budget`** (D70; carries
+    #32 — merge #32 first).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -942,6 +969,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+000. **Alon (PR D, D70):** merge #32, then review and merge `claude/guest-budget` (merge commits); deploy it on its own;
+    on the kits a second scene 2 s after the first should land.
 00. **PR C (D69) is merged and deployed (Oct 18, `0f8f38c`).** Still to try on the kits: tap a scene, dim right
     after it — the level should land when the cooldown ends and the panel should say so meanwhile. Then the
     brightness-readback bench check in the PR C block.

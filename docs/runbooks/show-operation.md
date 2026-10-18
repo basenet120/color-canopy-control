@@ -22,8 +22,9 @@ Oct 29. **How long:** the whole show; each action below takes seconds.
   7 am check says a slot drifted). Not during a busy moment: guest input waits for it (about a minute).
 
 What guests see on the kiosk: six moods; after a choice the canopy changes in a few seconds ("Changing the light…"
-→ "Ready"); there's an 8-second pause before the next choice; after 3 minutes with nobody touching it the canopy
-goes back to Lowcountry Calm.
+→ "Ready"); the next choice (or brightness, or on/off) waits a moment, paced by the account's write budget (D70): 2 s
+while the show drives two strands, 7.5 s once all nine are driven ("New scene in N s"); after 3 minutes with nobody
+touching it the canopy goes back to Lowcountry Calm.
 
 ## "Needs attention" — what it means per module, and what to do
 

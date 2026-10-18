@@ -71,7 +71,8 @@ def test_kiosk_cooldown_and_paused_guest_input():
     assert not out["first"].refused and out["first"].cooldown_until is not None
     second = out["second"]
     assert second.refused and second.mode == "holiday"  # nothing changed
-    assert "Try again in 6 s" in second.message and 5.9 <= second.retry_after_s <= 6.0
+    # D70: nine modules on one account → a 7.5 s guest gap (9 × 60 / 72), 5.5 s of it left 2 s in
+    assert "Try again in 6 s" in second.message and 5.4 <= second.retry_after_s <= 5.5
     assert second.to_json()["refused"] is True
     assert not out["ops"].refused and out["ops"].mode == "sunset"
     assert not out["after"].refused and out["after"].mode == "lowcountry-calm"
