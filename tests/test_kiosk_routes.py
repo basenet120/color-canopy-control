@@ -246,6 +246,22 @@ def test_modes_serve_without_an_engine(app_client):
     assert len(listing) == 6 and all(m["feature"] is None for m in listing)
 
 
+def test_the_legacy_kiosk_routes_leave_hidden_scenes_out(app_client, engine):
+    """kiosk.hidden_scenes (D76) takes a scene off /api/kiosk/modes too, and /api/kiosk/select refuses it as unknown
+    before the engine is asked."""
+    kiosk = app_client.app.state.services.settings.kiosk
+    kiosk.hidden_scenes = ["golden-hour"]  # in place, as the /ops switch does
+    ids = [m["id"] for m in app_client.get("/api/kiosk/modes").json()]
+    assert ids == [m for m in MODES_YAML["modes"] if m != "golden-hour"]
+    r = app_client.post("/api/kiosk/select", json={"mode": "golden-hour"})
+    assert r.status_code == 404 and r.json()["detail"] == "That mood isn't one of the canopy's choices."
+    assert engine.calls == []
+    kiosk.hidden_scenes = []
+    assert len(app_client.get("/api/kiosk/modes").json()) == 6
+    assert app_client.post("/api/kiosk/select", json={"mode": "golden-hour"}).status_code == 200
+    assert engine.calls == [("golden-hour", "kiosk")]
+
+
 # ---- state + select ------------------------------------------------------------------------------------------------
 def test_state_is_the_engines_canopy_state_with_server_relative_cooldown(app_client, engine):
     now = app_client.app.state.services.clock.now()

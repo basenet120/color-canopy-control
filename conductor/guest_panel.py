@@ -1,4 +1,5 @@
-"""The guest panel: the iPad on the stand (/kiosk) choosing one of the six approved scenes, brightness and power.
+"""The guest panel: the iPad on the stand (/kiosk) choosing one of the scenes the iPad offers (kiosk.hidden_scenes
+left out, D76), brightness and power.
 
 One API (`conductor/routes/guest.py`, under /api/kiosk) over one target, the canopy engine (D67; the panel had a
 second target for the shop kits until the canopy-only change):
@@ -17,6 +18,14 @@ message say so) — it is never dropped after the panel was told 200, and guest 
 
 **The canopy picture.** `canopy()` is the 270-light geometry and `state()["lit"]` what each canopy position truthfully
 shows (`conductor/canopy_view.py`: off, dark, unknown, lit or changing, with full-strength colours and the level).
+
+**The menu and the review cards (D76).** `GuestPanel.menu()` is `conductor/ipad_menu.live_menu`: the live catalog
+less `kiosk.hidden_scenes`. While more than six scenes are visible (the review menu) each card carries a still
+thumbnail of its scene at the tier the engine would show it at now (`thumb_basis`): per light only when the likely
+plan is canvas or slot (T1/T2: a hand-painted slot copies the canvas picture), else its nine module colours (module
+level and the stepped hold), and none for a whole-strand look — a picture is copy too. Thumbnails are cached per scene,
+per live-looks generation and basis, and computed synchronously: a thread under the virtual clock would let virtual
+time jump while it ran.
 """
 
 from __future__ import annotations
@@ -28,15 +37,18 @@ import logging
 import math
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from conductor import canopy_view
+from conductor import canopy_view, ipad_menu
 from conductor.clock import Clock
-from conductor.engine_api import CanopyPhase, CanopyState, ModeRefused, PlanError
+from conductor.engine_api import CanopyPhase, CanopyState, ModeRefused, PlanError, Tier
 from conductor.gate import Purpose
 from conductor.routes import kiosk as K
 from conductor.scenes import Scene, SceneCatalog
 from conductor.show import registered_canopy_ids
+
+if TYPE_CHECKING:
+    from conductor.looks.schema import ModesFile
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +225,9 @@ def _ms(start: float, end: float) -> int:
     return round((end - start) * 1000)
 
 
-def scene_json(scene: Scene) -> dict:
+def scene_json(scene: Scene, thumb: dict | None = None) -> dict:
+    """One scene as the panel sends it. `group` is its base's id (or its own); `thumb` is its review card's picture
+    (`ipad_menu.design_thumb`: `{sig, basis, modules}`), sent only while the review menu shows, else None."""
     return {
         "id": scene.id,
         "name": scene.name,
@@ -223,7 +237,54 @@ def scene_json(scene: Scene) -> dict:
         "frame": [list(rgb) for rgb in scene.frame(HEADS)],
         "solid": scene.solid.hex,
         "brightness_draft": scene.brightness_draft,
+        "option_of": scene.option_of,
+        "group": scene.group,
+        "thumb": thumb,
     }
+
+
+# ---- the review cards' basis (D76) ----------------------------------------------------------------------------------
+# The tiers that light a scene per light: a canvas (T1) and a hand-painted slot (T2, which copies the canvas picture).
+PER_LIGHT_TIERS = (str(Tier.T1), str(Tier.T2))
+Basis = Literal["heads", "modules"]
+
+
+def thumb_basis(engine: Any, modes: ModesFile | None, scene_ids: Iterable[str]) -> dict[str, Basis | None]:
+    """How each scene's review card draws it: the tier the engine would show it at now (a picture is copy too).
+
+    - no mode → None;
+    - a ladder whose first rung isn't canvas or slot is never compiled (it has no per-light rung): strand-first →
+      None (one whole-strand look), else "modules" when it has a modules rung (module level, and the stepped hold);
+    - canvas- or slot-first: the engine's likely plan (`routes.kiosk._likely_plan`, the rule /api/kiosk/modes uses):
+      canvas or slot → "heads"; strand → None; anything else, no plan or no engine → "modules" (when it has a modules
+      rung). On the show box that is module level until per-light is commissioned (07 §6, D73), and a Lab try-on's
+      scene runs module level while it stands (TRIAL_SKIP)."""
+    out: dict[str, Basis | None] = {}
+    current: Any = None
+    current_read = False
+    for sid in scene_ids:
+        mode = modes.modes.get(sid) if modes is not None else None
+        if mode is None:
+            out[sid] = None
+            continue
+        fallback: Basis | None = "modules" if mode.techniques.modules is not None else None
+        first = str(mode.ladder[0])
+        if first not in PER_LIGHT_TIERS:
+            out[sid] = None if first == str(Tier.STRAND) else fallback
+            continue
+        plan = None
+        if engine is not None:
+            if not current_read:
+                current, current_read = K._current_plan(engine), True
+            plan = K._likely_plan(engine, sid, current)
+        tier = str(plan.tier) if plan is not None else None
+        if tier in PER_LIGHT_TIERS:
+            out[sid] = "heads"
+        elif tier == str(Tier.STRAND):
+            out[sid] = None
+        else:
+            out[sid] = fallback
+    return out
 
 
 def guest_level(level: int) -> int:
@@ -565,6 +626,9 @@ class GuestPanel:
         self.log = CommandLog(services.clock)
         self.engine_target = EngineTarget(services, self.log)
         self.last_state: dict | None = None
+        # the review cards' thumbnails: (scene id, basis) → thumb, for one (live-looks generation, trio)
+        self._thumbs: dict[tuple[str, str | None], dict | None] = {}
+        self._thumbs_for: tuple[int, int] | None = None
 
     @classmethod
     def of(cls, services: Any) -> GuestPanel:
@@ -573,10 +637,34 @@ class GuestPanel:
             panel = services.extras[PANEL_KEY] = cls(services)
         return panel
 
-    def scenes(self) -> SceneCatalog:
-        from conductor.looks.live import live_trio  # the live catalog (D68): approved or published
+    def menu(self) -> ipad_menu.Menu:
+        """The iPad's menu over the live catalog (D68: approved or published) with kiosk.hidden_scenes in force."""
+        return ipad_menu.live_menu(self.services)
 
-        return live_trio(self.services).scenes
+    def scenes(self) -> SceneCatalog:
+        """The scenes the iPad offers (kiosk.hidden_scenes left out, D76)."""
+        return self.menu().visible
+
+    def thumbs(self, menu: ipad_menu.Menu) -> dict[str, dict | None]:
+        """Each visible scene's review-card thumbnail, only while the review menu shows (else {} and nothing is
+        computed). Cached per (scene, basis) for one published look: a basis flip (a Lab try-on, a commissioned
+        slot) recomputes only that scene. Synchronous on purpose (see the module docstring)."""
+        if not menu.review or menu.trio is None:
+            return {}
+        ids = [s.id for s in menu.visible.scenes]
+        basis = thumb_basis(self.engine_target.engine(), menu.trio.modes, ids)
+        stamp = (menu.generation, id(menu.trio))
+        if stamp != self._thumbs_for:
+            self._thumbs = {}
+            self._thumbs_for = stamp
+        missing = {sid: basis[sid] for sid in ids if (sid, basis[sid]) not in self._thumbs}
+        if missing:
+            got = ipad_menu.catalog_thumbs(
+                menu.trio, self.engine_target._canopy_cfg(), self.services.config_dir, missing
+            )
+            for sid, b in missing.items():
+                self._thumbs[(sid, b)] = got.get(sid)
+        return {sid: self._thumbs[(sid, basis[sid])] for sid in ids}
 
     async def target(self) -> EngineTarget:
         """The one target: the canopy engine, on every runtime (D67)."""

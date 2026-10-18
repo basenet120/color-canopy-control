@@ -1,16 +1,21 @@
 """The iPad's scene menu (D76): `kiosk.hidden_scenes` and its never-fail ops overlay (overrides/settings.yaml), the
 menu over the live catalog, the /ops switch's write path and its "Needs attention" lines, the conductor.yaml fold,
-and the review cards' thumbnails.
+the review cards' thumbnails, and the guest panel that serves them.
 
-Proves (config and conductor/ipad_menu.py, without the routes): git's list is validated and can't hide the idle
-scene; the overlay replaces it, never fails a start and is written atomically with a history copy; ids that hide
-nothing are named and dropped by the next switch; a failed save changes nothing; the switch's words say what
-changed; the fold is a `git apply`-able hunk; the preflight reads the overlay without writing; a card's picture is the
-basis it is given. Nothing touches the network.
+Proves (config and conductor/ipad_menu.py): git's list is validated and can't hide the idle scene; the overlay
+replaces it, never fails a start and is written atomically with a history copy; ids that hide nothing are named and
+dropped by the next switch; a failed save changes nothing; the switch's words say what changed; the fold is a
+`git apply`-able hunk; the preflight reads the overlay without writing; a card's picture is the basis it is given.
+
+Proves (GET /api/kiosk/panel and the kiosk routes, over the 18-scene review fixture): the panel lists the visible
+scenes with their group, and — only in the review menu — a thumbnail at the tier the engine would use now, computed
+once per published look and basis; a thumbnail that can't be drawn is none, never a failed panel; a hidden scene is
+refused calmly on both choose routes and is still named while it is showing. Nothing touches the network.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import json
@@ -24,8 +29,11 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from test_kiosk_routes import FakeEngine
 
+from conductor import guest_panel as GP
 from conductor import ipad_menu as IM
 from conductor.canopy_view import canopy_geometry, load_canopy
 from conductor.config import (
@@ -42,8 +50,10 @@ from conductor.config import (
     load_settings_overlay,
     save_settings_overlay,
 )
+from conductor.engine_api import ModePlan, Tier
 from conductor.looks import CompileContext
-from conductor.looks.live import git_trio
+from conductor.looks.live import git_trio, install_looks
+from conductor.routes import kiosk as K
 from conductor.routes.design import mode_design
 from conductor.scenes import load_scenes
 from tests.review_fixture import APPROVED, OPTION_IDS, REVIEW_IDS, install_review, review_scenes, review_trio
@@ -87,6 +97,90 @@ def _services(tmp_path: Path, overlay: str | None = None):
 
 def _ops_events(services) -> list[dict]:
     return [e for e in services.telemetry.ring if e["kind"] == "ops"]
+
+
+class ReviewEngine(FakeEngine):
+    """tests/test_kiosk_routes.py's FakeEngine over the review trio: it knows all 18 ids, and its state names an
+    option by its own id and label (FakeEngine's label lookup reads modes.yaml, which has the bases only)."""
+
+    def __init__(self, clock, trio, **kw) -> None:
+        super().__init__(clock, known=set(trio.modes.modes), **kw)
+        self.trio = trio
+
+    def state(self):
+        real = self.mode
+        self.mode = self.trio.scenes.get(real).group if real in self.trio.modes.modes else real
+        try:
+            st = super().state()
+        finally:
+            self.mode = real
+        return dataclasses.replace(st, mode=real, label=self.trio.modes.modes[real].label)
+
+    def invalidate_t1_plans(self) -> None:  # install_looks calls it (live.py)
+        pass
+
+
+class TierEngine(ReviewEngine):
+    """A ReviewEngine whose `compile_best` answers the tier in `tiers` (T3 by default; an Exception raises), and
+    records every id it was asked to compile."""
+
+    def __init__(self, clock, trio, tiers=None, **kw) -> None:
+        super().__init__(clock, trio, **kw)
+        self.tiers: dict = dict(tiers or {})
+        self.compiled: list[str] = []
+
+    def compile_best(self, mode_id: str):
+        self.compiled.append(mode_id)
+        tier = self.tiers.get(mode_id, Tier.T3)
+        if isinstance(tier, Exception):
+            raise tier
+        return ModePlan(mode_id, self.trio.modes.modes[mode_id].label, tier, "", False, {}), ""
+
+
+def counted(monkeypatch) -> list[tuple[str, bool]]:
+    """Every `routes.design.mode_design` call as (mode id, heads). A counter, never a raise: catalog_thumbs and the
+    panel swallow exceptions, so a raise would pass silently."""
+    from conductor.routes import design as DS
+
+    calls: list[tuple[str, bool]] = []
+    real = DS.mode_design
+
+    def wrapped(mode_id, ctx, **kw):
+        calls.append((mode_id, kw.get("heads", True)))
+        return real(mode_id, ctx, **kw)
+
+    monkeypatch.setattr(DS, "mode_design", wrapped)
+    return calls
+
+
+def _client(monkeypatch, tmp_path, overlay: str | None = None, **extra) -> TestClient:
+    """The real app (engine off, auth off) on tmp_path/data, with `overlay` as overrides/settings.yaml before the
+    start. Use as a context manager; a second one on the same tmp_path is a restart."""
+    from conftest import _env
+
+    from conductor.app import app
+
+    if overlay is not None:
+        _write_overlay(tmp_path / "data", overlay)
+    _env(monkeypatch, tmp_path, CONDUCTOR_AUTH="off", **extra)
+    return TestClient(app)
+
+
+def _svc(client: TestClient):
+    return client.app.state.services
+
+
+def _panel(client: TestClient) -> dict:
+    r = client.get("/api/kiosk/panel")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _engine(client: TestClient, trio, cls=ReviewEngine, **kw):
+    services = _svc(client)
+    engine = cls(services.clock, trio, **kw)
+    services.extras["canopy"] = engine
+    return engine
 
 
 class ShowingEngine:
@@ -699,3 +793,229 @@ def test_the_lab_never_writes_the_ipad_menu():
             "SETTINGS_OVERLAY_FILE",
         ):
             assert word not in text, f"{path.name} names {word}"
+
+
+# ---- the review cards' basis ---------------------------------------------------------------------------------------------
+PAINTED = ("rainbow-row-sunset", "garden-gathering", "golden-hour")  # the canvas-first bases
+MODULES_FIRST = ("lowcountry-calm", "coastal-tides", "goodnight-glow")  # modules- or stepped-first
+
+
+def test_the_thumb_basis_follows_the_tier_the_engine_would_use():
+    trio = review_trio(git_trio(CONFIG_DIR))
+    clock = SimpleNamespace(now=lambda: 0.0)
+    engine = TierEngine(
+        clock, trio, {GOLDEN: Tier.T1, "rainbow-row-sunset": Tier.T2, "garden-gathering": Tier.T3}
+    )
+    basis = GP.thumb_basis(engine, trio.modes, REVIEW_IDS)
+    assert list(basis) == REVIEW_IDS
+    assert (basis[GOLDEN], basis["rainbow-row-sunset"], basis["garden-gathering"]) == (
+        "heads",
+        "heads",
+        "modules",
+    )
+    assert all(basis[b] == "modules" for b in MODULES_FIRST)
+    assert all(basis[o] == "modules" for o in OPTION_IDS)
+    assert (
+        set(engine.compiled) <= set(PAINTED) and engine.compiled
+    )  # options and modules-first: never compiled
+    engine.tiers[GOLDEN] = Tier.STRAND
+    assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: None}  # one whole-strand look: no picture
+    engine.tiers[GOLDEN] = RuntimeError("no plan")
+    assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: "modules"}
+    assert GP.thumb_basis(engine, trio.modes, ["disco-inferno"]) == {"disco-inferno": None}
+    compiled = len(engine.compiled)
+    assert GP.thumb_basis(None, trio.modes, REVIEW_IDS) == dict.fromkeys(REVIEW_IDS, "modules")
+    assert len(engine.compiled) == compiled
+    strand = SimpleNamespace(ladder=["strand"], techniques=SimpleNamespace(modules=None))
+    assert GP.thumb_basis(engine, SimpleNamespace(modes={"x": strand}), ["x"]) == {"x": None}
+
+
+def test_the_thumb_basis_follows_the_plan_showing_now():
+    """The plan the engine shows now wins over a compile: the same rule as /api/kiosk/modes."""
+    trio = review_trio(git_trio(CONFIG_DIR))
+    engine = TierEngine(SimpleNamespace(now=lambda: 0.0), trio, {GOLDEN: Tier.T3})
+    showing = ModePlan(GOLDEN, "Golden Hour", Tier.T1, "", False, {})
+    engine.current_plan = lambda: showing
+    assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: "heads"}
+    assert engine.compiled == []
+
+
+def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_level(app_client_show):
+    services = _svc(app_client_show)
+    engine = services.extras.get("canopy")
+    assert engine is not None, "the sim engine didn't start"
+    trio = install_review(services)
+    body = _panel(app_client_show)
+    by_id = {s["id"]: s for s in body["scenes"]}
+    assert list(by_id) == REVIEW_IDS
+    assert all(by_id[o]["thumb"]["basis"] == "modules" for o in OPTION_IDS)
+    assert all(by_id[b]["thumb"]["basis"] == "modules" for b in MODULES_FIRST)
+    current = K._current_plan(engine)
+    for base in PAINTED:
+        plan = K._likely_plan(engine, base, current)
+        tier = str(plan.tier) if plan is not None else None
+        want = "heads" if tier in GP.PER_LIGHT_TIERS else "modules"
+        assert by_id[base]["thumb"]["basis"] == want, (base, tier)
+    start = time.perf_counter()
+    GP.thumb_basis(engine, trio.modes, REVIEW_IDS)
+    ms = (time.perf_counter() - start) * 1000
+    tiers = {b: by_id[b]["thumb"]["basis"] for b in PAINTED}
+    print(f"thumb_basis on the sim engine, 18 visible review scenes: {ms:.1f} ms (painted bases: {tiers})")
+    assert ms < 100
+
+
+# ---- the guest panel ------------------------------------------------------------------------------------------------------
+def test_the_panel_lists_eighteen_options_with_their_group_and_design(app_client):
+    trio = install_review(_svc(app_client))
+    body = _panel(app_client)
+    scenes = body["scenes"]
+    assert [s["id"] for s in scenes] == REVIEW_IDS
+    for s in scenes:
+        base = s["id"] if s["id"] in APPROVED else s["id"].rsplit("-", 1)[0]
+        assert s["group"] == base and s["option_of"] == (None if s["id"] in APPROVED else base)
+        thumb = s["thumb"]
+        assert thumb["basis"] == "modules" and HEX12.match(
+            thumb["sig"]
+        )  # engine off: module level for every card
+        assert len(thumb["modules"]) == 9
+        assert all(
+            re.fullmatch(r"#[0-9A-F]{6}", m["color"]) and m["colors"] is None for m in thumb["modules"]
+        )
+    by_id = {s["id"]: s for s in scenes}
+    want = IM.design_thumb(mode_design(GOLDEN, _ctx(trio), heads=False), "modules")
+    assert by_id[GOLDEN]["thumb"] == want
+    for base in APPROVED:
+        assert len({by_id[x]["thumb"]["sig"] for x in (base, f"{base}-2", f"{base}-3")}) == 3, base
+    assert body["showing"] is None
+    text = json.dumps(body)
+    for word in ("canopy-r", "sim-", "Module "):
+        assert word not in text
+
+
+def test_six_or_fewer_visible_compute_and_send_no_thumbnail(app_client, monkeypatch):
+    calls = counted(monkeypatch)
+    bases: list[tuple] = []
+    real = GP.thumb_basis
+
+    def counted_basis(*a, **kw):
+        bases.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(GP, "thumb_basis", counted_basis)
+    for _ in range(3):  # the git config: six scenes
+        body = _panel(app_client)
+        assert len(body["scenes"]) == 6 and all(s["thumb"] is None for s in body["scenes"])
+        assert all(s["group"] == s["id"] and s["option_of"] is None for s in body["scenes"])
+    install_review(_svc(app_client), hide=OPTION_IDS)
+    for _ in range(3):  # the review fixture with every option hidden: six again
+        body = _panel(app_client)
+        assert [s["id"] for s in body["scenes"]] == APPROVED and all(
+            s["thumb"] is None for s in body["scenes"]
+        )
+    assert calls == [] and bases == []
+
+
+def test_thumbnails_are_computed_once_per_published_look_and_basis(app_client, monkeypatch):
+    services = _svc(app_client)
+    trio = install_review(services)
+    engine = _engine(app_client, trio, TierEngine)  # every painted base at T3: module level for all
+    calls = counted(monkeypatch)
+    for _ in range(3):
+        _panel(app_client)
+    assert len(calls) == 18 and all(heads is False for _, heads in calls)
+    install_looks(services, trio, why="again")  # a new published look: every card again
+    _panel(app_client)
+    assert len(calls) == 36
+    _panel(app_client)
+    assert len(calls) == 36
+    engine.tiers[GOLDEN] = Tier.T1  # e.g. its slot commissioned: only that card is redrawn
+    body = _panel(app_client)
+    assert len(calls) == 37 and calls[-1] == (GOLDEN, True)
+    assert next(s for s in body["scenes"] if s["id"] == GOLDEN)["thumb"]["basis"] == "heads"
+
+
+def test_a_thumbnail_that_cant_be_drawn_is_no_thumbnail_never_a_failed_panel(app_client, monkeypatch):
+    install_review(_svc(app_client))
+    from conductor.routes import design as DS
+
+    real = DS.mode_design
+
+    def broken(mode_id, ctx, **kw):
+        if mode_id == "coastal-tides-2":
+            raise RuntimeError("no design")
+        return real(mode_id, ctx, **kw)
+
+    monkeypatch.setattr(DS, "mode_design", broken)
+    body = _panel(app_client)
+    by_id = {s["id"]: s for s in body["scenes"]}
+    assert by_id["coastal-tides-2"]["thumb"] is None
+    assert all(by_id[x]["thumb"] is not None for x in REVIEW_IDS if x != "coastal-tides-2")
+
+
+def test_a_panel_whose_thumbnails_fail_altogether_still_serves(app_client, monkeypatch):
+    install_review(_svc(app_client))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no thumbnails")
+
+    monkeypatch.setattr(GP, "thumb_basis", boom)
+    body = _panel(app_client)
+    assert [s["id"] for s in body["scenes"]] == REVIEW_IDS and all(s["thumb"] is None for s in body["scenes"])
+
+
+def test_a_hidden_scene_is_off_the_panel_and_refused_calmly(app_client):
+    services = _svc(app_client)
+    trio = install_review(services, hide=["golden-hour-2"])
+    engine = _engine(app_client, trio)
+    body = _panel(app_client)
+    assert "golden-hour-2" not in [s["id"] for s in body["scenes"]] and len(body["scenes"]) == 17
+    r = app_client.post("/api/kiosk/scene", json={"scene": "golden-hour-2"})
+    assert r.status_code == 404 and r.json()["detail"] == "That scene isn't one of the panel's choices."
+    assert engine.calls == []
+    debug = app_client.get("/api/kiosk/debug").json()
+    assert debug["commands"][0]["error"] == "hidden on the iPad (kiosk.hidden_scenes)"
+    assert debug["menu"] == {"hidden": ["golden-hour-2"], "ignored": []}
+    r = app_client.post("/api/kiosk/scene", json={"scene": "disco-inferno"})
+    assert r.status_code == 404
+    assert app_client.get("/api/kiosk/debug").json()["commands"][0]["error"] == "not in scenes.yaml"
+    r = app_client.post("/api/kiosk/scene", json={"scene": "golden-hour-3"})
+    assert r.status_code == 200, r.text
+    assert engine.calls == [("golden-hour-3", "kiosk")]
+
+
+def test_a_hidden_scene_that_is_showing_is_still_named(app_client):
+    services = _svc(app_client)
+    trio = install_review(services, hide=["golden-hour-3"])
+    engine = _engine(app_client, trio)
+    engine.mode = "golden-hour-3"
+    body = _panel(app_client)
+    assert body["state"]["scene"] == "golden-hour-3"
+    assert body["showing"]["id"] == "golden-hour-3" and body["showing"]["name"] == "Golden Hour #3"
+    assert body["showing"]["group"] == GOLDEN and body["showing"]["option_of"] == GOLDEN
+    assert "golden-hour-3" not in [s["id"] for s in body["scenes"]]
+    services.settings.kiosk.hidden_scenes = []
+    body = _panel(app_client)
+    assert body["showing"] is None and body["state"]["scene"] == "golden-hour-3"
+
+
+def _attention(client: TestClient) -> list[str]:
+    r = client.get("/api/ops/summary")
+    assert r.status_code == 200, r.text
+    return [i["message"] for i in r.json()["attention"]]
+
+
+def test_an_unusable_overlay_is_an_ops_summary_line_and_every_scene_stays_on(monkeypatch, tmp_path):
+    with _client(monkeypatch, tmp_path, "kiosk: {hidden_scenes: [golden-hour]\n") as client:
+        path = tmp_path / "data" / SETTINGS_OVERLAY_PATH
+        before = path.read_bytes()
+        assert [s["id"] for s in _panel(client)["scenes"]] == APPROVED
+        lines = [m for m in _attention(client) if m.startswith("The iPad's scene list")]
+        assert lines == [
+            (
+                "The iPad's scene list (overrides/settings.yaml) couldn't be used (it isn't valid YAML), so the "
+                "iPad offers every scene config/conductor.yaml doesn't hide. Flip a “Show on the iPad” switch on "
+                "/ops to write it again."
+            )
+        ]
+        assert lines[0] in client.get("/api/ops/summary").json()["problems"]
+        assert path.read_bytes() == before
