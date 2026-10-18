@@ -99,6 +99,11 @@ DEGRADED_AFTER = 2  # consecutive outage outcomes on one account
 OUTAGE_PROBE_INTERVAL_S = 10.0
 TOKEN_CHECK_INTERVAL_S = 5.0
 FRESH_TOKEN_MIN_LEFT_S = 15.0
+# The token keeper refreshes a connected account's bearer once it has less than this left, in the background, so a
+# burst's own check (≥ FRESH_TOKEN_MIN_LEFT_S, 07 §6) finds it fresh and the first PUT never waits on Keycloak.
+# Must exceed FRESH_TOKEN_MIN_LEFT_S + TOKEN_CHECK_INTERVAL_S + a refresh's round trips.
+PROACTIVE_REFRESH_LEFT_S = 30.0
+PROACTIVE_RETRY_S = 30.0  # after a background refresh that didn't succeed, leave that account alone this long
 ON_DEMAND_IDLE_S = 120.0  # sim mode: close an account's bridge after this long without a bench call
 MAX_OTP_ATTEMPTS = 5
 
@@ -272,6 +277,7 @@ class _Link:
     rejected_bearer: str | None = None  # fingerprint of the bearer a 401 refused since the last 2xx
     probe_device: str | None = None  # the device whose state call last failed (the watchdog reads it back)
     last_used: float = 0.0  # monotonic time of the last caller operation (sim mode's idle close)
+    refresh_retry_at: float = 0.0  # monotonic: no background refresh before this (one just failed)
     idle_task: asyncio.Task | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -659,12 +665,41 @@ class AferoDriver:
         log.info("afero token for %s rotated; saved generation %d", link.account, generation)
 
     async def _token_keeper(self) -> None:
-        """aioafero's background polling can rotate the token between our calls; persist it within seconds."""
+        """aioafero's background polling can rotate the token between our calls; persist it within seconds. And
+        refresh a connected account's bearer before it gets close to expiry (`_refresh_ahead`), so the refresh —
+        a Keycloak round trip, a users/me GET and the encrypted save — never sits in front of a guest's burst."""
         while not self._closed:
             await self.clock.sleep(TOKEN_CHECK_INTERVAL_S)
             for link in list(self._links.values()):
                 if link.bridge is not None:
                     self._persist_rotation(link)
+                    await self._refresh_ahead(link)
+
+    def _bearer_left(self, link: _Link) -> float | None:
+        data = link.bridge.token_data if link.bridge is not None else None
+        if data is None or not data.token:
+            return None
+        return data.expiration - self._afero_wall()
+
+    async def _refresh_ahead(self, link: _Link) -> None:
+        """Refresh `link`'s bearer now if it has < PROACTIVE_REFRESH_LEFT_S left (live connections only: in sim
+        mode a bench call's bridge refreshes on its own use and closes when idle). One try per PROACTIVE_RETRY_S
+        while it fails; never for an account that needs a fresh sign-in (07 §3: never loop logins)."""
+        if self._closed or self.on_demand or not link.connected or link.needs_reauth or link.forgotten:
+            return
+        if self.clock.monotonic() < link.refresh_retry_at:
+            return
+        left = self._bearer_left(link)
+        if left is None or left >= PROACTIVE_REFRESH_LEFT_S:
+            return
+        try:
+            outcome = await self.ensure_fresh_token(link.account, PROACTIVE_REFRESH_LEFT_S)
+        except Exception:  # the keeper must keep running
+            log.exception("afero background token refresh for %s failed", link.account)
+            outcome = Outcome.CONNECTION
+        self._record("token", account=link.account, action="refresh_ahead", outcome=str(outcome))
+        if outcome is not Outcome.OK:
+            link.refresh_retry_at = self.clock.monotonic() + PROACTIVE_RETRY_S
 
     async def ensure_fresh_token(
         self, account: str, min_left_s: float = FRESH_TOKEN_MIN_LEFT_S, *, purpose: Purpose | None = None

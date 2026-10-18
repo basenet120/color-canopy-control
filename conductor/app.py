@@ -173,7 +173,19 @@ app.include_router(ops.router)
 app.include_router(design.router)
 app.include_router(design_lab.router)
 
-app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+class RevalidatedStaticFiles(StaticFiles):
+    """Static files every load must revalidate (`Cache-Control: no-cache`; the ETag makes that a 304, milliseconds on
+    the show LAN). Without it the browser guesses a freshness lifetime from Last-Modified, so after a deploy the
+    guest iPad could keep running old code for hours, or load a new kiosk.js over a cached older module."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", RevalidatedStaticFiles(directory=WEB_DIR / "static"), name="static")
 app.mount("/ops", StaticFiles(directory=WEB_DIR / "ops", html=True), name="ops")
-app.mount("/kiosk", StaticFiles(directory=WEB_DIR / "kiosk", html=True), name="kiosk")
+app.mount("/kiosk", RevalidatedStaticFiles(directory=WEB_DIR / "kiosk", html=True), name="kiosk")
 app.mount("/visualizer", StaticFiles(directory=WEB_DIR / "visualizer", html=True), name="visualizer")

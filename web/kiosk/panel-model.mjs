@@ -17,11 +17,12 @@ export const COPY = {
   lightsOff: "Lights are off",
 };
 
-export const BRIGHTNESS_SEND_MS = 1000; // ≤ 1 request/s while dragging (the rate budget), plus the final value
 export const BRIGHTNESS_HOLD_MS = 3000; // after release, show the guest's value this long before following the poll
 export const POWER_HOLD_MS = 8000; // an optimistic switch position holds until the server agrees, or this long
 export const IDLE_MS = 120000; // attract after ~2 min without a touch
-export const POLL_MS = 2000;
+export const POLL_MS = 2000; // the fallback: a server push (topic "canopy") makes the panel read its state at once
+export const POLL_TIMEOUT_MS = 6000; // a read that hangs longer is dropped and counts as a failure (never stalls)
+export const WRITE_TIMEOUT_MS = 10000; // a scene/brightness/power request that hangs longer is given up
 export const LOST_AFTER_FAILURES = 3;
 export const SAME_CARD_DEBOUNCE_MS = 600;
 export const DRAG_CANCEL_PX = 10;
@@ -60,28 +61,28 @@ export function levelFromX(x, left, width, range = [10, 100]) {
  * `move(level, now)` returns the level to send now, or null; `release(level)` returns the final level unless it was
  * just sent. Deterministic for tests (the clock is passed in).
  */
-export function createPacer(intervalMs = BRIGHTNESS_SEND_MS) {
-  let lastAt = -Infinity;
-  let lastSent = null;
-  return {
-    move(level, now) {
-      if (level === lastSent) return null;
-      if (now - lastAt < intervalMs) return null;
-      lastAt = now;
-      lastSent = level;
-      return level;
-    },
-    release(level, now) {
-      if (level === lastSent) return null;
-      lastAt = now;
-      lastSent = level;
-      return level;
-    },
-    reset() {
-      lastAt = -Infinity;
-      lastSent = null;
-    },
-  };
+/**
+ * The guest's own change for `kind` ("brightness" | "power") that hasn't reached the lights yet — queued, or waiting
+ * out the guest cooldown (`state.next`) — else undefined.
+ */
+export function pendingValue(state, kind) {
+  const next = state && state.next;
+  return next && typeof next === "object" && Object.prototype.hasOwnProperty.call(next, kind) ? next[kind] : undefined;
+}
+
+/**
+ * The level a slider release (or an arrow key) sends, or null when it would change nothing: the level already set or
+ * queued, with the lights on. The slider sends once, on release: every guest input shares the engine's cooldown (D60),
+ * so values sent while dragging would hold the guest's final level back by a whole cooldown. Moving the slider while
+ * the lights are off turns them on (D60), so that always sends.
+ */
+export function brightnessToSend(level, state) {
+  const s = state || {};
+  const queued = pendingValue(s, "brightness");
+  const current = queued !== undefined ? queued : s.brightness;
+  const power = pendingValue(s, "power");
+  const on = power !== undefined ? power !== false : s.power !== false;
+  return level === current && on ? null : level;
 }
 
 /**

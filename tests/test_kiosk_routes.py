@@ -420,7 +420,7 @@ def test_kiosk_page_is_served_and_vendored(app_client):
     ):
         assert app_client.get(asset).status_code == 200, asset
     html = (KIOSK_DIR / "index.html").read_text()
-    assert 'src="/kiosk/kiosk.js"' in html and 'href="/kiosk/kiosk.css"' in html
+    assert re.search(r'src="/kiosk/kiosk\.js(\?v=[\w.-]+)?"', html) and 'href="/kiosk/kiosk.css"' in html
     assert "user-scalable=no" in html and "viewport-fit=cover" in html
     assert 'name="apple-mobile-web-app-capable" content="yes"' in html
     assert 'rel="apple-touch-icon"' in html
@@ -431,7 +431,8 @@ def test_kiosk_page_serves_every_module_it_imports_and_draws_the_canopy(app_clie
     module kiosk.js imports is a vendored file the app serves as JavaScript."""
     js = (KIOSK_DIR / "kiosk.js").read_text()
     imports = re.findall(r'from "(/[^"]+)"', js)
-    assert "/kiosk/canopy-preview.mjs" in imports and "/kiosk/panel-model.mjs" in imports
+    paths = [i.split("?")[0] for i in imports]  # (versioned: see test_panel_latency)
+    assert "/kiosk/canopy-preview.mjs" in paths and "/kiosk/panel-model.mjs" in paths
     for path in imports:
         r = app_client.get(path)
         assert r.status_code == 200, path

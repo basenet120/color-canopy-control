@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   COPY,
-  BRIGHTNESS_SEND_MS,
   IDLE_MS,
   attractDue,
+  brightnessToSend,
   cardsKey,
   cardState,
   cardTap,
@@ -14,7 +14,6 @@ import {
   cooldownChip,
   cooldownLeft,
   cooldownToast,
-  createPacer,
   debugAllowed,
   fractionForLevel,
   frameScale,
@@ -22,6 +21,7 @@ import {
   headerTint,
   levelFromX,
   nowShowing,
+  pendingValue,
   phaseOf,
   reconcile,
   refusalToast,
@@ -61,26 +61,28 @@ test("brightness maps the 10–100 range across the track and never goes below t
   assert.equal(fractionForLevel(100), 1);
 });
 
-test("dragging sends at most one brightness per second, and always the final value on release", () => {
-  assert.equal(BRIGHTNESS_SEND_MS, 1000);
-  const pacer = createPacer();
-  const sent = [];
-  const at = (level, t) => {
-    const v = pacer.move(level, t);
-    if (v !== null) sent.push([v, t]);
-  };
-  // a 2.5 s drag with a move every 16 ms
-  for (let t = 0, level = 20; t <= 2500; t += 16, level = Math.min(100, level + 1)) at(level, t);
-  assert.deepEqual(
-    sent.map(([, t]) => t),
-    [0, 1008, 2016],
-  );
-  const last = pacer.release(90, 2510);
-  assert.equal(last, 90);
-  // releasing on the value just sent sends nothing more
-  const p2 = createPacer();
-  assert.equal(p2.move(40, 0), 40);
-  assert.equal(p2.release(40, 10), null);
+test("the slider sends once, on release, and only when it changes something", () => {
+  const on70 = { power: true, brightness: 70, next: null };
+  assert.equal(brightnessToSend(40, on70), 40);
+  assert.equal(brightnessToSend(70, on70), null); // already so: nothing to send, no cooldown started
+  // moving the slider while the lights are off turns them on (D60): it always sends
+  assert.equal(brightnessToSend(70, { power: false, brightness: 70 }), 70);
+  // the guest's own queued change counts as the current level (it is on its way)
+  const queued = { power: true, brightness: 70, next: { brightness: 40 } };
+  assert.equal(brightnessToSend(40, queued), null);
+  assert.equal(brightnessToSend(70, queued), 70);
+  // a queued "off" means the lights are going off: a release sends, so they come back on at that level
+  assert.equal(brightnessToSend(70, { power: true, brightness: 70, next: { power: false } }), 70);
+  assert.equal(brightnessToSend(55, null), 55);
+});
+
+test("a queued brightness or power is read from state.next only", () => {
+  assert.equal(pendingValue({ next: { brightness: 40 } }, "brightness"), 40);
+  assert.equal(pendingValue({ next: { power: false } }, "power"), false);
+  assert.equal(pendingValue({ next: { power: false } }, "brightness"), undefined);
+  assert.equal(pendingValue({ next: null }, "power"), undefined);
+  assert.equal(pendingValue({}, "power"), undefined); // an older server never sends `next`
+  assert.equal(pendingValue(null, "power"), undefined);
 });
 
 test("an optimistic value holds until the server agrees or the hold expires", () => {

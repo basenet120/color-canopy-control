@@ -196,8 +196,8 @@ Six cards in fixed order from `config/scenes.yaml`.
   - Knob: white horizontal pill 64×44, radius 22, `--sh-knob`, centred on the value.
   - The value maps the range 10–100 across the track. Below 10 is impossible.
   - Pressed knob: scale 1.08. The label value updates live while dragging.
-- Pointer handling: `pointerdown` anywhere in the hit area jumps the value to that x and starts the drag. Capture the pointer. Send `POST /api/kiosk/brightness` at most every 250 ms while dragging, and always once on `pointerup` with the final value. The server coalesces, so the last value wins. The UI never waits for the reply to move the knob.
-- After release, the knob shows the guest's value for 3 s, then follows `state.brightness` from the poll (this avoids jitter while the lights catch up).
+- Pointer handling: `pointerdown` anywhere in the hit area jumps the value to that x and starts the drag. Capture the pointer. Send `POST /api/kiosk/brightness` **once, on `pointerup`**, with the final value (D69: every guest input shares the engine's cooldown, so values sent while dragging held the guest's real level back by a whole cooldown); nothing is sent when the release changes nothing. The UI never waits for the reply to move the knob.
+- After release, the knob shows the guest's value for 3 s, then follows `state.next.brightness` while the server still holds the guest's level (queued, or waiting out the cooldown: "Your brightness is next. It reaches the lights in a moment."), else `state.brightness`. The switch follows `state.next.power` the same way.
 - Keyboard and AT: `role="slider"`, `aria-valuemin=10`, `aria-valuemax=100`, `aria-valuenow`, `aria-valuetext="75 percent"`. Arrow keys step by 5.
 - Disabled (paused or resting): opacity .45, with the knob still visible at the current value.
 - No −/+ buttons. The 72px hit area and jump-to-tap make the slider usable on its own, and the app has none.
@@ -244,7 +244,7 @@ Six cards in fixed order from `config/scenes.yaml`.
 - The first touch only dismisses the attract screen (fade 240 ms). That touch is swallowed and never reaches a control underneath.
 
 ### 2.14 Connection lost
-If `/api/kiosk/panel` fails 3 polls in a row (poll every 2 s): show a toast that stays up until reconnected, "Hang on, we're reconnecting." Controls are disabled at opacity .45. Recovery dismisses it silently.
+The panel reads `/api/kiosk/panel` the moment the server pushes a change on the live socket (topic `canopy`, used only as a nudge; D69) and every 2 s regardless; each read times out after 6 s. If it fails 3 polls in a row: show a toast that stays up until reconnected, "Hang on, we're reconnecting." Controls are disabled at opacity .45. Recovery dismisses it silently.
 
 ---
 
@@ -460,7 +460,7 @@ BOTTOM BAR 88 (+safe) — feature left, lockup right
 ## 12. As built (web/kiosk/, October 2026)
 
 Where the build differs from the spec above, and why:
-1. **Brightness pacing is 1 request/s while dragging** (spec §2.7 said 250 ms), plus the final value on release. This matches the rate budget (≤ 1 write/s per device, CLAUDE.md); the server coalesces as well.
+1. **Brightness is sent once, on release** (D69; before that 1 request/s while dragging, and spec §2.7 said 250 ms). Every guest input shares the engine's cooldown, so values sent mid-drag held the guest's real level back by a whole cooldown; a change inside the cooldown now waits for its end on the server and goes out then.
 2. **Attract after 120 s idle** (spec §2.13 said 90 s): the build brief asked for about 2 minutes. `IDLE_MS` in `web/kiosk/panel-model.mjs`.
 3. **Quicksand is vendored as one variable file renamed "Canopy Rounded"**: `web/static/fonts/canopy-rounded/CanopyRounded-VF.woff2` (wght 400–700, about 52 KB) with `OFL.txt`. It was built with fontTools varLib from the unmodified Quicksand 3.006 Regular and Bold as its two masters (the official variable file wasn't available offline), so 500 and 600 render as real Medium and SemiBold; 400 and 700 are the original glyphs. Because Quicksand has the Reserved Font Name, the OFL requires a modified version to be renamed, hence "Canopy Rounded" in the font and in the CSS. Swapping in the official `Quicksand[wght].woff2` later (under its own name) is a drop-in change. Vendoring a web font departs from the "system font stacks" convention and needs Alon's OK (§11.2); deleting the `@font-face` rule falls back to SF Pro Rounded / system-ui.
 4. **Scene card preview** is a 30-segment hard-stop strip of fixed height (72 px; 60 px at 1024 landscape; radius 12) instead of a 28 px pill, so the colours read from arm's length on the 3 × 2 grid. Every card is the same: names take up to two lines, moods one line with an ellipsis, and the swatches sit on the card bottom (`margin-top: auto`), so swatch rows line up. The selected/pending badge sits on the top-right corner above the ring, with a sheet-coloured gap where it crosses it.
