@@ -4,9 +4,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   DIM_FLOOR,
+  DOT_R_IN,
+  FIN_DOT_R_IN,
   GRID,
   UNLIT,
   ariaSummary,
+  finNeighbours,
+  finPaint,
   geometryKey,
   layout,
   levelOpacity,
@@ -35,6 +39,16 @@ const canopy = (view = {}) => ({
   modules: GRID.map((pos) => module(Number(pos[1]), Number(pos[3]))),
 });
 const flat = (state, color = null) => GRID.map((pos) => ({ pos, state, color, colors: null }));
+// The fins as the panel serves them with the canopy's fin map (D74): a 6 in apron, 5 in fins.
+const withFins = (c, fins, { apron = 6, width = 5 } = {}) => ({
+  ...c,
+  apron_in: apron,
+  outline: { x: [-apron, 225 + apron], y: [-apron, 120 + apron] },
+  fin_width_in: width,
+  fins,
+});
+// The drawing's own 650 fins (config/fins.json, VWBD A-20-1 extracted): centres reach 6 in into the apron.
+const DRAWN = JSON.parse(readFileSync(new URL("../config/fins.json", import.meta.url), "utf8")).fins;
 const litOf = (modules, extra = {}) => ({ level: 70, modules, motion: null, ...extra });
 const near = (a, b) => Math.abs(a - b) < 1e-9;
 
@@ -196,4 +210,114 @@ test("the picture writes no Hubspace copy of its own", () => {
   const js = readFileSync(new URL("../web/kiosk/canopy-preview.mjs", import.meta.url), "utf8").replace(/(^|\s)\/\/.*$/gm, "");
   assert.doesNotMatch(js, /Hubspace/);
   assert.doesNotMatch(js, /https?:\/\//);
+});
+
+// ---- the fins (D74) ---------------------------------------------------------------------------------------------
+const close = (a, b, eps = 1e-3) => Math.abs(a - b) <= eps;
+const fin = (x, y, angle_deg = 0, drop_in = 14) => ({ x, y, angle_deg, drop_in });
+
+test("with an apron the drawing grows by it on every side and the canopy keeps its place", () => {
+  const c = withFins(canopy(), [fin(10, 20)]);
+  const d = layout(c);
+  assert.deepEqual([d.width, d.height, d.apron], [237, 132, 6]);
+  assert.deepEqual([d.dots[0].cx, d.dots[0].cy], [8.5, 11]);
+  assert.deepEqual(d.outline, { x: 0, y: 0, w: 237, h: 132 });
+  const middle = d.panels.find((p) => p.pos === "r1c1");
+  assert.deepEqual([middle.x, middle.y, middle.w, middle.h], [81, 46, 75, 40]);
+  assert.equal(d.dots[0].r, FIN_DOT_R_IN);
+  const boxed = layout(c, { width: 474, height: 400 });
+  assert.deepEqual(boxed.outline, { x: 0, y: 68, w: 474, h: 264 });
+  assert.equal(boxed.strokeWidth, 2.4);
+  // without the fins, everything is as it was
+  const plain = layout(canopy());
+  assert.equal(plain.dots[0].r, DOT_R_IN);
+  assert.equal(DOT_R_IN, 3.6);
+  assert.deepEqual([plain.apron, plain.fins], [0, []]);
+  assert.deepEqual(plain.outline, { x: 0, y: 0, w: 225, h: 120 });
+});
+
+test("fins are strokes along their axis, turned with the view", () => {
+  const ends = (d) => [d.fins[0].x1, d.fins[0].y1, d.fins[0].x2, d.fins[0].y2];
+  const one = (view, apron, f = fin(10, 20)) => layout(withFins(canopy(view), [f], { apron }));
+  assert.deepEqual(ends(one({}, 0)), [7.5, 20, 12.5, 20]);
+  assert.deepEqual(ends(one({}, 6)), [13.5, 26, 18.5, 26]);
+  assert.deepEqual(ends(one({ mirror_x: true }, 6)), [223.5, 26, 218.5, 26]);
+  const turned = one({ rotate_deg: 90 }, 6);
+  assert.deepEqual([turned.width, turned.height], [132, 237]);
+  assert.deepEqual(ends(turned), [106, 13.5, 106, 18.5]);
+  // 45° runs down and to the right (y down); mirrored, down and to the left
+  const diag = ends(one({}, 0, fin(10, 20, 45)));
+  [8.232, 18.232, 11.768, 21.768].forEach((v, i) => assert.ok(close(diag[i], v), `${diag}`));
+  const back = ends(one({ mirror_x: true }, 6, fin(10, 20, 45)));
+  [222.768, 24.232, 219.232, 27.768].forEach((v, i) => assert.ok(close(back[i], v), `${back}`));
+  // every one of the drawing's fins stays inside the drawing (the canopy and its apron), in every view
+  for (const view of [{}, { mirror_x: true }, { rotate_deg: 90 }, { rotate_deg: 270, mirror_x: true }]) {
+    const d = layout(withFins(canopy(view), DRAWN));
+    for (const f of d.fins) {
+      for (const [x, y] of [[f.x1, f.y1], [f.x2, f.y2]]) {
+        assert.ok(x >= 0 && x <= d.width && y >= 0 && y <= d.height, JSON.stringify({ view, f }));
+      }
+    }
+  }
+});
+
+test("each fin weighs its four nearest heads, once per geometry", () => {
+  const c = withFins(canopy(), [fin(2.5, 5, 0, 24.5), fin(7.5, 5, 0, 14), ...DRAWN]);
+  const n = finNeighbours(c);
+  assert.equal(n.near[0].length, 4);
+  assert.deepEqual(n.near[0][0], { i: 0, w: 1 });
+  for (const row of n.near) for (let j = 1; j < row.length; j += 1) assert.ok(row[j].w <= row[j - 1].w);
+  assert.equal(n.near[1][0].i, 0); // 5 in from heads 0 and 1: the tie goes to the lower index
+  assert.equal(n.near[1][1].i, 1);
+  assert.equal(n.near[1][0].w, n.near[1][1].w);
+  assert.ok(close(n.near[1][0].w, Math.exp(-((5 / 6) ** 2)), 1e-12)); // exp(−(d / 6)²)
+  assert.equal(n.alpha[0], 1); // the deepest drop
+  assert.equal(n.alpha[1], 0.45); // the shallowest
+  assert.equal(finNeighbours(c), finNeighbours(c));
+  assert.equal(finNeighbours(structuredClone(c)), finNeighbours(c)); // a new poll of the same geometry
+  assert.equal(layout(c, { width: 100, height: 60 }).fins[3].near, finNeighbours(c).near[3]);
+  assert.equal(layout(withFins(canopy({ mirror_x: true }), c.fins)).fins[3].near, finNeighbours(c).near[3]);
+  // one drop everywhere: every fin at full opacity
+  assert.deepEqual(finNeighbours(withFins(canopy(), [fin(2.5, 5), fin(50, 50)])).alpha, [1, 1]);
+});
+
+test("finPaint mixes lit heads at full strength and claims nothing it can't vouch for", () => {
+  const two = { alpha: 1, near: [{ i: 0, w: 1 }, { i: 1, w: 1 }] };
+  const lit = (fill, extra = {}) => ({ kind: "lit", fill, pulse: false, ...extra });
+  const unknown = { kind: "unknown", fill: null, pulse: false };
+  const unlit = { kind: "unlit", fill: UNLIT, pulse: false };
+  assert.deepEqual(finPaint(two, [lit("#FF0000"), lit("#0000FF")], { opacity: 0.805 }), {
+    kind: "lit",
+    stroke: "#800080",
+    opacity: 0.805,
+    pulse: false,
+  });
+  const none = { kind: "unknown", stroke: null, opacity: 1, pulse: false };
+  assert.deepEqual(finPaint(two, [lit("#FF0000"), unknown]), none);
+  assert.deepEqual(finPaint(two, [lit("#FF0000")]), none); // a missing paint is unknown too
+  const weighed = (a, b) => ({ alpha: 1, near: [{ i: 0, w: a }, { i: 1, w: b }] });
+  const most = finPaint(weighed(0.95, 0.05), [lit("#FF0000"), unknown], { opacity: 0.805 });
+  assert.deepEqual([most.kind, most.stroke, most.opacity], ["lit", "#FF0000", 0.785]);
+  assert.equal(finPaint(weighed(0.9, 0.1), [lit("#FF0000"), unknown]).kind, "unknown"); // exactly 10%
+  assert.deepEqual(finPaint({ ...two, alpha: 0.45 }, [unlit, unlit]), {
+    kind: "unlit",
+    stroke: "#D3D2D8",
+    opacity: 0.225,
+    pulse: false,
+  });
+  const half = finPaint(two, [lit("#FF0000"), unlit]);
+  assert.deepEqual([half.kind, half.stroke, half.opacity], ["lit", "#FF0000", 1]);
+  const changing = { kind: "changing", fill: "#00FF00", pulse: true };
+  const faint = { alpha: 1, near: [{ i: 0, w: 0.25 }] };
+  assert.deepEqual(finPaint(faint, [changing]), { kind: "changing", stroke: "#00FF00", opacity: 0.5, pulse: true });
+  assert.equal(finPaint(faint, [changing], { reduced: true }).pulse, false);
+  assert.equal(finPaint(two, [changing, lit("#00FF00")]).kind, "changing"); // a tie isn't confirmed yet
+  assert.equal(finPaint(weighed(0.4, 0.6), [changing, lit("#00FF00")]).kind, "lit");
+  // a per-head opacity (a panel's own level) passes through as data
+  assert.equal(finPaint(two, [lit("#FF0000", { opacity: 1 }), lit("#FF0000", { opacity: 0.5 })]).opacity, 0.75);
+  const u = finPaint(two, [unknown, unknown]);
+  const g = finPaint(two, [unlit, unlit]);
+  assert.notEqual(u.kind, g.kind);
+  assert.notEqual(u.stroke, g.stroke);
+  assert.deepEqual(finPaint({ alpha: 1, near: [] }, []), none);
 });
