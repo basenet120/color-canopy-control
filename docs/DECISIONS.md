@@ -1008,3 +1008,25 @@ slot object), so the next live run shows the old value directly. Not changed: `r
 `readback_interval_s` (bench the lag first: `docs/reports/readback-echo-lag-2026-10-18.md`), the re-send limits,
 MISMATCH handling, 07 §5's meaning of "ready". This is the brightness-readback re-send D70 names: the write it saved
 goes back to the guests' budget.
+
+**D72 — Fast guest pacing: 2 s whatever the canopy's size, backing off only when Hubspace throttles (Alon, Oct 18;
+a switch over D70).** Alon asked how low the full canopy's gap can go and called D70's 7.5 s cushion. The evidence:
+the only published Afero limit is ~1 write/s per device (the executor enforces it whatever the guests do); the
+account's 90 writes/min was chosen on Oct 13 so nine modules would step every 6 s (D65), never measured; the 20%
+reserve made 7.5 s; the show box has never sent more than 15 writes in a minute and has never been throttled. So
+`kiosk.fast_pacing` (**on**, Alon's call): every guest input waits only `kiosk.cooldown_min_s` (2 s), nine modules
+included; while ≥ `kiosk.fast_backoff_throttles` (2) write attempts on an account were answered 429/403 in the last
+60 s, guests there wait D70's budget gap again, until `kiosk.fast_backoff_s` (120 s) after the last one, with one
+info alert per back-off (503/504 are an outage, never a throttle). `fast_pacing: false` restores D70 exactly. On
+today's two kits both give 2 s: the switch matters once all nine strands are driven.
+- **What it costs, in the simulator (known, accepted).** Six seeds of the pinned soak (nine modules, 5% random 429s,
+  1% silent drops, 150–800 ms acks): mode-change settle p95 averages 4.89 s at 2 s vs 4.64 s under D70; the gating
+  rows fail on 4 of 6 seeds vs 1 of 6 (seed 3 fails under every setting); a 3 s floor averages 4.64 s but still fails
+  3 of 6. The cost is only in the button-mash burst: at 2 s a new change lands while the previous one is still being
+  retried and verified, so each settles slower, and one out-of-band change found then took 20 s to heal (seed 4; 9 s
+  under D70). Normal-paced choices (≥ 8 s apart) are unchanged. `docs/reports/sim-acceptance.md` now reads FAIL
+  (seed 0: settle p95 5.19 s). The kits are far kinder than the simulator (acks 0.18–0.34 s, no throttling seen), so
+  live it may never show — watch the settle times and the heal alerts in install week.
+- **The first real number:** `docs/runbooks/account-rate-probe.md` — both kits at their per-device limit for 3 minutes
+  (≈ 120 writes/min on the account), run by Alon. Throttled → set `fast_pacing: false` until the nine kits are
+  measured.

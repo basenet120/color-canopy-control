@@ -1,4 +1,5 @@
-"""Guest pacing by the account's write budget (D70; replaces D21's fixed 8 s cooldown).
+"""Guest pacing by the account's write budget (D70; replaces D21's fixed 8 s cooldown) — the rule in force with
+`kiosk.fast_pacing` off (D72's switch), and the one fast pacing backs off to while Hubspace throttles.
 
 Proves: the gap after an accepted guest input is the time the guests' write budget takes to pay for what it sent —
 one write per driven module, counted on the account that carries the most, at `kiosk.guest_writes_per_min` (never
@@ -18,7 +19,8 @@ from fake_compiler import MODULES, FakeCompiler, make_world, settings_with
 from conductor.clock import run_virtual
 from conductor.config import load_settings
 
-QUIET = {"idle_return_s": 100_000, "idle_reset_s": 100_000}
+QUIET = {"idle_return_s": 100_000, "idle_reset_s": 100_000, "fast_pacing": False}  # the budget rule (D70)
+BUDGET = settings_with(kiosk={"fast_pacing": False})
 EPS = 1e-6
 
 
@@ -26,7 +28,7 @@ def _plan(n: int) -> SimpleNamespace:
     return SimpleNamespace(modules={d: None for d in MODULES[:n]})
 
 
-def _gaps(settings=None, accounts=None) -> dict:
+def _gaps(settings=BUDGET, accounts=None) -> dict:
     async def main():
         w = make_world(settings=settings)
         await w.engine.start(
@@ -55,9 +57,9 @@ def test_the_account_carrying_the_most_modules_sets_the_gap():
 
 
 def test_a_lower_account_cap_lowers_the_guests_budget_with_it():
-    lower = settings_with(motion={"stepped": {"account_writes_per_min": 40}})
+    lower = settings_with(kiosk={"fast_pacing": False}, motion={"stepped": {"account_writes_per_min": 40}})
     assert _gaps(lower)[9] == pytest.approx(9 * 60 / 40)  # 13.5 s, not 7.5: never budgeted above the account
-    floor = settings_with(kiosk={"cooldown_min_s": 4})
+    floor = settings_with(kiosk={"cooldown_min_s": 4, "fast_pacing": False})
     assert _gaps(floor)[2] == 4.0 and _gaps(floor)[9] == pytest.approx(7.5)
 
 

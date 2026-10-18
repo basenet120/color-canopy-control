@@ -60,8 +60,10 @@ Binding rules for the build, written after an adversarial review of the plan aga
 - **Tier defaults before the bench:** sim runs T1; live runs T3 until Gate B/C flags are set; every effect code starts disabled. Sim-only motion semantics live in `config/sim/` and are labelled SIMULATED. Every surface shows a persistent "Simulator" badge in sim mode, so staging demos stay honest.
 - Kiosk constants (config): after an accepted guest input, the next waits until the guests' write budget has paid
   for it — one write per driven module (most on one account) × 60 / `kiosk.guest_writes_per_min` (72, never above the
-  account cap), never under `kiosk.cooldown_min_s` (2 s): two strands 2 s, nine 7.5 s (D70; was a fixed 8 s);
-  after 3 min idle, return to Lowcountry Calm.
+  account cap), never under `kiosk.cooldown_min_s` (2 s): two strands 2 s, nine 7.5 s (D70; was a fixed 8 s) — and
+  with `kiosk.fast_pacing` on (D72, the default) only `cooldown_min_s`, falling back to that budget gap while
+  Hubspace throttles the account (≥ 2 attempts answered 429/403 in 60 s, held 120 s); after 3 min idle, return to
+  Lowcountry Calm.
 - `SupplementalDriver`: interface stub only.
 - Naming: `DeviceDriver` is the interface (lights, plugs, locks, fans); `AferoDriver` in `conductor/drivers/afero.py` is the only aioafero importer.
 

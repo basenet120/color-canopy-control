@@ -94,6 +94,8 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     network, so the per-IP question stays open).
     *Default:* assume per account. The executor's budgets (≤ 1 write/s per device, bounded concurrency per account),
     the stepped cap and the governor all count per account. Gate R watches the canopy and bench accounts (no
-    vignette criterion since D67). If it turns out to be per IP, the
+    vignette criterion since D67). First account number: `docs/runbooks/account-rate-probe.md` (two kits at their
+    per-device limit, ≈ 120 writes/min; D72's fast guest pacing assumes no tighter account limit). If it turns out to
+    be per IP, the
     stepped cap would have to count every account's writes from the box, and stepped stays off until it does. Never
     rotate accounts or IPs to get around a limit.

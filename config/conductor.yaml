@@ -29,6 +29,12 @@ kiosk:
   # (motion.stepped.account_writes_per_min, 90, unmeasured until Gate R) less the same 20% reserve the steps keep.
   cooldown_min_s: 2
   guest_writes_per_min: 72
+  # D72, THE SWITCH: true = every guest input waits only cooldown_min_s (2 s), nine modules included, and falls back
+  # to the budget rule above (7.5 s on nine) only while Hubspace throttles the account: ≥ fast_backoff_throttles
+  # write attempts answered 429/403 in 60 s, held fast_backoff_s after the last one. false = the budget rule always.
+  fast_pacing: true
+  fast_backoff_throttles: 2
+  fast_backoff_s: 120
   idle_return_s: 180
   idle_mode: lowcountry-calm
   guest_brightness_min: 10       # the guest panel can't dim the canopy below this (D60)
