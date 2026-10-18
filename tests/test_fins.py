@@ -34,6 +34,7 @@ from conductor.fins import (
 )
 from conductor.geometry import build_layout, lattice_heads, load_canopy_config
 from conductor.looks import field as F
+from conductor.looks import load_modes
 
 ROOT = Path(__file__).resolve().parent.parent
 PLAN = ROOT / "docs" / "plans" / "preset-options"
@@ -345,6 +346,14 @@ def test_a_broken_canopy_yaml_is_a_config_error_naming_the_file(tmp_path):
         load_canopy_config(tmp_path / "none.yaml")
     with pytest.raises(ConfigError, match="is missing"):
         load_canopy_config(tmp_path / "nowhere" / "canopy.yaml")
+    # load_modes reads the canopy through the same loader: a ConfigError, never a YAMLError, KeyError or TypeError
+    # (before D74 a list there escaped as a TypeError, and a file without the section was silently no canopy)
+    for name in ("modes.yaml", "recipes.yaml"):
+        shutil.copy(CONFIG_DIR / name, bad / name)
+    for text in ("canopy: [\n", "canopy: [1, 2]\n", "name: no section\n"):
+        (bad / "canopy.yaml").write_text(text)
+        with pytest.raises(ConfigError, match="canopy.yaml"):
+            load_modes(bad)
     raw = yaml.safe_load(CANOPY_TEXT)
     raw["canopy"]["orientation_scheme"] = "p99"
     path = _config(tmp_path, canopy=yaml.safe_dump(raw))
