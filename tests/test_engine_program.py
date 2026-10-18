@@ -33,6 +33,7 @@ from conductor.sim.profiles import profile_parts
 from conductor.sim.settings import SimSettings
 
 PATH = Path(__file__).with_name("fixtures_modes_stepped.yaml")
+BREATHE_PATH = Path(__file__).with_name("fixtures_modes_breathe.yaml")  # D75: breathe and shimmer rungs
 CALM = {
     "label": "Lowcountry Calm",
     "blurb": "The resting look",
@@ -63,7 +64,8 @@ RECIPES = _frozen_recipes()
 
 def stepped_modes():
     raw = yaml.safe_load(PATH.read_text(encoding="utf-8"))
-    raw["modes"]["lowcountry-calm"] = CALM  # a still idle mode (the idle mode never steps)
+    raw["modes"].update(yaml.safe_load(BREATHE_PATH.read_text(encoding="utf-8"))["modes"])
+    raw["modes"]["lowcountry-calm"] = CALM  # a still idle mode
     return parse_modes(raw, recipes=RECIPES, canopy=load_canopy_config(), path=PATH)
 
 
@@ -970,16 +972,29 @@ def test_motion_idle_settings_load_off_and_refuse_nonsense(tmp_path):
     )
     with pytest.raises(ConfigError, match="burst"):
         load_settings(tmp_path)
+    # against the modes (show._check_stepped): an idle look with a rung, and room for two paced steps on nine
+    idle = {"idle_mode": "breathe-level"}
+    _check_stepped(settings_with(kiosk=idle, motion={"idle": {"breathe_run_s": 60, "every_s": 300}}), MODES)
+    _check_stepped(settings_with(kiosk=idle, motion={"idle": {"breathe_run_s": 15, "every_s": 300}}), MODES)
+    too_short = settings_with(kiosk=idle, motion={"idle": {"breathe_run_s": 10, "every_s": 300}})
+    with pytest.raises(ConfigError, match="breathe_run_s: 10 s fits fewer than two 7.5 s steps") as e:
+        _check_stepped(too_short, MODES)
+    assert "make it at least 15 s" in str(e.value)
+    still = settings_with(motion={"idle": {"breathe_run_s": 60, "every_s": 300}})  # Calm, no rung
+    with pytest.raises(ConfigError, match="has no stepped rung to breathe with"):
+        _check_stepped(still, MODES)
 
 
-def test_a_run_must_end_before_the_idle_hold_and_the_idle_mode_never_steps():
+def test_a_run_must_end_before_the_idle_hold_and_motion_idle_needs_an_idle_rung():
     _check_stepped(ConductorSettings(), MODES)  # 90 s runs, idle_return_s 180, a still idle mode
     short = settings_with(kiosk={"idle_return_s": 60})
     with pytest.raises(ConfigError, match="run_s: 90 s is longer than kiosk.idle_return_s"):
         _check_stepped(short, MODES)
-    stepping_idle = settings_with(kiosk={"idle_mode": "radial-outward"})
-    with pytest.raises(ConfigError, match="idle mode .* can't have a stepped rung"):
-        _check_stepped(stepping_idle, MODES)
+    # D75: the idle look may carry a rung (start-up and an idle return still show it still, motion.idle off)
+    _check_stepped(settings_with(kiosk={"idle_mode": "radial-outward"}), MODES)
+    breathing_calm = settings_with(motion={"idle": {"breathe_run_s": 60, "every_s": 300}})
+    with pytest.raises(ConfigError, match="'lowcountry-calm' .* has no stepped rung to breathe with"):
+        _check_stepped(breathing_calm, MODES)
 
 
 def test_the_show_checks_stepped_runs_against_the_kiosk_settings_when_it_loads(tmp_path):

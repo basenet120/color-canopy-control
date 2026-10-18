@@ -830,7 +830,8 @@ def apply_drafts(
         modes = parse_modes(modes_dump, recipes=recipes, canopy=canopy, path=where)
     except ConfigError as exc:
         raise DraftError(problems_from_config_error(str(exc))) from None
-    # 4. the show's own load checks: no run outlasts idle_return_s, the idle mode never steps, idle_scene is a mode
+    # 4. the show's own load checks: no run outlasts idle_return_s, motion.idle has an idle rung to breathe with
+    # (D75), idle_scene is a mode
     try:
         _check_stepped(settings, modes)
         _check_idle_scene(settings.kiosk.idle_scene, list(modes.modes))

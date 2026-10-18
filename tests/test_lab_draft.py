@@ -690,9 +690,15 @@ def test_a_draft_validates_with_an_idle_scene_set():
     settings = settings_with(kiosk={"idle_scene": "golden-hour"})
     patched = apply(edit("golden-hour", **DONE_MEANS), settings=settings)
     assert patched.modes.mode("golden-hour").techniques.modules.sample.brightness == 90
-    # and the check still runs: an idle mode that steps refuses every draft
-    found = problems(edit("lowcountry-calm"), settings=settings_with(kiosk={"idle_mode": "coastal-tides"}))
+    # D75: an idle look with a stepped rung is fine (start-up and an idle return show it still)
+    stepping_idle = settings_with(kiosk={"idle_mode": "coastal-tides"})
+    assert apply(edit("lowcountry-calm"), settings=stepping_idle).modes.mode("coastal-tides").moves
+    # and the check still runs: motion.idle on with an idle look that has no rung refuses every draft
+    breathing = settings_with(motion={"idle": {"breathe_run_s": 60, "every_s": 300}})
+    found = problems(edit("golden-hour"), settings=breathing)
     assert found and all(p.field == "draft" for p in found)
+    assert [p.path for p in found] == ["config/conductor.yaml → motion → idle"]
+    assert "has no stepped rung to breathe with" in found[0].message
 
 
 def test_blocking_scene_rules_refuse_and_warnings_never_do(monkeypatch):
