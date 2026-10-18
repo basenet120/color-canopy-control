@@ -5,9 +5,10 @@
                                   Reconciler (reconciler.py) ◀┘ re-assert · true-up · hysteresis · outage · idle
 
 Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
-- **Requests.** A kiosk request is refused (a plain sentence + retry-after) during the cooldown
-  (`kiosk.cooldown_s` after the last accepted kiosk change), while guest input is paused, while the canopy is
-  resting (outage) and while commissioning runs. Ops, idle and reconciler requests bypass the cooldown and the
+- **Requests.** A kiosk request is refused (a plain sentence + retry-after) during the cooldown (D70: after the
+  last accepted kiosk change, the time the guests' write budget takes to pay for it — one write per driven module,
+  the most on any one account, at `kiosk.guest_writes_per_min` — never under `kiosk.cooldown_min_s`; `guest_gap_s`),
+  while guest input is paused, while the canopy is resting (outage) and while commissioning runs. Ops, idle and reconciler requests bypass the cooldown and the
   pause. Refusals come back as a `CanopyState` with `refused=True` (never an exception).
 - **Tier.** The first tier on the mode's ladder that `tier_allowed` permits and that compiles, starting at any
   hysteresis floor currently in force for that mode (the reconciler sets floors). If nothing at or below the floor
@@ -355,6 +356,7 @@ class CanopyEngine:
         self._stopped = False
         self._started = False
         self._last_kiosk_mono: float | None = None
+        self._kiosk_gap_s = 0.0  # the cooldown the last accepted kiosk change bought (guest_gap_s, D70)
         self.last_change_mono: float = self.clock.monotonic()  # any accepted change (idle hold)
         # the last look chosen (not a re-pick, not a guest setting): a stepped look's run counts from it
         self._chosen_mono: float = self.last_change_mono
@@ -679,7 +681,7 @@ class CanopyEngine:
             self._restore_approved(cleared)  # the try-on's plan never stays without its override
             return self._refused(why, None)
         if source == "kiosk":
-            self._last_kiosk_mono = now
+            self._last_kiosk_mono, self._kiosk_gap_s = now, self.guest_gap_s(plan)
             self.last_guest_input_mono = now
         if source not in ("reconciler", "recovery"):
             self.last_change_mono = now
@@ -774,8 +776,10 @@ class CanopyEngine:
 
     def _guest_input(self, source: str, action: str) -> None:
         now = self.clock.monotonic()
-        if source == "kiosk":
-            self._last_kiosk_mono = now  # one cooldown for every guest input, moods included
+        if (
+            source == "kiosk"
+        ):  # one cooldown for every guest input, moods included (paid for by what it sends)
+            self._last_kiosk_mono, self._kiosk_gap_s = now, self.guest_gap_s(self._plan)
         self.last_guest_input_mono = now
         self.last_change_mono = now  # the idle hold waits for guest activity too
         self._apply_guest(source, action)
@@ -1177,7 +1181,24 @@ class CanopyEngine:
     def _cooldown_remaining(self, now: float) -> float:
         if self._last_kiosk_mono is None:
             return 0.0
-        return max(0.0, self._last_kiosk_mono + self.deps.settings.kiosk.cooldown_s - now)
+        return max(0.0, self._last_kiosk_mono + self._kiosk_gap_s - now)
+
+    def guest_gap_s(self, plan: ModePlan | None) -> float:
+        """D70: how long the next guest input waits after one that sends `plan` — the time the guests' write budget
+        (`kiosk.guest_writes_per_min`, never above the account cap) takes to pay for one write per driven module,
+        counted on the account that carries the most of them, and never less than `kiosk.cooldown_min_s`. Two
+        strands: 2 s; nine: 7.5 s."""
+        kiosk = self.deps.settings.kiosk
+        per_account: dict[str, int] = {}
+        for device_id in plan.modules if plan is not None else ():
+            target = self._targets.get(device_id)
+            account = self._account_of(target.address) if target is not None else "unknown"
+            per_account[account] = per_account.get(account, 0) + 1
+        writes = max(per_account.values(), default=0)
+        budget = min(
+            float(kiosk.guest_writes_per_min), float(self.deps.settings.motion.stepped.account_writes_per_min)
+        )
+        return max(float(kiosk.cooldown_min_s), writes * 60.0 / budget)
 
     # ---- the stepped rehearsal (Gate R, conductor/rehearsal.py) ----------------------------------------------------
     def _rehearsal_plan(self, mode_id: str) -> ModePlan:

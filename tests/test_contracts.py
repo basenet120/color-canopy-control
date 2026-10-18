@@ -247,7 +247,10 @@ def test_locks_exclusive_idle_expiry_and_allowlist():
 # ---- config -----------------------------------------------------------------------------------------------------
 def test_settings_and_registry_load():
     settings = load_settings()
-    assert settings.executor.min_write_interval_s == 1.0 and settings.kiosk.cooldown_s == 8
+    assert settings.executor.min_write_interval_s == 1.0
+    # D70: the guest gap is the guests' write budget over what an input sends, never under 2 s
+    assert (settings.kiosk.cooldown_min_s, settings.kiosk.guest_writes_per_min) == (2.0, 72.0)
+    assert settings.lab.apply_min_gap_s == 8.0  # the try-on keeps its own 8 s gap
     reg = load_registry()
     assert len(reg.canopy_modules()) == 9
     kit = reg.get("bench-kit")

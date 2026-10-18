@@ -439,11 +439,11 @@ def test_d62_the_engine_drives_only_the_registered_modules_and_stops_asking_for_
         await _hold(services, engine, 20)
         scenes = []
         for mode_id in MODES.modes:
-            await clock.sleep(services.settings.kiosk.cooldown_s + 1)
+            await clock.sleep(engine.guest_gap_s(engine.current_plan()) + 1)
             state = await engine.request_mode(mode_id, source="kiosk")
             await _hold(services, engine, 10)
             scenes.append((mode_id, state.refused, engine.current_plan(), engine.state().feature))
-        await clock.sleep(services.settings.kiosk.cooldown_s + 1)
+        await clock.sleep(engine.guest_gap_s(engine.current_plan()) + 1)
         before = len(writes)
         await engine.set_guest_brightness(50, source="kiosk")
         await _hold(services, engine, 10)

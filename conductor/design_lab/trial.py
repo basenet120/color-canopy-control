@@ -8,10 +8,10 @@ level, through the canopy engine — never past it.
 - `confirm_sentence` names the driven modules and the bound (a re-apply: the running session's time left, which it
   never extends; `confirm_matches` lets that number tick down by up to `CONFIRM_SLACK_S` while ops reads it);
   `cost_line` says what one apply sends (one write per module now, plus the engine's re-assert and up to
-  `EARLY_REASSERT_LIMIT` early re-sends per module). A re-apply with less than `kiosk.cooldown_s` of the bound left is
+  `EARLY_REASSERT_LIMIT` early re-sends per module). A re-apply with less than `lab.apply_min_gap_s` of the bound left is
   refused (`ending_sentence`): it would land a moment before the bound puts the approved look back.
-- `ApplyGate`: the server-side minimum gap between accepted applies (`kiosk.cooldown_s`): "lab" bypasses the kiosk
-  cooldown like ops, so the Lab keeps its own. `reserve()` runs on the loop thread before any await, so a
+- `ApplyGate`: the server-side minimum gap between accepted applies (`lab.apply_min_gap_s`, 8 s): "lab" bypasses the
+  kiosk cooldown like ops, so the Lab keeps its own. `reserve()` runs on the loop thread before any await, so a
   double-tapped second POST is refused even while the first is still being built.
 - `trial_json(lab)`: TrialJSON (§4), from the engine's trial and the INSTALLED plan (its tier is never assumed).
 
@@ -149,13 +149,13 @@ def cost_line(n: int, *, left_s: float | None = None) -> str:
 
 
 def ending_sentence(left_s: float) -> str:
-    """A re-apply refused this close to the bound (less than kiosk.cooldown_s of it left)."""
+    """A re-apply refused this close to the bound (less than lab.apply_min_gap_s of it left)."""
     return TRIAL_ENDING_MESSAGE.format(left=math.ceil(left_s))
 
 
 # ---- the apply gap ---------------------------------------------------------------------------------------------------
 class ApplyGate:
-    """The minimum gap between accepted applies (`kiosk.cooldown_s`). Used on the loop thread only."""
+    """The minimum gap between accepted applies (`lab.apply_min_gap_s`). Used on the loop thread only."""
 
     def __init__(self, gap_s: float) -> None:
         self.gap_s = float(gap_s)
@@ -183,7 +183,7 @@ class ApplyGate:
 def apply_gate(lab: LabService) -> ApplyGate:
     gate = lab.services.extras.get(GATE_KEY)
     if gate is None:
-        gate = lab.services.extras[GATE_KEY] = ApplyGate(lab.settings.kiosk.cooldown_s)
+        gate = lab.services.extras[GATE_KEY] = ApplyGate(lab.settings.lab.apply_min_gap_s)
     return gate
 
 
