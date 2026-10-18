@@ -184,7 +184,7 @@ def registry_problems(registry: Registry) -> list[str]:
         )
     if registry.dropped_fields:
         problems.append(
-            "The registry overlay had removed vignette fields (kind/vignette) on "
+            "The registry overlay had removed vignette fields (kind/vignette/profile) on "
             f"{', '.join(sorted(registry.dropped_fields))}; they were ignored (D67). The next registry edit on "
             "/ops removes them from the overlay."
         )
