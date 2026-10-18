@@ -16,7 +16,9 @@ What it does — offline (no Hubspace, no network), binds no port, writes nothin
   `profile`), and building every entry's simulator profile (startup's SimDriver does, in live mode too);
 - the saved enrollments and sessions (`<data>/roles/*.json`), loaded by the real `RoleStore` from a temporary copy
   (so nothing is set aside), naming any record of a removed role it skips. A file this code would set aside as
-  corrupt is a failure: after the restart the guest iPad would need a new link.
+  corrupt is a failure: after the restart the guest iPad would need a new link;
+- the published looks (`<data>/overrides/show-looks.yaml`, D68), read only: a file the new code can't use is named
+  (the show would start on the approved looks with an /ops alert), not a failure.
 
 Exit 0 when everything loads (old data that is ignored is listed, not a failure), 1 otherwise. The output names
 device ids, roles and short fingerprints only — never a token, a password or a session id.
@@ -93,8 +95,27 @@ def _roles(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
         return lines
 
 
-# Each check returns the lines it prints, or raises. (B1 adds the published looks here.)
-CHECKS: tuple[Callable[[Mapping[str, str], Path, Path], list[str]], ...] = (_settings, _registry, _roles)
+def _looks(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
+    # Read-only (D68): never the equals-git rewrite the show's own start may make. A file the new code can't use is
+    # not a failure — the show would start on the approved (git) looks with an /ops alert — so it is named, not fatal.
+    # A broken git modes/scenes/recipes config raises here, as it would refuse the start.
+    from conductor.looks.live import LOOKS_PATH, preflight_line
+
+    problem = preflight_line(config_dir, data, load_settings(config_dir))
+    if problem is not None:
+        return [f"looks      {problem}"]
+    if (data / LOOKS_PATH).is_file():
+        return [f"looks      ok ({LOOKS_PATH} loads)"]
+    return ["looks      ok (nothing published: the approved looks)"]
+
+
+# Each check returns the lines it prints, or raises.
+CHECKS: tuple[Callable[[Mapping[str, str], Path, Path], list[str]], ...] = (
+    _settings,
+    _registry,
+    _roles,
+    _looks,
+)
 
 
 def run(

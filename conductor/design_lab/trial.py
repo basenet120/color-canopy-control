@@ -21,15 +21,13 @@ Nothing here writes to a device or touches the executor, a driver or a lock: eve
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from conductor.canopy import EARLY_REASSERT_LIMIT, TRIAL_ENDING_MESSAGE, Trial
 from conductor.config import trial_bound_s
 from conductor.design_lab.draft import ConfigTrio, SceneDraft, apply_draft
 from conductor.engine_api import PlanError, Tier
-from conductor.looks import load_modes
-from conductor.scenes import load_scenes
+from conductor.looks.live import live_trio
 
 if TYPE_CHECKING:
     from conductor.design_lab.service import LabService
@@ -46,28 +44,16 @@ REASSERT_WINDOW_S = 10
 # how long a re-apply's confirm sentence (it names the seconds left) still matches after it was shown
 CONFIRM_SLACK_S = 30
 ERROR_MESSAGE = (
-    "The try-on failed on the server ({name}) and was ended; the approved look is back wherever it could be "
+    "The try-on failed on the server ({name}) and was ended; the show's look is back wherever it could be "
     "compiled (the alert on /ops says more)."
 )
 
 
 # ---- the trial -------------------------------------------------------------------------------------------------------
 def show_trio(lab: LabService) -> ConfigTrio:
-    """The trio the running show compiles from, deep-copied (never the show's own objects)."""
-    config_dir = Path(lab.services.config_dir)
-    wiring = lab.show()
-    if wiring is not None:
-        modes = wiring.modes_file
-        recipes = wiring.context().recipes  # what the show compiles with (git, cached)
-    else:
-        from conductor.config import load_recipes
-
-        modes, recipes = load_modes(config_dir), load_recipes(config_dir)
-    return ConfigTrio(
-        scenes=load_scenes(config_dir).model_copy(deep=True),
-        modes=modes.model_copy(deep=True),
-        recipes=recipes.model_copy(deep=True),
-    )
+    """The trio the running show compiles from — the live looks (D68: approved or published), all three — deep-copied
+    (never the show's own objects). A try-on started after a publish patches the published looks."""
+    return live_trio(lab.services).copy()
 
 
 def build_trial(
@@ -114,7 +100,7 @@ def confirm_sentence(
     shows. The draft is named only when it renames the scene ("Try on Calm evening for Lowcountry Calm …"); a draft
     that keeps the name is "your draft of Golden Hour", never "Golden Hour for Golden Hour". With `left_s` (a re-apply
     while a try-on runs: it keeps that session's bound) the time named is what's left of it, never the full bound."""
-    scene = lab.approved.scenes.get(draft.scene_id).name
+    scene = _approved_name(lab, draft.scene_id)  # the scene as the show runs it (the live looks)
     labels = ", ".join((m.label or m.id) for m in modules) or "none"
     who = f"{draft.name} for {scene}" if draft.name != scene else f"your draft of {scene}"
     when = (
@@ -253,10 +239,16 @@ def trial_json(lab: LabService) -> dict | None:
 
 
 def _approved_name(lab: LabService, scene_id: str) -> str:
+    """The scene's name as the show runs it (the live looks: approved or published)."""
     try:
-        return lab.approved.scenes.get(scene_id).name
+        return live_trio(lab.services).scenes.get(scene_id).name
     except (KeyError, LookupError):
         return scene_id
+    except Exception:  # noqa: BLE001 - a stand-in without the live looks: the approved name
+        try:
+            return lab.approved.scenes.get(scene_id).name
+        except (KeyError, LookupError):
+            return scene_id
 
 
 def _modules_why(lab: LabService, scene_id: str) -> str:

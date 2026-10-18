@@ -606,9 +606,19 @@ def test_the_show_never_reads_looks_yaml(tmp_path):
         for p in conductor.rglob("*.py")
         if "design_lab" not in p.parts
         and p.name != "design_lab.py"
-        and any(word in p.read_text() for word in ("looks.yaml", "LOOKS_FILE", "LookStore"))
+        and any(
+            word in _without_show_looks(p.read_text()) for word in ("looks.yaml", "LOOKS_FILE", "LookStore")
+        )
     ]
     assert readers == []  # only the Lab (conductor/design_lab/, routes/design_lab.py) knows the file
+
+
+def _without_show_looks(text: str) -> str:
+    """conductor/looks/live.py's own file is overrides/show-looks.yaml (D68): the show reads that one, never the
+    Lab's store, so its name (and the module's own LOOKS_FILE for it) isn't a reader of looks.yaml."""
+    if 'LOOKS_FILE = "show-looks.yaml"' in text:
+        text = text.replace("LOOKS_FILE", "")
+    return text.replace("show-looks.yaml", "")
 
 
 def test_load_never_raises(tmp_path, fake_s1, monkeypatch):

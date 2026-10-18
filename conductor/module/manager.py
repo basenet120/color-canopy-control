@@ -8,6 +8,7 @@ state at once.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import secrets
 from pathlib import Path
@@ -17,7 +18,7 @@ from conductor.config import ConfigError, load_recipes
 from conductor.gate import Purpose
 from conductor.geometry import CONFIG_PATH, load_canopy_config
 from conductor.locks import LockError
-from conductor.looks import load_modes
+from conductor.looks.live import live_trio
 from conductor.module.layout import calibration_for, module_map
 from conductor.module.session import SESSIONS_KEY, ModuleError, ModuleSession, SessionDeps
 from conductor.roles_api import Principal, Role
@@ -41,12 +42,15 @@ class ModuleManager:
         self.sessions: dict[str, ModuleSession] = services.extras.setdefault(SESSIONS_KEY, {})
         canopy_path = Path(services.config_dir) / "canopy.yaml"
         self.canopy = load_canopy_config(canopy_path if canopy_path.exists() else CONFIG_PATH)
-        self.recipes = load_recipes(services.config_dir)
+        # The live looks (D68): the Lowcountry preview shows what the show runs (approved or published); a publish
+        # swaps both here and in every open session (`install_looks`).
         self.modes: Any = None
         try:
-            self.modes = load_modes(Path(services.config_dir))
+            trio = live_trio(services)
+            self.recipes, self.modes = trio.recipes, trio.modes
         except ConfigError as e:  # the module page still works; only the Lowcountry preview is unavailable
             log.warning("module page: the Lowcountry Modes couldn't be loaded:\n%s", e)
+            self.recipes = load_recipes(services.config_dir)
         services.hub.register_snapshot("module", self.topic_snapshot)
 
     @classmethod
@@ -72,6 +76,13 @@ class ModuleManager:
             tracker=s.tracker,
             modes=self.modes,
         )
+
+    def install_looks(self, recipes: Any, modes: Any) -> None:
+        """A publish (conductor.looks.live.install_looks): new sessions and every open one compile the Lowcountry
+        preview from the live looks now. Synchronous."""
+        self.recipes, self.modes = recipes, modes
+        for session in list(self.sessions.values()):
+            session.deps = dataclasses.replace(session.deps, recipes=recipes, modes=modes)
 
     # ---- lookups -----------------------------------------------------------------------------------------------
     def get(self, device_id: str) -> ModuleSession | None:

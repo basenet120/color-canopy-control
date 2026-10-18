@@ -59,10 +59,14 @@ SIM_TITLE = "What this simulator shows"
 LIVE_TITLE = "What the lights can show today"
 SHOW_BOX_TITLE = "Show box today (Modules 1–2, module level)"
 NO_ENGINE = "The canopy engine isn't running here."
-HEADS_APPROVED = (
-    "The slots hold the approved painted design; your draft's painted design reaches the lights only after export, "
-    "merge and commissioning."
+# "today" at T1/T2 paints what the slots hold: the show's painted design (the live looks: approved or published),
+# never the draft's. A scene held off T1 (D68: its slots don't hold the live design yet) is never "today" at T1.
+HEADS_SLOTS = (
+    "The slots hold the {which} painted design, the one the show runs; your draft's painted design isn't in them "
+    "until they are rewritten."
 )
+HEADS_APPROVED = HEADS_SLOTS.format(which="approved")
+HELD_WHY = "its slots don't hold the show's painted design yet (they are rewritten first)"
 SHOW_BOX_NOTE = (
     "Until the Oct 19 undo the Mac show box drives VWBD's two test kits as Modules 1–2 only (D62), with no painted "
     "slot commissioned: nothing painted."
@@ -240,28 +244,41 @@ def today_view(lab: LabService, patched: ConfigTrio, scene_id: str) -> dict:
     trying = _trial_view(lab, wiring, title, scene_id, patched)
     if trying is not None:
         return trying
-    plan, reasons = _first_plan(
-        scene_id, patched.modes, ctx, lambda tier: wiring.tier_allowed(scene_id, tier)
-    )
+    engine = lab.engine()
+    held = set(getattr(engine, "t1_hold", ()) or ()) if engine is not None else set()
+
+    def allowed(tier: Tier) -> tuple[bool, str]:
+        if tier is Tier.T1 and scene_id in held:
+            return False, HELD_WHY
+        return wiring.tier_allowed(scene_id, tier)
+
+    plan, reasons = _first_plan(scene_id, patched.modes, ctx, allowed)
     if plan is None:
         return _view(title, None, note="No rung of this scene can run here now: " + "; ".join(reasons))
     level = patched.modes.mode(scene_id).techniques.modules.sample.brightness  # type: ignore[union-attr]
     devices = ctx.devices
     positions = _positions(devices, plan)
     if plan.tier in (Tier.T1, Tier.T2):
-        # The slots hold the approved painted design: the heads are the approved trio's, never the draft's.
-        actx = dataclasses.replace(wiring.context(modes=lab.approved.modes), recipes=lab.approved.recipes)
+        # The slots hold the show's painted design: the heads are the live trio's (approved or published), never
+        # the draft's.
+        from conductor.looks.live import live_looks, scene_source
+
+        looks = live_looks(lab.services)
+        live = looks.trio
+        which = scene_source(looks, scene_id)
+        note = HEADS_SLOTS.format(which=which)
+        actx = dataclasses.replace(wiring.context(modes=live.modes), recipes=live.recipes)
         try:
             shown = compile_mode(scene_id, plan.tier, actx)
         except PlanError as exc:
-            return _view(title, plan, heads="approved", positions=positions, note=f"{HEADS_APPROVED} ({exc})")
+            return _view(title, plan, heads=which, positions=positions, note=f"{note} ({exc})")
         return _view(
             title,
             shown,
             lit=_lit(ctx.canopy or lab.canopy, devices, shown, level),
-            heads="approved",
+            heads=which,
             positions=positions,
-            note=HEADS_APPROVED,
+            note=note,
         )
     return _view(
         title,
@@ -343,53 +360,185 @@ def show_box_today(lab: LabService, patched: ConfigTrio, scene_id: str) -> dict:
     )
 
 
-# ---- the T1 lock (§3.8) ------------------------------------------------------------------------------------------------
+# ---- the slot locks (D68 supersedes D66's T1 lock; docs/live-lab/PLAN.md §2.6.0, §2.13) -------------------------------
+APP_LOCK = (
+    "{scene}'s slot is hand-painted in the Hubspace app on {n} ({labels}); publishing a new design would make the "
+    "iPad describe colours the lights don't show. Repaint it in the app and record it on the module page's Slots tab "
+    "first, or publish only its brightness, copy or timing."
+)
+API_LOCK = (
+    "{scene}'s painted design is in {slot} on {n}; repainting from the Lab isn't on this box yet. Publish its colours "
+    "with the painted design unchanged, or publish and then commission again on /ops/bench."
+)
+API_WARNING = (
+    "{scene}'s painted design is in {slot} on {n}: publishing this design needs a slot repaint, which isn't on this "
+    "box yet (Revert to approved and Undo are always allowed)."
+)
+NO_REPAINT = "No slot repaint: no module has {slot} commissioned {where}."
+SIM_REPAINT = (
+    "In the simulator a new painted design publishes: {scene} shows at module level until the reconciler rewrites "
+    "{slot} on {n} (at most once every 10 min per slot); on the show box this needs PR B2's repaint."
+)
+
+
+def _count(n: int) -> str:
+    return f"{n} module" if n == 1 else f"{n} modules"
+
+
+def slot_records(lab: LabService, slot: str) -> tuple[list[Any], list[Any], int]:
+    """(entries whose `slot` record is origin "api", entries whose record is hand-painted "app", canopy modules):
+    the engine's view when it runs (ShowWiring._record's two lines), else the registry's."""
+    engine = lab.engine()
+    api, app = [], []
+    modules = list(lab.services.registry.canopy_modules())
+    for entry in modules:
+        record = engine.recorded_slot(entry.id, slot) if engine is not None else entry.slot_record(slot)
+        if record is None:
+            continue
+        (api if record.get("origin") == "api" else app).append(entry)
+    return api, app, len(modules)
+
+
+def _labels(entries: list[Any]) -> str:
+    return ", ".join((e.label or e.module or e.id) for e in entries)
+
+
+def _live_name(lab: LabService, scene_id: str) -> str:
+    from conductor.looks.live import live_trio
+
+    try:
+        return live_trio(lab.services).scenes.get(scene_id).name
+    except (KeyError, LookupError):
+        return lab.approved.scenes.get(scene_id).name
+
+
+def app_lock_sentence(lab: LabService, scene_id: str, app: list[Any]) -> str:
+    return APP_LOCK.format(scene=_live_name(lab, scene_id), n=_count(len(app)), labels=_labels(app))
+
+
+def api_lock_sentence(lab: LabService, scene_id: str, slot: str, api: list[Any]) -> str:
+    return API_LOCK.format(scene=_live_name(lab, scene_id), slot=slot, n=_count(len(api)))
+
+
+def _t1_proven(lab: LabService, entry: Any) -> bool:
+    """Has this module its own Gate C (t1_frames, proven on the kit at its engine address)?"""
+    try:
+        address = lab.services.registry.address(entry.id, lab.services.engine_driver.name)
+        return bool(entry.flags_for(address).t1_frames)
+    except Exception:  # noqa: BLE001 - unknown: not proven
+        return False
+
+
+def repaint_info(lab: LabService, scene_id: str) -> dict | None:
+    """RepaintInfo (§2.11) for a painted scene, None for the others. B1: `available` is false wherever a module has
+    the slot commissioned (a design change there is refused at publish; the repaint job is PR B2)."""
+    mode = lab.approved.modes.mode(scene_id)
+    slot = mode.slot
+    if slot is None:
+        return None
+    api, app, total = slot_records(lab, slot)
+    simulated = lab.simulated
+    if simulated:
+        eligible = len(api)
+    else:
+        eligible = sum(1 for e in api if _t1_proven(lab, e))
+    if app:
+        sentence = app_lock_sentence(lab, scene_id, app)
+    elif api and simulated:
+        sentence = SIM_REPAINT.format(scene=_live_name(lab, scene_id), slot=slot, n=_count(len(api)))
+    elif api:
+        sentence = api_lock_sentence(lab, scene_id, slot, api)
+    else:
+        sentence = NO_REPAINT.format(
+            slot=slot, where="in this simulator" if simulated else "on this show box"
+        )
+    return {
+        "slot": slot,
+        "commissioned": [e.module or e.id for e in api],
+        "eligible": eligible,
+        "total": total,
+        "app": [e.module or e.id for e in app],
+        "simulated": simulated,
+        # B1: a design change publishes where no slot is hand-painted, and (on hardware) none is commissioned
+        "available": not app and (simulated or not api),
+        "sentence": sentence,
+    }
+
+
 def t1_lock(lab: LabService, scene_id: str) -> dict:
-    """{"locked", "simulated", "slot", "positions", "sentence"} (§3.8). Enforced only on a non-simulated driver."""
+    """{"locked", "simulated", "slot", "positions", "sentence", "repaint"}: `locked` (and its sentence) is the app
+    lock — a painted design change where a module's slot is hand-painted in the app is refused (the T2 truth rule);
+    `positions` are the positions with the slot commissioned (origin api); `repaint` is the scene's RepaintInfo."""
     mode = lab.approved.modes.mode(scene_id)
     slot = mode.slot
     simulated = lab.simulated
     if slot is None:
-        return {"locked": False, "simulated": simulated, "slot": None, "positions": [], "sentence": None}
-    if simulated:
         return {
             "locked": False,
-            "simulated": True,
-            "slot": slot,
+            "simulated": simulated,
+            "slot": None,
             "positions": [],
-            "sentence": SIM_LOCK_SENTENCE,
+            "sentence": None,
+            "repaint": None,
         }
-    engine = lab.engine()
-    positions = []
-    for entry in lab.services.registry.canopy_modules():
-        # ShowWiring._record's two lines (it is private): the engine's view when it runs, else the registry's
-        record = engine.recorded_slot(entry.id, slot) if engine is not None else entry.slot_record(slot)
-        if record is not None and record.get("origin") == "api":
-            positions.append(entry.module or entry.id)
-    locked = bool(positions)
-    name = lab.approved.scenes.get(scene_id).name
+    api, app, _total = slot_records(lab, slot)
     return {
-        "locked": locked,
-        "simulated": False,
+        "locked": bool(app),
+        "simulated": simulated,
         "slot": slot,
-        "positions": positions,
-        "sentence": f"{name}: {T1_LOCKED}." if locked else None,
+        "positions": [e.module or e.id for e in api],
+        "sentence": app_lock_sentence(lab, scene_id, app) if app else None,
+        "repaint": repaint_info(lab, scene_id),
     }
 
 
-def check_t1_lock(lab: LabService, draft: SceneDraft) -> None:
-    """Raise T1Locked when `t1_lock` is on for the draft's scene and the draft changes its painted frames (the
-    palette's hexes, their order and count, the layout, sample_at: `D.painted_change`, the same predicate as
-    `needs_slot_repaint`); colour names, brightness, solid, copy and stepped timing stay editable (a rename keeps the
-    slot hash, so it needs no repaint). Used by preview and by the save route."""
+def _live_seed(lab: LabService, scene_id: str) -> SceneDraft:
+    from conductor.looks.live import live_trio
+
+    try:
+        return D.seed_draft(live_trio(lab.services), scene_id)
+    except (KeyError, D.DraftError):
+        return D.seed_draft(lab.approved, scene_id)
+
+
+def check_app_lock(lab: LabService, draft: SceneDraft) -> None:
+    """Raise T1Locked when the draft changes its painted frames (`D.painted_change` against the show's live look:
+    the palette's hexes, their order and count, the layout, sample_at) where a module's slot is hand-painted in the
+    app. Names, brightness, the solid, copy and stepped timing stay editable. Used by preview, save and publish."""
     if draft.scene_id not in lab.approved.modes.modes:
         return  # an unknown scene is apply_drafts' problem (field scene_id)
-    lock = t1_lock(lab, draft.scene_id)
-    if not lock["locked"]:
+    slot = lab.approved.modes.mode(draft.scene_id).slot
+    if slot is None:
         return
-    changed = D.painted_change(D.seed_draft(lab.approved, draft.scene_id), draft)
+    _api, app, _total = slot_records(lab, slot)
+    if not app:
+        return
+    changed = D.painted_change(_live_seed(lab, draft.scene_id), draft)
     if changed is not None:
-        raise T1Locked(lock["sentence"], changed)
+        raise T1Locked(app_lock_sentence(lab, draft.scene_id, app), changed)
+
+
+check_t1_lock = check_app_lock  # the old name (D66); the lock is the app lock now (D68)
+
+
+def api_warning(lab: LabService, draft: SceneDraft) -> dict | None:
+    """B1, on hardware: a painted design change where the slot is commissioned (api) is refused at publish — a
+    warning in the preview, never a refusal there (the draft can still be saved, tried on and exported)."""
+    if draft.scene_id not in lab.approved.modes.modes:
+        return None
+    slot = lab.approved.modes.mode(draft.scene_id).slot
+    if slot is None:
+        return None
+    if lab.simulated:  # the simulator publishes it (held, then the reconciler rewrites the slots)
+        return None
+    api, _app, _total = slot_records(lab, slot)
+    if not api:
+        return None
+    changed = D.painted_change(_live_seed(lab, draft.scene_id), draft)
+    if changed is None:
+        return None
+    message = API_WARNING.format(scene=_live_name(lab, draft.scene_id), slot=slot, n=_count(len(api)))
+    return {"rule": "repaint", "field": changed, "message": message}
 
 
 # ---- the preview ---------------------------------------------------------------------------------------------------------
@@ -406,7 +555,7 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
     approved, canopy, scene_id = lab.approved, lab.canopy, draft.scene_id
     if scene_id not in approved.modes.modes:
         raise _unknown(scene_id)
-    check_t1_lock(lab, draft)
+    check_app_lock(lab, draft)
     copy = D.resolve_copy(approved, draft, canopy)
     relaxed = {rung: "auto" for rung in ("modules", "stepped") if (c := copy[rung]) is not None and c.refused}
     applied = draft.model_copy(update={"copy": draft.copy.model_copy(update=relaxed)}) if relaxed else draft
@@ -431,6 +580,8 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
         )
         if p.mode == scene_id
     ]
+    if (repaint := api_warning(lab, draft)) is not None:  # B1: refused at publish, never here
+        warnings.append(repaint)
     stepped = copy["stepped"]
     show_box = show_box_today(lab, patched, scene_id)
     driven = (show_box.get("positions") or {}).get("driven") or list(scene_rules.LIVE_KITS)
@@ -472,10 +623,13 @@ __all__ = [
     "T1_LOCKED",
     "TIERS",
     "T1Locked",
+    "api_warning",
+    "check_app_lock",
     "check_t1_lock",
     "design_caps",
     "design_registry",
     "preview",
+    "repaint_info",
     "show_box_today",
     "t1_lock",
     "tiers_json",

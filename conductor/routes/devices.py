@@ -234,6 +234,10 @@ def runtime_problems(services: Any) -> list[str]:
         problems.append(services.token_store.problem)
     if services.roles.problem:
         problems.append(services.roles.problem)
+    # The published looks (D68): read live, so a fixed problem leaves /ops at once (never a static startup line).
+    from conductor.looks.live import runtime_problem_lines
+
+    problems += runtime_problem_lines(services)
     return list(dict.fromkeys(p for p in problems if p))
 
 

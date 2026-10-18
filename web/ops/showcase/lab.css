@@ -76,7 +76,7 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-badge { align-self: center; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: #e4eadc; color: #3d5b3f; white-space: nowrap; }
 .lab-badge.draft { background: #fbe6d6; color: #8a4a1f; }
 .lab-badge.in-try-on { background: var(--orange); color: #fff; }
-.lab-badge.approved-design { background: #e4eadc; color: #3d5b3f; }
+.lab-badge.approved-design, .lab-badge.published-design { background: #e4eadc; color: #3d5b3f; }
 
 /* the stage (the Studio's dark card around its light canopy view) */
 .lab-stage-col { background: var(--lab-stage); border-radius: 12px; color: #edf1df; padding: 14px 14px 16px; min-width: 0; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
@@ -262,6 +262,95 @@ html.lab-presenting, html.lab-presenting body { overflow: hidden; overscroll-beh
 .lab-present-play { min-height: 52px; min-width: 52px; padding: 0 20px; border-radius: 999px; background: #e8eedf; color: #20382e; font-size: 16px; font-weight: 600; border: 0; }
 .lab-present-play:disabled { opacity: .4; }
 .lab-present-pace { font-size: 14px; color: #adbeb1; font-variant-numeric: tabular-nums; }
+
+/* the live show (docs/live-lab/PLAN.md §3): the show bar, the publish dialog, history, the iPad strip */
+.lab [hidden] { display: none !important; }
+.lab-show { background: #fffefa; border: 1px solid var(--lab-line); border-left: 6px solid #5f8a62; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
+.lab-show[data-tone="warn"] { border-left-color: #c98a2e; }
+.lab-show[data-tone="error"] { border-left-color: #c45a3a; background: #fdf3ef; }
+.lab-show[data-tone="unknown"] { border-left-color: #a9b3a5; }
+.lab-show-main { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.lab-show-state { flex: 1 1 520px; min-width: 0; }
+.lab-show-text { margin: 0; font-size: 15px; line-height: 1.45; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.lab-show-lines { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+.lab-show-line { font-size: 13px; line-height: 1.45; color: #4f604f; }
+.lab-show-line.warn { color: #8a4a1f; }
+.lab-show-line.error { color: #a23c22; font-weight: 600; }
+.lab-show-line.ok { color: #3d5b3f; }
+.lab-show-chip { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: #e4eadc; color: #2f4a33; white-space: nowrap; }
+.lab-show-chip.sim { background: #25372f; color: #f4f2eb; }
+.lab-show-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.lab-repaint-rows { margin-top: 6px; font-size: 13px; }
+.lab-repaint-rows summary { min-height: var(--lab-tap); display: inline-flex; align-items: center; cursor: pointer; color: #526c4c; text-decoration: underline; text-underline-offset: 3px; }
+.lab-repaint-rows ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 2px 14px; }
+.lab-repaint-row.failed, .lab-repaint-row.mismatch, .lab-repaint-row.locked { color: #a23c22; }
+.lab-repaint-row.applied { color: #3d5b3f; }
+.lab-history { border-top: 1px solid var(--lab-line); margin-top: 10px; padding-top: 8px; }
+.lab-history h3 { font-size: 17px; margin-bottom: 4px; }
+.lab-history-list { list-style: none; margin: 0; padding: 0; display: grid; max-height: 360px; overflow: auto; overscroll-behavior: contain; }
+.lab-history-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--lab-line); }
+.lab-history-row:first-child { border-top: 0; }
+.lab-history-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; }
+.lab-history-text small { font-size: 12px; color: var(--muted); }
+.lab-outcome { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: #eef1e8; color: #4f604f; }
+.lab-outcome.live { background: #20382e; color: #f4f2eb; }
+.lab-outcome.rolled-back { background: #fae2dc; color: #8a3724; }
+.lab-outcome.in-git { background: #e4eadc; color: #2f4a33; }
+.lab-btn.publish { background: #20382e; border-color: #20382e; color: #f4f2eb; font-weight: 600; }
+.lab-btn.publish.is-live { background: transparent; color: #3d5b3f; border-color: #c9d1c1; font-weight: 600; }
+.lab-btn.publish:disabled { opacity: .55; }
+.lab-btn.publish.is-live:disabled { opacity: 1; }
+.lab-versions-files { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 8px; }
+.lab-versions-files small { margin: 0; }
+.lab-publish-why { font-size: 13px; color: #8a4a1f; margin: 6px 0 0; }
+.lab-publish-why:empty { display: none; }
+.lab-flag.live { background: #20382e; color: #f4f2eb; }
+.lab-badges { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; align-self: center; }
+.lab-live-badge { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid #c9d1c1; color: #4f604f; white-space: nowrap; }
+.lab-live-badge.published { border-color: #20382e; background: #20382e; color: #f4f2eb; }
+.lab-badge.live { background: #e4eadc; color: #3d5b3f; }
+.lab-scene.is-refused { border-color: #c45a3a; box-shadow: inset 0 0 0 1px #c45a3a55; }
+.lab-ipad { margin-top: 12px; padding: 10px; border: 1px dashed #c9d1c1; border-radius: 8px; background: #f8f8f2; }
+.lab-scenes .lab-ipad-cards { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 4px; overflow: visible; }
+.lab-scenes .lab-ipad-cards li { flex: none; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink); }
+.lab-ipad-cards li.published span:last-child:after { content: " · published"; color: var(--muted); font-size: 12px; }
+.lab-ipad-swatches { display: inline-flex; width: 54px; height: 12px; border-radius: 3px; overflow: hidden; flex: none; box-shadow: inset 0 0 0 1px #00000014; }
+.lab-ipad-swatches i { flex: 1; }
+.lab-ipad-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 4px 0 0; }
+.lab-menu.wide { margin-left: 0; }
+.lab-menu.wide summary { min-width: 0; padding: 0 12px; font-size: 13px; background: #fffefa; }
+.lab-menu.wide .lab-menu-items { left: 0; right: auto; min-width: 210px; }
+.lab-publish-dialog { width: min(720px, 94vw); max-width: min(720px, 94vw); max-height: min(90vh, 760px); padding: 16px 18px; }
+.lab-publish-dialog[open] { display: flex; flex-direction: column; }
+.lab-publish-scroll { overflow: auto; min-height: 0; flex: 1 1 auto; overscroll-behavior: contain; padding-right: 4px; }
+.lab-publish-conflict { font-size: 14px; color: #8a3724; background: #fae2dc; border-radius: 6px; padding: 8px 10px; margin: 0 0 10px; }
+.lab-publish-sentence { font: 400 19px/1.4 var(--serif); margin: 0 0 8px; color: var(--ink); }
+.lab-publish-cost { font-size: 14px; color: #4f604f; margin: 0 0 8px; }
+.lab-publish-cost:empty { display: none; }
+.lab-publish-list { margin: 6px 0; padding-left: 20px; display: grid; gap: 3px; font-size: 14px; line-height: 1.45; }
+.lab-publish-list.warn { color: #8a4a1f; }
+.lab-publish-list.note { color: #4f604f; }
+.lab-d59 { color: #8a4a1f; }
+.lab-publish-who { margin-top: 10px; max-width: 420px; }
+.lab-publish-wait { font-size: 14px; color: #8a4a1f; margin: 6px 0 0; }
+.lab-publish-wait:empty { display: none; }
+.lab-publish-actions { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--lab-line); }
+.lab-publish-actions .lab-btn { min-width: 140px; }
+.lab-toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); transform: translateX(-50%); z-index: 2147481000; background: #20382e; color: #f4f2eb; padding: 12px 18px; border-radius: 8px; font-size: 15px; box-shadow: 0 10px 30px #14241e55; max-width: min(720px, 92vw); }
+
+@media (max-width: 1279px) {
+  .lab-show { padding: 8px 12px; margin-bottom: 10px; }
+  .lab-show-state { flex-basis: 100%; }
+  .lab-show-text { font-size: 14px; }
+  /* the strip's cards are narrow: the two badges go under the name, so the name keeps its width */
+  .lab-scenes .lab-scene { grid-template-columns: minmax(0, 1fr); }
+  .lab-badges { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-self: start; }
+  .lab-ipad { margin-top: 8px; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+  .lab-scenes .lab-ipad-cards { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; }
+  .lab-ipad-note { flex-basis: 100%; margin: 0; }
+  .lab-versions-files { margin-top: 6px; }
+  .lab-versions-files small { display: none; } /* the Open button's title says it */
+}
 
 @media (max-width: 1279px) {
   body.lab-open main { padding: 0 20px 40px; }

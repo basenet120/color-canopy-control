@@ -3,6 +3,7 @@
 // CatalogJSON's approved SceneDraft, StateJSON, the 422 / 409 / 501 bodies).
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { CANOPY, designPaint } from "../web/ops/showcase/demo-model.mjs";
 import { UNLIT as KIOSK_UNLIT } from "../web/kiosk/canopy-preview.mjs";
 import * as M from "../web/ops/showcase/lab-model.mjs";
@@ -1104,4 +1105,387 @@ test("the tier list's moving line at the show box's pace names whose sentence it
   for (const state of ["idle", "paused", "done"]) assert.deepEqual(M.tierMovingLines(tier, st, state, at, "today"), [], state);
   assert.deepEqual(M.tierMovingLines(tier, st, "playing", M.stepAt(tl, 999), "today"), [], "the run is over");
   assert.deepEqual(M.tierMovingLines({ tier: "modules" }, st, "playing", at, "today"), []);
+});
+
+// ---- the live show (docs/live-lab/PLAN.md §3.2, §5.3) ---------------------------------------------------------------
+// Fixtures: tests/fixtures_live_lab/*.json, written from PLAN §2.11 verbatim (LiveJSON, RepaintJSON, the 409 bodies,
+// PublishReport, RepaintInfo); the server's route tests check their key sets against the real answers.
+const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures_live_lab/${name}.json`, import.meta.url), "utf8"));
+const LIVE_APPROVED = fixture("live_approved");
+const LIVE_PUBLISHED = fixture("live_published");
+const LIVE_HELD = fixture("live_held");
+const LIVE_FALLBACK = fixture("live_fallback");
+const LIVE_REPAINTING = fixture("live_repainting");
+const REPAINT = fixture("repaint");
+const CONFIRM_409 = fixture("publish_confirm_required");
+const CONFLICT_409 = fixture("publish_conflict");
+const CATALOG_ADD = fixture("catalog_additions");
+const CATALOG = { config_sha: "3f9a1c0e2b7d", simulated: false, scenes: [] };
+const T0 = 1792700000; // the fixtures' published_at (epoch s)
+const hhmm = (s) => new Date(s * 1000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+const err = (status, body) => ({ status, body, message: "x" });
+const LIVE_GOLDEN = CATALOG_ADD.scene.live_look; // Golden Hour as published: Peach #FFB38A, Sunset pink #FF8FBF
+const IDS = ["golden-hour", "coastal-tides"];
+
+test("the fixtures carry PLAN §2.11's keys", () => {
+  const keys = (o) => Object.keys(o).sort();
+  assert.deepEqual(keys(LIVE_PUBLISHED), ["canopy", "current", "fallback", "history", "previous", "problem", "repaint", "scenes", "simulated", "source", "writable"]);
+  assert.deepEqual(keys(LIVE_PUBLISHED.current), ["by", "changed", "git_changed", "id", "kind", "name", "published_at", "version", "version_exists"]);
+  assert.deepEqual(keys(LIVE_PUBLISHED.previous), ["by", "id", "name", "published_at"]);
+  assert.deepEqual(keys(LIVE_PUBLISHED.scenes[0]), ["held", "id", "mood", "name", "palette", "source"]);
+  assert.deepEqual(keys(LIVE_PUBLISHED.history[0]), ["by", "changed", "id", "kind", "name", "outcome", "published_at", "repaint", "version", "version_exists"]);
+  assert.deepEqual(keys(REPAINT), ["finished_at", "label", "modules", "publication", "queued_until", "running", "scene", "slot", "started_at"]);
+  assert.deepEqual(keys(CONFIRM_409), ["changes", "confirm", "confirm_required", "cost", "detail", "ends_trial", "notes", "repaint", "replaces", "show_offer", "warnings"]);
+  assert.deepEqual(keys(CONFLICT_409), ["conflict", "detail", "live"]);
+  assert.deepEqual(keys(CATALOG_ADD.scene.repaint), ["app", "available", "commissioned", "eligible", "sentence", "simulated", "slot", "total"]);
+});
+
+test("liveBadge: Published only for a published look; LiveJSON's source wins over the catalog's", () => {
+  assert.equal(M.liveBadge({ live_source: "published" }), "Published");
+  assert.equal(M.liveBadge({ live_source: "approved" }), "Approved");
+  assert.equal(M.liveBadge({}), "Approved", "a server without publishing runs git");
+  assert.equal(M.liveBadge({ live_source: "approved" }, { source: "published" }), "Published");
+  assert.equal(M.liveBadge({ live_source: "published" }, { source: "approved" }), "Approved");
+});
+
+test("workingState compares the working draft with the LIVE look, never with approved", () => {
+  const approved = golden();
+  assert.equal(M.workingState(golden(), approved, null), "live");
+  // the show runs a published Golden Hour: the approved draft is a Draft against it, the published one is Live
+  assert.equal(M.workingState(approved, LIVE_GOLDEN, null), "draft");
+  const lower = { ...LIVE_GOLDEN, palette: LIVE_GOLDEN.palette.map((c) => ({ ...c, hex: c.hex.toLowerCase() })) };
+  assert.equal(M.workingState(lower, LIVE_GOLDEN, null), "live", "lower-case hexes (input type=color) are the same look");
+  assert.equal(M.workingState({ ...LIVE_GOLDEN, brightness: "95" }, LIVE_GOLDEN, null), "live");
+  assert.equal(M.workingState({ ...LIVE_GOLDEN, brightness: 70 }, LIVE_GOLDEN, null), "draft");
+  assert.equal(M.workingState(LIVE_GOLDEN, LIVE_GOLDEN, { scene_id: "golden-hour" }), "in try-on");
+  assert.equal(M.workingState(LIVE_GOLDEN, LIVE_GOLDEN, { scene_id: "coastal-tides" }), "live");
+  assert.equal(M.WORKING_TEXT.live, "Live");
+  assert.ok(!Object.values(M.WORKING_TEXT).includes("Approved"), "never the word Approved for the working state");
+});
+
+test("seedFor: the stored draft, else the opened version's, else the show's live look", () => {
+  const scene = { id: "golden-hour", approved: golden(), live_look: LIVE_GOLDEN };
+  const stored = golden({ brightness: 40 });
+  assert.equal(M.seedFor(scene, stored), stored);
+  assert.equal(M.seedFor(scene, null), LIVE_GOLDEN, "no version opened: what the show runs");
+  assert.equal(M.seedFor(scene), LIVE_GOLDEN);
+  const v = golden({ brightness: 60 });
+  assert.equal(M.seedFor(scene, null, { versionDraft: v, fromVersion: true }), v);
+  assert.equal(M.seedFor(scene, null, { fromVersion: true }), scene.approved, "a scene a version doesn't name is approved in it");
+  assert.deepEqual(M.seedFor({ id: "golden-hour", approved: golden() }, null), golden(), "an older server (no live_look): approved");
+});
+
+test("publishAction: Publish to the show, Save & publish, Live now", () => {
+  const approved = { "golden-hour": golden(), "coastal-tides": golden({ scene_id: "coastal-tides", name: "Coastal Tides" }) };
+  const liveLooks = { ...approved, "golden-hour": LIVE_GOLDEN };
+  const base = { ...approved, "golden-hour": LIVE_GOLDEN };
+  const args = { approved, liveLooks, order: IDS, selected: "v0007" };
+  // the working drafts are what the show runs
+  let a = M.publishAction({ ...args, working: { ...base }, base });
+  assert.deepEqual([a.label, a.enabled, a.save], ["Live now", false, false]);
+  // the selected saved version (= the working drafts) differs from live
+  const v8 = { ...base, "coastal-tides": { ...approved["coastal-tides"], brightness: 50 } };
+  a = M.publishAction({ ...args, selected: "v0008", working: v8, base: v8 });
+  assert.deepEqual([a.label, a.enabled, a.version, a.save], ["Publish to the show", true, "v0008", false]);
+  // edits since the selected version: save first, then publish what is on screen
+  const edited = { ...v8, "golden-hour": { ...LIVE_GOLDEN, brightness: 70 } };
+  a = M.publishAction({ ...args, selected: "v0008", working: edited, base: v8 });
+  assert.deepEqual([a.label, a.enabled, a.version, a.save], ["Save & publish", true, null, true]);
+  // nothing saved yet (no version opened) and the drafts differ from live: save first too
+  a = M.publishAction({ ...args, selected: null, working: edited, base: edited });
+  assert.deepEqual([a.label, a.save], ["Save & publish", true]);
+  // nothing opened, every working draft is git's, the show runs a published look: publish "approved"
+  a = M.publishAction({ ...args, selected: null, working: { ...approved }, base: { ...approved } });
+  assert.deepEqual([a.label, a.version, a.save], ["Publish to the show", "approved", false]);
+  // a simulator says so; busy or a read-only store hold the button
+  a = M.publishAction({ ...args, selected: "v0008", working: v8, base: v8, simulated: true });
+  assert.equal(a.label, "Publish to this simulator");
+  assert.equal(M.publishAction({ ...args, selected: "v0008", working: v8, base: v8, busy: true }).enabled, false);
+  a = M.publishAction({ ...args, selected: "v0008", working: edited, base: v8, readOnly: true });
+  assert.deepEqual([a.label, a.enabled], ["Save & publish", false]);
+  assert.match(a.why, /read-only/);
+  // no publishing on this server (404 Not Found), the live state unknown, no data folder
+  a = M.publishAction({ ...args, working: v8, base: v8, api: "missing" });
+  assert.deepEqual([a.enabled, a.why], [false, M.LIVE_COPY.missingAction]);
+  assert.equal(M.publishAction({ ...args, working: v8, base: v8, api: "unreachable" }).enabled, false);
+  a = M.publishAction({ ...args, working: v8, base: v8, writable: false });
+  assert.deepEqual([a.enabled, a.why], [false, M.LIVE_COPY.noData]);
+});
+
+test("publishLabel says 'this simulator' only on a simulator runtime", () => {
+  assert.equal(M.publishLabel(false, M.PUBLISH), "Publish to the show");
+  assert.equal(M.publishLabel(true, M.PUBLISH), "Publish to this simulator");
+  assert.equal(M.publishLabel(true, M.REVERT), "Revert this simulator to approved");
+  assert.equal(M.publishLabel(false, M.REVERT), "Revert the show to approved");
+  assert.equal(M.publishLabel(true, M.SAVE_PUBLISH), "Save & publish");
+  assert.equal(M.publishTitle("previous", true), "Undo last publish");
+  assert.equal(M.publishTitle("approved", false), "Revert the show to approved");
+  assert.equal(M.publishTitle("version", true), "Publish to this simulator");
+});
+
+test("publishBody: the ask has no confirm; the confirmed one sends the sentence, the live id, who and show", () => {
+  assert.deepEqual(M.publishBody({ version: "v0007", expected: "p0003" }), { version: "v0007", expected_live: "p0003" });
+  assert.deepEqual(M.publishBody({ version: "approved", confirm: "Revert …", expected: "approved", who: "  Alon   S  ", show: false }), {
+    version: "approved",
+    expected_live: "approved",
+    confirm: "Revert …",
+    who: "Alon S",
+    show: false,
+  });
+  assert.equal(M.publishBody({ version: "v1", who: "x".repeat(80) }).who.length, 40);
+  assert.equal("who" in M.publishBody({ version: "v1", who: "   " }), false);
+  assert.equal(M.expectedLive(LIVE_PUBLISHED), "p0003");
+  assert.equal(M.expectedLive(LIVE_APPROVED), "approved");
+  assert.equal(M.expectedLive(null), "approved");
+});
+
+test("publishDialog shows the server's sentence verbatim, the cost, changes, repaint, warnings and notes", () => {
+  const d = M.publishDialog(CONFIRM_409);
+  assert.equal(d.sentence, CONFIRM_409.confirm);
+  assert.equal(d.cost, "sends 2 writes now (one per module); no slot repaint");
+  assert.equal(d.replaces, "Client Oct 22 v2");
+  assert.deepEqual(d.changes, [{ scene: "golden-hour", name: "Golden Hour", text: "Golden Hour: palette, layout", d59: true }]);
+  assert.deepEqual(d.repaint, ["Golden Hour repaints custom-3 on Modules 1–2: 2 slot writes, in 56 s"]);
+  assert.deepEqual(d.warnings, ["Golden Hour: reads as stripes at module level (D63)"]);
+  assert.deepEqual(d.notes, CONFIRM_409.notes);
+  assert.equal(d.showOffer, "golden-hour");
+  assert.equal(d.showLabel, "Show Golden Hour on the canopy after publishing");
+  assert.equal(d.trialLine, "");
+  // the try-on line only when the server's sentence doesn't already say it
+  assert.equal(M.publishDialog({ ...CONFIRM_409, ends_trial: true }).trialLine, "The running try-on ends.");
+  assert.equal(M.publishDialog({ ...CONFIRM_409, ends_trial: true, confirm: `${CONFIRM_409.confirm} The running try-on ends.` }).trialLine, "");
+  const back = M.publishDialog({ ...CONFIRM_409, changes: [{ scene: "coastal-tides", name: "Coastal Tides", what: ["brightness"], needs_d59: false, to: "approved" }], show_offer: null, repaint: [] });
+  assert.equal(back.changes[0].text, "Coastal Tides: brightness — back to approved");
+  assert.deepEqual([back.showOffer, back.showLabel, back.repaint], [null, "", []]);
+  assert.equal(M.publishDialog(null).sentence, "");
+});
+
+test("publishOutcome sorts every §2.8 answer", () => {
+  assert.equal(M.publishOutcome(err(409, CONFIRM_409)).kind, "confirm");
+  assert.equal(M.publishOutcome(err(409, CONFIRM_409)).dialog.sentence, CONFIRM_409.confirm);
+  const c = M.publishOutcome(err(409, CONFLICT_409));
+  assert.deepEqual([c.kind, c.text, c.live.current.id], ["conflict", CONFLICT_409.detail, "p0003"]);
+  assert.equal(M.publishOutcome(err(409, { detail: "This is already what the show runs.", nothing: true })).kind, "nothing");
+  assert.equal(M.publishOutcome(err(409, { detail: "x", read_only: true })).kind, "read-only");
+  const stale = M.publishOutcome(err(409, { detail: "stale", stale: true, problems: [{ field: "palette", message: "m" }] }));
+  assert.deepEqual([stale.kind, stale.problems.length], ["stale", 1]);
+  assert.equal(M.publishOutcome(err(422, { detail: "The trio has 1 problem(s).", problems: [] })).kind, "stale");
+  const field = M.publishOutcome(err(409, { detail: "Golden Hour's slot is hand-painted …", field: "golden-hour.layout" }));
+  assert.deepEqual([field.kind, field.scene, field.slot], ["field", "golden-hour", "layout"]);
+  const wait = M.publishOutcome(err(409, { detail: "A kit is being commissioned (/ops/bench); publish once it ends.", retry_after_s: 30 }));
+  assert.deepEqual([wait.kind, wait.retryAfterS], ["wait", 30]);
+  assert.deepEqual(M.publishOutcome(err(409, { detail: "Another publish is in progress." })), { kind: "refused", text: "Another publish is in progress." });
+  assert.equal(M.publishOutcome(err(404, { detail: "Not Found" })).kind, "missing", "no publish route on this server");
+  assert.equal(M.publishOutcome(err(501, { detail: "Not built yet: publishing.", not_built: true })).kind, "missing");
+  assert.deepEqual(M.publishOutcome(err(404, { detail: "There is no version v0099." })), { kind: "refused", text: "There is no version v0099." });
+  assert.equal(M.publishOutcome(err(503, { detail: "no engine" })).kind, "no-engine");
+  assert.equal(M.publishOutcome(err(0, null)).kind, "unreachable");
+  assert.match(M.publishOutcome(err(500, "Internal Server Error")).text, /HTTP 500/);
+});
+
+test("liveApiFromError: a missing route is 'missing', not an error", () => {
+  assert.equal(M.liveApiFromError(err(404, { detail: "Not Found" })), "missing");
+  assert.equal(M.liveApiFromError(err(405, { detail: "Method Not Allowed" })), "missing");
+  assert.equal(M.liveApiFromError(err(501, { not_built: true })), "missing");
+  assert.equal(M.liveApiFromError(err(0, null)), "unreachable");
+  assert.equal(M.liveApiFromError(err(500, { detail: "boom" })), "error");
+});
+
+test("showBar: approved, published, simulator, a missing route, unreachable", () => {
+  let bar = M.showBar(LIVE_APPROVED, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.text, "● Live on the show: the approved looks · git 3f9a1c");
+  assert.deepEqual([bar.tone, bar.chip, bar.lines], ["ok", "Live hardware", []]);
+  assert.deepEqual(bar.actions, { undo: null, revert: null, history: null });
+  bar = M.showBar(LIVE_PUBLISHED, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.text, `● Live on the show: “Client Oct 22 v3 – warmer sunset” · published ${hhmm(T0)} by Alon · Golden Hour differs from approved`);
+  assert.equal(bar.tone, "ok");
+  assert.deepEqual(bar.actions.undo, { label: "Undo last publish", title: "Back to “Client Oct 22 v2” (published by ops)" });
+  assert.deepEqual(bar.actions.revert, { label: "Revert the show to approved" });
+  assert.deepEqual(bar.actions.history, { label: "History (3)" });
+  // another day: the date too
+  assert.match(M.showBar(LIVE_PUBLISHED, CATALOG, { nowMs: (T0 + 3 * 86400) * 1000 }).text, /published [A-Z][a-z]{2} \d+, \d\d:\d\d by Alon/);
+  const sim = M.showBar({ ...LIVE_PUBLISHED, simulated: true }, CATALOG, { host: "127.0.0.1:8212", nowMs: T0 * 1000 });
+  assert.ok(sim.text.startsWith("● Simulator on 127.0.0.1:8212: nothing here reaches the canopy · it runs “Client Oct 22 v3"), sim.text);
+  assert.deepEqual([sim.chip, sim.actions.revert.label], ["Simulator", "Revert this simulator to approved"]);
+  bar = M.showBar(null, { ...CATALOG, simulated: false }, { api: "missing" });
+  assert.equal(bar.text, "● Live on the show: the approved looks · git 3f9a1c · publishing from the Lab isn’t on this server yet");
+  assert.deepEqual(bar.actions, { undo: null, revert: null, history: null });
+  assert.equal(M.showBar(null, CATALOG, { api: "loading" }).tone, "unknown");
+  bar = M.showBar(LIVE_PUBLISHED, CATALOG, { api: "unreachable" });
+  assert.deepEqual([bar.tone, bar.text], ["warn", "● Can’t reach the Conductor, so what the show runs is unknown (last known: “Client Oct 22 v3 – warmer sunset”)"]);
+  assert.deepEqual(bar.actions, { undo: null, revert: null, history: null }, "no publish actions while the state is unknown");
+});
+
+test("showBar: the fallback is red and offers Revert; git changed is amber; in git says so", () => {
+  let bar = M.showBar(LIVE_FALLBACK, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.tone, "error");
+  assert.ok(bar.text.startsWith("● Live on the show: the approved looks"), "the show runs approved");
+  assert.deepEqual(bar.lines[0], {
+    tone: "error",
+    text: "The published looks couldn’t be loaded (the trio_sha doesn't match (edited by hand or cut short)), so the show runs the approved looks. Publish again, or Revert to approved.",
+  });
+  assert.ok(bar.actions.revert && bar.actions.undo);
+  const changed = { ...LIVE_PUBLISHED, current: { ...LIVE_PUBLISHED.current, git_changed: true } };
+  bar = M.showBar(changed, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.tone, "warn");
+  assert.deepEqual(bar.lines, [{ tone: "warn", text: "config/ changed since this was published; the show still runs the published looks." }]);
+  const inGit = {
+    ...LIVE_APPROVED,
+    current: { id: "p0004", kind: "approved", version: null, name: "approved (in git)", published_at: T0, by: "ops", changed: [], git_changed: true, version_exists: false },
+    history: [{ id: "p0004", kind: "approved", version: null, name: "approved (in git)", published_at: T0, by: "ops", changed: [], repaint: null, outcome: "in git", version_exists: false }],
+  };
+  bar = M.showBar(inGit, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.text, "● Live on the show: the approved looks (the same as approved — it’s in git) · git 3f9a1c");
+  assert.deepEqual(bar.lines, [], "no git-changed warning for a look that is in git");
+  assert.equal(bar.actions.revert, null);
+});
+
+test("showBar: held scenes, the queued repaint's countdown, repaint progress, canopy off, no data folder", () => {
+  let bar = M.showBar(LIVE_HELD, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.tone, "warn");
+  assert.deepEqual(bar.lines, [{ tone: "warn", text: "Golden Hour shows at module level until its slots are repainted" }]);
+  const queued = { ...LIVE_HELD, repaint: { ...REPAINT, started_at: null, queued_until: T0 + 56, modules: REPAINT.modules.map((m) => ({ ...m, status: "pending" })) } };
+  bar = M.showBar(queued, CATALOG, { nowMs: (T0 + 10) * 1000, readAtMs: T0 * 1000 });
+  assert.equal(bar.lines[0].text, "Golden Hour shows at module level until its slots are repainted · repaint in 46 s");
+  bar = M.showBar(queued, CATALOG, { nowMs: (T0 + 600) * 1000, readAtMs: T0 * 1000 });
+  assert.equal(bar.lines[0].text, "Golden Hour shows at module level until its slots are repainted · repaint in 0 s", "never negative");
+  bar = M.showBar(LIVE_REPAINTING, CATALOG, { nowMs: T0 * 1000 });
+  assert.equal(bar.lines[1].text, "Repainting Golden Hour into custom-3: 6 of 9 modules done");
+  assert.equal(bar.repaint.rows.length, 9);
+  bar = M.showBar({ ...LIVE_APPROVED, canopy: { power: false, brightness: 100, designed_brightness: 100 }, writable: false }, CATALOG);
+  assert.deepEqual(bar.lines.map((l) => l.text), [M.LIVE_COPY.canopyOff, M.LIVE_COPY.noData]);
+});
+
+test("repaintProgress counts modules, says how it ended, and counts a queue down", () => {
+  const p = M.repaintProgress(REPAINT);
+  assert.deepEqual([p.done, p.total, p.applied, p.running, p.queued, p.finished], [6, 9, 6, true, false, false]);
+  assert.equal(p.text, "Repainting Golden Hour into custom-3: 6 of 9 modules done");
+  assert.equal(p.rows[6].text, "Module 7: waiting");
+  const all = { ...REPAINT, running: false, finished_at: T0 + 20, modules: REPAINT.modules.map((m) => ({ ...m, status: "applied" })) };
+  assert.deepEqual([M.repaintProgress(all).text, M.repaintProgress(all).tone], ["Golden Hour’s painted design is in custom-3 on 9 modules", "ok"]);
+  const some = { ...all, modules: all.modules.map((m, i) => (i === 8 ? { ...m, status: "failed", reason: "HTTP 429" } : m)) };
+  assert.equal(
+    M.repaintProgress(some).text,
+    "Golden Hour: custom-3 repainted on 8 of 9 modules (Module 9: failed, HTTP 429); it shows at module level until the rest are current (the reconciler retries after 10 min)",
+  );
+  const queued = { ...REPAINT, started_at: null, queued_until: T0 + 56 };
+  const q = M.repaintProgress(queued, { nowMs: (T0 + 6) * 1000, readAtMs: T0 * 1000 });
+  assert.deepEqual([q.queued, q.left], [true, 50]);
+  assert.equal(M.repaintProgress(queued, { nowMs: (T0 + 99) * 1000, readAtMs: T0 * 1000 }).left, 0);
+  assert.equal(M.repaintProgress(null), null);
+});
+
+test("gateCountdown is whole seconds and never negative", () => {
+  assert.equal(M.gateCountdown(30, 10_000, 0), 20);
+  assert.equal(M.gateCountdown(30, 10_500, 0), 20);
+  assert.equal(M.gateCountdown(30, 29_100, 0), 1);
+  assert.equal(M.gateCountdown(30, 60_000, 0), 0);
+  assert.equal(M.gateCountdown(30, 0, 5_000), 30, "a clock behind the send never adds time");
+  for (const bad of [0, -5, null, undefined, "x", NaN]) assert.equal(M.gateCountdown(bad, 0, 0), 0);
+  assert.equal(M.queuedLeft({ queued_until: T0 + 56 }, T0 * 1000, T0 * 1000), 56);
+  assert.equal(M.queuedLeft({ queued_until: null }, 0, 0), 0);
+});
+
+test("historyRows: what each row offers", () => {
+  const rows = M.historyRows(LIVE_PUBLISHED.history, { scenes: { "golden-hour": "Golden Hour" }, nowMs: T0 * 1000 });
+  assert.deepEqual(rows.map((r) => [r.id, r.outcomeText, r.live, r.canOpen, r.canRepublish, r.canExport]), [
+    ["p0003", "Live", true, true, false, true],
+    ["p0002", "Replaced", false, true, true, true],
+    ["p0001", "Replaced", false, true, true, false],
+  ]);
+  assert.deepEqual([rows[0].name, rows[0].by, rows[0].scenes, rows[0].when], ["Client Oct 22 v3 – warmer sunset", "Alon", "Golden Hour", hhmm(T0)]);
+  assert.equal(rows[1].repaint, "Golden Hour: custom-3 repainted on 9 of 9 modules");
+  assert.deepEqual([rows[2].name, rows[2].version], ["The approved looks", "approved"]);
+  const gone = M.historyRows([{ ...LIVE_PUBLISHED.history[1], version_exists: false }])[0];
+  assert.deepEqual([gone.canOpen, gone.canRepublish, gone.canExport, gone.gone], [false, false, false, "Its Lab version was deleted."]);
+  assert.equal(M.historyRows(Array.from({ length: 30 }, (_, i) => ({ ...LIVE_PUBLISHED.history[1], id: `p${i}` }))).length, 20);
+  assert.deepEqual(M.historyRows(null), []);
+});
+
+test("liveNotice fires only when the live publication changed", () => {
+  assert.equal(M.liveNotice(null, LIVE_PUBLISHED), null, "the first read");
+  assert.equal(M.liveNotice(LIVE_PUBLISHED, { ...LIVE_PUBLISHED, scenes: [] }), null, "same id");
+  assert.equal(M.liveNotice(LIVE_APPROVED, LIVE_PUBLISHED, { nowMs: T0 * 1000 }), `The show changed: “Client Oct 22 v3 – warmer sunset” was published at ${hhmm(T0)} by Alon.`);
+  assert.equal(M.liveNotice(LIVE_PUBLISHED, LIVE_APPROVED), "The show changed: it runs the approved looks again.");
+  const reverted = { ...LIVE_APPROVED, current: { id: "p0004", kind: "approved", version: null, name: "approved", published_at: T0, by: "ops", changed: [], git_changed: false, version_exists: false } };
+  assert.equal(M.liveNotice(LIVE_PUBLISHED, reverted, { nowMs: T0 * 1000 }), `The show changed: it runs the approved looks again at ${hhmm(T0)} by ops.`);
+  assert.equal(M.liveNotice(LIVE_APPROVED, reverted), "The show changed: it runs the approved looks again at " + M.whenLine(T0) + " by ops.");
+});
+
+test("a version file round-trips; anything else is refused readably", () => {
+  const v = { id: "v0007", name: "Client Oct 22 v3 – warmer sunset", note: "warmer sunset", created_at: T0, parent: null, scenes: ["golden-hour"], drafts: { "golden-hour": LIVE_GOLDEN } };
+  const file = M.versionFile(v, "3f9a1c0e2b7d");
+  assert.deepEqual(Object.keys(file), ["kind", "format", "id", "name", "note", "created_at", "config_sha", "drafts"]);
+  assert.equal(file.config_sha, "3f9a1c0e2b7d");
+  const back = M.readVersionFile(JSON.stringify(file));
+  assert.deepEqual(back.drafts, v.drafts);
+  assert.deepEqual([back.name, back.note, back.configSha], [v.name, "from Client Oct 22 v3 – warmer sunset", "3f9a1c0e2b7d"]);
+  assert.ok(back.note.length <= 60);
+  assert.equal(M.fromNote("x".repeat(100)).length, 60);
+  assert.equal(M.fromNote(""), "from a version file");
+  assert.equal(M.versionFileName(v), "lab-version-v0007-client-oct-22-v3-warmer-sunset.json");
+  assert.match(M.readVersionFile("{nope").error, /isn’t JSON/);
+  assert.match(M.readVersionFile("").error, /empty/);
+  assert.match(M.readVersionFile("[]").error, /isn’t a Lab version/);
+  assert.match(M.readVersionFile(JSON.stringify({ name: "x" })).error, /no drafts/);
+  assert.match(M.readVersionFile(JSON.stringify({ ...file, kind: "something-else" })).error, /another kind/);
+  assert.match(M.readVersionFile(JSON.stringify({ ...file, drafts: { "coastal-tides": LIVE_GOLDEN } })).error, /draft for coastal-tides/);
+  assert.match(M.readVersionFile(" ".repeat(10) + "x".repeat(M.VERSION_FILE_MAX_BYTES)).error, /too large/);
+  assert.deepEqual(M.readVersionFile(JSON.stringify({ drafts: {} })).drafts, {}, "a version equal to approved");
+});
+
+test("ipadCards: the live catalog (names + swatches), else the approved one", () => {
+  const cards = M.ipadCards(LIVE_PUBLISHED, null);
+  assert.equal(cards.length, 6);
+  assert.deepEqual(cards[4], { id: "golden-hour", name: "Golden Hour", source: "published", palette: ["#FFDB9B", "#FFB38A", "#FF8FBF", "#E779B0", "#B59AE2"] });
+  const old = M.ipadCards(null, { scenes: [{ id: "golden-hour", name: "Golden Hour", approved: golden() }] });
+  assert.deepEqual(old, [{ id: "golden-hour", name: "Golden Hour", source: "approved", palette: golden().palette.map((c) => c.hex) }]);
+});
+
+test("repaintNote: the server's sentence, plus the B1 note only over commissioned slots", () => {
+  const info = CATALOG_ADD.scene.repaint;
+  assert.equal(M.repaintNote(info), info.sentence);
+  assert.equal(M.repaintNote({ ...info, available: false }), `${info.sentence} ${M.LIVE_COPY.repaintOff}`);
+  assert.equal(M.repaintNote({ ...info, available: false, commissioned: [] }), info.sentence, "nothing commissioned: nothing to repaint");
+  assert.equal(M.repaintNote(null), "");
+});
+
+test("the A/B side 'Live on the show' paints the live look; the eyebrow says a publish can reach the lights", () => {
+  const live = { "golden-hour": LIVE_GOLDEN };
+  assert.equal(M.presentDraft(M.LIVE, "golden-hour", { approved: { "golden-hour": golden() }, working: {}, versionDrafts: {}, live }), LIVE_GOLDEN);
+  assert.deepEqual(M.presentDraft(M.LIVE, "golden-hour", { approved: { "golden-hour": golden() }, working: {}, versionDrafts: {} }), golden());
+  assert.equal(M.entryLabel(M.LIVE, []), "Live on the show");
+  assert.equal(M.labEyebrow("ready", null, true), "DESIGN LAB · SCREEN ONLY UNTIL YOU APPLY OR PUBLISH");
+  assert.equal(M.labEyebrow("missing", null, true), "DESIGN LAB · SCREEN ONLY UNTIL YOU PUBLISH");
+  assert.equal(M.labEyebrow("ready", null), "DESIGN LAB · SCREEN ONLY UNTIL YOU APPLY");
+  assert.equal(M.publishedToast(LIVE_PUBLISHED), "Live now: “Client Oct 22 v3 – warmer sunset”");
+  assert.equal(M.publishedToast(LIVE_APPROVED, true), "Live on this simulator now: the approved looks");
+  assert.equal(M.labelList(["Module 1", "Module 2", "Module 3", "Module 5"]), "Modules 1–3 and 5");
+  assert.equal(M.labelList(["Module 1", "Spare"]), "Module 1 and Spare");
+});
+
+// ---- PR B review fixes (2026-10-17): UI-1, UI-4 ------------------------------------------------------------------------
+
+test("UI-1: the Show <scene> box starts on for a version, off for Undo and Revert (the recovery path)", () => {
+  assert.equal(M.publishShowDefault("version"), true);
+  assert.equal(M.publishShowDefault("approved"), false);
+  assert.equal(M.publishShowDefault("previous"), false);
+  // the ask carries it, so the server's sentence and cost are built for what Publish now sends
+  assert.deepEqual(M.publishBody({ version: "v0003", expected: "p0005", show: true }), { version: "v0003", expected_live: "p0005", show: true });
+  assert.deepEqual(M.publishBody({ version: "previous", expected: "p0005", show: false }), { version: "previous", expected_live: "p0005", show: false });
+});
+
+test("UI-4: the try-on line is true whatever the slots hold, and today names the published design it paints", () => {
+  assert.doesNotMatch(M.TRIAL_COPY.painted, /approved/);
+  assert.match(M.TRIAL_COPY.painted, /never writes the slots/);
+  const p = preview();
+  const published = { ...p, today: { ...p.today, heads: "published", note: "The slots hold the published painted design, …" } };
+  assert.equal(
+    M.tierCaption("today", published),
+    `What this simulator shows · Module level (one colour per strand) · ${M.HEADS_PUBLISHED_CAPTION}`,
+  );
+  assert.equal(M.stageState("today", published, "draft"), "published design");
+  assert.equal(M.BADGE_TEXT[M.stageState("today", published, "draft")], "Published design");
+  assert.equal(M.stageState("today", published, "in try-on"), "in try-on");
+  assert.ok(M.slotHeads(published.today) && !M.slotHeads({ heads: "draft" }));
 });

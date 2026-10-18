@@ -21,6 +21,9 @@ are 2-D designs now (D63), so it asks the Conductor for the design instead and p
   - `ladder`: the mode's techniques in order; its first is what the show tries first (`modules` for the
     modules-first scenes, so the Studio opens those at module level).
 
+- `GET /api/canopy/scenes` → the six scenes' palette, name, mood, description and brightness as the show runs them
+  (the live looks), with the install `generation` (the Studio's chips, tiles and copy; see `scenes_json`).
+
 It reads config only: no engine, no device, no registry (a position draws the design whether or not a device is
 registered there). Ops only: the auth middleware already keeps kiosk and tester out of /api/canopy/*.
 """
@@ -48,7 +51,17 @@ _SLOT = "custom-3"  # any slot: only the frame's entries matter to the per-head 
 
 
 def _context(services: Any) -> CompileContext:
-    return CompileContext(registry=[], capabilities={}, config_dir=services.config_dir)
+    """The design context over the show's live looks (D68: approved or published), read once per request."""
+    from conductor.looks.live import live_trio
+
+    trio = live_trio(services)
+    return CompileContext(
+        registry=[],
+        capabilities={},
+        modes=trio.modes,
+        recipes=trio.recipes,
+        config_dir=services.config_dir,
+    )
 
 
 def _design_canvas(mode: Any) -> tuple[Any, str | None]:
@@ -131,3 +144,37 @@ def design(
     if body is None:
         raise HTTPException(status_code=404, detail=f"There is no mode called {mode!r}.")
     return JSONResponse(body, headers=NO_STORE)
+
+
+def scenes_json(services: Any) -> dict:
+    """The six scenes as the show runs them now (the live looks, D68: approved or published), for the Studio's
+    palette chips, scene tiles and copy: `{generation, live_id, scenes: [{id, name, mood, description, brightness,
+    default_solid, palette: [{name, hex}], source}]}`. `generation` moves on every install of new looks, so an open
+    Studio knows its cached designs are stale. A read of config only: no engine, no device."""
+    from conductor.looks.live import live_looks, scene_source
+
+    looks = live_looks(services)
+    generation = looks.generation  # read before the trio: a racing install is seen as stale, never as current
+    trio = looks.trio
+    return {
+        "generation": generation,
+        "live_id": looks.live_id,
+        "scenes": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "mood": s.mood,
+                "description": s.description,
+                "brightness": s.brightness_draft,
+                "default_solid": s.default_solid,
+                "palette": [{"name": c.name, "hex": c.hex} for c in s.palette],
+                "source": scene_source(looks, s.id),
+            }
+            for s in trio.scenes.scenes
+        ],
+    }
+
+
+@router.get("/api/canopy/scenes")
+def scenes(request: Request, _ops: Ops) -> JSONResponse:
+    return JSONResponse(scenes_json(services_of(request)), headers=NO_STORE)

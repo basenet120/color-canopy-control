@@ -486,73 +486,91 @@ def _commissioned(slot: str = "custom-3", origin: str = "api") -> SimpleNamespac
     return SimpleNamespace(canopy_modules=lambda: entries)
 
 
-def test_t1_lock_refuses_design_edits_after_commissioning_on_live_only(tmp_path):
+def test_the_app_lock_refuses_design_edits_where_a_slot_is_hand_painted(tmp_path):
+    """D68 supersedes D66's T1 lock: a painted design change is refused only where a module's slot is hand-painted in
+    the app (the iPad would describe colours the lights don't show), on any runtime; names, brightness, the solid,
+    copy and stepped timing stay editable (a rename keeps the frames and the slot hash)."""
+    for simulated in (False, True):
+        lab = make_lab(tmp_path, simulated=simulated, registry=_commissioned(origin="app"))
+        lock = P.t1_lock(lab, "golden-hour")
+        assert lock["locked"] is True and lock["slot"] == "custom-3" and lock["positions"] == []
+        assert lock["sentence"] == P.app_lock_sentence(lab, "golden-hour", P.slot_records(lab, "custom-3")[1])
+        assert lock["sentence"].startswith(
+            "Golden Hour's slot is hand-painted in the Hubspace app on 9 modules ("
+        )
+        assert lock["repaint"]["app"] == list(D.GRID) and lock["repaint"]["available"] is False
+        for changes, field in (
+            ({"palette.2.hex": NEW_PINK}, "palette"),
+            ({"layout": {"kind": "linear", "angle_deg": 30}}, "layout"),
+        ):
+            with pytest.raises(P.T1Locked) as exc:
+                P.preview(lab, edit("golden-hour", **changes))
+            assert exc.value.field == field and exc.value.detail == lock["sentence"]
+        P.preview(lab, edit("golden-hour", **{"palette.1.name": "Apricot"}))
+        swapped = D.seed_draft(lab.approved, "golden-hour").model_dump(mode="json")["palette"]
+        swapped[0], swapped[1] = swapped[1], swapped[0]  # a reorder moves the frames: locked
+        with pytest.raises(P.T1Locked) as exc:
+            P.preview(lab, edit("golden-hour", palette=swapped))
+        assert exc.value.field == "palette"
+        P.preview(
+            lab,
+            edit(
+                "golden-hour",
+                brightness=60,
+                solid=0,
+                name="Golden Glow",
+                stepped={"direction": "forward", "steps_per_cycle": 8, "step_s": 6, "run_s": 60},
+            ),
+        )
+        assert P.t1_lock(lab, "rainbow-row-sunset")["locked"] is False  # its slot isn't painted here
+        assert P.t1_lock(lab, "coastal-tides") == {
+            "locked": False,
+            "simulated": simulated,
+            "slot": None,
+            "positions": [],
+            "sentence": None,
+            "repaint": None,
+        }
+
+
+def test_commissioned_api_slots_warn_in_the_preview_but_never_refuse_it(tmp_path):
+    """B1: where the slot is commissioned (api), a painted design change is refused at publish (repainting from the
+    Lab is PR B2) — the preview and the save only warn."""
     lab = make_lab(tmp_path, simulated=False, registry=_commissioned())
     lock = P.t1_lock(lab, "golden-hour")
-    assert lock["locked"] is True and lock["slot"] == "custom-3" and lock["positions"] == list(D.GRID)
-    assert lock["sentence"] == f"Golden Hour: {P.T1_LOCKED}."
-    for changes, field in (
-        ({"palette.2.hex": NEW_PINK}, "palette"),
-        ({"layout": {"kind": "linear", "angle_deg": 30}}, "layout"),
-    ):
-        with pytest.raises(P.T1Locked) as exc:
-            P.preview(lab, edit("golden-hour", **changes))
-        assert exc.value.field == field and exc.value.detail == lock["sentence"]
-    # a colour's name, brightness, the solid, the client copy and the stepped timing stay editable: a rename keeps
-    # the frames and the slot hash (no repaint), so the lock never claims it needs one
-    P.preview(lab, edit("golden-hour", **{"palette.1.name": "Apricot"}))
-    swapped = D.seed_draft(lab.approved, "golden-hour").model_dump(mode="json")["palette"]
-    swapped[0], swapped[1] = swapped[1], swapped[0]  # a reorder moves the frames: locked
-    with pytest.raises(P.T1Locked) as exc:
-        P.preview(lab, edit("golden-hour", palette=swapped))
-    assert exc.value.field == "palette"
-    P.preview(
-        lab,
-        edit(
-            "golden-hour",
-            brightness=60,
-            solid=0,
-            name="Golden Glow",
-            stepped={"direction": "forward", "steps_per_cycle": 8, "step_s": 6, "run_s": 60},
-        ),
-    )
-    # a slot nobody commissioned, a module-level scene, an app-painted slot: no lock
-    assert P.t1_lock(lab, "rainbow-row-sunset")["locked"] is False
-    assert P.t1_lock(lab, "coastal-tides") == {
-        "locked": False,
-        "simulated": False,
-        "slot": None,
-        "positions": [],
-        "sentence": None,
-    }
-    painted = make_lab(tmp_path, simulated=False, registry=_commissioned(origin="app"))
-    assert P.t1_lock(painted, "golden-hour")["locked"] is False
+    assert lock["locked"] is False and lock["sentence"] is None and lock["positions"] == list(D.GRID)
+    info = lock["repaint"]
+    assert info["commissioned"] == list(D.GRID) and info["total"] == 9 and info["available"] is False
+    assert info["eligible"] == 0  # no module has its own Gate C here (no t1_frames proven)
+    assert info["sentence"].startswith("Golden Hour's painted design is in custom-3 on 9 modules; repainting")
+    answer = P.preview(lab, edit("golden-hour", **{"palette.2.hex": NEW_PINK}))
+    [warning] = [w for w in answer["warnings"] if w["rule"] == "repaint"]
+    assert warning["field"] == "palette" and "isn't on this box yet" in warning["message"]
+    renamed = P.preview(lab, edit("golden-hour", **{"palette.1.name": "Apricot"}))
+    assert not [w for w in renamed["warnings"] if w["rule"] == "repaint"]  # no frame change: no repaint
 
 
-def test_the_t1_lock_reads_the_engines_records_when_it_runs(tmp_path):
+def test_the_slot_records_read_the_engines_view_when_it_runs(tmp_path):
     engine = SimpleNamespace(
         recorded_slot=lambda device_id, slot: (
-            {"hash": "h", "origin": "api", "effects": None} if device_id.endswith("r1c1") else None
+            {"hash": "h", "origin": "app", "effects": None} if device_id.endswith("r1c1") else None
         )
     )
     lab = make_lab(tmp_path, simulated=False, engine=engine)
-    assert P.t1_lock(lab, "golden-hour")["positions"] == ["r1c1"]
+    assert P.t1_lock(lab, "golden-hour")["repaint"]["app"] == ["r1c1"]
     with pytest.raises(P.T1Locked):
-        P.check_t1_lock(lab, edit("golden-hour", **{"palette.0.hex": "#FFFFFF"}))
+        P.check_app_lock(lab, edit("golden-hour", **{"palette.0.hex": "#FFFFFF"}))
 
 
-def test_the_t1_lock_is_never_on_in_the_simulator(tmp_path):
-    lab = make_lab(tmp_path, simulated=True, registry=_commissioned())
-    lock = P.t1_lock(lab, "golden-hour")
-    assert lock == {
-        "locked": False,
-        "simulated": True,
-        "slot": "custom-3",
-        "positions": [],
-        "sentence": P.SIM_LOCK_SENTENCE,
-    }
-    P.check_t1_lock(lab, edit("golden-hour", **DONE_MEANS))  # no T1Locked
-    assert P.preview(lab, edit("golden-hour", **DONE_MEANS))["t1_lock"] == lock
+def test_no_records_means_no_lock_and_no_repaint(tmp_path):
+    for simulated, where in ((True, "in this simulator"), (False, "on this show box")):
+        lab = make_lab(tmp_path, simulated=simulated)
+        lock = P.t1_lock(lab, "golden-hour")
+        assert lock["locked"] is False and lock["positions"] == []
+        assert lock["repaint"]["sentence"] == f"No slot repaint: no module has custom-3 commissioned {where}."
+        assert lock["repaint"]["available"] is True
+        P.check_app_lock(lab, edit("golden-hour", **DONE_MEANS))  # no T1Locked
+        assert P.preview(lab, edit("golden-hour", **DONE_MEANS))["t1_lock"] == lock
 
 
 def test_an_unknown_scene_is_a_draft_error_not_a_crash(tmp_path):

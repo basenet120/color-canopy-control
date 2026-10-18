@@ -1,0 +1,13 @@
+{
+  "live": {"source": "published", "simulated": false, "fallback": false, "problem": null},
+  "report": {
+    "id": "p0004",
+    "sent": 2,
+    "repick": true,
+    "ended_trial": false,
+    "copies": ["live looks", "show modes", "show recipes", "rehearsal designs", "T1 plans", "design lab"],
+    "held": ["golden-hour"],
+    "repaint": []
+  },
+  "state": {"mode": "golden-hour", "tier": "modules"}
+}

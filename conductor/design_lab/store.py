@@ -33,7 +33,6 @@ the contracts commit (L); the rest is stream S2's.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import re
@@ -52,15 +51,18 @@ from conductor.clock import Clock
 from conductor.config import ConductorSettings
 from conductor.design_lab import draft as D
 from conductor.design_lab.draft import ConfigTrio, Problem, SceneDraft
+from conductor.looks import live as _live
 from conductor.telemetry import Telemetry
 from conductor.tokens import atomic_write
 
 log = logging.getLogger(__name__)
 
 LOOKS_FILE = "looks.yaml"
+# config_sha and CONFIG_FILES moved to conductor/looks/live.py (D68: the show reads them too); re-exported
+CONFIG_FILES = _live.CONFIG_FILES
+config_sha = _live.config_sha
 MAX_VERSIONS = 200
 MAX_BYTES = 1_000_000
-CONFIG_FILES = ("scenes.yaml", "modes.yaml", "recipes.yaml")
 READ_ONLY = "The Lab's store couldn't be set aside: {reason}; saved versions are kept as they are."
 NOT_SAVED = "The Lab couldn't save overrides/looks.yaml ({reason}); nothing was changed."
 CORRUPT_ALERT = (
@@ -607,11 +609,3 @@ def default_name(note: str, now: float, existing: Iterable[str], *, issued: int 
     base = f"Client {mon} {day} v{max([*used, issued], default=0) + 1}"
     room = 80 - len(base) - 3  # Version.name is at most 80 characters
     return f"{base} – {note[:room]}" if note else base
-
-
-def config_sha(config_dir: Path) -> str:
-    """sha256[:12] of config/{scenes,modes,recipes}.yaml's bytes, in that order: what a version was saved against."""
-    h = hashlib.sha256()
-    for name in CONFIG_FILES:
-        h.update((Path(config_dir) / name).read_bytes())
-    return h.hexdigest()[:12]

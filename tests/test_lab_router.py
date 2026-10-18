@@ -24,6 +24,7 @@ SLICE_A = {
     ("GET", "/api/lab/export"),
 }
 SLICE_B = {("GET", "/api/lab/trial"), ("POST", "/api/lab/trial/start"), ("POST", "/api/lab/trial/stop")}  # B1
+LIVE_LAB = {("GET", "/api/lab/live"), ("POST", "/api/lab/publish")}  # D68 (PR B)
 
 
 def draft_json(scene_id: str) -> dict:
@@ -82,8 +83,8 @@ def test_the_router_is_mounted_with_every_slice_a_route_behind_ops_and_the_same_
         return out
 
     routes = _lab_routes()
-    assert {(m, r.path) for r in routes for m in r.methods} == SLICE_A | SLICE_B
-    assert _mounted() == SLICE_A | SLICE_B
+    assert {(m, r.path) for r in routes for m in r.methods} == SLICE_A | SLICE_B | LIVE_LAB
+    assert _mounted() == SLICE_A | SLICE_B | LIVE_LAB
     for route in routes:
         assert isinstance(route, LabRoute)
         deps = [c for c in calls(route.dependant) if c is not None]
@@ -213,12 +214,12 @@ def test_the_studio_and_ops_link_to_the_lab(app_client):
     studio = app_client.get("/ops/showcase/")
     assert studio.status_code == 200
     html = studio.text
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-5">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-7">' in html
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert html.index('id="lab-link"') < html.index('id="guest-panel-link"')
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert html.index('id="lab" class="lab"') < html.index("</main>")
-    assert html.index('src="./studio.js?v=screen-1"') < html.index('src="./lab.js?v=lab-5"')
+    assert html.index('src="./studio.js?v=screen-2"') < html.index('src="./lab.js?v=lab-7"')
     for asset in ("lab.js", "lab.css", "lab-model.mjs"):
         assert app_client.get(f"/ops/showcase/{asset}").status_code == 200, asset
     ops = app_client.get("/ops/").text

@@ -119,11 +119,17 @@ test('studio.js loads the design for the scene, views it at S.level and paints t
   const js=readFileSync(new URL('../web/ops/showcase/studio.js',import.meta.url),'utf8').replace(/(^|\s)\/\/.*$/gm,'');
   const body=name=>{const i=js.indexOf('function '+name+'(');assert.ok(i>=0,name+' is missing');const j=js.indexOf('\nfunction ',i+1);return js.slice(i,j<0?undefined:j);};
   assert.match(body('sceneView'),/return sceneDesignView\(designs\.get\(S\.scene\),S\.level\);/);
-  assert.match(body('loadDesign'),/designs\.set\(id,await api\('\/api\/canopy\/design\?mode='\+encodeURIComponent\(id\)\)\)/);
+  assert.match(body('loadDesign'),/design=await api\('\/api\/canopy\/design\?mode='\+encodeURIComponent\(id\)\);/);
+  // a design read across a publish (the generation moved while it loaded) is read again, never cached stale
+  assert.match(body('loadDesign'),/if\(epoch!==designEpoch\)\{loadDesign\(id\);return;\}\s*designs\.set\(id,design\);/);
+  // the scenes are the show's live looks (GET /api/canopy/scenes); a newer generation drops every cached design
+  assert.match(body('loadScenes'),/next=liveScenes\(SCENES,await api\('\/api\/canopy\/scenes'\)\)/);
+  assert.match(body('loadScenes'),/if\(changed\)\{designEpoch\+\+;designs\.clear\(\);\}/);
+  assert.match(body('selectedScene'),/LIVE\.scenes\.find/);
   assert.match(body('selectScene'),/S\.scene=id;[^\n]*loadDesign\(id\);/);
   const scene=body('renderCanopy');
   assert.match(scene,/view=sceneView\(\)/);
-  assert.match(scene,/const painters=scenePainters\(view,S\.scene,canopyView\.layout\.width\);\s*paintCanopy\(canopyView,painters\.head,painters\.spill,brightness\);/);
+  assert.match(scene,/const painters=view\.paint\?scenePainters\(view,S\.scene,canopyView\.layout\.width\):palettePainters\(selectedScene\(\),canopyView\.layout\.width\);\s*paintCanopy\(canopyView,painters\.head,painters\.spill,brightness\);/);
   assert.equal((js.match(/paintCanopy\(/g)||[]).length,1,'the Studio paints once, through scenePainters (D67: it is screen only)');
   assert.match(js,/\$\('design-level'\)\.addEventListener\('click',\(\)=>\{S\.level=nextDesignLevel\(sceneView\(\)\);/);
 });

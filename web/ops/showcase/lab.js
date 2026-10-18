@@ -10,13 +10,18 @@
 // The Motion preview (Slice C, PLAN §7) is screen only too: it plays the server's compiled stepped steps at the
 // Conductor's own pace and lands the server's ripple rings at a chosen stagger; it never touches
 // motion.stepped.live_enabled or kiosk.ripple_stagger_s (the Lab shows where each stands and has no control for either).
+// The live show (docs/live-lab/PLAN.md §3, D68): the show bar says what the show runs (GET /api/lab/live: the approved
+// looks or a published version), each scene says whether its live look is approved or published and whether the
+// working draft is that look; "Publish to the show" / "Save & publish" / Undo / Revert POST /api/lab/publish, and the
+// SERVER answers with its confirm sentence and cost first, gates the publish and installs it. Nothing here writes to
+// a light any other way, and no publish state is kept in this browser (only working drafts and UI prefs).
 
 import { api as baseApi, connectLive, copyJSON } from "/static/app.js";
 import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-3";
-import * as M from "./lab-model.mjs?v=lab-5";
+import * as M from "./lab-model.mjs?v=lab-7";
 
 const API = "/api/lab";
-const UI_KEY = "lab-ui"; // remembered scene / view / angle (not a draft key: staleDraftKeys never matches it)
+const UI_KEY = "lab-ui"; // remembered scene / view / angle / the publisher's name (not a draft key: staleDraftKeys never matches it)
 const CACHE_MAX = 80;
 
 // ---- small DOM helpers ------------------------------------------------------------------------------------------------
@@ -114,6 +119,24 @@ const L = {
     key: "",
     ripple: { stagger: M.RIPPLE_DEFAULT_S, since: null }, // since: performance.now() when the ripple started
   },
+  // the live show (GET /api/lab/live; never kept in the browser: every read is the server's)
+  live: null, // LiveJSON (PLAN §2.11) | null
+  liveKey: "", // the last read, as compared between polls
+  liveApi: "loading", // loading | ready | missing | unreachable | error
+  liveReadAt: 0, // Date.now() when `live` was read (queued repaints count down from it)
+  liveLooks: {}, // scene → the look the show runs (catalog live_look; approved on a server without publishing)
+  livePoll: null,
+  liveWatching: false,
+  historyOpen: false,
+  who: "", // the publisher's name (a UI pref, sent as `who`)
+  publish: {
+    busy: false, // a publish request is on its way: every Publish button waits
+    dialog: null, // {version, kind, name, expected, view (publishDialog), conflict, changed, waitS, waitAt}
+    clock: null,
+    marks: {}, // scene → the server's sentence that refused a publish for it (a `field` 409), until the next publish
+    stale: {}, // version id → the 422/stale sentence: the version doesn't apply to the show's config
+  },
+  toastTimer: null,
 };
 
 /** Every Lab call: the shared api() plus a look at which approved config the Conductor answered from. */
@@ -274,7 +297,8 @@ async function boot() {
   }
   L.catalog = catalog;
   for (const s of catalog.scenes) L.approved[s.id] = s.approved;
-  const [state, versions] = await Promise.allSettled([api(`${API}/state`), api(`${API}/versions`)]);
+  setLiveLooks(catalog);
+  const [state, versions] = await Promise.allSettled([api(`${API}/state`), api(`${API}/versions`), refreshLive({ render: false })]);
   if (state.status === "fulfilled") {
     L.state = state.value;
     setAlert("store", M.alertFor(state.value));
@@ -283,11 +307,12 @@ async function boot() {
   else setAlert("versions", M.alertFor(versions.reason));
   const current = (state.status === "fulfilled" && state.value.current) || (versions.status === "fulfilled" && versions.value.current) || null;
   L.selected = null;
-  for (const id of order()) L.base[id] = clone(L.approved[id]);
+  // no version opened: each scene starts from the show's live look (a published look, or approved)
+  for (const id of order()) L.base[id] = clone(M.seedFor(sceneOf(id)));
   if (current) {
     try {
       const drafts = await versionDrafts(current);
-      for (const [id, d] of Object.entries(drafts)) if (L.base[id]) L.base[id] = d;
+      for (const id of order()) L.base[id] = clone(M.seedFor(sceneOf(id), null, { versionDraft: drafts[id], fromVersion: true }));
       L.selected = current;
     } catch (err) {
       setAlert("versions", `The current version ${current} couldn't be opened: ${M.alertFor(err)}`);
@@ -298,11 +323,18 @@ async function boot() {
   L.scene = order().includes(ui.scene) ? ui.scene : order()[0];
   if (M.VIEWS.includes(ui.view)) L.view = ui.view;
   if (ui.angle === "plan") L.angle = "plan";
+  L.who = M.whoValue(ui.who);
   buildLab();
   renderAll();
   schedulePreview();
   prefetchApproved();
   startTrialWatch();
+  startLiveWatch({ fresh: false });
+}
+
+/** The look the show runs for each scene, from the catalog (live_look; approved on a server without publishing). */
+function setLiveLooks(catalog) {
+  for (const s of (catalog && catalog.scenes) || []) L.liveLooks[s.id] = M.liveLookOf(s);
 }
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -338,13 +370,16 @@ function persist(id) {
 }
 
 function rememberUi() {
-  store((s) => s.setItem(UI_KEY, JSON.stringify({ scene: L.scene, view: L.view, angle: L.angle })));
+  store((s) => s.setItem(UI_KEY, JSON.stringify({ scene: L.scene, view: L.view, angle: L.angle, who: L.who || undefined })));
 }
 
 function prefetchApproved() {
-  for (const id of order()) requestPreview(L.approved[id]).then(() => {
-    if (L.ab.on) renderStage();
-  });
+  for (const id of order()) {
+    const looks = [L.approved[id], ...(M.draftEquals(L.liveLooks[id], L.approved[id]) ? [] : [L.liveLooks[id]])];
+    for (const d of looks) requestPreview(d).then(() => {
+      if (L.ab.on) renderStage();
+    });
+  }
 }
 
 // ---- editing ------------------------------------------------------------------------------------------------------------
@@ -384,17 +419,21 @@ function undo() {
   renderAll();
 }
 
-function revertToApproved() {
+/** Reset the scene's working draft (client only, never a publish): to the look the show runs, or to approved (git). */
+function resetDraft(to) {
   const id = L.scene;
-  if (M.draftEquals(L.working[id], L.approved[id])) {
-    setNotice(`${sceneName(id)} is already the approved design.`);
+  const target = to === "live" ? L.liveLooks[id] : L.approved[id];
+  const what = to === "live" ? "the show’s look" : "the approved design (git)";
+  if (!target) return;
+  if (M.draftEquals(L.working[id], target)) {
+    setNotice(`${sceneName(id)} is already ${what}.`);
     return;
   }
-  if (!M.draftEquals(L.working[id], L.base[id]) && !window.confirm(`Revert ${sceneName(id)} to approved? Your unsaved changes to it are kept in Undo.`)) return;
+  if (!M.draftEquals(L.working[id], L.base[id]) && !window.confirm(`Reset ${sceneName(id)} to ${what}? Your unsaved changes to it are kept in Undo.`)) return;
   L.undo[id] = M.undoPush(L.undo[id], L.working[id]);
-  L.working[id] = clone(L.approved[id]);
+  L.working[id] = clone(target);
   setAlert("save", null);
-  setNotice(`${sceneName(id)} reverted to approved (Undo brings your edit back).`);
+  setNotice(`${sceneName(id)} reset to ${what} (Undo brings your edit back). Nothing was published.`);
   persist(id);
   rebuildEditor();
   schedulePreview();
@@ -659,6 +698,7 @@ function buildLab() {
   const tabs = h("div", { class: "lab-tabs", role: "tablist", "aria-label": "What the stage shows" });
   el.replaceChildren(
     header(),
+    showBarEl(),
     h("div", { id: "lab-alert", class: "lab-alert", role: "alert", hidden: true }),
     h(
       "section",
@@ -674,18 +714,40 @@ function buildLab() {
           h("input", { id: "lab-note", class: "lab-input", maxlength: 60, placeholder: "Note, e.g. warmer sunset", autocomplete: "off" }),
           h("button", { class: "lab-btn primary", type: "submit", text: "Save version" }),
         ),
+        h("button", { class: "lab-btn publish", type: "button", dataset: { publish: "bar" }, onclick: () => publishWorking(), text: M.PUBLISH }),
         h("button", { id: "lab-export-open", class: "lab-btn", type: "button", text: "Export" }),
         h("button", { id: "lab-back", class: "lab-btn quiet", type: "button", text: "Back to previous version" }),
         h("button", { id: "lab-all-approved", class: "lab-btn quiet", type: "button", text: "Back to all approved" }),
         h("button", { id: "lab-version-summary", class: "lab-btn", type: "button", "aria-expanded": "false", "aria-controls": "lab-versions-ol", text: "Saved versions" }),
       ),
+      h(
+        "div",
+        { class: "lab-versions-files" },
+        h("button", { id: "lab-download", class: "lab-btn small", type: "button", text: "Download version" }),
+        h("button", { id: "lab-open-file", class: "lab-btn small", type: "button", "aria-controls": "lab-file", title: "Add a version downloaded from another Lab (laptop, staging, the show box); it is checked like any save", text: "Open a version file" }),
+        h("label", { class: "sr-only", for: "lab-file", text: "A Lab version file (.json)" }),
+        h("input", { id: "lab-file", class: "sr-only", type: "file", accept: ".json,application/json", tabindex: "-1" }),
+        h("small", { class: "lab-muted", text: "A version file carries a version between the laptop, staging and the show box; it is checked like any save." }),
+      ),
+      h("p", { id: "lab-publish-why", class: "lab-publish-why" }),
       h("p", { id: "lab-notice", class: "lab-notice", role: "status", "aria-live": "polite" }),
       h("ol", { id: "lab-versions-ol", class: "lab-version-list", hidden: true }),
     ),
     h(
       "div",
       { class: "lab-grid" },
-      h("nav", { class: "lab-scenes", "aria-label": "Scenes" }, h("ul", { id: "lab-scene-list" })),
+      h(
+        "nav",
+        { class: "lab-scenes", "aria-label": "Scenes" },
+        h("ul", { id: "lab-scene-list" }),
+        h(
+          "section",
+          { id: "lab-ipad", class: "lab-ipad", "aria-label": "What the iPad shows" },
+          h("span", { class: "eyebrow", text: "ON THE IPAD NOW" }),
+          h("ul", { id: "lab-ipad-cards", class: "lab-ipad-cards" }),
+          h("p", { class: "lab-ipad-note", text: M.LIVE_COPY.ipad }),
+        ),
+      ),
       h(
         "section",
         { class: "lab-stage-col", "aria-label": "Preview" },
@@ -710,8 +772,11 @@ function buildLab() {
     ),
     presentOverlay(),
     exportDialog(),
+    publishDialogEl(),
+    h("div", { id: "lab-toast", class: "lab-toast", role: "status", "aria-live": "polite", hidden: true }),
   );
   $("#lab-sim").hidden = !L.catalog.simulated;
+  wireLive();
   $("#lab-present-open").disabled = false;
   $("#lab-present-open").addEventListener("click", openPresent);
   $("#lab-save").addEventListener("submit", async (e) => {
@@ -772,19 +837,53 @@ function renderSceneList() {
   ul.replaceChildren(
     ...order().map((id) => {
       const d = L.working[id];
-      const state = M.draftState(L.approved[id], d, trial());
+      // two badges: what the show runs for this scene (approved or published), and the working draft against it
+      const state = M.workingState(d, L.liveLooks[id], trial());
+      const live = M.liveBadge(sceneOf(id), liveScene(id));
+      const held = !!(liveScene(id) && liveScene(id).held);
       const unsaved = !M.draftEquals(d, L.base[id]);
+      const marked = !!L.publish.marks[id];
       const strip = h("span", { class: "lab-strip", "aria-hidden": "true" }, (d.palette || []).map((c) => h("i", { style: `background:${c.hex}` })));
       const btn = h(
         "button",
-        { type: "button", class: "lab-scene", "aria-current": id === L.scene ? "true" : null, onclick: () => selectScene(id) },
+        { type: "button", class: marked ? "lab-scene is-refused" : "lab-scene", "aria-current": id === L.scene ? "true" : null, onclick: () => selectScene(id) },
         strip,
         h("span", { class: "lab-scene-text" }, h("strong", { text: d.name }), h("small", { text: d.mood })),
-        h("span", { class: `lab-badge ${state.replace(/\s/g, "-")}`, text: M.BADGE_TEXT[state] }),
+        h(
+          "span",
+          { class: "lab-badges" },
+          h("span", { class: `lab-live-badge ${live.toLowerCase()}`, title: held ? "Shows at module level until its slots are repainted" : `The show runs the ${live.toLowerCase()} look`, text: `Live: ${live}${held ? " · held" : ""}` }),
+          h("span", { class: `lab-badge ${state.replace(/\s/g, "-")}`, title: state === "draft" ? "The working draft differs from what the show runs" : null, text: M.WORKING_TEXT[state] }),
+        ),
         unsaved ? h("span", { class: "lab-dot", title: "Unsaved changes", "aria-label": "Unsaved changes" }) : null,
       );
       return h("li", {}, btn);
     }),
+  );
+}
+
+/** LiveJSON's entry for a scene (what the iPad shows; `held`), or null. */
+function liveScene(id) {
+  return (L.live && Array.isArray(L.live.scenes) && L.live.scenes.find((s) => s.id === id)) || null;
+}
+
+/** "On the iPad now": the six cards as the live catalog has them (never a draft or a try-on). */
+function renderIpadStrip() {
+  const ul = $("#lab-ipad-cards");
+  if (!ul) return;
+  const cards = M.ipadCards(L.liveApi === "ready" ? L.live : null, L.catalog);
+  const key = JSON.stringify(cards);
+  if (ul.dataset.key === key) return;
+  ul.dataset.key = key;
+  ul.replaceChildren(
+    ...cards.map((c) =>
+      h(
+        "li",
+        { class: c.source === "published" ? "published" : null, title: c.source === "published" ? "Published look" : "Approved look" },
+        h("span", { class: "lab-ipad-swatches", "aria-hidden": "true" }, c.palette.map((hex) => h("i", { style: `background:${hex}` }))),
+        h("span", { text: c.name }),
+      ),
+    ),
   );
 }
 
@@ -806,12 +905,17 @@ function renderVersionsBar() {
   for (const b of document.querySelectorAll("#lab-back, #lab-all-approved")) b.disabled = readOnly;
   for (const b of document.querySelectorAll("#lab-save button")) b.disabled = readOnly || L.saving;
   exp.disabled = L.saving;
+  renderPublishButtons();
+  $("#lab-download").disabled = !L.selected;
+  $("#lab-download").title = L.selected ? `Download ${M.entryLabel(L.selected, L.versions)} as a version file` : "Save or open a version first";
+  $("#lab-open-file").disabled = readOnly || L.saving;
   $("#lab-version-summary").textContent = `Saved versions (${L.versions.length})`;
+  const liveVersion = L.live && L.live.source === "published" && L.live.current ? L.live.current.version : null;
   const ol = $("#lab-versions-ol");
   ol.replaceChildren(
-    ...(L.versions.length ? [] : [h("li", { class: "lab-muted", text: "No saved versions yet. Save one to compare it, present it or export it." })]),
+    ...(L.versions.length ? [] : [h("li", { class: "lab-muted", text: "No saved versions yet. Save one to compare it, present it, publish it or export it." })]),
     ...L.versions.map((v) => {
-      const flags = M.versionFlags(v);
+      const flags = [...(v.id === liveVersion ? ["Live on the show"] : []), ...M.versionFlags(v), ...(L.publish.stale[v.id] && !v.stale ? ["Stale"] : [])];
       const actions = v.unreadable
         ? [h("span", { class: "lab-muted", text: v.error || "This version couldn't be read; it is kept in the file as it is." })]
         : [
@@ -819,6 +923,7 @@ function renderVersionsBar() {
             h("button", { type: "button", class: "lab-btn small", onclick: () => compareAs("a", v.id), text: "As A" }),
             h("button", { type: "button", class: "lab-btn small", onclick: () => compareAs("b", v.id), text: "As B" }),
             h("button", { type: "button", class: "lab-btn small", onclick: () => openExport(v.id), text: "Export" }),
+            h("button", { type: "button", class: "lab-btn small", onclick: () => downloadVersion(v.id), text: "Download" }),
             h("button", { type: "button", class: "lab-btn small danger", disabled: readOnly, onclick: () => deleteVersion(v.id), text: "Delete" }),
           ];
       return h(
@@ -829,13 +934,50 @@ function renderVersionsBar() {
           { class: "lab-version-text" },
           h("strong", { text: v.name || v.id }),
           h("small", { text: [M.versionDate(v.created_at), (v.scenes || []).map((s) => (sceneOf(s) ? sceneOf(s).name : s)).join(", ") || "no scene changed"].filter(Boolean).join(" · ") }),
-          flags.length ? h("span", { class: "lab-flags" }, flags.map((f) => h("span", { class: "lab-flag", text: f }))) : null,
+          flags.length ? h("span", { class: "lab-flags" }, flags.map((f) => h("span", { class: f === "Live on the show" ? "lab-flag live" : "lab-flag", text: f }))) : null,
           (v.problems || []).length ? h("small", { class: "lab-warning", text: v.problems.map((p) => p.message).join(" ") }) : null,
+          L.publish.stale[v.id] && !(v.problems || []).length ? h("small", { class: "lab-warning", text: L.publish.stale[v.id] }) : null,
         ),
         h("div", { class: "lab-version-actions" }, actions),
       );
     }),
   );
+}
+
+/** The one Publish button (versions bar and editor header): its label, whether it can send, and why not. */
+function publishState() {
+  return M.publishAction({
+    working: L.working,
+    base: L.base,
+    approved: L.approved,
+    liveLooks: L.liveLooks,
+    order: order(),
+    selected: L.selected,
+    api: L.liveApi,
+    writable: !(L.live && L.live.writable === false),
+    readOnly: !!(L.state && L.state.store && L.state.store.read_only),
+    busy: L.publish.busy || L.saving,
+    simulated: isSimulated(),
+  });
+}
+
+function isSimulated() {
+  return L.live && typeof L.live.simulated === "boolean" ? L.live.simulated : !!(L.catalog && L.catalog.simulated);
+}
+
+function renderPublishButtons() {
+  const a = publishState();
+  for (const b of document.querySelectorAll("[data-publish]")) {
+    b.textContent = L.publish.busy ? "Publishing…" : a.label;
+    b.disabled = !a.enabled;
+    b.title = a.why || (a.save ? "Saves the working drafts as a version (with the note), then asks the server to publish it" : "The server says what changes and what it costs before anything is sent");
+    b.classList.toggle("is-live", a.label === M.LIVE_NOW);
+  }
+  const why = $("#lab-publish-why");
+  if (why) {
+    // only the reasons a person can act on or should know (not "Live now", which the button itself says)
+    why.textContent = a.enabled || a.label === M.LIVE_NOW ? "" : a.why;
+  }
 }
 
 // ---- the stage ----------------------------------------------------------------------------------------------------------
@@ -844,7 +986,7 @@ function sideEntries() {
 }
 
 function draftFor(entry, sceneId) {
-  return M.presentDraft(entry, sceneId, { approved: L.approved, working: L.working, versionDrafts: L.versionDrafts });
+  return M.presentDraft(entry, sceneId, { approved: L.approved, working: L.working, versionDrafts: L.versionDrafts, live: L.liveLooks });
 }
 
 function previewFor(entry, sceneId) {
@@ -881,7 +1023,7 @@ function stageEl(side, entry) {
 
 function sidePicker(side) {
   const sel = h("select", { class: "lab-select", "aria-label": side === "a" ? "Side A shows" : "Side B shows" });
-  const opts = [[M.APPROVED, "Approved"], [M.WORKING, "Working draft"], ...L.versions.filter((v) => !v.unreadable).map((v) => [v.id, v.name])];
+  const opts = [[M.APPROVED, "Approved"], [M.LIVE, publishLabelSim("Live on the show")], [M.WORKING, "Working draft"], ...L.versions.filter((v) => !v.unreadable).map((v) => [v.id, v.name])];
   for (const [value, text] of opts) sel.append(h("option", { value, text }));
   sel.value = L.ab[side];
   sel.addEventListener("change", () => compareAs(side, sel.value));
@@ -939,7 +1081,7 @@ function renderStage() {
     const picker = $("select", st.el);
     if (picker && document.activeElement !== picker) picker.value = entry;
     const draft = draftFor(entry, L.scene);
-    const state = M.stageState(v, preview, draft ? M.draftState(L.approved[L.scene], draft, trial()) : "approved");
+    const state = M.stageState(v, preview, stageDraftState(entry, draft));
     const caption = [M.tierCaption(v, preview), mo && mo.label].filter(Boolean).join(" · ");
     $(".lab-stage-label", st.el).textContent = L.ab.on ? `${side.toUpperCase()} · ${caption}` : caption;
     const badge = $(".lab-badge", st.el);
@@ -954,6 +1096,20 @@ function renderStage() {
 
 function renderStageBadges() {
   renderStage();
+}
+
+/** A stage side's badge: the working draft against what the show runs (Live / Draft / In try-on: never "Approved" for
+ * a published look); the show's own look is Live; Approved and a saved version against approved (git). */
+function stageDraftState(entry, draft) {
+  if (!draft) return "approved";
+  if (entry === M.WORKING) return M.workingState(draft, L.liveLooks[L.scene], trial());
+  if (entry === M.LIVE) return "live";
+  return M.draftState(L.approved[L.scene], draft, trial());
+}
+
+/** "…the show…" → "…this simulator…" on a simulator runtime. */
+function publishLabelSim(text) {
+  return M.publishLabel(isSimulated(), text);
 }
 
 function renderTabs(preview, views, current) {
@@ -1037,7 +1193,19 @@ function rebuildEditor() {
   const scene = sceneOf(id);
   const d = L.working[id];
   const undoBtn = h("button", { type: "button", class: "lab-btn small", title: "Undo edit (⌘Z / Ctrl-Z)", onclick: undo, text: "↶ Undo edit" });
-  const revertBtn = h("button", { type: "button", class: "lab-btn small", onclick: revertToApproved, text: "Revert to approved" });
+  // client only (never a publish): renamed from "Revert to approved" so it can't be read as the show-level Revert
+  const resetMenu = h(
+    "details",
+    { class: "lab-menu wide" },
+    h("summary", { "aria-label": "Reset this scene's working draft", text: "Reset draft ▾" }),
+    h(
+      "div",
+      { class: "lab-menu-items" },
+      h("button", { type: "button", onclick: (e) => menuReset(e, "live"), text: publishLabelSim("to the show’s look") }),
+      h("button", { type: "button", onclick: (e) => menuReset(e, "approved"), text: "to approved (git)" }),
+    ),
+  );
+  const publishBtn = h("button", { type: "button", class: "lab-btn small publish", dataset: { publish: "editor" }, onclick: () => publishWorking(), text: M.PUBLISH });
   const kinds = h(
     "div",
     { class: "lab-seg", role: "group", "aria-label": "Layout kind" },
@@ -1050,10 +1218,11 @@ function rebuildEditor() {
       "div",
       { class: "lab-editor-head" },
       h("div", {}, h("span", { class: "eyebrow", text: scene && scene.painted ? `PAINTED · ${scene.slot}` : scene && scene.stepped ? "MODULE LEVEL · STEPPED" : "MODULE LEVEL" }), h("h2", { id: "lab-editor-title", text: d.name })),
-      h("div", { class: "lab-row" }, undoBtn, revertBtn),
+      h("div", { class: "lab-row" }, undoBtn, resetMenu, publishBtn),
     ),
     h("p", { class: "lab-reality", text: M.REALITY_LINE }),
     h("p", { id: "lab-lock", class: "lab-lock", hidden: true }),
+    h("p", { id: "lab-repaint-note", class: "lab-lock", hidden: true }),
     h(
       "section",
       { class: "lab-section", "aria-label": "Palette" },
@@ -1177,6 +1346,12 @@ function menuAction(e, fn) {
   edit(fn);
 }
 
+function menuReset(e, to) {
+  const menu = e.target.closest("details");
+  if (menu) menu.open = false;
+  resetDraft(to);
+}
+
 function renderPalette(d, locked) {
   const box = $("#lab-palette");
   const ed = $("#lab-editor");
@@ -1261,12 +1436,19 @@ function syncEditor() {
   if (locked) {
     lockEl.hidden = false;
     lockEl.className = "lab-lock on";
-    lockEl.textContent = `${scene ? scene.name : id}: ${M.T1_LOCKED}. The colours’ hexes, their order and count, and the layout are read-only; colour names, brightness, solid, copy and stepped timing stay editable.`;
+    // the server's sentence (the hand-painted "app" slot lock, D68; the T1 lock on an older server)
+    const why = lock.sentence || `${scene ? scene.name : id}: ${M.T1_LOCKED}.`;
+    lockEl.textContent = `${why} The colours’ hexes, their order and count, and the layout are read-only; colour names, brightness, solid, copy and stepped timing stay editable.`;
   } else if (lock && lock.sentence && scene && scene.painted) {
     lockEl.hidden = false;
     lockEl.className = "lab-lock";
     lockEl.textContent = lock.sentence;
   } else lockEl.hidden = true;
+  // a painted scene's slot and what a publish of a new painted design does to it (RepaintInfo, from the server)
+  const repaintEl = $("#lab-repaint-note");
+  const repaintText = scene && scene.painted ? M.repaintNote((lock && lock.repaint) || scene.repaint) : "";
+  repaintEl.textContent = repaintText;
+  repaintEl.hidden = !repaintText || repaintText === lockEl.textContent;
   $("#lab-editor-title").textContent = d.name || (scene && scene.name) || id;
   renderPalette(d, locked);
   renderLayoutControls(d, locked);
@@ -1715,7 +1897,9 @@ function renderMotion() {
 // ---- the whole panel ----------------------------------------------------------------------------------------------------
 function renderAll() {
   if (!L.built) return;
+  renderShowBar();
   renderSceneList();
+  renderIpadStrip();
   renderVersionsBar();
   renderStage();
   syncEditor();
@@ -1724,10 +1908,569 @@ function renderAll() {
   if (L.present) renderPresent();
 }
 
+// ---- the live show (docs/live-lab/PLAN.md §3) -------------------------------------------------------------------------
+// GET /api/lab/live every 5 s while the Lab is open and visible (every 1 s while a slot repaint runs), and on focus.
+// Publish, Undo and Revert POST /api/lab/publish: without `confirm` the server answers 409 with its sentence, the cost,
+// the changes and the repaint; "Publish now" sends that sentence back with the live id the dialog was opened against
+// (`expected_live`), so a look someone else published meanwhile is a conflict, never silently replaced.
+
+function showBarEl() {
+  return h(
+    "section",
+    { id: "lab-show", class: "lab-show", "aria-label": "What the show runs" },
+    h(
+      "div",
+      { class: "lab-show-main" },
+      h("div", { id: "lab-show-state", class: "lab-show-state", role: "status", "aria-live": "polite" }, h("p", { id: "lab-show-text", class: "lab-show-text" }), h("ul", { id: "lab-show-lines", class: "lab-show-lines" })),
+      h("span", { id: "lab-show-chip", class: "lab-show-chip" }),
+      h(
+        "div",
+        { class: "lab-show-actions" },
+        h("button", { id: "lab-show-undo", class: "lab-btn small", type: "button", hidden: true, text: M.UNDO_PUBLISH }),
+        h("button", { id: "lab-show-revert", class: "lab-btn small danger", type: "button", hidden: true, text: M.REVERT }),
+        h("button", { id: "lab-show-history", class: "lab-btn small", type: "button", hidden: true, "aria-expanded": "false", "aria-controls": "lab-history", text: "History" }),
+      ),
+    ),
+    h("details", { id: "lab-repaint-rows", class: "lab-repaint-rows", hidden: true }, h("summary", { text: "Each module" }), h("ul", {})),
+    h("div", { id: "lab-history", class: "lab-history", hidden: true }, h("h3", { text: "Publish history" }), h("ol", { id: "lab-history-ol", class: "lab-history-list" })),
+  );
+}
+
+function publishDialogEl() {
+  return h(
+    "dialog",
+    { id: "lab-publish", class: "lab-dialog lab-publish-dialog", "aria-labelledby": "lab-publish-title" },
+    h("div", { class: "lab-dialog-head" }, h("h2", { id: "lab-publish-title", text: M.PUBLISH }), h("button", { id: "lab-publish-close", type: "button", class: "lab-btn small", text: "Close" })),
+    h(
+      "div",
+      { class: "lab-publish-scroll" },
+      h("p", { id: "lab-publish-conflict", class: "lab-publish-conflict", hidden: true }),
+      h("p", { id: "lab-publish-sentence", class: "lab-publish-sentence" }),
+      h("p", { id: "lab-publish-cost", class: "lab-publish-cost" }),
+      h("ul", { id: "lab-publish-changes", class: "lab-publish-list" }),
+      h("ul", { id: "lab-publish-repaint", class: "lab-publish-list" }),
+      h("ul", { id: "lab-publish-warnings", class: "lab-publish-list warn" }),
+      h("ul", { id: "lab-publish-notes", class: "lab-publish-list note" }),
+      h("label", { id: "lab-publish-show-row", class: "lab-switch", hidden: true }, h("input", { type: "checkbox", id: "lab-publish-show", checked: true }), h("span", { id: "lab-publish-show-label" })),
+      h(
+        "label",
+        { class: "lab-label lab-publish-who" },
+        "Your name, for the show’s history",
+        h("input", { id: "lab-publish-who", class: "lab-input", maxlength: M.WHO_MAX, autocomplete: "name", placeholder: "e.g. Alon" }),
+      ),
+      h("p", { id: "lab-publish-wait", class: "lab-publish-wait", role: "status", "aria-live": "polite" }),
+    ),
+    h(
+      "div",
+      { class: "lab-row lab-publish-actions" },
+      h("button", { id: "lab-publish-go", class: "lab-btn publish", type: "button", text: "Publish now" }),
+      h("button", { id: "lab-publish-cancel", class: "lab-btn", type: "button", text: "Cancel" }),
+    ),
+  );
+}
+
+function wireLive() {
+  $("#lab-show-undo").addEventListener("click", () => askPublish("previous", "previous", (L.live && L.live.previous && L.live.previous.name) || ""));
+  $("#lab-show-revert").addEventListener("click", () => askPublish(M.APPROVED, "approved", "the approved looks"));
+  $("#lab-show-history").addEventListener("click", () => {
+    L.historyOpen = !L.historyOpen;
+    renderShowBar();
+  });
+  $("#lab-publish-go").addEventListener("click", confirmPublish);
+  // the box is part of what ops confirms: the server's sentence, notes and cost follow it, so a toggle asks again
+  $("#lab-publish-show").addEventListener("change", (e) => {
+    const d = L.publish.dialog;
+    if (d) askPublish(d.version, d.kind, d.name, { show: !!e.target.checked, reask: true });
+  });
+  $("#lab-publish-cancel").addEventListener("click", () => closePublishDialog());
+  $("#lab-publish-close").addEventListener("click", () => closePublishDialog());
+  $("#lab-publish").addEventListener("cancel", () => closePublishDialog({ fromEvent: true })); // Esc
+  $("#lab-download").addEventListener("click", () => L.selected && downloadVersion(L.selected));
+  $("#lab-open-file").addEventListener("click", () => $("#lab-file").click());
+  $("#lab-file").addEventListener("change", openVersionFile);
+}
+
+/** GET /api/lab/live. Never throws: a missing route (an older server) or an unreachable Conductor is a state. */
+async function refreshLive({ render = true } = {}) {
+  const before = L.live;
+  const beforeKey = L.liveKey;
+  try {
+    const live = await api(`${API}/live`);
+    L.liveApi = "ready";
+    applyLive(live, { before });
+  } catch (err) {
+    L.liveApi = M.liveApiFromError(err);
+    if (L.liveApi === "error") setAlert("live", M.alertFor(err));
+  }
+  L.liveReadAt = Date.now();
+  if (L.liveApi !== "error") setAlert("live", null);
+  L.liveKey = `${L.liveApi}|${JSON.stringify(L.live)}`;
+  if (!render || !L.built) return;
+  // the whole panel only when something changed (a poll every 5 s must not rebuild the lists under a finger)
+  if (L.liveKey !== beforeKey) renderAll();
+  else renderShowBar();
+}
+
+/** A new LiveJSON (a poll, or a publish's answer): when the live publication changed, say so, read the scenes' live
+ * looks again (the badges compare with them) and what the lights show today. Working drafts are never touched. */
+function applyLive(live, { before = L.live, ownPublish = false } = {}) {
+  if (!live || typeof live !== "object") return;
+  L.live = live;
+  L.liveApi = "ready";
+  L.liveReadAt = Date.now();
+  const changed = !!before && M.expectedLive(before) !== M.expectedLive(live);
+  if (!changed) return;
+  if (!ownPublish) {
+    const notice = M.liveNotice(before, live);
+    if (notice) setNotice(notice);
+  }
+  refreshLiveLooks();
+  invalidateToday();
+}
+
+/** The catalog's per-scene live looks (live_look, live_source, repaint) after the show's look changed. */
+async function refreshLiveLooks() {
+  try {
+    const catalog = await api(`${API}/catalog`);
+    if (!L.catalog || catalog.config_sha !== L.catalog.config_sha) return; // another config: the reload alert says so
+    const byId = Object.fromEntries((catalog.scenes || []).map((s) => [s.id, s]));
+    for (const s of L.catalog.scenes) {
+      const next = byId[s.id];
+      if (!next) continue;
+      for (const k of ["live_look", "live_source", "repaint", "t1_lock"]) if (k in next) s[k] = next[k];
+    }
+    if ("show_looks" in catalog) L.catalog.show_looks = catalog.show_looks;
+    setLiveLooks(L.catalog);
+    prefetchApproved();
+    renderAll();
+  } catch {
+    // the next change (or a reload) reads them again; the badges keep the last known looks meanwhile
+  }
+}
+
+function liveDelay() {
+  const r = L.live && L.live.repaint;
+  return r && (r.running || (r.queued_until !== null && r.queued_until !== undefined && !r.finished_at)) ? M.LIVE_REPAINT_POLL_MS : M.LIVE_POLL_MS;
+}
+
+function scheduleLivePoll() {
+  clearTimeout(L.livePoll);
+  if (!L.liveWatching || L.liveApi === "missing") return; // an older server: a reload finds publishing once it's there
+  L.livePoll = setTimeout(async () => {
+    if (!document.hidden) await refreshLive();
+    scheduleLivePoll();
+  }, liveDelay());
+}
+
+function onVisible() {
+  if (!L.liveWatching || document.hidden) return;
+  refreshLive().then(scheduleLivePoll);
+}
+
+/** `fresh`: read now (the Lab reopened); boot has just read it. */
+function startLiveWatch({ fresh = true } = {}) {
+  if (L.liveWatching) return;
+  L.liveWatching = true;
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("focus", onVisible);
+  if (fresh) refreshLive().then(scheduleLivePoll);
+  else scheduleLivePoll();
+}
+
+function stopLiveWatch() {
+  L.liveWatching = false;
+  clearTimeout(L.livePoll);
+  document.removeEventListener("visibilitychange", onVisible);
+  window.removeEventListener("focus", onVisible);
+}
+
+function renderShowBar() {
+  const box = $("#lab-show");
+  if (!box) return;
+  const bar = M.showBar(L.live, L.catalog, { api: L.liveApi, host: location.host, nowMs: Date.now(), readAtMs: L.liveReadAt });
+  box.dataset.tone = bar.tone;
+  const text = $("#lab-show-text");
+  if (text.textContent !== bar.text) text.textContent = bar.text;
+  const lines = $("#lab-show-lines");
+  const key = JSON.stringify(bar.lines);
+  if (lines.dataset.key !== key) {
+    lines.dataset.key = key;
+    lines.replaceChildren(...bar.lines.map((l) => h("li", { class: `lab-show-line ${l.tone}`, text: l.text })));
+  }
+  lines.hidden = !bar.lines.length;
+  // "Live hardware" here; on a simulator the line itself and the header's Simulator badge say so
+  const chip = $("#lab-show-chip");
+  chip.textContent = bar.chip;
+  chip.hidden = bar.chip === "Simulator";
+  const busy = L.publish.busy;
+  const undo = $("#lab-show-undo");
+  undo.hidden = !bar.actions.undo;
+  if (bar.actions.undo) undo.title = bar.actions.undo.title;
+  undo.disabled = busy;
+  const revert = $("#lab-show-revert");
+  revert.hidden = !bar.actions.revert;
+  if (bar.actions.revert) revert.textContent = bar.actions.revert.label;
+  revert.disabled = busy;
+  const hist = $("#lab-show-history");
+  hist.hidden = !bar.actions.history;
+  if (bar.actions.history) hist.textContent = bar.actions.history.label;
+  hist.setAttribute("aria-expanded", String(L.historyOpen && !!bar.actions.history));
+  // the repaint's per-module list (B2), on tap
+  const rows = $("#lab-repaint-rows");
+  const progress = bar.repaint;
+  rows.hidden = !(progress && progress.rows.length);
+  if (progress && progress.rows.length) {
+    const ul = $("ul", rows);
+    const rkey = JSON.stringify(progress.rows);
+    if (ul.dataset.key !== rkey) {
+      ul.dataset.key = rkey;
+      ul.replaceChildren(...progress.rows.map((r) => h("li", { class: `lab-repaint-row ${r.status}`, text: r.text })));
+    }
+  }
+  renderHistory(!!bar.actions.history);
+  const eyebrow = $("#lab-eyebrow");
+  if (eyebrow) eyebrow.textContent = M.labEyebrow(L.tryon.api, trial(), L.liveApi === "ready");
+}
+
+function renderHistory(available) {
+  const box = $("#lab-history");
+  const open = L.historyOpen && available;
+  box.hidden = !open;
+  if (!open) return;
+  const names = Object.fromEntries(order().map((id) => [id, (sceneOf(id) && sceneOf(id).name) || id]));
+  const rows = M.historyRows(L.live && L.live.history, { scenes: names });
+  const busy = L.publish.busy;
+  $("#lab-history-ol").replaceChildren(
+    ...rows.map((r) =>
+      h(
+        "li",
+        { class: r.live ? "lab-history-row live" : "lab-history-row" },
+        h(
+          "div",
+          { class: "lab-history-text" },
+          h("strong", { text: r.name }),
+          h("small", { text: [r.when, r.by ? `by ${r.by}` : "", r.scenes].filter(Boolean).join(" · ") }),
+          r.repaint ? h("small", { text: r.repaint }) : null,
+          r.gone ? h("small", { class: "lab-muted", text: r.gone }) : null,
+        ),
+        h("span", { class: `lab-outcome ${r.outcome.replace(/\s/g, "-")}`, text: r.outcomeText }),
+        h(
+          "div",
+          { class: "lab-version-actions" },
+          r.canOpen ? h("button", { type: "button", class: "lab-btn small", onclick: () => openVersion(r.version), text: "Open in editor" }) : null,
+          r.canRepublish ? h("button", { type: "button", class: "lab-btn small", disabled: busy, onclick: () => askPublish(r.version, r.kind === "approved" ? "approved" : "version", r.name), text: "Publish again" }) : null,
+          r.canExport ? h("button", { type: "button", class: "lab-btn small", onclick: () => openExport(r.version), text: "Export to git" }) : null,
+        ),
+      ),
+    ),
+  );
+}
+
+/** The Publish button: publish the selected version, or save the working drafts first (with the note) and publish the
+ * version just saved, or (every working draft approved, nothing selected) revert the show to approved. */
+async function publishWorking() {
+  const a = publishState();
+  if (!a.enabled) return;
+  if (a.save) {
+    const note = $("#lab-note") ? $("#lab-note").value : "";
+    const saved = await saveVersion(note);
+    if (!saved) return;
+    if ($("#lab-note")) $("#lab-note").value = "";
+    await askPublish(saved.id, "version", saved.name);
+    return;
+  }
+  await askPublish(a.version, a.version === M.APPROVED ? "approved" : "version", M.entryLabel(a.version, L.versions));
+}
+
+/** POST /api/lab/publish without `confirm`: the server answers with its confirm sentence (409 confirm_required), or
+ * refuses. `conflict`: the sentence of a conflict that brought the dialog back (shown on top). `show`: the
+ * "Show <scene> after publishing" box (M.publishShowDefault: on for a version, off for Undo and Revert), asked with
+ * so the sentence and the cost say what it sends; `reask`: the box was toggled in an open dialog. */
+async function askPublish(version, kind, name = "", { conflict = "", show = M.publishShowDefault(kind), reask = false } = {}) {
+  if (L.publish.busy || !version) return;
+  L.publish.busy = true;
+  renderPublishBusy();
+  const expected = M.expectedLive(L.live);
+  try {
+    const answer = await api(`${API}/publish`, { method: "POST", body: M.publishBody({ version, expected, show }) });
+    onPublished(answer); // a server that publishes without asking first (not this one: it always asks)
+  } catch (err) {
+    const out = M.publishOutcome(err);
+    if (out.kind === "confirm") openPublishDialog({ version, kind, name, expected, view: out.dialog, conflict, show }, { reask });
+    else if (out.kind === "conflict") {
+      // the show changed between our read and the ask: read it and ask again (once per click)
+      if (out.live) applyLive(out.live);
+      L.publish.busy = false;
+      if (reask) closePublishDialog();
+      if (!conflict) return askPublish(version, kind, name, { conflict: out.text, show });
+      publishRefused(out, version);
+    } else {
+      if (reask) closePublishDialog();
+      publishRefused(out, version);
+    }
+  } finally {
+    L.publish.busy = false;
+    renderPublishBusy();
+  }
+}
+
+function openPublishDialog(d, { reask = false } = {}) {
+  const P = L.publish;
+  const dlg = $("#lab-publish");
+  if (reask && P.dialog && dlg.open) {
+    // the same dialog, the server's sentence for the box as it is now (the name typed so far stays)
+    P.dialog = { ...P.dialog, ...d, changed: "" };
+    $("#lab-publish-show").checked = !!d.show;
+    renderPublishDialog();
+    return;
+  }
+  P.dialog = { ...d, waitS: 0, waitAt: 0 };
+  $("#lab-publish-who").value = L.who || "";
+  $("#lab-publish-show").checked = !!d.show;
+  renderPublishDialog();
+  if (!dlg.open) dlg.showModal ? dlg.showModal() : dlg.setAttribute("open", "");
+  const scroll = $(".lab-publish-scroll", dlg);
+  if (scroll) scroll.scrollTop = 0;
+  // the name is asked once per browser: focus it the first time (not on a touch screen: no keyboard popping up over
+  // the sentence), else the confirm button
+  const touch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  const first = L.who ? $("#lab-publish-go") : touch ? null : $("#lab-publish-who");
+  if (first) setTimeout(() => first.focus(), 0);
+}
+
+function closePublishDialog({ fromEvent = false } = {}) {
+  const P = L.publish;
+  P.dialog = null;
+  clearInterval(P.clock);
+  P.clock = null;
+  const dlg = $("#lab-publish");
+  if (!fromEvent && dlg && dlg.open) dlg.close ? dlg.close() : dlg.removeAttribute("open");
+  renderPublishBusy();
+}
+
+function renderPublishDialog() {
+  const P = L.publish;
+  const d = P.dialog;
+  if (!d) return;
+  const v = d.view;
+  const sim = isSimulated();
+  $("#lab-publish-title").textContent = M.publishTitle(d.kind, sim);
+  const conflict = $("#lab-publish-conflict");
+  conflict.textContent = [d.conflict, d.changed].filter(Boolean).join(" ");
+  conflict.hidden = !conflict.textContent;
+  $("#lab-publish-sentence").textContent = v.sentence;
+  $("#lab-publish-cost").textContent = v.cost ? `Cost: ${v.cost}.` : "";
+  const list = (sel, items) => {
+    const ul = $(sel);
+    ul.replaceChildren(...items.map((x) => (x instanceof Node ? x : h("li", { text: x }))));
+    ul.hidden = !items.length;
+  };
+  list(
+    "#lab-publish-changes",
+    v.changes.map((c) => h("li", {}, c.text, c.d59 ? h("span", { class: "lab-d59", text: ` — ${M.LIVE_COPY.d59}` }) : null)),
+  );
+  list("#lab-publish-repaint", v.repaint);
+  list("#lab-publish-warnings", v.warnings.map((w) => `Not blocking: ${w}`));
+  list("#lab-publish-notes", [v.trialLine, ...v.notes].filter(Boolean));
+  const showRow = $("#lab-publish-show-row");
+  showRow.hidden = !v.showOffer;
+  $("#lab-publish-show-label").textContent = v.showLabel;
+  renderPublishWait();
+}
+
+/** The confirm button and the server's wait (retry_after_s), counted down once a second. */
+function renderPublishWait() {
+  const P = L.publish;
+  const d = P.dialog;
+  const go = $("#lab-publish-go");
+  if (!d || !go) return;
+  const left = M.gateCountdown(d.waitS, Date.now(), d.waitAt);
+  go.disabled = P.busy || left > 0;
+  const box = $("#lab-publish-show");
+  if (box) box.disabled = P.busy;
+  go.textContent = P.busy ? "Publishing…" : left > 0 ? `Publish now (in ${left} s)` : "Publish now";
+  const wait = $("#lab-publish-wait");
+  wait.textContent = d.waitText && left > 0 ? d.waitText : d.waitText && !left ? `${d.waitText} You can try again now.` : "";
+  if (!left && P.clock) {
+    clearInterval(P.clock);
+    P.clock = null;
+  }
+}
+
+function renderPublishBusy() {
+  renderPublishButtons();
+  renderShowBar();
+  if (L.historyOpen) renderHistory(true);
+  renderPublishWait();
+}
+
+/** "Publish now": the server's sentence back, with the live id the dialog was opened against. */
+async function confirmPublish() {
+  const P = L.publish;
+  const d = P.dialog;
+  if (!d || P.busy) return;
+  if (M.gateCountdown(d.waitS, Date.now(), d.waitAt) > 0) return;
+  L.who = M.whoValue($("#lab-publish-who").value);
+  rememberUi();
+  // the `show` the dialog's sentence was asked with (a toggle asks again before this is possible)
+  const show = d.view.showOffer ? !!d.show : null;
+  P.busy = true;
+  renderPublishBusy();
+  try {
+    const answer = await api(`${API}/publish`, { method: "POST", body: M.publishBody({ version: d.version, confirm: d.view.sentence, expected: d.expected, who: L.who, show }) });
+    closePublishDialog();
+    // what the show runs now, as far as this page knows it, until the catalog's live looks answer (no Draft flash)
+    if (d.kind === "approved") for (const id of order()) L.liveLooks[id] = L.approved[id];
+    else if (d.kind === "version" && L.versionDrafts[d.version]) for (const id of order()) L.liveLooks[id] = L.versionDrafts[d.version][id] || L.approved[id];
+    onPublished(answer);
+  } catch (err) {
+    const out = M.publishOutcome(err);
+    if (out.kind === "conflict") {
+      // someone else published while this dialog was open: show what's live now and the server's new sentence
+      if (out.live) applyLive(out.live);
+      P.busy = false;
+      closePublishDialog();
+      await askPublish(d.version, d.kind, d.name, { conflict: out.text, show: !!d.show });
+      return;
+    }
+    if (out.kind === "confirm") {
+      // the server's sentence changed (another try-on, a pause, a repaint): read the new one before publishing
+      P.dialog = { ...d, view: out.dialog, changed: "What publishing does changed since this opened; read it again." };
+      renderPublishDialog();
+    } else if (out.kind === "wait") {
+      d.waitS = out.retryAfterS;
+      d.waitAt = Date.now();
+      d.waitText = out.text;
+      clearInterval(P.clock);
+      P.clock = setInterval(renderPublishWait, 1000);
+    } else {
+      closePublishDialog();
+      publishRefused(out, d.version);
+    }
+  } finally {
+    P.busy = false;
+    renderPublishBusy();
+  }
+}
+
+/** A refusal outside the dialog: its sentence in #lab-alert; a `field` one marks the scene, a stale one the version. */
+function publishRefused(out, version) {
+  if (out.kind === "nothing") {
+    setAlert("publish", null);
+    setNotice(out.text);
+    refreshLive();
+    return;
+  }
+  if (out.kind === "missing") L.liveApi = "missing";
+  if (out.kind === "field" && out.scene) {
+    L.publish.marks[out.scene] = out.text;
+    L.problems[out.scene] = [{ field: out.slot, message: out.text }];
+  }
+  let text = out.text;
+  if (out.kind === "stale") {
+    if (version) L.publish.stale[version] = out.text;
+    const names = Object.fromEntries(order().map((sid) => [sid, sceneName(sid)]));
+    text = [out.text, ...M.saveProblemLines(out.problems || [], names)].join(" ");
+    refreshVersions().then(renderAll);
+  }
+  setAlert("publish", text);
+  renderAll();
+}
+
+/** A publish went live: the show bar and badges from the answer's `live`, the toast, and the stage's "today". */
+function onPublished(answer) {
+  const live = answer && answer.live;
+  if (answer && answer.state && answer.state.engine) L.state = answer.state;
+  L.publish.marks = {};
+  setAlert("publish", null);
+  if (live) {
+    const before = L.live;
+    applyLive(live, { before, ownPublish: true });
+    if (before && M.expectedLive(before) === M.expectedLive(live)) refreshLiveLooks();
+  } else refreshLive();
+  const text = M.publishedToast(live, isSimulated());
+  const held = ((answer && answer.report && answer.report.held) || []).map((id) => (sceneOf(id) ? sceneOf(id).name : id));
+  toast(held.length ? `${text} · ${held.join(", ")} at module level until its slots are repainted` : text);
+  setNotice(text);
+  invalidateToday();
+  refreshTrial(); // a publish ends a running try-on
+  renderAll();
+}
+
+function toast(text) {
+  const el = $("#lab-toast");
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(L.toastTimer);
+  L.toastTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 5000);
+}
+
+// ---- version files (one system across the laptop, staging and the show box) -------------------------------------------
+async function downloadVersion(id) {
+  try {
+    const v = await api(`${API}/versions/${encodeURIComponent(id)}`);
+    const file = M.versionFile(v, L.catalog && L.catalog.config_sha);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2) + "\n"], { type: "application/json" }));
+    const a = h("a", { href: url, download: M.versionFileName(v) });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setNotice(`Downloaded ${v.name || id} as a version file.`);
+  } catch (err) {
+    setAlert("versions", M.alertFor(err) || "That version couldn't be downloaded.");
+  }
+}
+
+/** "Open a version file": its drafts are saved here as a new version (the server checks them like any save: the
+ * stale, app-lock and copy rules), then opened into the working drafts (the unsaved-changes question first). */
+async function openVersionFile(e) {
+  const input = e.target;
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+  if (file.size > M.VERSION_FILE_MAX_BYTES) {
+    setAlert("file", "That file is too large to be a Lab version.");
+    return;
+  }
+  let text;
+  try {
+    text = await file.text();
+  } catch {
+    setAlert("file", "That file couldn't be read.");
+    return;
+  }
+  const parsed = M.readVersionFile(text);
+  if (parsed.error) {
+    setAlert("file", parsed.error);
+    return;
+  }
+  const body = { drafts: Object.fromEntries(Object.entries(parsed.drafts).map(([sid, d]) => [sid, M.normaliseDraft(d)])), note: parsed.note };
+  if (parsed.name) body.name = parsed.name;
+  let saved;
+  try {
+    saved = await api(`${API}/versions`, { method: "POST", body });
+  } catch (err) {
+    const problems = (err && err.body && err.body.problems) || [];
+    const lines = M.saveProblemLines(problems, Object.fromEntries(order().map((sid) => [sid, sceneName(sid)])));
+    setAlert("file", [`${parsed.name || file.name} wasn't added:`, M.alertFor(err) || (err.body && err.body.detail) || "the server refused it.", ...lines].join(" "));
+    return;
+  }
+  setAlert("file", null);
+  L.versionDrafts[saved.id] = saved.drafts || {};
+  await refreshVersions();
+  setNotice(`Added ${saved.name} from ${file.name}.`);
+  renderAll();
+  await openVersion(saved.id);
+}
+
 // ---- the try-on (Slice B, PLAN §4/§6.4) -----------------------------------------------------------------------------
 // The panel sends nothing on its own: Apply → POST /trial/start (the server answers 409 with the confirm sentence
-// naming the modules; "Try it on" sends it back) and Back to approved → POST /trial/stop. The server keeps the gap
-// between applies, the bound and every refusal; this page shows its sentences and debounces taps.
+// naming the modules; "Try it on" sends it back) and Back to the show's look → POST /trial/stop. The server keeps the
+// gap between applies, the bound and every refusal; this page shows its sentences and debounces taps.
 
 function trialPanel() {
   return h(
@@ -1760,7 +2503,7 @@ function trialPanel() {
       "div",
       { id: "lab-trial-actions", class: "lab-row lab-trial-actions" },
       h("button", { id: "lab-trial-apply", class: "lab-btn tryon", type: "button", text: "Apply to the lights" }),
-      h("button", { id: "lab-trial-stop", class: "lab-btn quiet-dark", type: "button", hidden: true, text: "Back to approved" }),
+      h("button", { id: "lab-trial-stop", class: "lab-btn quiet-dark", type: "button", hidden: true, text: "Back to the show’s look" }),
     ),
   );
 }
@@ -1845,7 +2588,7 @@ function renderTrialClock() {
     badge.textContent = M.trialBadge(t, left);
   }
   const eyebrow = $("#lab-eyebrow");
-  if (eyebrow) eyebrow.textContent = M.labEyebrow(T.api, t);
+  if (eyebrow) eyebrow.textContent = M.labEyebrow(T.api, t, L.liveApi === "ready");
   const apply = $("#lab-trial-apply");
   if (apply) {
     const avail = trialAvailability();
@@ -2016,7 +2759,7 @@ async function applyTrial({ confirm = null } = {}) {
   refreshLabState().then(renderTrial);
 }
 
-/** Back to approved: the server ends the try-on and the engine puts the scene's approved look back (one burst). */
+/** Back to the show's look: the server ends the try-on and the engine puts the scene's live look back (one burst). */
 async function stopTrial() {
   const T = L.tryon;
   if (T.busy) return;
@@ -2030,7 +2773,7 @@ async function stopTrial() {
     T.confirm = null;
     if (answer && answer.state && answer.state.engine) L.state = answer.state;
     setAlert("trial", null);
-    setNotice(was ? `Back to approved: the lights show ${was.label || sceneName(was.scene_id)}’s approved look.` : "No try-on was running.");
+    setNotice(was ? `Back to the show’s look: the lights show ${was.label || sceneName(was.scene_id)} as the show runs it.` : "No try-on was running.");
     invalidateToday();
   } catch (err) {
     const out = M.startOutcome(err);
@@ -2304,11 +3047,15 @@ function route() {
     if (L.present) closePresent();
     motionStop({ render: false }); // no motion clock while the Lab is closed
     stopTrialWatch(); // no polling or socket while the Lab is closed
+    stopLiveWatch();
     return;
   }
   window.scrollTo(0, 0);
   if (!L.booting) L.booting = boot();
-  else if (L.built) startTrialWatch();
+  else if (L.built) {
+    startTrialWatch();
+    startLiveWatch();
+  }
 }
 
 wireKeys();

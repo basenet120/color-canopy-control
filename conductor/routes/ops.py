@@ -63,7 +63,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -179,20 +178,16 @@ def engine_of(services: Any) -> Any:
     return engine
 
 
-def load_modes(config_dir: Path) -> dict:
-    """modes.yaml (the six Lowcountry Modes as data)."""
-    with open(Path(config_dir) / "modes.yaml") as f:
-        return yaml.safe_load(f) or {}
-
-
 def mode_list(services: Any) -> list[dict]:
+    """The six modes (id, label, blurb, slot) as the show runs them: the live looks (D68), approved or published."""
+    from conductor.looks.live import live_trio
+
     try:
-        modes = load_modes(services.config_dir).get("modes") or {}
-    except (OSError, yaml.YAMLError):
+        modes = live_trio(services).modes.modes
+    except (OSError, ValueError):
         return []
     return [
-        {"id": mode_id, "label": m.get("label", mode_id), "blurb": m.get("blurb", ""), "slot": m.get("slot")}
-        for mode_id, m in modes.items()
+        {"id": mode_id, "label": m.label, "blurb": m.blurb, "slot": m.slot} for mode_id, m in modes.items()
     ]
 
 

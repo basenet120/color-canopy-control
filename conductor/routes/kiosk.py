@@ -160,14 +160,15 @@ def _rgb_hex(rgb: Any) -> str:
     return "#" + "".join(f"{int(v):02X}" for v in rgb)
 
 
-def _sampled_colours(mode: Any) -> list[str] | None:
+def _sampled_colours(mode: Any, *, modes: Any = None, recipes: Any = None) -> list[str] | None:
     """Nine "#RRGGBB" (r0c0…r2c2): a validated mode's module-level design at each canopy position, through the
-    compiler's own `module_look` (the same sampling T3 sends), or None when it can't be worked out."""
+    compiler's own `module_look` (the same sampling T3 sends), or None when it can't be worked out. `modes` /
+    `recipes`: the live looks the mode came from (D68; None = the git defaults, for the file form)."""
     try:
         from conductor.config import DeviceEntry
         from conductor.looks import CompileContext, module_look
 
-        ctx = CompileContext(registry=[], capabilities={})
+        ctx = CompileContext(registry=[], capabilities={}, modes=modes, recipes=recipes)
         return [
             _rgb_hex(
                 module_look(
@@ -183,7 +184,9 @@ def _sampled_colours(mode: Any) -> list[str] | None:
         return None
 
 
-def _static_module_colours(spec: Mapping[str, Any], mode: Any = None) -> list[str] | None:
+def _static_module_colours(
+    spec: Mapping[str, Any], mode: Any = None, *, modes: Any = None, recipes: Any = None
+) -> list[str] | None:
     """Nine "#RRGGBB" (r0c0…r2c2) for a modules-first mode (a stepped-first one too: its still design is the
     modules rung, D65), so its picture shows what module level puts on the ceiling even before the engine can compile
     a plan for it: its design (`sample`, from the validated `mode`) sampled at each module, or its literal `columns`;
@@ -192,7 +195,9 @@ def _static_module_colours(spec: Mapping[str, Any], mode: Any = None) -> list[st
         return None
     modules = (spec.get("techniques") or {}).get("modules") or {}
     if modules.get("sample") is not None:
-        return _sampled_colours(mode) if mode is not None else None  # None: the looks loader refused the file
+        if mode is None:  # the looks loader refused the file
+            return None
+        return _sampled_colours(mode, modes=modes, recipes=recipes)
     columns = modules.get("columns") or []
     if len(columns) != 3 or any((c or {}).get("kind") != "rgb" for c in columns):
         return None
@@ -233,12 +238,20 @@ def _from_looks() -> dict[str, Any] | None:
     return {str(_field(m, "id") or _field(m, "mode_id")): m for m in loaded}
 
 
-def load_kiosk_modes(path: Path = MODES_FILE) -> list[dict[str, Any]]:
-    """The six modes as the kiosk shows them, in config order. Raises ValueError with a plain message."""
-    raw = _read_yaml(path)
-    specs: dict[str, Any] = raw["modes"]
+def load_kiosk_modes(
+    path: Path = MODES_FILE, *, modes: Any = None, recipes: Any = None
+) -> list[dict[str, Any]]:
+    """The six modes as the kiosk shows them, in config order. Raises ValueError with a plain message.
+
+    `modes` (a validated ModesFile: the show's live looks, D68) replaces the file: the raw spec is its dump and the
+    looks its modes, with `recipes` for the sampled colours. The `path=` form reads a file (tests pass one)."""
     looks = None
-    if path == MODES_FILE:
+    if modes is not None:
+        specs: dict[str, Any] = modes.model_dump(mode="json", exclude_unset=True)["modes"]
+        looks = dict(modes.modes)
+    else:
+        specs = _read_yaml(path)["modes"]
+    if modes is None and path == MODES_FILE:
         try:
             looks = _from_looks()
         except Exception as exc:  # noqa: BLE001 - the yaml still serves the kiosk; ops sees the log line
@@ -263,7 +276,7 @@ def load_kiosk_modes(path: Path = MODES_FILE) -> list[dict[str, Any]]:
                 "pattern_primary": _pattern(spec),  # the picture above T3 (the kiosk falls back to it)
                 "feature": None,
                 "tier": None,
-                "module_colours": _static_module_colours(spec, loaded),
+                "module_colours": _static_module_colours(spec, loaded, modes=modes, recipes=recipes),
             }
         )
     return modes
@@ -446,9 +459,13 @@ def _refusal(exc: ModeRefused) -> JSONResponse:
     return _refuse(status, message, **extra)
 
 
-def _modes_or_503() -> list[dict[str, Any]]:
+def _modes_or_503(services: Any) -> list[dict[str, Any]]:
+    """The kiosk's modes from the show's live looks (D68: approved or published), read once per request."""
     try:
-        return load_kiosk_modes()
+        from conductor.looks.live import live_trio
+
+        trio = live_trio(services)
+        return load_kiosk_modes(modes=trio.modes, recipes=trio.recipes)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         log.error("The kiosk couldn't read config/modes.yaml: %s", exc)
         raise HTTPException(status_code=503, detail=RESTING) from None
@@ -471,8 +488,8 @@ def _likely_plan(engine: Any, mode_id: str, current: ModePlan | None) -> ModePla
 
 @router.get("/api/kiosk/modes")
 def modes(request: Request) -> JSONResponse:
-    listing = _modes_or_503()
     services = services_of(request)
+    listing = _modes_or_503(services)
     engine = services.extras.get(ENGINE_KEY)
     if engine is not None:
         try:
@@ -485,8 +502,10 @@ def modes(request: Request) -> JSONResponse:
                     mode["feature"] = state.feature
         current = _current_plan(engine)
         try:
-            specs = _read_yaml(MODES_FILE)["modes"]
-        except (OSError, ValueError, yaml.YAMLError):
+            from conductor.looks.live import live_trio
+
+            specs = live_trio(services).modes.model_dump(mode="json", exclude_unset=True)["modes"]
+        except (OSError, ValueError):
             specs = {}
         for mode in listing:
             plan = _likely_plan(engine, mode["id"], current)
@@ -515,7 +534,7 @@ async def select(request: Request) -> JSONResponse:
         raise HTTPException(status_code=422, detail='Send {"mode": "<mode id>"}.') from None
     services = services_of(request)
     engine = _engine(request)
-    if body.mode not in {m["id"] for m in _modes_or_503()}:
+    if body.mode not in {m["id"] for m in _modes_or_503(services)}:
         raise HTTPException(status_code=404, detail=UNKNOWN)
     # The published state first: a paused kiosk or a running cooldown is refused whatever the engine does.
     current = _engine_state(engine)
