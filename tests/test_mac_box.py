@@ -243,7 +243,9 @@ def test_install_exits_3_and_prints_the_rollback_when_the_preflight_rejects_the_
     failing = _stub_python(box["tmp"] / "failing-python", box["python_calls"], exit_code=1)
     result = run([HELPER, "install", "--no-load"], {**box["env"], "CANOPY_MAC_PYTHON": str(failing)})
     assert result.returncode == 3, result.stderr
-    prev = {"installed": "1111111aaaaaaa", "paste-block": "2222222bbbbbbb", "none": "<the previous release>"}[known]
+    prev = {"installed": "1111111aaaaaaa", "paste-block": "2222222bbbbbbb", "none": "<the previous release>"}[
+        known
+    ]
     assert f"checkout --detach {prev}" in result.stderr
     assert "uv sync --frozen --no-dev --extra live" in result.stderr
     assert "would start" in result.stderr and "canopy-mac start/restart" in result.stderr

@@ -468,7 +468,9 @@ class Dropped:
     """What `_merge` ignored from the overlay as old data (D67)."""
 
     ids: list[str] = field(default_factory=list)  # whole entries: removed device ids or role: vignette
-    fields: dict[str, list[str]] = field(default_factory=dict)  # device id → removed field names (or `profile`)
+    fields: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # device id → removed field names (or `profile`)
 
 
 def _is_removed(device_id: str, patch: Mapping[str, Any]) -> bool:

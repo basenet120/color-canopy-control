@@ -250,7 +250,9 @@ def test_an_old_registry_overlay_loads_and_the_next_ops_edit_prunes_it(monkeypat
     assert registry.dropped == DROPPED_IDS
     assert registry.dropped_fields == DROPPED_FIELDS
     assert registry.get("shop-string-1").role == "spare" and registry.get("bench-kit").role == "bench"
-    assert registry.get("shop-string-2").profile is None  # the removed profile is ignored: the default applies
+    assert (
+        registry.get("shop-string-2").profile is None
+    )  # the removed profile is ignored: the default applies
     for gone in DROPPED_IDS:
         with pytest.raises(KeyError):
             registry.get(gone)
@@ -288,6 +290,39 @@ def test_the_guest_panel_target_is_the_engine_with_conductor_env_workshop_sim(mo
         assert c.get("/api/kiosk/panel", auth=OPS).json()["target"] == "canopy"
         panel = GuestPanel.of(c.app.state.services)
         assert isinstance(c.portal.call(panel.target), EngineTarget)
+
+
+DELETED_TOOLING = re.compile(
+    r"release\.sh|install\.sh|canopy-(start|stop|restart|backup|restore|logs|kiosk-enroll)\b"
+)
+
+
+def test_nothing_outside_the_history_docs_names_the_deleted_venue_tooling():
+    """The venue box's installer, `bin/canopy-*` commands and `scripts/release.sh` went with D67 (review R3): only the
+    history (DECISIONS, STATUS, live-lab/PLAN, research/) may still name them."""
+    files = [ROOT / name for name in (".gitignore", "Makefile", "Dockerfile", "pyproject.toml", "CLAUDE.md")]
+    for folder in (
+        "conductor",
+        "tests",
+        "tests_e2e",
+        "deploy",
+        "scripts",
+        "web",
+        "config",
+        "docs/runbooks",
+        "docs/context",
+    ):
+        files += [
+            p for p in (ROOT / folder).rglob("*") if p.is_file() and p.suffix not in (".png", ".jpg", ".pyc")
+        ]
+    hits = [
+        f"{p.relative_to(ROOT)}:{n}"
+        for p in files
+        if p.exists() and p != Path(__file__).resolve() and ".venv" not in p.parts
+        for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+        if DELETED_TOOLING.search(line)
+    ]
+    assert hits == [], hits
 
 
 # ---- the preflight -------------------------------------------------------------------------------------------

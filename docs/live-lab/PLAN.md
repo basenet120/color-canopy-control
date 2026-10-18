@@ -240,7 +240,7 @@ unused (`afero.py` looks tokens up by registry account). A leftover `studio-grad
 `nice -n 15 uv run --offline pytest -q` (no `--ignore` needed any more), `uv run --offline ruff check . && uv run
 --offline ruff format --check .`, `node --test tests/*.test.mjs`, `nice -n 15 uv run --offline python -m
 conductor.soak` (exit 0; same rows as #27: the only FAIL is the non-gating "(reported)" D65 spread), a final
-`git grep -n -i -E 'vignette|workshop|PAIR_IDS|scene_gradient|module\.pair|TEST-CENTER|deploy/venue|dev_guest_panel|kiosk-resting|venue[- ]box|canopy-status|systemctl|chrony|docker compose|guest-dev|VWBD-HANDOFF|shop-string-1'`
+`git grep -n -i -E 'vignette|workshop|PAIR_IDS|scene_gradient|module\.pair|TEST-CENTER|deploy/venue|dev_guest_panel|kiosk-resting|venue[- ]box|canopy-status|systemctl|chrony|docker compose|guest-dev|VWBD-HANDOFF|shop-string-1|release\.sh|install\.sh|canopy-(start|stop|restart|backup|restore|logs|kiosk-enroll)\b'`
 whose remaining hits are only an explicit allowlist written into STATUS (history docs of §1.4's "leave" row,
 `research/**`, evidence files of §1.0, `.gitignore`, the strip tests, `gate.py`'s pinned "venue box" strings, the
 removal tolerance (`REMOVED_DEVICE_IDS`, D67), the Studio's kept `shop-string-1` option, demo-model's generated
@@ -1307,3 +1307,8 @@ git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)" && ~/canop
 - O11 gate wait shown only after a 409 — **accepted in the queue form** (`in_s`, `queued_until`); the pre-press countdown label is moot once nothing is refused.
 - O12 `publish` name clash in canopy.py — **accepted**: `LOOKS_SOURCE` etc. (§2.5).
 - O13 07 §8 still names the venue box; deploy check of a surviving look — **accepted** (§6.1, §8.1 step 3).
+
+**Build review of PR A (Oct 17, after stream R; each fixed with a regression test that failed first)**
+- PR-A R1 a surviving overlay entry naming a deleted vignette sim profile passed the preflight, then SimDriver (built at every start, live mode too) refused it — **fixed both ways**: `REMOVED_PROFILES` pops it by value (ignored, named, pruned) and the preflight builds every entry's profile (§1.5).
+- PR-A R2 after a failed preflight the checkout stays on the rejected code, and any restart of the KeepAlive job starts it — **fixed**: `canopy-mac install` exits 3 with the rollback line; the paste blocks roll back on rc 3 (§8.1, `release-and-freeze.md`, `mac-show-box.md` §5).
+- PR-A R3 two comments named the deleted `release.sh`/`install.sh`/`canopy-start` — **fixed**, and the §1.6 grep (plus a test) now covers those names.
