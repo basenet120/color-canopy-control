@@ -38,6 +38,12 @@
   try-on instead (`_joining_trial`): the approved look goes to every module; a re-pick that keeps the set keeps it.
 - In sim, the slots are commissioned automatically once every module's capabilities are read, so demos run T1
   exactly as the show would after install-day commissioning. On hardware commissioning is an explicit ops action.
+- **The operator repaint (D68 PR B2).** `repaint_plan(trio)` says, per painted mode, which modules a publish would
+  repaint (their own api record, Gate C at their address and — on a longer frame — a valid map; one that can't take
+  T1 drops out alone) and compiles their T1 plan; `repaint_target(mode)` is that against the live looks now (the
+  engine's job recomputes it when the scene's window opens). The engine's hook writes the job's bookkeeping into the
+  published-looks overlay (`conductor.looks.live.note_repaint`). After a restart, once every module is read (in sim:
+  after the start-up commissioning), the overlay's queued repaints go back to the engine (`_requeue_repaints`).
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from conductor.capabilities import Capabilities, detect
@@ -126,8 +132,10 @@ def split_canopy_positions(services: Any) -> tuple[list[str], list[str]]:
 @dataclass(frozen=True)
 class RepaintTarget:
     """One painted mode's slot against a trio (`ShowWiring.repaint_plan`): the modules whose api record differs from
-    the trio's T1 compile (`listed`), how many could be repainted (`eligible`), of `total`; the modules whose slot is
-    hand-painted in the app (`app`), not commissioned yet (`uncommissioned`) or commissioned (`commissioned`)."""
+    the trio's T1 compile (`listed`), how many could be repainted (`eligible`: their own api record, Gate C and — on
+    a longer frame — map), of `total`; the modules whose slot is hand-painted in the app (`app`), not commissioned yet
+    (`uncommissioned`) or commissioned (`commissioned`); and (B2) the T1 plan compiled over the eligible modules, which
+    the operator repaint writes, with the mode's label in the trio."""
 
     slot: str
     listed: list[str]
@@ -136,6 +144,9 @@ class RepaintTarget:
     app: list[str]
     uncommissioned: list[str]
     commissioned: list[str]
+    plan: Any = field(default=None, compare=False, repr=False)
+    label: str = ""
+    eligible_ids: list[str] = field(default_factory=list)
 
 
 class ShowWiring:
@@ -169,6 +180,7 @@ class ShowWiring:
         self._cleanup: list[Any] = []
         # mode id → the modes file a stepped rehearsal of it compiles against
         self._rehearsal_modes: dict[str, Any] = {}
+        self._requeued = False  # the overlay's queued operator repaints went back to the engine (D68 PR B2)
 
     # ---- capabilities --------------------------------------------------------------------------------------------
     def _registered(self, entry: Any) -> bool:
@@ -353,6 +365,9 @@ class ShowWiring:
         seed = getattr(engine, "seed_t1_hold", None)
         if seed is not None:
             seed()
+        # every module read (in sim: commissioned): the overlay's queued operator repaints go back (B2)
+        if self.caps_ready.is_set() and self.started:
+            self._requeue_repaints()
         plan = engine.current_plan()
         if plan is None:  # the first look: one burst, never a ripple (the engine sends a first look that way)
             await engine.request_mode(self.services.settings.kiosk.idle_mode, source="idle")
@@ -530,11 +545,13 @@ class ShowWiring:
         self.recipes = recipes
         self._rehearsal_modes.clear()
 
-    def repaint_plan(self, trio: Any) -> dict[str, RepaintTarget]:
-        """Per painted mode (a slot and T1 on its ladder): which modules' recorded slot doesn't hold what `trio`
-        compiles to (B1: the publish's locks and counts; B2: the repaint job). Per MODULE: the eligible modules are the
-        canopy modules whose record for the slot is origin "api" (and, on hardware, that have their own t1_frames
-        flag); T1 is compiled over a context restricted to them (PlanError → none eligible). Pure: no engine cache."""
+    def repaint_plan(self, trio: Any, *, only: Any = None) -> dict[str, RepaintTarget]:
+        """Per painted mode (a slot and T1 on its ladder; `only`: these modes): which modules' recorded slot doesn't
+        hold what `trio` compiles to (the publish's counts and app lock; B2: the repaint job). Per MODULE: the
+        eligible modules are the canopy modules whose record for the slot is origin "api", that have their own
+        t1_frames flag on hardware (Gate C at their address), and whose T1 frame compiles there (a longer frame needs
+        its own proven map); T1 is compiled over a context restricted to them. A module that can't take T1 drops out
+        alone, never the others. Pure: no engine cache."""
         import dataclasses
 
         from conductor.engine_api import PlanError
@@ -544,7 +561,16 @@ class ShowWiring:
         base = self.context(trio.modes, trio.recipes)
         simulated = self.services.engine_driver.simulated
         modules = list(self.services.registry.canopy_modules())
+
+        def compiled(mode_id: str, entries: list[Any]) -> Any:
+            try:
+                return compile_mode(mode_id, Tier.T1, dataclasses.replace(base, registry=entries))
+            except (PlanError, KeyError, LookupError):
+                return None
+
         for mode_id, mode in trio.modes.modes.items():
+            if only is not None and mode_id not in only:
+                continue
             if mode.slot is None or "canvas" not in mode.ladder:
                 continue
             app, uncommissioned, api = [], [], []
@@ -562,19 +588,20 @@ class ShowWiring:
                 if simulated or bool(getattr((base.flags or {}).get(e.id), "t1_frames", False))
             ]
             listed: list[str] = []
-            if eligible:
-                ctx = dataclasses.replace(base, registry=[e for e, _r in eligible])
-                try:
-                    plan = compile_mode(mode_id, Tier.T1, ctx)
-                except (PlanError, KeyError, LookupError):
-                    plan = None
-                if plan is None:
-                    eligible = []
-                else:
-                    for entry, record in eligible:
-                        mt = plan.modules.get(entry.id)
-                        if mt is not None and mt.slot_hash and mt.slot_hash != record["hash"]:
-                            listed.append(entry.id)
+            plan = compiled(mode_id, [e for e, _r in eligible]) if eligible else None
+            if plan is None and eligible:
+                # one module that can't take T1 (no map for its longer frame, no per-head mode) refuses the whole
+                # compile: keep the modules that compile on their own, and compile over those
+                eligible = [(e, r) for e, r in eligible if compiled(mode_id, [e]) is not None]
+                plan = compiled(mode_id, [e for e, _r in eligible]) if eligible else None
+            if plan is None:
+                eligible = []
+            else:
+                eligible = [(e, r) for e, r in eligible if e.id in plan.modules]  # read: driven
+                for entry, record in eligible:
+                    mt = plan.modules[entry.id]
+                    if mt.slot_hash and mt.slot_hash != record["hash"]:
+                        listed.append(entry.id)
             out[mode_id] = RepaintTarget(
                 slot=mode.slot,
                 listed=listed,
@@ -583,8 +610,69 @@ class ShowWiring:
                 app=app,
                 uncommissioned=uncommissioned,
                 commissioned=[e.id for e, _r in api],
+                plan=plan,
+                label=mode.label,
+                eligible_ids=[e.id for e, _r in eligible],
             )
         return out
+
+    def repaint_target(self, mode_id: str) -> RepaintTarget | None:
+        """The operator repaint's view of one painted mode against the LIVE looks now (the engine's job recomputes it
+        when the scene's window opens). None for a mode without a painted slot."""
+        from conductor.looks.live import live_trio
+
+        return self.repaint_plan(live_trio(self.services), only=[mode_id]).get(mode_id)
+
+    def _requeue_repaints(self) -> None:
+        """After a restart (once the capability reads and, in sim, the start-up commissioning are done): the overlay's
+        queued operator repaints go back to the engine at their due times, and its gate (`repaints`) seeds the
+        engine's, clamped to the interval (D68 PR B2). Once per process."""
+        if self._requeued or self.engine is None:
+            return
+        from conductor.canopy import RepaintJob
+        from conductor.looks.live import forget_queued, live_looks
+
+        engine = self.engine
+        if engine.stopped or getattr(engine, "repainting", False):
+            return
+        self._requeued = True
+        looks = live_looks(self.services)
+        clock = self.services.clock
+        now, mono = clock.now(), clock.monotonic()
+        engine.seed_repaint_gate({m: now - t for m, t in looks.file.repaints.items()})
+        queued = dict(looks.file.queued)
+        if not queued:
+            return
+        interval = self.services.settings.lab.repaint_min_interval_s
+        targets = self.repaint_plan(looks.trio, only=list(queued))
+        jobs = []
+        for mode_id, due_wall in queued.items():
+            target = targets.get(mode_id)
+            if target is None or not target.listed or target.plan is None:
+                continue
+            left = max(0.0, min(interval, due_wall - now))
+            jobs.append(RepaintJob(mode_id, target.slot, tuple(target.listed), target.label, mono + left))
+        current = looks.file.current
+        scheduled = (
+            engine.start_repaint(
+                jobs, generation=looks.generation, publication=current.id if current is not None else None
+            )
+            if jobs
+            else []
+        )
+        done = [m for m in queued if m not in {j.mode_id for j in scheduled}]
+        if done:
+            forget_queued(looks, done, now=now)  # nothing left to repaint for them
+        if scheduled:
+            log.info(
+                "Re-queued the operator repaint of %s after the restart",
+                ", ".join(j.mode_id for j in scheduled),
+            )
+
+    def _after_quiet(self) -> None:
+        """A repaint's quiet window ended: new capabilities that arrived during it are applied now."""
+        if self._reapply:
+            self._wake.set()
 
     def tier_allowed(self, mode_id: str, tier: Tier) -> tuple[bool, str]:
         if tier is Tier.STEPPED:
@@ -632,6 +720,8 @@ class ShowWiring:
 
         services = self.services
         services.extras[CAPS_KEY + "_wiring"] = self
+        from conductor.looks.live import live_looks, note_repaint
+
         engine = engine_from_services(
             services,
             compile=self.compile,
@@ -639,6 +729,11 @@ class ShowWiring:
             modes=self.mode_ids,
             tier_allowed=self.tier_allowed,
             rehearsal_compile=self.rehearsal_plan,
+            # the operator repaint (D68 PR B2): the live looks' targets now, their generation, and the overlay's
+            # bookkeeping (the gate, the queue, the history row, the Lab's progress)
+            repaint_target=self.repaint_target,
+            looks_generation=lambda: live_looks(services).generation,
+            on_repaint=lambda event, info: note_repaint(services, event, info),
         )
         original = engine.commission
 
@@ -657,6 +752,7 @@ class ShowWiring:
         services.extras[ENGINE_KEY] = engine
         self.engine = engine
         engine.recovery_listeners.append(self.request_refresh)
+        engine.quiet_listeners.append(self._after_quiet)
         callbacks = getattr(services.engine_driver, "on_recovery", None)
         if isinstance(callbacks, list):
             callbacks.append(self._on_driver_recovery)
@@ -686,6 +782,7 @@ class ShowWiring:
             # choice made while commissioning ran.
             current = self.engine.state().mode or self.services.settings.kiosk.idle_mode
             await self.engine.request_mode(current, source="startup")
+            self._requeue_repaints()  # the overlay's queued operator repaints, against what was just commissioned
         except asyncio.CancelledError:
             raise
         except Exception:

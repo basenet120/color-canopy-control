@@ -5,7 +5,8 @@ that is registered and writable but NOT in HUBSPACE_DEVICE_ALLOWLIST. The runtim
 mode) with a real AferoDriver on the fake transport. The test fails if any PUT for that device reaches the wire.
 
 **Every new writer path must add itself here** (reconciler, idle hold, slot manager, bench jobs, module page,
-the Lab's try-on, ...). `test_every_writer_module_is_listed` fails when a module that submits commands isn't covered.
+the Lab's try-on, the Lab publish's slot repaint, ...). `test_every_writer_module_is_listed` fails when a module that
+submits commands isn't covered.
 """
 
 from __future__ import annotations
@@ -421,6 +422,24 @@ async def _lab_trial(env: Env, address: str) -> str:
     return str(engine.last_status[address])
 
 
+async def _lab_publish_repaint(env: Env, address: str) -> str:
+    """The Design Lab publish's operator slot repaint (D68 PR B2): the engine's own job (`start_repaint`) writes the
+    slot object through `_commission_plan` and the executor, like commissioning. The Lab never writes."""
+    from types import SimpleNamespace
+
+    from conductor.canopy import RepaintJob
+
+    engine, device_id = _canopy_engine(env, address)
+    plan = engine.deps.compile("golden", Tier.T1)
+    engine.deps.repaint_target = lambda _mode: SimpleNamespace(listed=[device_id], plan=plan)
+    engine.start_repaint([RepaintJob("golden", "custom-3", (device_id,), "Golden", 0.0)], generation=0)
+    await engine.wait_repaint()
+    status = engine.repaint_json()
+    await engine.stop()
+    assert status is not None and status["modules"], "the repaint didn't try to write"
+    return str(status["modules"][0]["status"])
+
+
 WriterPath = Callable[[Env, str], Awaitable[str]]
 WRITER_PATHS: dict[str, WriterPath] = {
     "executor.submit (engine)": _executor_engine,
@@ -441,6 +460,7 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "program runner (stepped look)": _program_runner,
     "stepped rehearsal (Gate R)": _stepped_rehearsal,
     "lab try-on (module level)": _lab_trial,
+    "lab publish (slot repaint)": _lab_publish_repaint,
 }
 # Modules that submit commands or call driver.write, and the WRITER_PATHS entry covering each.
 COVERED_MODULES = {

@@ -22,6 +22,11 @@ scenes/modes/recipes trio, or a trio the Design Lab published — and the one fu
   rules, and git's own ids, order, ladders, slots and motion flags (the Lab never changes them).
 - **`install_looks`** is THE hot-apply checklist (§2.4): synchronous (no await, so no request sees half of it), deep
   copies, every process-lifetime copy refreshed.
+- **The operator repaint's bookkeeping (B2)** lives in the same file, parsed leniently on its own: `repaints` (scene →
+  wall time its last operator repaint started: the 2-min gate survives a restart, clamped to the interval) and
+  `queued` (scene → wall time a queued repaint is due: re-queued after a restart). A publish writes the queue with
+  its publication; the engine's hook (`note_repaint`) writes the gate when a scene starts and drops the scene from the
+  queue (and fills its history row's `repaint`) when it ends — without a history copy (the publication didn't change).
 
 This module imports conductor.looks / .scenes / .config only — never conductor.design_lab (pinned by a test).
 """
@@ -486,10 +491,13 @@ def _follow_git(looks: LiveLooks, current: Publication, *, now: float | None) ->
         looks.file = new_file  # memory follows git either way
 
 
-def write_looks(looks: LiveLooks, new_file: ShowLooksFile, *, now: float) -> bytes | None:
+def write_looks(
+    looks: LiveLooks, new_file: ShowLooksFile, *, now: float, history: bool = True
+) -> bytes | None:
     """Validate, write a history copy of the file being replaced, then the new file (atomic, 0600). SYNC, on the loop
     thread (a small file). Returns the replaced file's bytes (None: there was none) for a rollback. OSError when it
-    can't be written (memory untouched). `looks.file` changes only after the write."""
+    can't be written (memory untouched). `looks.file` changes only after the write. `history=False`: the operator
+    repaint's bookkeeping (its gate, queue and history row) — the publication didn't change, so no copy is kept."""
     from conductor.tokens import atomic_write
 
     if looks.path is None:
@@ -504,14 +512,81 @@ def write_looks(looks: LiveLooks, new_file: ShowLooksFile, *, now: float) -> byt
         old = looks.path.read_bytes() if looks.path.is_file() else None
     except OSError:
         old = None
-    if old is not None:
-        history = looks.path.parent / "history"
-        target = _free_name(history, f"show-looks-{_utc_stamp(now)}")
+    if old is not None and history:
+        copies = looks.path.parent / "history"
+        target = _free_name(copies, f"show-looks-{_utc_stamp(now)}")
         atomic_write(target, old, mode=0o600)
-        _prune(history)
+        _prune(copies)
     atomic_write(looks.path, text, mode=0o600)
     looks.file = new_file
     return old
+
+
+# ---- the operator repaint's bookkeeping (D68 PR B2) -------------------------------------------------------------------
+def _bookkeep(looks: LiveLooks, new_file: ShowLooksFile, *, now: float, what: str) -> None:
+    """Write the repaint's bookkeeping (no history copy). A failure is logged; memory follows anyway (the gate and
+    the queue are best effort across a restart, never a reason to stop a repaint)."""
+    if looks.path is None:
+        looks.file = new_file
+        return
+    try:
+        write_looks(looks, new_file, now=now, history=False)
+    except (OSError, ValidationError) as exc:
+        log.warning("Published looks: couldn't save the repaint's %s (%s); kept in memory", what, exc)
+        looks.file = new_file
+
+
+def note_repaint(services: Any, event: str, info: Any) -> None:
+    """The engine's repaint hook (CanopyEngine.deps.on_repaint): "progress" → `LiveLooks.repaint` (RepaintJSON, the
+    Lab polls it); "started" → `repaints[mode]` = its wall time (the 2-min gate survives a restart); "finished" →
+    the scene leaves `queued` and its publication's history row gets `repaint[mode] = {slot, applied, skipped,
+    failed}`."""
+    looks = (getattr(services, "extras", None) or {}).get(LOOKS_KEY)
+    if looks is None:
+        return
+    if event == "progress":
+        looks.repaint = info
+        return
+    if not isinstance(info, Mapping):
+        return
+    mode = str(info.get("mode") or "")
+    if not mode:
+        return
+    clock = getattr(services, "clock", None)
+    now = clock.now() if clock is not None else 0.0
+    file = looks.file
+    if event == "started":
+        at = info.get("at")
+        stamp = float(at) if _finite(at) else now
+        _bookkeep(
+            looks, file.model_copy(update={"repaints": {**file.repaints, mode: stamp}}), now=now, what="gate"
+        )
+        return
+    if event != "finished" or info.get("aborted"):
+        return
+    queued = {k: v for k, v in file.queued.items() if k != mode}
+    history = list(file.history)
+    publication = info.get("publication")
+    if info.get("started") or info.get("reason"):
+        row = {
+            "slot": str(info.get("slot") or ""),
+            "applied": int(info.get("applied") or 0),
+            "skipped": int(info.get("skipped") or 0),
+            "failed": int(info.get("failed") or 0),
+        }
+        history = [
+            h.model_copy(update={"repaint": {**(h.repaint or {}), mode: row}}) if h.id == publication else h
+            for h in history
+        ]
+    _bookkeep(looks, file.model_copy(update={"queued": queued, "history": history}), now=now, what="queue")
+
+
+def forget_queued(looks: LiveLooks, modes: list[str], *, now: float) -> None:
+    """Drop scenes from `queued` that have nothing left to repaint (a restart found their slots current)."""
+    file = looks.file
+    queued = {k: v for k, v in file.queued.items() if k not in modes}
+    if queued != file.queued:
+        _bookkeep(looks, file.model_copy(update={"queued": queued}), now=now, what="queue")
 
 
 def restore_file(looks: LiveLooks, old: bytes | None, file: ShowLooksFile) -> None:
@@ -777,11 +852,13 @@ __all__ = [
     "build_live_looks",
     "changed_scenes",
     "config_sha",
+    "forget_queued",
     "git_trio",
     "install_looks",
     "live_looks",
     "live_trio",
     "load_live_looks",
+    "note_repaint",
     "preflight_line",
     "trio_sha",
     "validate_trio",

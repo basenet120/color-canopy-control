@@ -349,19 +349,13 @@ APP_LOCK = (
     "iPad describe colours the lights don't show. Repaint it in the app and record it on the module page's Slots tab "
     "first, or publish only its brightness, copy or timing."
 )
-API_LOCK = (
-    "{scene}'s painted design is in {slot} on {n}; repainting from the Lab isn't on this box yet. Publish its colours "
-    "with the painted design unchanged, or publish and then commission again on /ops/bench."
-)
-API_WARNING = (
-    "{scene}'s painted design is in {slot} on {n}: publishing this design needs a slot repaint, which isn't on this "
-    "box yet (Revert to approved and Undo are always allowed)."
-)
+# B2 (the operator repaint, §2.6): the count-based sentences of a painted scene's RepaintInfo.
 NO_REPAINT = "No slot repaint: no module has {slot} commissioned {where}."
-SIM_REPAINT = (
-    "In the simulator a new painted design publishes: {scene} shows at module level until the reconciler rewrites "
-    "{slot} on {n} (at most once every 10 min per slot); on the show box this needs PR B2's repaint."
+SOME_REPAINT = (
+    "{slot} is commissioned on {eligible} of {total} modules ({labels}); publishing repaints those {eligible} (one slot "
+    "write each). The other {rest} get the published design when they are commissioned."
 )
+ALL_REPAINT = "Publishing a new painted design repaints {slot} on {n} (one slot write each)."
 
 
 def _count(n: int) -> str:
@@ -399,10 +393,6 @@ def app_lock_sentence(lab: LabService, scene_id: str, app: list[Any]) -> str:
     return APP_LOCK.format(scene=_live_name(lab, scene_id), n=_count(len(app)), labels=_labels(app))
 
 
-def api_lock_sentence(lab: LabService, scene_id: str, slot: str, api: list[Any]) -> str:
-    return API_LOCK.format(scene=_live_name(lab, scene_id), slot=slot, n=_count(len(api)))
-
-
 def _t1_proven(lab: LabService, entry: Any) -> bool:
     """Has this module its own Gate C (t1_frames, proven on the kit at its engine address)?"""
     try:
@@ -412,38 +402,61 @@ def _t1_proven(lab: LabService, entry: Any) -> bool:
         return False
 
 
+def _eligible(lab: LabService, scene_id: str, api: list[Any]) -> list[Any]:
+    """The modules an operator repaint would write (B2): their own api record, Gate C and — on a longer frame — map
+    (ShowWiring.repaint_plan's rule, against the live looks); without the show wiring, the records and flags."""
+    wiring = lab.show()
+    if wiring is not None:
+        from conductor.looks.live import live_trio
+
+        try:
+            target = wiring.repaint_plan(live_trio(lab.services), only=[scene_id]).get(scene_id)
+        except Exception:  # noqa: BLE001 - the counts fall back to the records
+            target = None
+        if target is not None:
+            ids = set(target.eligible_ids)
+            return [e for e in api if e.id in ids]
+    if lab.simulated:
+        return list(api)
+    return [e for e in api if _t1_proven(lab, e)]
+
+
 def repaint_info(lab: LabService, scene_id: str) -> dict | None:
-    """RepaintInfo (§2.11) for a painted scene, None for the others. B1: `available` is false wherever a module has
-    the slot commissioned (a design change there is refused at publish; the repaint job is PR B2)."""
+    """RepaintInfo (§2.11) for a painted scene, None for the others: where its slot is commissioned, how many modules
+    a publish of a new painted design would repaint (B2: their own api record, Gate C and map), and the §2.6 sentence
+    for those counts. `available` is false only where a module's slot is hand-painted in the app (the app lock)."""
     mode = lab.approved.modes.mode(scene_id)
     slot = mode.slot
     if slot is None:
         return None
     api, app, total = slot_records(lab, slot)
     simulated = lab.simulated
-    if simulated:
-        eligible = len(api)
-    else:
-        eligible = sum(1 for e in api if _t1_proven(lab, e))
+    eligible = _eligible(lab, scene_id, api)
     if app:
         sentence = app_lock_sentence(lab, scene_id, app)
-    elif api and simulated:
-        sentence = SIM_REPAINT.format(scene=_live_name(lab, scene_id), slot=slot, n=_count(len(api)))
-    elif api:
-        sentence = api_lock_sentence(lab, scene_id, slot, api)
-    else:
+    elif not eligible:
         sentence = NO_REPAINT.format(
             slot=slot, where="in this simulator" if simulated else "on this show box"
         )
+    elif len(eligible) < total:
+        sentence = SOME_REPAINT.format(
+            slot=slot,
+            eligible=len(eligible),
+            total=total,
+            labels=_labels(eligible),
+            rest=total - len(eligible),
+        )
+    else:
+        sentence = ALL_REPAINT.format(slot=slot, n=_count(total))
     return {
         "slot": slot,
         "commissioned": [e.module or e.id for e in api],
-        "eligible": eligible,
+        "eligible": len(eligible),
         "total": total,
         "app": [e.module or e.id for e in app],
         "simulated": simulated,
-        # B1: a design change publishes where no slot is hand-painted, and (on hardware) none is commissioned
-        "available": not app and (simulated or not api),
+        # a new painted design publishes wherever no module's slot is hand-painted (B2 repaints the commissioned ones)
+        "available": not app,
         "sentence": sentence,
     }
 
@@ -504,26 +517,6 @@ def check_app_lock(lab: LabService, draft: SceneDraft) -> None:
 check_t1_lock = check_app_lock  # the old name (D66); the lock is the app lock now (D68)
 
 
-def api_warning(lab: LabService, draft: SceneDraft) -> dict | None:
-    """B1, on hardware: a painted design change where the slot is commissioned (api) is refused at publish — a
-    warning in the preview, never a refusal there (the draft can still be saved, tried on and exported)."""
-    if draft.scene_id not in lab.approved.modes.modes:
-        return None
-    slot = lab.approved.modes.mode(draft.scene_id).slot
-    if slot is None:
-        return None
-    if lab.simulated:  # the simulator publishes it (held, then the reconciler rewrites the slots)
-        return None
-    api, _app, _total = slot_records(lab, slot)
-    if not api:
-        return None
-    changed = D.painted_change(_live_seed(lab, draft.scene_id), draft)
-    if changed is None:
-        return None
-    message = API_WARNING.format(scene=_live_name(lab, draft.scene_id), slot=slot, n=_count(len(api)))
-    return {"rule": "repaint", "field": changed, "message": message}
-
-
 # ---- the preview ---------------------------------------------------------------------------------------------------------
 def _unknown(scene_id: str) -> D.DraftError:
     return D.DraftError(
@@ -563,8 +556,6 @@ def preview(lab: LabService, draft: SceneDraft) -> dict:
         )
         if p.mode == scene_id
     ]
-    if (repaint := api_warning(lab, draft)) is not None:  # B1: refused at publish, never here
-        warnings.append(repaint)
     stepped = copy["stepped"]
     show_box = show_box_today(lab, patched, scene_id)
     driven = (show_box.get("positions") or {}).get("driven") or list(scene_rules.LIVE_KITS)
@@ -606,7 +597,6 @@ __all__ = [
     "T1_LOCKED",
     "TIERS",
     "T1Locked",
-    "api_warning",
     "check_app_lock",
     "check_t1_lock",
     "design_caps",

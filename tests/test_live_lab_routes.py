@@ -218,11 +218,20 @@ def test_the_lab_pages_fixtures_match_the_real_answers(no_threads):
             # the same dialog confirmed after someone else published: the conflict
             v2 = await save(c, {TIDES: brighter(TIDES), GOLDEN: pinker_hour()})
             await publish(c, v2, who="B")
-            stale = await ask(c, vid, expected_live="approved", confirm=first.json()["confirm"])
-            out["conflict"] = (stale.status_code, stale.json())
+            # B2: Pinker Hour runs held while its slots are repainted (the publish answers before the repaint)
             out["live held"] = (await c.get("/api/lab/live")).json()
             out["catalog"] = (await c.get("/api/lab/catalog")).json()
             out["state"] = (await c.get("/api/lab/state")).json()
+            for _ in range(40):  # the repaint's quiet window: LiveJSON.repaint is the RepaintJSON in progress
+                if w.engine.repaint_quiet:
+                    break
+                await w.run_for(0.25)
+            out["live repainting"] = (await c.get("/api/lab/live")).json()
+            # a publish is refused while Pinker Hour's slots are being repainted
+            await w.engine.wait_repaint()
+            out["live repainted"] = (await c.get("/api/lab/live")).json()
+            stale = await ask(c, vid, expected_live="approved", confirm=first.json()["confirm"])
+            out["conflict"] = (stale.status_code, stale.json())
         await w.close()
         return out
 
@@ -255,6 +264,19 @@ def test_the_lab_pages_fixtures_match_the_real_answers(no_threads):
     assert golden["live_look"]["layout"]["kind"] == "linear" and golden["live_source"] == "published"
     assert shape_problems(additions["show_looks"], out["catalog"]["show_looks"]) == []
     assert shape_problems(fixture("state_additions.json"), out["state"]) == []
+    # B2's RepaintJSON (U's live_repainting.json / repaint.json) against the real one, during and after
+    during = out["live repainting"]["repaint"]
+    assert during is not None and during["running"] is True and during["scene"] == GOLDEN, during
+    assert shape_problems(fixture("live_repainting.json"), out["live repainting"]) == []
+    assert shape_problems(fixture("repaint.json"), during) == []
+    assert set(fixture("repaint.json")) == set(during)
+    after = out["live repainted"]["repaint"]
+    assert (
+        after["running"] is False
+        and after["finished_at"]
+        and {m["status"] for m in after["modules"]} == {"applied"}
+    )
+    assert out["state"]["show_looks"]["repainting"] is True
 
 
 def test_the_lab_pages_fallback_fixture_matches_the_real_answer(tmp_path, no_threads):

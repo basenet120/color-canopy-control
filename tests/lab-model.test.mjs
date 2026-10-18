@@ -1447,6 +1447,7 @@ test("repaintNote: the server's sentence, plus the B1 note only over commissione
   assert.equal(M.repaintNote(info), info.sentence);
   assert.equal(M.repaintNote({ ...info, available: false }), `${info.sentence} ${M.LIVE_COPY.repaintOff}`);
   assert.equal(M.repaintNote({ ...info, available: false, commissioned: [] }), info.sentence, "nothing commissioned: nothing to repaint");
+  assert.equal(M.repaintNote({ ...info, available: false, app: ["r1c1"] }), info.sentence, "B2: the app lock's own sentence");
   assert.equal(M.repaintNote(null), "");
 });
 

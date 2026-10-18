@@ -111,16 +111,18 @@ async def show(
     prepare=None,
     quiet: bool = True,
     settings=None,
+    sim: SimSettings | None = None,
 ) -> Show:
     """The show on virtual time, its live looks built before ShowWiring (the lifespan's order). `live`: the show
-    box's tier rules over the simulator's transport (no automatic commissioning, no bench flags)."""
+    box's tier rules over the simulator's transport (no automatic commissioning, no bench flags). `sim`: the
+    simulator's settings (default: acceptance with no random throttling or silent drops)."""
     from conductor.alerts import AlertBoard
     from conductor.services import build_services
     from conductor.show import ShowWiring
 
     owned = data is None
     data = data or Path(tempfile.mkdtemp(prefix="canopy-live-lab-"))
-    sim = SimSettings.from_acceptance().with_(throttle_429_rate=0.0, silent_drop_rate=0.0)
+    sim = sim or SimSettings.from_acceptance().with_(throttle_429_rate=0.0, silent_drop_rate=0.0)
     services = build_services(
         {"CONDUCTOR_DATA_DIR": str(data)}, clock=VirtualClock(), config_dir=CONFIG_DIR, sim_settings=sim
     )

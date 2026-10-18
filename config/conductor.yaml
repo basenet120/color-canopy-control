@@ -65,6 +65,10 @@ lab:
   # this long, then the approved look is back. Must be at most kiosk.idle_return_s (validated), so the idle hold never
   # swaps the look under a try-on. null = kiosk.idle_return_s. Any other look, a pause, commissioning or a stop ends it.
   trial_max_s: 150
+  # Alon, Oct 17: an operator republish of a painted scene repaints its slot at most this often (a sooner publish
+  # installs at once, shows the scene at module level and queues the repaint; Revert and Undo are never refused). The
+  # reconciler's own drift rewrite stays at reconciler.slot_rewrite_min_interval_s.
+  repaint_min_interval_s: 120
 
 effects:
   # motionEffect / brightnessEffect codes the bench has enabled. Every code starts disabled (06 #4).
