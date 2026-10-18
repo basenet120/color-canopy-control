@@ -817,6 +817,8 @@ export const TRIAL_COPY = Object.freeze({
   unreachable: "Can’t reach the Conductor, so whether a try-on is running is unknown.",
   stopped: "The canopy engine is stopped, so a try-on can’t start.",
   commissioning: "The canopy is being set up (commissioning), so a try-on can’t start until that finishes.",
+  repainting:
+    "A publish is repainting a painted scene’s slot (a few seconds), so a try-on can’t start until that finishes.",
   paused: "Guest input is paused by staff, so a try-on can’t start; resume guest input on /ops first.",
   outage: "The canopy is resting after a connection problem, so a try-on can’t start.",
   problems: "Fix the draft’s problems first: only a draft the server accepts can be tried on.",
@@ -856,7 +858,7 @@ export function trialApiFromError(err) {
  * Whether the Try-on panel offers its controls, and if not, the one readable line it shows instead.
  * `api`: 'loading' | 'ready' | 'missing' | 'no-engine' | 'unreachable' | 'error'; `engine`: StateJSON.engine.
  * → {controls, canApply, canStop, reason}. The controls show only when the API exists and the engine runs; a pause,
- * commissioning or an outage keeps them (a running try-on can still be ended) with Apply off and the reason.
+ * a publish's slot repaint, commissioning or an outage keeps them (a running try-on can still be ended) with Apply off and the reason.
  */
 export function trialAvailability({ api, engine, trial = null, problems = 0, error = "" } = {}) {
   const note = (reason) => ({ controls: false, canApply: false, canStop: false, reason });
@@ -868,7 +870,9 @@ export function trialAvailability({ api, engine, trial = null, problems = 0, err
   const e = engine && typeof engine === "object" ? engine : null;
   if (e && e.running === false) return note(TRIAL_COPY.stopped);
   let reason = "";
-  if (e && e.commissioning) reason = TRIAL_COPY.commissioning;
+  // a publish's slot repaint first: the engine's public commissioning flag is true in its quiet window too
+  if (e && e.repaint_quiet) reason = TRIAL_COPY.repainting;
+  else if (e && e.commissioning) reason = TRIAL_COPY.commissioning;
   else if (e && e.paused) reason = TRIAL_COPY.paused;
   else if (e && e.outage) reason = TRIAL_COPY.outage;
   else if (problems > 0) reason = TRIAL_COPY.problems;
@@ -1771,7 +1775,8 @@ export function ipadCards(live, catalog) {
  * the B1 note when a new painted design can't be published here (commissioned slots, no repaint on this box yet). */
 export function repaintNote(info) {
   if (!info || typeof info !== "object") return "";
-  const blocked = info.available === false && Array.isArray(info.commissioned) && info.commissioned.length > 0;
+  // B1's note (a design change over commissioned slots, no repaint here); never under B2's app lock, whose sentence says it
+  const blocked = info.available === false && Array.isArray(info.commissioned) && info.commissioned.length > 0 && strs(info.app).length === 0;
   return [str(info.sentence), blocked ? LIVE_COPY.repaintOff : ""].filter(Boolean).join(" ");
 }
 

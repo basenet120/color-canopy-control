@@ -113,6 +113,24 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   (`_restore_approved`), so a trial plan never stays installed without its override and bound. Memory only: a
   restart has no trial.
 
+- **The operator repaint (D68 PR B2, docs/live-lab/PLAN.md §2.6–§2.7).** A publish of a new painted design hands
+  the engine ONE job (`start_repaint`, a list of `RepaintJob`s: a scene, its slot, the modules whose commissioned
+  record doesn't hold the live design, when it is due). The job's (device, slot) pairs are marked pending at once
+  (`repaint_pending`: the reconciler's `check_slots` skips them, and the scene is held below T1 while any is pending);
+  a newer job cancels one that hasn't started writing, its marks with it. Each scene waits until it is due — at most
+  once per `lab.repaint_min_interval_s` per scene, enforced here (`_repaint_last`, monotonic; seeded from the
+  overlay's wall times after a restart, clamped to the interval) — then, unless the engine is stopped, commissioning,
+  resting or rehearsing, opens a **quiet window** (`quiet`: the public `commissioning` property says so, so the
+  reconciler, the idle hold, the stepped runner and the capability re-pick hold still; guest, ops and try-on requests
+  are refused with `REPAINT_MESSAGE` and a retry-after; a try-on ends first), waits for the commands in flight, and
+  writes the slot on each listed module through `_commission_plan(min_interval=0, only=…, verb="publish repaint",
+  locked=True)`: one slot write per module under its `_slot_lock`, header from the device's readback, retried at most
+  twice more only when it didn't land, never over a hand-painted ("app") slot or a module held by the module page,
+  `slot_written` stamped at submit (the reconciler's 600 s limit counts from the attempt), the readback hash recorded
+  exactly as commissioning records it. Its `finally` clears the scene's marks and the window; a fully applied scene's
+  hold lifts and the look showing is re-picked once (the re-select after rewriting the active slot: one T1 burst).
+  `commission()` is refused while a job runs; a publish is refused only while one is writing (`looks_refusal`).
+
 All timing comes from the injected Clock (safe on VirtualTimeLoop); nothing here touches the network except through a
 Target's driver/executor.
 """
@@ -124,7 +142,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -202,6 +220,15 @@ TRIAL_CHANGED_MESSAGE = (
 _ANY_SESSION: Any = object()  # start_trial's default: whatever runs (or nothing)
 TRIAL_SKIP = frozenset({Tier.T1, Tier.T2, Tier.STEPPED})
 ONE_BURST_SOURCES = RECOMPILE_SOURCES | {TRIAL_SOURCE}
+# The operator repaint (D68 PR B2): what a guest, ops or a try-on hears during its quiet window (true: the slots are
+# being rewritten), the verb on its commands' labels ("publish repaint: Golden Hour → custom-3"), and the window's
+# estimate (about M·1.2 + 3 s for M modules: one slot write each, paced by the executor, plus the header reads).
+REPAINT_MESSAGE = "One moment: the canopy is changing."
+REPAINT_VERB = "publish repaint"
+REPAINT_PER_MODULE_S = 1.2
+REPAINT_BASE_S = 3.0
+# the window waits this long at most for the commands already in flight (as commissioning does)
+REPAINT_IDLE_WAIT_S = 30.0
 
 Compiler = Callable[[str, Tier], ModePlan]
 Ladder = Callable[[str], list[Tier]]
@@ -250,6 +277,30 @@ class EngineDeps:
     # <data>/bench/rehearsals, where its reports go (None = telemetry only).
     rehearsal_compile: Callable[[str], ModePlan] | None = None
     rehearsal_dir: Path | None = None
+    # The operator repaint (D68 PR B2): mode → its RepaintTarget against the live looks NOW (ShowWiring.repaint_plan:
+    # `listed`, the modules whose commissioned record doesn't hold the live design, and `plan`, T1 compiled over the
+    # eligible modules; None when the mode has no painted slot); the live looks' generation (a newer publish aborts a
+    # job); and a hook told of each step of a job — ("progress", RepaintJSON), ("started", {mode, slot, at,
+    # publication}), ("finished", {mode, slot, publication, applied, skipped, failed, …}) — for the overlay and the Lab.
+    repaint_target: Callable[[str], Any] | None = None
+    looks_generation: Callable[[], int] | None = None
+    on_repaint: Callable[[str, dict], Any] | None = None
+    # Awaited by a due scene before its window opens: the show's start-up is over (hardware: the first round of
+    # capability reads; sim: the start-up commissioning), so a job re-queued at engine start never compiles its
+    # target before any profile is read. None = no wait.
+    repaint_ready: Callable[[], Awaitable[Any]] | None = None
+
+
+@dataclass(frozen=True)
+class RepaintJob:
+    """One scene of an operator repaint (D68 PR B2): its slot, the modules to repaint (marked pending at once), its
+    label (the Lab), and when it is due (monotonic; `start_repaint` never lets it run sooner than the gate allows)."""
+
+    mode_id: str
+    slot: str
+    modules: tuple[str, ...]
+    label: str = ""
+    due_mono: float = 0.0
 
 
 @dataclass
@@ -364,6 +415,21 @@ class CanopyEngine:
         # slot as stale, or the reconciler would never rewrite it and the hold would never lift); a slot record that
         # makes the mode's slots current lifts it (`_record_slot_value`), with one T1 re-pick.
         self._t1_hold: set[str] = set()
+        # The operator repaint (D68 PR B2): (device, slot) → the job that marked it pending; the job's task (not one of
+        # the burst tasks: wait_idle never waits for a queued repaint, and the job itself waits for them); the quiet
+        # window and its estimated end; mode → monotonic start of its last operator repaint (the 2-min gate); the
+        # scenes of the running job not started yet (a newer job keeps their due times); the job's RepaintJSON (the
+        # Lab); listeners told when a quiet window ends (the show's capability loop re-picks what it deferred).
+        self._repaint_pending: dict[tuple[str, str], int] = {}
+        self._repaint_task: asyncio.Task | None = None
+        self._repaint_quiet = False
+        self._repaint_serial = 0
+        self._repaint_last: dict[str, float] = {}
+        self._repaint_ends: float | None = None
+        self._repaint_waiting: dict[str, RepaintJob] = {}
+        self.repaint_status: dict | None = None
+        self.quiet_listeners: list[Callable[[], Any]] = []
+        self.stats["repaints"] = 0
         # modes a publish's re-pick couldn't show under the published looks (their warn stands until one shows)
         self._unshowable: set[str] = set()
         self.stats["governor_trips"] = 0
@@ -468,6 +534,11 @@ class CanopyEngine:
             trial_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await trial_task
+        repaint_task = self._repaint_task
+        if repaint_task is not None and repaint_task is not _current_task():
+            repaint_task.cancel()  # its finally clears its marks and the quiet window
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await repaint_task
         await self.reconciler.stop()
         for task in list(self._tasks):
             task.cancel()
@@ -511,8 +582,31 @@ class CanopyEngine:
         return self._outage
 
     @property
+    def quiet(self) -> bool:
+        """Commissioning, or an operator repaint's quiet window (D68 PR B2): nothing else writes to the canopy."""
+        return self._commissioning or self._repaint_quiet
+
+    @property
     def commissioning(self) -> bool:
-        return self._commissioning
+        """The PUBLIC flag the reconciler (tick, re-assert, idle hold and reset), the stepped runner, the show's
+        capability re-pick and the kiosk read: `quiet`, so they all hold still during a repaint's window too. Internal
+        reads of `self._commissioning` are about commissioning itself."""
+        return self.quiet
+
+    @property
+    def repaint_quiet(self) -> bool:
+        """An operator repaint is writing now (its quiet window)."""
+        return self._repaint_quiet
+
+    @property
+    def repainting(self) -> bool:
+        """An operator repaint job is queued or running (from the publish until its last scene's finally)."""
+        return self._repaint_task is not None and not self._repaint_task.done()
+
+    @property
+    def repaint_pending(self) -> frozenset[tuple[str, str]]:
+        """(device, slot) pairs an operator repaint will write: the reconciler never judges or rewrites them."""
+        return frozenset(self._repaint_pending)
 
     @property
     def stopped(self) -> bool:
@@ -604,6 +698,9 @@ class CanopyEngine:
             return self._refused(STOPPED_MESSAGE, None)
         if self._commissioning:
             return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        # a publish's slot repaint is writing (D68 PR B2): every request waits a moment
+        if self._repaint_quiet:
+            return self._refused(REPAINT_MESSAGE, self._repaint_left())
         if source == "kiosk":
             if self._paused:
                 return self._refused(PAUSED_MESSAGE, None)
@@ -658,6 +755,8 @@ class CanopyEngine:
             return self._refused(STOPPED_MESSAGE, None)
         if self._commissioning:
             return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        if self._repaint_quiet:
+            return self._refused(REPAINT_MESSAGE, self._repaint_left())
         if self.guest_overrides_active:
             self._guest_brightness, self._guest_power = None, True
             self._apply_guest(source, "clear")
@@ -754,10 +853,14 @@ class CanopyEngine:
     async def reassert_all(self, *, source: str) -> CanopyState:
         """Send the full state vector to every non-locked module, now (one burst). During an outage, probe instead:
         the first good readback re-applies the look to every module."""
+        if self._commissioning:
+            return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        if self._repaint_quiet:  # a publish's slot repaint is writing (D68 PR B2): nothing else writes
+            return self._refused(REPAINT_MESSAGE, self._repaint_left())
         if self._outage is not None:
             await self.reconciler.probe()
             return self.state()
-        if self._plan is not None and not self._commissioning:
+        if self._plan is not None:
             self.send(None, source=source, label=f"re-assert all: {self._plan.mode_id}")
         return self.state()
 
@@ -802,6 +905,17 @@ class CanopyEngine:
             return {"ok": False, "message": "Commissioning is already running.", "modes": {}, "skipped": []}
         if self._outage is not None:
             return {"ok": False, "message": RESTING_MESSAGE, "modes": {}, "skipped": []}
+        if self.repainting:  # a publish's slot repaint (D68 PR B2) is queued or writing: never both at once
+            left = self.repaint_left_total()
+            slot = (self.repaint_status or {}).get("slot") or "a slot"
+            return {
+                "ok": False,
+                "message": f"A publish is repainting {slot} (about {math.ceil(left)} s left); commission once it "
+                "ends.",
+                "modes": {},
+                "skipped": [],
+                "retry_after_s": round(max(1.0, left), 2),
+            }
         # The try-on ends; its scene's approved look goes back without T1/T2/stepped: the show's wrapper has already
         # set its commissioning flag, under which T1 passes without slot records. _replan_soon lifts it afterwards.
         self._clear_trial("commissioning started", repick=True, skip=TRIAL_SKIP)
@@ -1027,6 +1141,8 @@ class CanopyEngine:
             return CanopyPhase.RESTING, STARTING_MESSAGE
         if self._commissioning:
             return CanopyPhase.UPDATING, "Writing the saved patterns to every registered strand…"
+        if self._repaint_quiet:
+            return CanopyPhase.UPDATING, REPAINT_MESSAGE
         stuck = [d for d, s in active if self._stuck(d, s)]
         if stuck or unresolved:
             names = [modules[d]["label"] for d in [*stuck, *unresolved]]
@@ -1091,6 +1207,11 @@ class CanopyEngine:
         if self._commissioning:
             raise RehearsalRefused(
                 "Commissioning is writing the saved patterns; rehearse once it has finished."
+            )
+        if self._repaint_quiet:
+            raise RehearsalRefused(
+                f"A publish is repainting a saved pattern (about {math.ceil(self._repaint_left() or 1)} s left); "
+                "rehearse once it has finished."
             )
         if self._outage is not None:
             raise RehearsalRefused(
@@ -1302,7 +1423,7 @@ class CanopyEngine:
         if still is None:
             return  # the run's own hold stays
         self._install(still, "reconciler")
-        if self._outage is None and not self._commissioning:
+        if self._outage is None and not self.quiet:
             changed = [d for d in still.modules if self.desired_rows(d) != self.sent_rows.get(d)]
             if changed:
                 self.send(changed, source="reconciler", label=f"after the stepped rehearsal: {mode_id}")
@@ -1335,6 +1456,8 @@ class CanopyEngine:
             return self._refused(STOPPED_MESSAGE, None)
         if self._commissioning:
             return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        if self._repaint_quiet:
+            return self._refused(REPAINT_MESSAGE, self._repaint_left())
         if self._paused:
             return self._refused(TRIAL_PAUSED_MESSAGE, None)
         if self._outage is not None:
@@ -1561,13 +1684,16 @@ class CanopyEngine:
             return "outage", float(self.deps.settings.reconciler.outage_probe_interval_s)
         if self._rehearsal is not None:
             return "rehearsal", self._rehearsal_left()
+        # B2: only while a repaint WRITES (a queued one is replaced by the new publish)
+        if self._repaint_quiet:
+            return "repainting", self._repaint_left()
         return None
 
     def t1_hold_for(self, modes: Iterable[str]) -> set[str]:
         """The modes of `modes` to hold off T1: a slot, T1 on the ladder and allowed (every position commissioned),
-        and some module's commissioned (api) record differing from what the live looks compile to there. Compiled
-        through the show (the live trio), never the cache. A mode whose T1 doesn't compile isn't held (it isn't
-        picked anyway)."""
+        and some module's commissioned (api) record differing from what the live looks compile to there, or (B2) some
+        module's slot pending an operator repaint. Compiled through the show (the live trio), never the cache. A mode
+        whose T1 doesn't compile isn't held (it isn't picked anyway)."""
         held: set[str] = set()
         for mode_id in modes:
             try:
@@ -1581,6 +1707,9 @@ class CanopyEngine:
             for device_id, mt in plan.modules.items():
                 if not mt.slot or not mt.slot_hash:
                     continue
+                if (device_id, mt.slot) in self._repaint_pending:  # its repaint hasn't finished yet
+                    held.add(mode_id)
+                    break
                 record = self.recorded_slot(device_id, mt.slot)
                 if record is not None and record["origin"] == "api" and record["hash"] != mt.slot_hash:
                     held.add(mode_id)
@@ -1694,6 +1823,411 @@ class CanopyEngine:
         if st.refused:
             self._safe_look_now()
         return st
+
+    # ---- the operator repaint (D68 PR B2, docs/live-lab/PLAN.md §2.6–§2.7) -----------------------------------------
+    def _repaint_interval(self) -> float:
+        lab = getattr(self.deps.settings, "lab", None)
+        return float(getattr(lab, "repaint_min_interval_s", 120.0))
+
+    def repaint_wait(self, mode_id: str) -> float:
+        """Seconds until an operator repaint of `mode_id` may start (the 2-min gate): 0 = now, never more than
+        `lab.repaint_min_interval_s`. A scene still queued keeps its due time."""
+        interval = self._repaint_interval()
+        now = self.clock.monotonic()
+        left = 0.0
+        last = self._repaint_last.get(mode_id)
+        if last is not None:
+            left = last + interval - now
+        waiting = self._repaint_waiting.get(mode_id)
+        if waiting is not None:
+            left = max(left, waiting.due_mono - now)
+        return max(0.0, min(interval, left))
+
+    def seed_repaint_gate(self, ages: dict[str, float]) -> None:
+        """After a restart: each scene's last operator repaint was `age` seconds ago by the wall clock (the overlay's
+        `repaints`). Clamped to [0, interval], so a wall-clock step can't lock a scene out for longer than the
+        interval, or open it sooner than the interval allows in this process; a later start seen here wins."""
+        interval = self._repaint_interval()
+        now = self.clock.monotonic()
+        for mode_id, age in ages.items():
+            if not isinstance(age, int | float) or not math.isfinite(age):
+                continue
+            last = now - max(0.0, min(interval, float(age)))
+            self._repaint_last[mode_id] = max(self._repaint_last.get(mode_id, float("-inf")), last)
+
+    def queued_repaints(self) -> dict[str, RepaintJob]:
+        """The scenes of the running job that haven't started writing (a newer publish keeps their due times)."""
+        return dict(self._repaint_waiting)
+
+    def start_repaint(
+        self, jobs: Sequence[RepaintJob], *, generation: int, publication: str | None = None
+    ) -> list[RepaintJob]:
+        """ONE job per publish (D68 PR B2). Synchronously, in this call: the job that hasn't started writing is
+        cancelled (its marks with it; a publish is refused while one writes), every (device, slot) of `jobs` is
+        marked pending, and the job's task is spawned. Each scene's due time is never sooner than the gate
+        (`lab.repaint_min_interval_s` after that scene's last operator repaint started — enforced HERE, so no caller
+        can bypass it), keeps a still-queued scene's due time, and is never later than one interval from now.
+        Returns the jobs as scheduled. The task's try/finally wraps everything, so marks never leak."""
+        if self._repaint_quiet:
+            raise RuntimeError("an operator repaint is writing; a new one waits until it ends")
+        previous = self._repaint_waiting
+        self._cancel_repaint_task()
+        now = self.clock.monotonic()
+        interval = self._repaint_interval()
+        scheduled: list[RepaintJob] = []
+        for job in jobs:
+            if not job.modules or any(j.mode_id == job.mode_id for j in scheduled):
+                continue
+            due = max(job.due_mono, now)
+            old = previous.get(job.mode_id)
+            if old is not None:
+                due = max(due, old.due_mono)  # latest wins; the due time stays
+            last = self._repaint_last.get(job.mode_id)
+            if last is not None:
+                due = max(due, last + interval)
+            scheduled.append(replace(job, due_mono=min(due, now + interval)))
+        # the scenes run one after another: the one due first goes first, so a scene due now never waits behind
+        # another scene's gate (stable: equal due times keep the publish's order)
+        scheduled.sort(key=lambda j: j.due_mono)
+        for mode_id in set(previous) - {j.mode_id for j in scheduled}:
+            # its queued repaint went: its slots may hold the live design already
+            self._maybe_lift_hold(mode_id)
+        if not scheduled:
+            self.repaint_status = None
+            self._hook("progress", None)
+            self._publish_soon()
+            return []
+        self._repaint_serial += 1
+        serial = self._repaint_serial
+        for job in scheduled:
+            for device_id in job.modules:
+                self._repaint_pending[(device_id, job.slot)] = serial
+        self._repaint_waiting = {j.mode_id: j for j in scheduled}
+        first = scheduled[0]
+        self._set_repaint_status(
+            first,
+            publication,
+            first.modules,
+            queued_until=self.clock.now() + (first.due_mono - now) if first.due_mono > now else None,
+        )
+        self._repaint_task = asyncio.get_running_loop().create_task(
+            self._repaint(scheduled, generation, publication, serial), name="canopy:repaint"
+        )
+        self._publish_soon()
+        return scheduled
+
+    def cancel_repaint(self, why: str) -> None:
+        """Cancel the job that hasn't started writing (a rolled-back publish): its marks and status go now."""
+        if self._repaint_quiet:
+            return  # a writing window always finishes (its finally clears it)
+        had = list(self._repaint_waiting)
+        self._cancel_repaint_task()
+        if had:
+            log.info("Operator repaint of %s cancelled: %s", ", ".join(had), why)
+        self.repaint_status = None
+        self._hook("progress", None)
+        for mode_id in had:
+            self._maybe_lift_hold(mode_id)
+        self._publish_soon()
+
+    def _cancel_repaint_task(self) -> None:
+        task, self._repaint_task = self._repaint_task, None
+        if task is not None and not task.done() and task is not _current_task():
+            task.cancel()  # its scene's finally sees the cancellation: no bookkeeping, no alerts
+        self._repaint_pending.clear()
+        self._repaint_waiting = {}
+
+    async def wait_repaint(self) -> None:
+        """Wait until no operator repaint job is queued or running (tests, the soak, shutdown)."""
+        while True:
+            task = self._repaint_task
+            if task is None or task.done():
+                return
+            await asyncio.gather(task, return_exceptions=True)
+
+    def repaint_json(self) -> dict | None:
+        """RepaintJSON (docs/live-lab/PLAN.md §2.11): the running, queued or last job's scene and its modules."""
+        status = self.repaint_status
+        if status is None:
+            return None
+        return {**status, "modules": [dict(m) for m in status.get("modules", [])]}
+
+    def _repaint_left(self) -> float:
+        """Seconds the writing window has left (an estimate: about M·1.2 + 3 s for M modules), at least 1."""
+        ends = self._repaint_ends
+        left = (ends - self.clock.monotonic()) if ends is not None else REPAINT_BASE_S
+        return round(max(1.0, left), 2)
+
+    def repaint_left_total(self) -> float:
+        """Seconds until the job is over: the window's estimate, or the first queued scene's wait plus its own."""
+        if self._repaint_quiet:
+            return self._repaint_left()
+        now = self.clock.monotonic()
+        total = 0.0
+        for job in self._repaint_waiting.values():
+            total = max(total, job.due_mono - now) + len(job.modules) * REPAINT_PER_MODULE_S + REPAINT_BASE_S
+        return round(max(1.0, total), 2)
+
+    def _hook(self, event: str, info: Any) -> None:
+        hook = self.deps.on_repaint
+        if hook is None:
+            return
+        try:
+            hook(event, info)
+        except Exception:  # the overlay or the Lab failing never stops a repaint
+            log.exception("repaint hook %s failed", event)
+
+    def _set_repaint_status(
+        self,
+        job: RepaintJob,
+        publication: str | None,
+        modules: Iterable[str],
+        *,
+        queued_until: float | None = None,
+        started_at: float | None = None,
+    ) -> None:
+        def label(device_id: str) -> str:
+            entry = self._entry(device_id)
+            return (entry.label if entry else "") or device_id
+
+        self.repaint_status = {
+            "running": True,
+            "queued_until": queued_until,
+            "scene": job.mode_id,
+            "label": job.label or job.mode_id,
+            "slot": job.slot,
+            "publication": publication,
+            "started_at": started_at,
+            "finished_at": None,
+            "modules": [{"id": d, "label": label(d), "status": "pending", "reason": None} for d in modules],
+        }
+        self._hook("progress", self.repaint_json())
+
+    def _note_repaint_module(self, device_id: str, entry: dict) -> None:
+        status = self.repaint_status
+        if status is None:
+            return
+        for row in status["modules"]:
+            if row["id"] == device_id:
+                row["status"] = str(entry.get("status") or "failed")
+                row["reason"] = entry.get("reason") if row["status"] != "applied" else None
+        self._hook("progress", self.repaint_json())
+        self._publish_soon()
+
+    def _repaint_refusal(self) -> str | None:
+        """Why a due scene can't be repainted now (it stays held at module level), else None."""
+        if self._stopped:
+            return "the canopy engine is stopped"
+        if self._commissioning:
+            return "a kit was being commissioned"
+        if self._outage is not None:
+            return "Hubspace wasn't answering (the canopy was resting)"
+        if self._rehearsal is not None:
+            return "a stepped rehearsal was running"
+        return None
+
+    async def _repaint(
+        self, jobs: list[RepaintJob], generation: int, publication: str | None, serial: int
+    ) -> dict[str, dict]:
+        """The job (§2.6): its scenes in sequence; the try/finally around all of it clears its marks."""
+        outcomes: dict[str, dict] = {}
+        try:
+            for job in jobs:
+                outcomes[job.mode_id] = await self._repaint_scene(job, generation, publication, serial)
+        finally:
+            for pair, owner in list(self._repaint_pending.items()):
+                if owner == serial:
+                    del self._repaint_pending[pair]
+            for job in jobs:
+                if self._repaint_waiting.get(job.mode_id) is job:
+                    del self._repaint_waiting[job.mode_id]
+            self._publish_soon()
+        return outcomes
+
+    async def _repaint_scene(
+        self, job: RepaintJob, generation: int, publication: str | None, serial: int
+    ) -> dict:
+        mode_id, slot = job.mode_id, job.slot
+        outcome: dict[str, Any] = {
+            "mode": mode_id,
+            "label": job.label or mode_id,
+            "slot": slot,
+            "publication": publication,
+            "ok": False,
+            "applied": 0,
+            "skipped": 0,
+            "failed": 0,
+            "listed": list(job.modules),
+            "modules": {},
+            "reason": None,
+            "started": False,
+        }
+        listed: list[str] = list(job.modules)
+        writing = cancelled = False
+        try:
+            wait = job.due_mono - self.clock.monotonic()
+            if wait > 0:  # the 2-min gate: held at module level meanwhile, its marks pending
+                self._set_repaint_status(job, publication, listed, queued_until=self.clock.now() + wait)
+                await self.clock.sleep(wait)
+            # after a restart: never before the show's first capability reads (and, in sim, its commissioning)
+            if self.deps.repaint_ready is not None:
+                await self.deps.repaint_ready()
+            if self._repaint_waiting.get(mode_id) is job:
+                del self._repaint_waiting[mode_id]
+            looks_generation = self.deps.looks_generation
+            if looks_generation is not None and looks_generation() != generation:
+                outcome["reason"] = "a newer publish replaced it"
+                outcome["aborted"] = True
+                return outcome
+            why = self._repaint_refusal()
+            if why is not None:
+                outcome["reason"] = why
+                return outcome
+            # The quiet window: a try-on ends first (its approved look goes out now, before the window); then nothing
+            # else writes until the slots are done, and the commands already on their way finish first.
+            self._clear_trial("a publish's slot repaint started", repick=True)
+            self._repaint_quiet = writing = True
+            self._repaint_ends = self.clock.monotonic() + len(listed) * REPAINT_PER_MODULE_S + REPAINT_BASE_S
+            self._publish_soon()
+            with contextlib.suppress(TimeoutError):
+                await self.wait_idle(timeout=REPAINT_IDLE_WAIT_S)
+            target = self.deps.repaint_target(mode_id) if self.deps.repaint_target is not None else None
+            plan = getattr(target, "plan", None) if target is not None else None
+            listed = list(getattr(target, "listed", None) or []) if target is not None else []
+            if plan is None or not listed:  # recomputed now
+                unread = list(getattr(target, "unread", None) or []) if target is not None else []
+                # unread: nothing to judge them by, so never "already holds" (the reconciler takes them once read)
+                if unread:
+                    n = len(unread)
+                    outcome.update(
+                        listed=[],
+                        reason=f"the Hubspace profile of {n} module{'s' if n != 1 else ''} hadn't been read yet",
+                    )
+                else:  # the slots already hold the live design
+                    outcome.update(ok=True, listed=[], reason="its slots already hold the live design")
+                return outcome
+            for device_id in listed:
+                self._repaint_pending.setdefault((device_id, slot), serial)
+            now = self.clock.monotonic()
+            self._repaint_ends = now + len(listed) * REPAINT_PER_MODULE_S + REPAINT_BASE_S
+            self._repaint_last[mode_id] = now  # the gate counts from the start of the writing
+            self.stats["repaints"] += 1
+            outcome.update(started=True, listed=listed)
+            started_at = self.clock.now()
+            self._set_repaint_status(job, publication, listed, started_at=started_at)
+            self._hook(
+                "started", {"mode": mode_id, "slot": slot, "at": started_at, "publication": publication}
+            )
+            report = await self._commission_plan(
+                plan,
+                LOOKS_SOURCE,
+                min_interval=0.0,
+                only=listed,
+                verb=REPAINT_VERB,
+                locked=True,
+                on_module=self._note_repaint_module,
+            )
+            modules = report["modules"]
+            outcome["modules"] = modules
+            statuses = [m.get("status") for m in modules.values()]
+            outcome["applied"] = statuses.count("applied")
+            outcome["skipped"] = sum(1 for s in statuses if s in ("skipped", "locked"))
+            outcome["failed"] = len(statuses) - outcome["applied"] - outcome["skipped"]
+            outcome["ok"] = outcome["applied"] == len(listed)
+            return outcome
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        except Exception as e:  # never leave the window open or the marks set; the scene stays held
+            log.exception("The operator repaint of %s failed", mode_id)
+            outcome["reason"] = f"{type(e).__name__}: {e}"
+            return outcome
+        finally:
+            for device_id in {*job.modules, *listed}:
+                if self._repaint_pending.get((device_id, slot)) == serial:
+                    del self._repaint_pending[(device_id, slot)]
+            if writing:
+                self._repaint_quiet = False
+                self._repaint_ends = None
+                for listener in list(self.quiet_listeners):
+                    try:
+                        listener()
+                    except Exception:
+                        log.exception("quiet-window listener failed")
+            if not cancelled:
+                self._repaint_done(outcome)
+            self._publish_soon()
+
+    def _repaint_done(self, outcome: dict) -> None:
+        """A scene's repaint is over (applied, partly, refused, or nothing to do): the hold lifts when its slots hold
+        the live design (one re-pick: the re-select after rewriting the active slot), the Lab's status, the overlay
+        (via the hook), telemetry and the scene's alert."""
+        mode_id, slot, label = outcome["mode"], outcome["slot"], outcome["label"]
+        was_held = mode_id in self._t1_hold
+        self._maybe_lift_hold(mode_id)
+        plan = self._plan
+        if (
+            outcome["started"]
+            and outcome["applied"]
+            and not was_held
+            and plan is not None
+            and plan.mode_id == mode_id
+            and plan.tier is Tier.T1
+            and not self.quiet
+        ):
+            # the active slot was rewritten under a look that wasn't held: re-select it (04 item 6), one burst
+            self.send(None, source="reconciler", label=f"re-select after the repaint: {mode_id}")
+        status = self.repaint_status
+        if status is not None and status.get("scene") == mode_id:
+            status["running"] = False
+            status["queued_until"] = None
+            status["finished_at"] = self.clock.now()
+            self._hook("progress", self.repaint_json())
+        self._hook("finished", dict(outcome))
+        if outcome.get("aborted"):
+            return
+        self.telemetry.record(
+            "lab",
+            action="repaint",
+            scene=mode_id,
+            slot=slot,
+            publication=outcome["publication"],
+            applied=outcome["applied"],
+            skipped=outcome["skipped"],
+            failed=outcome["failed"],
+            ok=outcome["ok"],
+            reason=outcome["reason"],
+            source="engine",
+        )
+        key = f"looks:repaint:{mode_id}"
+        n = len(outcome["listed"])
+        if not outcome["started"] and outcome["ok"]:
+            return  # nothing to repaint: no news
+        if not outcome["started"]:
+            message = (
+                f"Published looks: {label}'s repaint of {slot} didn't start ({outcome['reason']}); it shows at "
+                "module level until its slots hold the design (the reconciler rewrites them, at most once every 10 "
+                "min per slot)."
+            )
+            level = "warn"
+        elif outcome["ok"]:
+            message = f"Published looks: {label}'s painted design is in {slot} on {n} module{'s' if n != 1 else ''}."
+            level = "info"
+        else:
+            missed = []
+            for device_id, entry in outcome["modules"].items():
+                if entry.get("status") == "applied":
+                    continue
+                e = self._entry(device_id)
+                name = (e.label if e else "") or device_id
+                missed.append(f"{name}: {entry.get('reason') or entry.get('status')}")
+            message = (
+                f"Published looks: {label}: {slot} repainted on {outcome['applied']} of {n} modules "
+                f"({'; '.join(missed)}); it shows at module level until the rest are current (the reconciler "
+                "retries after 10 min)."
+            )
+            level = "warn"
+        self.telemetry.record("alert", level=level, message=message, mode_id=mode_id, alert_key=key)
 
     # ---- compiling --------------------------------------------------------------------------------------------
     def compile_best(
@@ -2061,7 +2595,7 @@ class CanopyEngine:
     def _maybe_early_reassert(self, address: str) -> None:
         plan = self._plan
         cmd = self._latest.get(address)
-        if plan is None or cmd is None or self._outage is not None or self._commissioning:
+        if plan is None or cmd is None or self._outage is not None or self.quiet:
             return
         record = self._sent.get(id(cmd))
         if record is None or record.generation != self._generation or record.kind != "show":
@@ -2223,12 +2757,34 @@ class CanopyEngine:
         )
 
     # ---- slots ------------------------------------------------------------------------------------------------
-    async def _commission_plan(self, plan: ModePlan, source: str) -> dict:
-        min_interval = self.deps.settings.reconciler.slot_rewrite_min_interval_s
+    async def _commission_plan(
+        self,
+        plan: ModePlan,
+        source: str,
+        *,
+        min_interval: float | None = None,
+        only: Collection[str] | None = None,
+        verb: str = "commission",
+        locked: bool = False,
+        on_module: Callable[[str, dict], Any] | None = None,
+    ) -> dict:
+        """Write `plan`'s slot content to its modules and record each readback (see the module doc).
+
+        `min_interval` None = `reconciler.slot_rewrite_min_interval_s` (commissioning, as ever); `only` limits the
+        modules; `verb` prefixes the command labels; `locked` writes each module under its `_slot_lock` (header read
+        → burst → record, one burst per device, the modules concurrently); `on_module(device_id, entry)` hears each
+        module's result. When `verb` isn't "commission" (the operator repaint) `slot_written` is stamped at SUBMIT for
+        every module whose slot command was built, whatever the outcome, so a throttled or failed repaint is never
+        followed by an immediate reconciler rewrite (its 600 s limit counts from the attempt)."""
+        if min_interval is None:
+            min_interval = self.deps.settings.reconciler.slot_rewrite_min_interval_s
+        operator = verb != "commission"
         now = self.clock.monotonic()
         modules: dict[str, dict] = {}
         pending: list[tuple[str, ModuleTarget, Any]] = []
         for device_id, mt in plan.modules.items():
+            if only is not None and device_id not in only:
+                continue
             if not mt.slot or mt.slot_value is None:
                 modules[device_id] = {"status": "skipped", "reason": "No slot content at this tier."}
                 continue
@@ -2255,11 +2811,30 @@ class CanopyEngine:
                 }
                 continue
             pending.append((device_id, mt, target))
+        for device_id, entry in modules.items():
+            self._tell_module(on_module, device_id, entry)
+        label = f"{verb}: {plan.label}"
         # A write that didn't land (a silent drop, throttling that outlasted the executor's retries, a throttled
         # header read) never changed the slot, so trying it again within this commission is a retry, not a rewrite.
         for _round in range(COMMISSION_ROUNDS):
-            batch: list[tuple[str, ModuleTarget, Any, Command]] = []
             retry: list[tuple[str, ModuleTarget, Any]] = []
+            if locked:
+                outcomes = await asyncio.gather(
+                    *(
+                        self._slot_write_locked(plan, d, mt, t, source, label, operator)
+                        for d, mt, t in pending
+                    )
+                )
+                for (device_id, mt, target), (entry, again) in zip(pending, outcomes, strict=True):
+                    modules[device_id] = entry
+                    self._tell_module(on_module, device_id, entry)
+                    if again:
+                        retry.append((device_id, mt, target))
+                pending = retry
+                if not pending:
+                    break
+                continue
+            batch: list[tuple[str, ModuleTarget, Any, Command]] = []
             for device_id, mt, target in pending:
                 if self.locks.holder(target.address) is not None:
                     modules[device_id] = {
@@ -2268,27 +2843,71 @@ class CanopyEngine:
                         "reason": "In use on a test page.",
                     }
                     continue
-                cmd, error, retryable = await self._slot_command(
-                    device_id, target, mt, source, f"commission: {plan.label}"
-                )
+                cmd, error, retryable = await self._slot_command(device_id, target, mt, source, label)
                 if cmd is None:
                     modules[device_id] = {"status": "failed", "slot": mt.slot, "reason": error}
                     if retryable:
                         retry.append((device_id, mt, target))
                     continue
+                if operator:  # the limit counts from the attempt
+                    self.slot_written[(device_id, mt.slot)] = self.clock.monotonic()
                 batch.append((device_id, mt, target, cmd))
             results = await self._slot_burst(batch) if batch else {}
             for device_id, mt, target, cmd in batch:
                 result = results.get(id(cmd))
                 modules[device_id] = self._record_slot_result(device_id, mt.slot, plan, result)
-                if modules[device_id]["status"] == "applied":
+                if modules[device_id]["status"] == "applied" and not operator:
                     self.slot_written[(device_id, mt.slot)] = self.clock.monotonic()
                 elif result is not None and result.status in _SLOT_RETRY:
                     retry.append((device_id, mt, target))
+            for device_id, entry in modules.items():
+                self._tell_module(on_module, device_id, entry)
             pending = retry
             if not pending:
                 break
         return {"tier": str(plan.tier), "label": plan.label, "modules": modules}
+
+    @staticmethod
+    def _tell_module(on_module: Callable[[str, dict], Any] | None, device_id: str, entry: dict) -> None:
+        if on_module is None:
+            return
+        try:
+            on_module(device_id, entry)
+        except Exception:  # progress reporting never fails a write
+            log.exception("slot progress callback failed")
+
+    async def _slot_write_locked(
+        self,
+        plan: ModePlan,
+        device_id: str,
+        mt: ModuleTarget,
+        target: Any,
+        source: str,
+        label: str,
+        operator: bool,
+    ) -> tuple[dict, bool]:
+        """One module's slot write under its slot lock: the header read, one burst, the record. (entry, retry?)"""
+        try:
+            async with self._slot_lock(device_id):
+                if self.locks.holder(target.address) is not None:
+                    return {"status": "locked", "slot": mt.slot, "reason": "In use on a test page."}, False
+                cmd, error, retryable = await self._slot_command(device_id, target, mt, source, label)
+                if cmd is None:
+                    return {"status": "failed", "slot": mt.slot, "reason": error}, retryable
+                if operator:  # the reconciler's limit counts from the attempt, whatever it answers
+                    self.slot_written[(device_id, mt.slot)] = self.clock.monotonic()
+                results = await self._slot_burst([(device_id, mt, target, cmd)])
+                result = results.get(id(cmd))
+                entry = self._record_slot_result(device_id, mt.slot, plan, result)
+                if entry["status"] == "applied" and not operator:
+                    self.slot_written[(device_id, mt.slot)] = self.clock.monotonic()
+                again = entry["status"] != "applied" and result is not None and result.status in _SLOT_RETRY
+                return entry, again
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # one module's failure never stops the others
+            log.exception("slot write for %s failed", device_id)
+            return {"status": "failed", "slot": mt.slot, "reason": f"{type(e).__name__}: {e}"}, False
 
     def _record_slot_result(
         self, device_id: str, slot: str, plan: ModePlan, result: CommandResult | None
@@ -2422,7 +3041,7 @@ class CanopyEngine:
                     meta={"mode": plan.mode_id, "tier": str(plan.tier), "device_id": device_id},
                 )
                 self.dirty.add(target.address)
-                if not self._commissioning:
+                if not self.quiet:
                     self.reconciler.check_module_soon(device_id, target)
         if R.animates((previous or {}).get("effects")) != R.animates(record.get("effects")):
             self._replan_soon()
@@ -2444,7 +3063,7 @@ class CanopyEngine:
             self._replan_handle = None
             if self._stopped or self._plan is None or self._generation != generation:
                 return
-            if self._commissioning:
+            if self.quiet:  # commissioning or a repaint's window: the re-pick goes out once it ends
                 self._replan_handle = loop.call_later(REPLAN_DELAY_S, fire)
                 return
             plan = self._plan
@@ -2689,6 +3308,10 @@ def engine_from_services(
     modes: Callable[[], list[str]],
     tier_allowed: TierAllowed | None = None,
     rehearsal_compile: Callable[[str], ModePlan] | None = None,
+    repaint_target: Callable[[str], Any] | None = None,
+    looks_generation: Callable[[], int] | None = None,
+    on_repaint: Callable[[str, dict], Any] | None = None,
+    repaint_ready: Callable[[], Awaitable[Any]] | None = None,
 ) -> CanopyEngine:
     """The engine wired to the Services container (the lead's one-liner). Slot hashes are saved to the registry
     overlay (`slot_hashes` per device, merged), which needs CONDUCTOR_DATA_DIR; stepped rehearsal reports go to
@@ -2726,5 +3349,9 @@ def engine_from_services(
             rehearsal_dir=(Path(services.data) / "bench" / REHEARSAL_DIR)
             if getattr(services, "data", None)
             else None,
+            repaint_target=repaint_target,
+            looks_generation=looks_generation,
+            on_repaint=on_repaint,
+            repaint_ready=repaint_ready,
         )
     )

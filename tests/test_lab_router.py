@@ -214,12 +214,12 @@ def test_the_studio_and_ops_link_to_the_lab(app_client):
     studio = app_client.get("/ops/showcase/")
     assert studio.status_code == 200
     html = studio.text
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-7">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-8">' in html
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert html.index('id="lab-link"') < html.index('id="guest-panel-link"')
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert html.index('id="lab" class="lab"') < html.index("</main>")
-    assert html.index('src="./studio.js?v=screen-2"') < html.index('src="./lab.js?v=lab-7"')
+    assert html.index('src="./studio.js?v=screen-2"') < html.index('src="./lab.js?v=lab-8"')
     for asset in ("lab.js", "lab.css", "lab-model.mjs"):
         assert app_client.get(f"/ops/showcase/{asset}").status_code == 200, asset
     ops = app_client.get("/ops/").text

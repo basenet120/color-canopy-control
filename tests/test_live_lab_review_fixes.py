@@ -315,16 +315,21 @@ def test_a_rolled_back_painted_publish_leaves_no_stale_t1_hold(no_threads):
 def test_a_rolled_back_revert_keeps_the_hold_the_restored_trio_needs(no_threads):
     """A published Golden Hour design is held (its slots still hold the approved one); a Revert whose re-pick raises
     is rolled back to that publication: the hold stands again (before the fix it was dropped, so Golden Hour showed
-    T1 copy for a design its slots don't hold)."""
+    T1 copy for a design its slots don't hold). B2: the publish's own repaint job is kept from running (as when it
+    couldn't start), so the slots still hold the approved design."""
 
     async def main():
         w = await show()
         await w.engine.request_mode(GOLDEN, source="ops")
         await w.engine.wait_idle()
+        real_start = w.engine.start_repaint
+        # no operator repaint: the slots keep the approved design
+        w.engine.start_repaint = lambda jobs, **kw: []
         async with client_of(w) as c:
             vid = await save(c, {GOLDEN: pinker_hour()})
             assert (await publish(c, vid)).status_code == 200
             await w.engine.wait_idle()
+            w.engine.start_repaint = real_start
             held = GOLDEN in w.engine.t1_hold
             _flaky_repick(w)
             r = await publish(c, "approved")

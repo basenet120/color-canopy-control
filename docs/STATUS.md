@@ -1,8 +1,9 @@
 # Status
 
-_Last updated: 2026-10-17 night (PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A
-`claude/canopy-only`: the Conductor controls the canopy only, D67; the Studio is screen only; see the two blocks
-below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
+_Last updated: 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
+`claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
+PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A `claude/canopy-only`: the
+Conductor controls the canopy only, D67; the Studio is screen only; see the three blocks below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
 `claude/design-lab-motion`; all three Lab slices built; see the PR stack), 2026-10-16.
 **The show box is the Mac mini** (D61), **live since Oct 17** on `6ce971b` (`main` with the Design Lab #25–#27;
 Alon deployed it from paste-commands; no release tag yet). **Canopy Modules 1–2 are VWBD's two kits for real**
@@ -12,6 +13,137 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR B2 — the operator repaint (D68), `claude/live-lab-repaint` → `main` (built Oct 17; plan `docs/live-lab/PLAN.md` §2.6–§2.8, §5.2 B2)
+**Merge PR B first ("merge #B first"); B2 targets `main` too; merge commits, not squash. Deploy B2 only after bench
+item 6 (rewriting the showing slot, then the re-select) has been run once on a show kit with its own Gate C (from
+`/ops/module`).** Built on `claude/live-lab` at `c32f3f0` (B1 + U + R integrated); the stream's commit `1803274` is
+merged into `claude/live-lab-repaint` (a clean merge: B2 was cut from `claude/live-lab`'s head).
+- **Integration check (Oct 17, macOS, sim, after the merge):** `nice -n 15 uv run --offline pytest -q` → 2354 passed,
+  5 skipped, 44 subtests (10 m 6 s); ruff check / format clean; `node --test tests/*.test.mjs` 144/144. **Smoke on a
+  sim dev server** (`scripts/dev_design_lab.py --port 8215`, throwaway data, killed after): the start-up commissioning
+  wrote 27 slots, the catalog then said sentence (c) "…repaints custom-3 on 9 modules…". (1) Golden Hour, one palette
+  stop changed → 200, the confirm listed only the 3 modules whose compiled slot differs (Modules 3, 6, 9: the others'
+  records already held the design), 3 slot writes (`publish repaint: Golden Hour → custom-3`, one per module, all
+  applied) in 2.5 s, the info alert. (2) A second publish 2 s later → 200 at once, "in 118 s", held, `queued_until` =
+  the first start + 120 s, no slot write. (3) Revert to approved 3 s after that → 200 at once (never blocked), it
+  replaced the queued job (latest wins, due time kept); at the due time 3 writes (Modules 3, 6, 9: git's design over
+  what (1) wrote), then held false. (4) After the gate, a layout change shown on the canopy (`show: true`): 9 module
+  writes now (held), the repaint's 9 slot writes (one per module), guest taps every 0.4 s during the window all 503
+  "One moment: the canopy is changing." (kiosk state `updating` with the same copy), the history row `applied: 9`. (5)
+  Again with no guest taps: after the repaint, exactly one T1 burst (`golden-hour` at `canvas`, 9 commands; telemetry
+  source "reconciler", the capability re-pick). In (4) a guest tap landed 0.3 s after the window and took the canopy
+  (coastal-tides) before the re-pick — a guest choice, so no T1 burst for Golden Hour then. Two small things seen,
+  not B2 regressions: the window's retry-after said 12–14 s for a 5 s window (an upper bound), and with `show: true`
+  the confirm still says "Nothing on the canopy changes now (no changed scene is showing)" while the cost line counts
+  the 9 writes (B1's sentence, unchanged by B2; the Lab shows the "Show <scene> on the canopy" checkbox beside it).
+- **Review 5 (Oct 18, 9 findings, all fixed; `tests/test_lab_repaint_review.py`, 21 tests, each failing before its
+  fix or on its mutant).** First merged the fixed `claude/live-lab` (review 4) in: conflicts in `canopy.py`,
+  `publish.py` (the confirm takes both `show` and B2's `tokens`; the queued map and the fallback's no-Undo both go
+  into the new file) and `tests/live_lab.py`; review 4's rolled-back-Revert test keeps the publish's repaint from
+  running so its premise stands. Then: **B2-1** the persisted gate and queue reached the engine only once every module
+  was read — with one module unreadable at boot a publish repainted inside the gate, the reconciler rewrote the queued
+  slots 36–41 s after the last repaint, and a publish dropped the queued scene. Now `ShowWiring._restore_repaints`
+  runs right after `engine.start`: the gate seeded, the queued scenes started at their due times over every module
+  with an api record for the slot (pending at once, shown queued), a publish carries them over (`repaint_jobs` keeps
+  a queued job's unread modules), and a window opens only after `repaint_ready` (the first capability round; in sim
+  the start-up commissioning, which cancels a restored job first); the window's target is recomputed then, an unread
+  module is left to the reconciler, and with nothing judgeable the repaint "didn't start (the Hubspace profile of N
+  modules hadn't been read yet)" — never "already holds". No history row for a repaint whose slots already held the
+  design. **B2-2** a job's scenes now run in due order (stable). **B2-3 / UI-3** StateJSON.engine gains
+  `repaint_quiet` (and `commissioning` is only a real one); ops' Re-assert all answers 409 "A publish is repainting a
+  painted scene's slot right now (about N s left)…" + Retry-After; `reassert_all` refuses in the window and while
+  commissioning; the try-on panel's `TRIAL_COPY.repainting` (`?v=lab-8`). **UI-6** sentences (b)/(c) say "up to" /
+  "those … whose design changes". **Mutation gaps** Q3, Q5, Q7, Q30, Q31, S2, P3, L3 — tests added; 16 mutants of
+  the fixes and those guards (`scratchpad` runner) each killed by its named test. **Verified (macOS, sim, Oct 18):**
+  `nice -n 15 uv run --offline pytest -q` → 2434 passed, 5 skipped, 44 subtests (10 m 48 s); ruff check / format
+  clean; `node --test tests/*.test.mjs` 150/150. Not run: a browser walk of the new try-on reason or a sim dev
+  server smoke of the restart (the restart paths are covered on the virtual clock with the simulator's devices kept).
+- **What it does.** A publish of a new painted design no longer needs the reconciler: the scene installs at once,
+  held below T1 (truthful module level), and the engine gets ONE repaint job (`CanopyEngine.start_repaint`,
+  `RepaintJob`s): the scenes whose eligible modules — their own api record, Gate C at their address and, on a longer
+  frame, a valid map (`ShowWiring.repaint_plan`, per module; one that can't take T1 drops out alone) — hold another
+  design, plus a queued job's scenes it replaces. Its (device, slot) pairs are pending from that moment (the hold
+  follows them; `reconciler.check_slots` skips them — the only reconciler.py edit). When a scene comes due: refused
+  (its marks cleared, the scene stays held) if the engine is stopped, commissioning, resting or rehearsing; else a
+  **quiet window** (`quiet`, which the public `commissioning` property returns: reconciler tick/re-assert/idle
+  hold/reset, the stepped runner and the capability re-pick hold still; guest, ops, try-on and Gate R requests are
+  refused with "One moment: the canopy is changing." + retry-after — the kiosk routes and the guest panel say the same,
+  503 / `waiting: "changing"`; a running try-on ends first), `wait_idle` for the commands in flight, the target
+  recomputed from the live looks, then `_commission_plan(min_interval=0, only=listed, verb="publish repaint",
+  locked=True)`: per module under its `_slot_lock` (the modules concurrently), header from the readback, one slot
+  write through the executor, `slot_written` stamped at submit, at most two retries only when it didn't land, never
+  over an app record or a module held by the module page, the readback recorded exactly like commissioning (the
+  registry overlay). The scene's `finally` clears its marks and the window; fully applied → the hold lifts → one T1
+  re-pick (the re-select; also sent when a showing T1 scene wasn't held). Commissioning is refused while a job is
+  queued or running; a publish only while one is writing (Lab sentence "<Scene>'s slots are being repainted (about N s
+  left).").
+- **The 2-min gate** (`lab.repaint_min_interval_s: 120`, `config/conductor.yaml`, validated 60–600): enforced inside
+  `start_repaint` (monotonic, from the start of the scene's last operator writing; never later than one interval
+  from now); a sooner publish installs and queues (never 409); a newer publish replaces a queued job (marks cancelled
+  with it; the due time stays); Revert and Undo queue the same way. The overlay keeps `repaints` (the gate) and
+  `queued` (the job, written with the publication); the engine's hook (`looks.live.note_repaint`, no history copy)
+  writes the gate when a scene starts, drops the scene from the queue and fills its history row's `repaint` counts
+  when it ends. After a restart the gate and the queue go back to the engine as it starts, before any profile is
+  read (review 5, below; in sim the start-up commissioning, which writes the live design, replaces the restored job
+  and the queue settles), the gate seeded from the wall times clamped to one interval (a ±1 h clock step can't
+  stretch or skip it).
+- **The Lab's view.** The confirm adds "<Scene>'s painted design is repainted into custom-3 on N modules<, in S s>
+  (one slot write each)." and the cost "repaints custom-3 on N modules: up to 3N slot writes (one each unless a write
+  doesn't land), N reads, then one T1 burst"; a confirm shown earlier still matches while its "in S s" ticks down (by
+  up to one interval: the number is then an upper bound). `confirm_required.repaint` = [{scene, slot, modules
+  (labels), writes, in_s}], `PublishReport.repaint` = [{scene, slot, modules, in_s}], `LiveJSON.repaint` = the
+  RepaintJSON U renders (`running`, `queued_until`, `started_at`, `finished_at`, per-module status, per module
+  updated), `state.show_looks.repainting`, RepaintInfo's §2.6 count sentences (a)/(b)/(c) and `available` false only
+  under the app lock (B1's api lock and its preview warning are gone; `lab-model.mjs`'s B1 note no longer shows under
+  the app lock — no `?v=` bump, so a cached page may show it until a reload). Telemetry `lab repaint`; alerts keyed
+  `looks:repaint:<mode>` (info "…'s painted design is in custom-3 on N modules." / warn "…: custom-3 repainted on k of
+  N modules (…); it shows at module level until the rest are current (the reconciler retries after 10 min).").
+- **Contract text:** 07 §6's "Operator repaint (D68)" paragraph (§6.2 of the plan, verbatim) and §1's writer list
+  ("and the Lab's publish repaint"); D68's PR B2 bullet. New writer path `WRITER_PATHS["lab publish (slot
+  repaint)"]` (denied on the wire for a non-allowlisted id; reaches it for the bench kit).
+- **Verified (macOS, sim, virtual clock):** `nice -n 15 uv run --offline pytest -q` → 2354 passed, 5 skipped, 44 subtests (10 m 3 s); `uv run --offline ruff
+  check . && uv run --offline ruff format --check .` clean; `node --test tests/*.test.mjs` → 144/144.
+  `tests/test_lab_repaint.py` (20 tests): one slot write per module (9), ≥ 1 s between writes to any device with the
+  simulator's per-device 1 s budget on (0 violations), records = the live compile, `stale_slot` None right after and
+  after 30 virtual minutes with no reconciler rewrite, no stale/"waiting" alert, then exactly one T1 burst; the quiet
+  window (guest taps every 0.5 s all refused with the sentence and a retry-after, the kiosk route 503 with it, an
+  overdue idle return held, Gate R and a try-on refused, the re-pick burst over before the first header read, no
+  SUPERSEDED slot result); a MISMATCH on a pending module starts no rewrite; a failed module (3 attempts, stamped at
+  the last, the reconciler's rewrite once ≥ 600 s later, held until then); partly commissioned (5 of 9 + one with a
+  bad map: 5 writes, sentence (b), a sixth commissioned later gets the published design); a module held by the module
+  page (locked, then the reconciler); an app record never written; the gate (republish at 60 s → 200, held, queued
+  `in_s` ≈ 60, no slot write before 120 s, nine at 120 s; Revert and Undo inside the gate → 200; brightness only → no
+  repaint); restart mid-queue with a ±1 h wall step; the simulator's restart settling the queue; refusal at job start
+  (outage); two painted scenes as one job in sequence; commissioning refused while queued; a publish refused only
+  while writing; the confirm's ticking wait; a newer job cancelling a queued one; a newer install aborting a queued
+  job; the slot lock against a running reconciler rewrite; a module whose record already holds the design isn't
+  written. B1's tests updated where B2 changes the answer (the hold test now ends with the repaint, the hardware
+  api-lock test became "no Gate C → no slot write", the RepaintJSON fixtures `live_repainting.json`/`repaint.json`
+  are now checked against the real answer, during and after). **Mutation checks (16, each killed by the named
+  test):** the `check_slots` pending guard; `commissioning` → `quiet`; `wait_idle` before the first header read; the
+  `_slot_lock` (`locked=True`); the submit-time `slot_written` stamp; `min_interval=0` (→ 600 s); the `only` filter;
+  the gate clamp (its three layers together: the restart seed, `start_repaint`'s bound, the requeue's wait — the
+  restart seed alone is NOT covered by the others when nothing is queued: review 5's S2 test covers it); `start_repaint`'s own due enforcement; `commission`'s refusal while repainting; the
+  generation abort; `looks_refusal`'s "repainting"; the marks set in `start_repaint`; the kiosk's copy in the window;
+  both requeue paths (show box, simulator).
+- **Notes for review (deviations from the plan's letter).** (1) `start_repaint(jobs: Sequence[RepaintJob], *,
+  generation, publication)` — the due times ride in the jobs. (2) The job's task is not one of the engine's burst
+  tasks, so `wait_idle` never waits for a queued repaint (`wait_repaint()` does; `stop()` cancels it). (3) The publish
+  calls `start_repaint` **before** `reload_looks` (both in the one synchronous section), so the re-pick's hold already
+  follows the new marks and a Revert whose slots already hold git's design lifts at once with one burst. (4) The
+  confirm's "in S s" is matched with slack (as the try-on's re-apply sentence). (5) Partly commissioned sentence (b)
+  lists the module labels comma-separated ("Module 1, Module 2, …"), not "Modules 1–5". (6) The repaint confirm
+  names the scene as the show runs it now (B1's hold note does the same).
+- **Needs the show box / real hardware:** bench item 6 once on a show kit with its own Gate C (the first operator
+  repaint rewrites the showing slot, then the re-select burst); the first repaint on the show kits with `/ops` open
+  (writes in 60 s, any 429/403); a republish inside 2 min on the lights (queued, held at module level, then
+  repainted). On today's two kits (no Gate C, nothing commissioned) a painted design publishes with no slot write
+  (tested in sim with hardware rules). `nice -n 15 uv run --offline python -m conductor.soak` → exit 0, 21 PASS rows,
+  the only FAIL the non-gating "(reported)" D65 landing spread (p95 2.78 s), as on PR A/B (`sim-acceptance.md` only
+  changed its timestamp, so it was reverted). **Not run:** `make lab-roundtrip` (the export path is untouched by B2)
+  and the browser walk of §5.3 B2 (repaint progress 9/9, the queued countdown) — the JSON the page reads is checked
+  against U's fixtures instead.
 
 ## PR B — the live Lab (D68), `claude/live-lab` → `main` (built Oct 17; plan `docs/live-lab/PLAN.md` §2–§3)
 Alon, Oct 17: "make the test lab work on the live system so that I can just think of everything as one system".
@@ -404,6 +536,9 @@ Lab); both target `main`; merge commits, not squash.
     (the live Lab); merge commits, not squash.
 0j. **PR B `claude/live-lab` → `main`, after PR A** (D68, the live Lab: B1 server + the Lab page; the PR B block at
     the top). Both target `main`; "merge #A first"; merge commits. Deploy it on its own, after PR A is deployed.
+0k. **PR B2 `claude/live-lab-repaint` → `main`, after PR B** (D68's operator repaint; the PR B2 block at the top).
+    Targets `main`; "merge #B first"; merge commits. Deploy only after bench item 6 has been run once on a show kit
+    with its own Gate C, on its own, after PR B is deployed.
 1. **`claude/paris-folder-consolidate-3addc3` → `main`**: the consolidation. It has two parts:
    - an import commit (`79a0082`): Paris's 2026-10-07 package source, verbatim on the kit commit it forked from
      (`1eb8551`);
@@ -732,7 +867,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 0a. **Alon (PR A, D67):** review CLAUDE.md's two changed lines in the PR (the lead asked stream R to apply them),
     merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above (no
     registry undo: the kits stay Modules 1–2). Then PR B (the live Lab): merge after A, deploy on its own (PR B
-    block, "Needs the show box"), reload the Lab once after the deploy.
+    block, "Needs the show box"), reload the Lab once after the deploy. Then PR B2 (the operator repaint): merge
+    after B; deploy only after bench item 6 on a show kit with its own Gate C (install, Oct 20–23), with `/ops` open
+    for the first repaint.
 0. **Alon:** (a) ~~Undo the test-kit Modules 1–2 by Oct 19~~ — cancelled Oct 17: they are the real Modules 1–2. (b) Done Oct 17:
    #24–#27 merged and `6ce971b` deployed. (c)
    Decide D63 (layouts, with Paris), D64 (ripple on: `kiosk.ripple_stagger_s: 1.2`) and D65 (which scenes move); run

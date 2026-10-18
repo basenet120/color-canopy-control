@@ -301,6 +301,7 @@ def test_no_live_reader_uses_the_git_defaults(no_threads, monkeypatch):
         async with client_of(w) as c:
             vid = await save(c, {GOLDEN: pinker_hour()})
             assert (await publish(c, vid)).status_code == 200
+            await w.engine.wait_repaint()  # B2: the slot repaint's quiet window refuses guests for a moment
             await w.engine.wait_idle()
 
             def boom(*_a, **_k):
@@ -423,10 +424,9 @@ def test_show_after_publishing_is_one_burst_of_that_scene(no_threads):
 
 # ---- the T1 hold (sim: every module recorded) ------------------------------------------------------------------------
 def test_a_painted_scene_is_held_at_module_level_until_its_slots_hold_the_design(no_threads):
-    """Golden Hour at T1 (sim: nine records), a published layout change: the copy drops below T1 at once and stays
-    there while the slots hold the old design; the reconciler's stale rule rewrites custom-3 (≥ 600 s after
-    commissioning, once per module), the hold lifts, and the showing Golden Hour goes back to T1 by itself with one
-    look PUT per module."""
+    """Golden Hour at T1 (sim: nine records), a published layout change: the copy drops below T1 at once (the
+    publish answers while the slots still hold the old design); B2's operator repaint writes custom-3 once per module,
+    the hold lifts, and the showing Golden Hour goes back to T1 by itself with one look PUT per module."""
 
     async def main():
         w = await show()
@@ -437,38 +437,29 @@ def test_a_painted_scene_is_held_at_module_level_until_its_slots_hold_the_design
         async with client_of(w) as c:
             vid = await save(c, {GOLDEN: pinker_hour()})
             r = await publish(c, vid)
-        await w.engine.wait_idle()
         plan = w.engine.current_plan()
         held = (plan.tier, plan.feature, GOLDEN in w.engine.t1_hold)
+        await w.engine.wait_repaint()
         tiers = []
-        # Golden Hour chosen again shortly before the rewrite is due (the idle hold returns to Calm after 180 s)
-        await w.run_for(560 - w.clock.monotonic())
-        await w.engine.request_mode(GOLDEN, source="ops")
-        await w.engine.wait_idle()
-        before_rewrite = (w.engine.current_plan().tier, GOLDEN in w.engine.t1_hold)
-        mark = len(writes)
-        for _ in range(15):
-            await w.run_for(10)
+        for _ in range(10):
+            await w.run_for(1)
             tiers.append(w.engine.current_plan().tier)
+        await w.engine.wait_idle()
         final = w.engine.current_plan()
-        after = writes[mark:]
-        out = (start_tier, r.status_code, held, before_rewrite, tiers, final, after, w.engine.t1_hold)
+        out = (start_tier, r.status_code, held, tiers, final, list(writes), w.engine.t1_hold)
         await w.close()
         return out
 
-    start, status, held, before_rewrite, tiers, final, after, hold = run_virtual(main)
+    start, status, held, tiers, final, after, hold = run_virtual(main)
     assert start is Tier.T1 and status == 200
     tier, feature, is_held = held
     assert tier is not Tier.T1 and is_held
     assert (
         "Hubspace strand set to a single colour" in feature
     )  # the module-level design's sentence, truthfully
-    assert before_rewrite[0] is not Tier.T1 and before_rewrite[1]
     assert final.mode_id == GOLDEN and final.tier is Tier.T1 and not hold
     rewrites = slot_writes(after)
-    assert (
-        len(rewrites) == 9 and len({a for _t, a, _r in rewrites}) == 9
-    )  # the reconciler's stale rewrite, once each
+    assert len(rewrites) == 9 and len({a for _t, a, _r in rewrites}) == 9  # the repaint, once each
     first_t1 = tiers.index(Tier.T1)
     assert all(t is not Tier.T1 for t in tiers[:first_t1])
     upgrade = [x for x in look_writes(after) if x[0] > max(t for t, _a, _r in rewrites)]
@@ -592,9 +583,10 @@ def test_a_painted_design_change_over_a_hand_painted_slot_is_refused(no_threads)
     assert live == "p0001"  # the brightness publish stands; the design one wrote nothing
 
 
-def test_b1_refuses_a_painted_design_change_over_commissioned_slots_on_hardware(no_threads, monkeypatch):
-    """On hardware (no repaint job until PR B2): api records + a design change → 409; a brightness change is fine;
-    Revert to approved — a design change over the same records — is always allowed."""
+def test_commissioned_slots_without_gate_c_publish_with_no_slot_write_on_hardware(no_threads, monkeypatch):
+    """B2 on hardware: api records but no module with its own Gate C (no t1_frames proven at its address): a painted
+    design change publishes (the B1 api lock is gone) with no slot repaint (nothing is eligible), a brightness change
+    too, and Revert to approved — never a slot write."""
     from live_lab import patched_trio, publication_document, write_document
 
     def prepare(services):
@@ -610,28 +602,20 @@ def test_b1_refuses_a_painted_design_change_over_commissioned_slots_on_hardware(
         writes = spy_writes(w)
         async with client_of(w) as c:
             design = await save(c, {GOLDEN: edited(GOLDEN, **{"palette.0.hex": "#FFE0A0"})})
-            refused = await publish(c, design)
+            first = (await ask(c, design)).json()
+            done = await publish(c, design)
             bright = await save(c, {GOLDEN: {**pinker_hour(), "brightness": pinker_hour()["brightness"] - 5}})
             ok = await publish(c, bright)
             back = await publish(c, "approved")  # Golden Hour's design changes back over the api records
-        out = (
-            refused.status_code,
-            refused.json(),
-            ok.status_code,
-            back.status_code,
-            back.json(),
-            slot_writes(writes),
-        )
+        await w.engine.wait_repaint()
+        out = (first, done.status_code, ok.status_code, back.status_code, back.json(), slot_writes(writes))
         await w.close()
         return out
 
-    status, body, ok, back, back_body, slots = run_virtual(main)
-    assert status == 409 and body["field"] == f"{GOLDEN}.palette", body
-    assert body["detail"].startswith(
-        "Pinker Hour's painted design is in custom-3 on 9 modules; repainting from the"
-    )
-    assert ok == 200 and back == 200, back_body
-    assert slots == []  # B1 never writes a slot itself
+    first, done, ok, back, back_body, slots = run_virtual(main)
+    assert first["confirm_required"] and first["repaint"] == [] and "no slot repaint" in first["cost"]
+    assert done == 200 and ok == 200 and back == 200, back_body
+    assert slots == []  # nothing eligible: no slot write
 
 
 def test_kits_without_gate_c_publish_a_design_with_zero_slot_writes(no_threads, monkeypatch):

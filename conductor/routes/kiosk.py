@@ -76,6 +76,8 @@ UNAVAILABLE = "That mood isn't available right now. Choose another."
 BEING_SET_UP = "The canopy is being set up. It will be back shortly."
 TESTING = "The canopy is being tested. It will be back shortly."
 TRYING_ON = "Staff are trying a new look. It will be back shortly."
+# A publish's slot repaint is writing (D68 PR B2, conductor/canopy.py REPAINT_MESSAGE): a short wait, and true.
+CHANGING = "One moment: the canopy is changing."
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]  # the kiosk illustration's module order
 MAX_RETRY_AFTER_S = 60.0  # a guest never waits longer than this, whatever a bad clock says
 
@@ -355,7 +357,10 @@ def _current_plan(engine: Any) -> ModePlan | None:
 
 def kiosk_view(engine: Any, state: CanopyState) -> CanopyState:
     """The engine's state as the guest should read it: while slots are being commissioned no look is changing, so
-    the kiosk rests ("being set up") instead of saying "Changing the light…" for minutes."""
+    the kiosk rests ("being set up") instead of saying "Changing the light…" for minutes. A publish's slot repaint
+    (a few seconds, D68) says what is true: the canopy is changing."""
+    if _flag(engine, "repaint_quiet") is True and state.phase != CanopyPhase.RESTING:
+        return dataclasses.replace(state, phase=CanopyPhase.UPDATING, message=CHANGING)
     if _flag(engine, "commissioning") is True and state.phase != CanopyPhase.RESTING:
         return dataclasses.replace(
             state, phase=CanopyPhase.RESTING, look_phase=CanopyPhase.RESTING, message=BEING_SET_UP
@@ -420,6 +425,8 @@ def refusal_for_state(engine: Any, st: CanopyState, now: float) -> Refusal:
     log.info("The canopy engine declined a kiosk choice: %s", st.message)
     if _flag(engine, "stopped") is True:
         return 503, RESTING, {}
+    if _flag(engine, "repaint_quiet") is True:  # a publish's slot repaint (D68 PR B2): a moment's wait
+        return 503, CHANGING, _retry(st.retry_after_s or 5.0)
     if _flag(engine, "commissioning") is True:
         return 503, BEING_SET_UP, _retry(st.retry_after_s or 30.0)
     if _flag(engine, "outage") is not None:

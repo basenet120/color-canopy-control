@@ -384,13 +384,19 @@ def _engine_json(lab: LabService) -> dict:
             "running": False,
             "simulated": lab.simulated,
             "commissioning": False,
+            "repaint_quiet": False,
             "paused": False,
             "outage": False,
         }
+    # The engine's public `commissioning` is true during an operator repaint's quiet window too (D68 PR B2: so the
+    # reconciler and the stepped runner hold still); the Lab names the two apart. They never overlap: commissioning
+    # is refused while a repaint job runs, and a repaint never starts while commissioning.
+    repaint_quiet = engine_flag(engine, "repaint_quiet") is True
     return {
         "running": not bool(engine_flag(engine, "stopped")),
         "simulated": lab.simulated,
-        "commissioning": bool(engine_flag(engine, "commissioning")),
+        "commissioning": bool(engine_flag(engine, "commissioning")) and not repaint_quiet,
+        "repaint_quiet": repaint_quiet,
         "paused": bool(engine_flag(engine, "paused")),
         "outage": bool(engine_flag(engine, "outage")),
     }

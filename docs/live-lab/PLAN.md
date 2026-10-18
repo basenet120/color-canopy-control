@@ -610,8 +610,11 @@ are repainted; the others get the live design when commissioned (commissioning h
 limit: runbook line "commission after your last publish, or wait 10 min after a publish before commissioning that
 kit"). RepaintInfo/confirm sentences come from counts: (a) none: "No slot repaint: no module has custom-3
 commissioned on this show box."; (b) some: "custom-3 is commissioned on 5 of 9 modules (Modules 1–5); publishing
-repaints those 5 (one slot write each). The other 4 get the published design when they are commissioned."; (c) all:
-"Publishing a new painted design repaints custom-3 on 9 modules (one slot write each)."
+repaints those of the 5 whose design changes (one slot write each; the confirm names them). The other 4 get the
+published design when they are commissioned."; (c) all: "Publishing a new painted design repaints custom-3 on up to
+9 modules: only the modules whose design changes (one slot write each; the confirm names them)." (b) and (c) are
+maxima — the editor has no draft yet; the confirm counts the modules whose record differs from the new compile, e.g.
+3 of 9 for one palette stop (review 5, UI-6).
 
 ### 2.7 B2: the operator repaint limit (2 min per scene) — never blocks a look change
 - Setting: `LabSettings.repaint_min_interval_s: float = Field(120, ge=60, le=600)` (config.py:201) and
@@ -623,7 +626,14 @@ repaints those 5 (one slot write each). The other 4 get the published design whe
   interval)` from `looks.file.repaints[mode]` and `engine._repaint_last[mode]` (the clamp means an NTP step can't lock
   it out or open it early by more than the interval). `start_repaint` itself enforces `due`, so no caller can bypass
   it. A publish while a repaint is queued replaces the job (latest wins; the due time stays). The confirm says
-  "…repainted into custom-3 in 56 s." `queued` is persisted and re-queued after a restart.
+  "…repainted into custom-3 in 56 s." `queued` is persisted and re-queued after a restart — **at engine start**,
+  before any profile is read (review 5, B2-1): `ShowWiring._restore_repaints` seeds the gate from `repaints` and gives
+  the engine the queued scenes at their due times over every module with an api record for the slot (pending from
+  then: the reconciler leaves them alone; a publish carries them over, the unread modules included); a scene's window
+  never opens before the show's start-up is over (`repaint_ready`: the first capability round; in sim, the start-up
+  commissioning, which replaces the restored job) and recomputes its target then — a module still unread is left to
+  the reconciler, and with nothing judgeable the repaint "didn't start" (never "already holds"). The scenes of one
+  job run in due order (stable), so a scene due now never waits behind another's gate (B2-2).
 - Revert to approved and Undo are publishes like any other: never refused by the gate; their repaint (if the slots
   need one) is queued the same way. When the slot already holds the reverted design (the queued repaint never ran),
   `repaint_plan` lists nothing and the hold lifts at once.
@@ -1354,3 +1364,27 @@ mutation check of every new guard — `tests/test_live_lab_review_fixes.py`, `te
   (`read_only=True`: no write, no log line); parity test over every fallback cause and the lenient cases.
 - B1-3, B1-4, B1-5 untested guards (the kiosk's sampled colours from the live recipes; validate_trio's blocking
   scene rules; seq recovery, the no-data-folder row, Undo's checksum) — **tests added**, each failing on its mutant.
+
+**Build review of PR B2 (Oct 18, review 5; each fixed at its root with a regression test that failed first, plus a
+mutation check of every new or untested guard — `tests/test_lab_repaint_review.py`, the node tests)**
+- B2-1 after a restart the persisted gate and queue reached the engine only once EVERY module's profile was read, so
+  with one module unreadable at boot a publish repainted at once inside the gate, the reconciler rewrote the queued
+  scene's slots 36–41 s after the last repaint, and a publish dropped the queued scene — **fixed**: §2.7's restore at
+  engine start (gate seed, the queued scenes pending at once over the api-record modules, carried over by a publish,
+  windows after `repaint_ready`); the simulator's start-up commissioning replaces a restored job, then re-queues
+  what is left.
+- B2-2 a job's scenes ran in mode order, so a scene due now waited behind another's 2-min gate while its confirm
+  named no wait — **fixed**: `start_repaint` sorts the scenes by due time (stable). The scenes still run one after
+  another, so a second scene due now starts after the first's write window (~M·1.2 + 3 s), as §2.6 has it.
+- B2-3 / UI-3 the quiet window made Re-assert all answer "Commissioning is writing… (a minute or two)" and the Lab's
+  try-on panel say "being set up (commissioning)" — **fixed**: StateJSON.engine has `repaint_quiet` and
+  `commissioning` only for a real commissioning; ops' reassert checks the window first (409 "A publish is repainting
+  a painted scene's slot right now (about N s left)…" + Retry-After); `CanopyEngine.reassert_all` itself refuses in
+  the window (REPAINT_MESSAGE) and while commissioning (it used to answer refused=false and send nothing);
+  `TRIAL_COPY.repainting` ahead of commissioning (`?v=lab-8`).
+- UI-6 the editor's repaint line said every commissioned module would be repainted while the publish repaints only
+  those whose design changes — **fixed**: sentences (b)/(c) are maxima (§2.6); the confirm still names the modules.
+- Mutation gaps (Q3 the guest reset, Q5 the try-on start, Q7 reassert_all, Q30 a try-on running when the window
+  opens, Q31 a coalesced re-pick in a second scene's window, S2 the gate seed with nothing queued, P3 the carry-over
+  of a queued scene, L3 no history copy for the bookkeeping) — **tests added**, each failing on its mutant; the
+  history row is no longer written for a repaint whose slots already held the design.

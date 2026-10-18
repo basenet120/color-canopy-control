@@ -892,6 +892,37 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
   2 min per scene, `lab.repaint_min_interval_s`; a sooner publish installs at once and queues it; a revert is never
   blocked). On today's two kits (no Gate C, nothing commissioned) nothing is repainted and the design shows at module
   level.
+- **PR B2 — the operator repaint (built Oct 17, `docs/live-lab/PLAN.md` §2.6–§2.7; 07 §6's "Operator repaint").**
+  B1's api lock is gone (on hardware and in the simulator alike); the app lock stays. A publish whose painted scene's
+  commissioned slots won't hold the new design installs at once (the scene is held below T1) and hands the engine
+  ONE job (`CanopyEngine.start_repaint`): the scenes whose eligible modules — their own api record, Gate C at their
+  address and, on a longer frame, a valid map (`ShowWiring.repaint_plan`, per module: one that can't take T1 drops
+  out alone) — have a record that differs, plus any scene of a queued job it replaces. The job's (device, slot) pairs
+  are marked pending at once; the reconciler's `check_slots` skips them (its only edit) and the scene stays held while
+  any is pending. When a scene comes due the engine opens a quiet window (the public `commissioning` flag reads it, so
+  the reconciler, idle hold, stepped runner and capability re-pick hold still; guests, ops, a try-on and Gate R are
+  refused with "One moment: the canopy is changing." and a retry-after — ops' Re-assert all and the Lab's try-on
+  panel name the repaint, never "commissioning" (review 5); a running try-on ends first), waits for the
+  commands in flight, recomputes the target from the live looks, and writes each listed module's slot under its
+  `_slot_lock` through `_commission_plan(min_interval=0, only=…, verb="publish repaint", locked=True)`: header from
+  the readback, `slot_written` stamped at submit, at most two retries only when a write didn't land, never over an
+  app record or a module held by the module page, the readback recorded as commissioning records it (the registry
+  overlay), so the reconciler never calls the published design stale. A fully applied scene's hold lifts: one T1
+  re-pick, the re-select after rewriting the active slot. A module that failed or was locked keeps the scene at
+  module level until the reconciler's stale rule (≥ 600 s after the attempt) or a commissioning makes it current.
+  **The 2-min gate** (`lab.repaint_min_interval_s: 120`): enforced inside `start_repaint` (monotonic, from the start
+  of a scene's last operator writing); a sooner publish is never refused — it installs and queues (`in_s` in the
+  confirm, which may tick down by up to one interval while ops reads it); a newer publish replaces a queued job (the
+  due time stays); Revert and Undo queue the same way. The overlay keeps `repaints` (the gate) and `queued` (the
+  job), so a restart re-queues it as the engine starts, before any profile is read (review 5: the gate seeded from
+  the wall times, clamped to one interval, so a clock step can't stretch or skip it; the queued scenes pending at once
+  over the api-record modules, so a module unreadable at boot opens neither the gate nor its slots to the reconciler,
+  and a publish carries them over; a window opens only after the show's first capability round); in the simulator
+  the start-up commissioning writes the live design itself, replaces the restored job, and the queue settles. A job's
+  scenes run one after another in due order. A publish is refused only while a repaint is writing ("repainting"); commissioning is refused while a job
+  is queued or running. The Lab reads the job as RepaintJSON (`LiveJSON.repaint`: `queued_until`, `started_at`,
+  per-module status) and the history row's `repaint` counts. **Deploy B2 only after bench item 6** (rewriting the
+  showing slot, then the re-select) has been run once on a show kit with its own Gate C.
 - **Git stays the record.** The Lab's export of the published version is the PR that approves it; once merged and
   deployed the overlay equals git and is followed as git. Until then a deploy doesn't change a published look (the
   /ops warn names the masked change); Revert to approved takes git's.
