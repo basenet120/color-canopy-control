@@ -170,6 +170,18 @@ class DeviceStateTracker:
         dev = self._devices.get(address)
         return self._evaluate(dev)[0] if dev else DeviceStatus.UNKNOWN
 
+    def flagged_only(self, address: str) -> bool:
+        """Needs attention only for a flagged problem (`flag_problem`, e.g. D54's "no proven map yet"), with the
+        current look sent, read back and matching: nothing is changing, and no re-send can clear a flag."""
+        dev = self._devices.get(address)
+        if dev is None or not dev.problems or dev.desired is None or dev.outstanding:
+            return False
+        if dev.auth_problem or dev.available is False or dev.command_problem:
+            return False
+        if dev.reported is None or dev.readback_seq < dev.desired_seq:
+            return False
+        return not self._mismatches(dev)
+
     def snapshot(self, address: str) -> dict:
         """JSON-safe record for /ops, the module page, the visualizer and WebSocket push."""
         dev = self._devices.get(address) or _Device(address)

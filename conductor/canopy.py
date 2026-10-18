@@ -1178,12 +1178,16 @@ class CanopyEngine:
 
     def _stuck(self, device_id: str, status: DeviceStatus) -> bool:
         """A driven module that has needed attention longer than `reconciler.downgrade_after_wrong_s` — or, while a
-        stepped look moves, one whose write has gone unverified for max(2 steps, 10 s) (`ProgramRunner.status`)."""
+        stepped look moves, one whose write has gone unverified for max(2 steps, 10 s) (`ProgramRunner.status`) —
+        or at once when its only problem is a flagged note and its look is confirmed (`tracker.flagged_only`): the
+        retry window is for a readback that still differs, and no retry clears a flag (on Modules 1–2 D54's "no proven
+        map yet" note held the guest panel at "changing" for 10 s after every scene)."""
         if self.stepping:
             return status is DeviceStatus.NEEDS_ATTENTION
-        return status is DeviceStatus.NEEDS_ATTENTION and self.reconciler.wrong_too_long(
-            self._targets[device_id].address
-        )
+        if status is not DeviceStatus.NEEDS_ATTENTION:
+            return False
+        address = self._targets[device_id].address
+        return self.tracker.flagged_only(address) or self.reconciler.wrong_too_long(address)
 
     def _refused(self, message: str, retry_after_s: float | None) -> CanopyState:
         state = self.state()

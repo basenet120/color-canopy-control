@@ -1030,3 +1030,18 @@ today's two kits both give 2 s: the switch matters once all nine strands are dri
 - **The first real number:** `docs/runbooks/account-rate-probe.md` — both kits at their per-device limit for 3 minutes
   (≈ 120 writes/min on the account), run by Alon. Throttled → set `fast_pacing: false` until the nine kits are
   measured.
+
+**D73 — A module whose only problem is a flagged note isn't "changing" (Oct 18, found live).** After D72 went live
+(2 s guest gap), Alon still saw ~8–12 s between scenes: the iPad said "One moment, the lights are changing". Live
+telemetry: both kits confirmed each scene at ~1.4–2.6 s with no mismatch, and the next scene got through 0.17 s after
+a routine true-up read ~12 s in. Cause: the show flags D54's capability note on each kit ("the controller reports 60
+entries for 30 heads and this kit has no proven map yet … per-head frames refused; whole-strand looks still work") as
+a tracker problem, so a confirmed module reads NEEDS_ATTENTION; the engine's phase counts a NEEDS_ATTENTION module as
+"changing" until it is "stuck" (`reconciler.downgrade_after_wrong_s`, 10 s, timers reset by every new look) — the
+retry window meant for a readback that still differs. The guest panel's pending scene clears only when the phase
+leaves "changing", so every scene held the panel ~10 s, whatever the cooldown (the old 8 s cooldown hid it). Now
+`tracker.flagged_only(address)` — needs attention only for flagged problems, the look sent, read back and matching —
+makes the module "stuck" at once: /ops shows the note immediately (true), the guest panel goes to cooldown/ready as
+soon as the kits confirm, and a readback that really differs still gets its 10 s of "changing" while the reconciler
+retries. Reproduced first (`tests/test_flagged_not_changing.py`: 10.1 s of "changing", the second scene at 11.4 s on
+the two-kit setup), then fixed (under 3 s, and under 4 s through the panel).
