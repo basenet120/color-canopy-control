@@ -838,3 +838,7 @@ guest panel worked on the two live kits: "remove all the stuff that isn't the ca
 - **Contract text changed:** 07 §1 (the show box, the writer list), §2 (the role table), §8 (the data folder's
   home), §10 (the Mac); 05 #3, #11, #13; CLAUDE.md's opening line and the show-accounts rule (applied in PR A, for
   Alon to review there).
+- **Modules 1–2 for real (Alon, Oct 17):** VWBD's two shop kits are real canopy kits — Kingston test is Module 1
+  (`canopy-r0c0`) and String light 1 is Module 2 (`canopy-r0c1`), on VWBD's Hubspace account, which is the live show
+  account (logical account `bench`). The Oct 19 registry undo that the Oct 13 test set-up planned (STATUS) is
+  cancelled; D66's "Show box today (Modules 1–2)" view now shows the real Modules 1–2.
