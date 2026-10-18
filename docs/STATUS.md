@@ -1,6 +1,8 @@
 # Status
 
-_Last updated: 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
+_Last updated: 2026-10-18 afternoon (PR C `claude/panel-latency`: input to reaction on the guest panel, D69; see its
+block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
+blocks below still read as before the merge. Before that 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
 `claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
 PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A `claude/canopy-only`: the
 Conductor controls the canopy only, D67; the Studio is screen only; see the three blocks below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
@@ -13,6 +15,57 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR C — input to reaction on the guest panel (D69), `claude/panel-latency` → `main` (Oct 18)
+Alon: "minimize delay between input and reaction on the panels". Cut from `main` at `96b31ad` (after #28–#30); one
+PR, merge commit. Measured on the simulator first (`make lab-dev`, port 8200): a tap is answered in ~7 ms and the
+burst goes out without waiting; the delay was in the panel and in how guest input met the engine's cooldown.
+- **Fixed — brightness/power inside the cooldown were silently dropped.** The panel got 200, then the engine refused
+  the lane's job (shared 8 s cooldown, D60): the slider snapped back after 3 s and the lights never took the level.
+  Now the change waits for the cooldown's end and goes out (latest wins, one burst; the budget holds), with true copy
+  ("Your brightness is next. It reaches the lights in a moment.") and `state.next` keeping the controls in place. The
+  slider sends **once, on release** (its first-touch send used to start the cooldown with the wrong level).
+- **The panel reads its state on each server push** (the `canopy` WebSocket topic as a nudge; the 2 s poll stays the
+  fallback); single-flight reads; 6 s/10 s timeouts so a hung request can't freeze it. Tap → "ready" on the panel:
+  2.0–3.9 s (avg ~2.8) before, ~2.2 s after (sim; the rest is the readback, `readback_delay_s` 1.0, unchanged).
+- **Delivery:** `/kiosk/*` and `/static/*` now `Cache-Control: no-cache`; the kiosk's modules share one `?v=` tag
+  (bump index.html's and kiosk.js's together).
+- **Live path:** the AferoDriver refreshes a live account's bearer in the background at < 30 s left, so a guest
+  burst never waits on Keycloak first (was ~13% of bursts); a newer command no longer waits for an older command's
+  readback GET on the wire (left to finish, never cancelled); redaction is indexed (~0.63 → ~0.014 ms a call after
+  12 days of token rotation, same output); the preview skips its layout on animation frames.
+- **Verified (sim, macOS):** `nice -n 15 uv run --offline pytest -q` → 2450 passed, 5 skipped, 44 subtests (11 min; the
+  redaction strategy pick and its long-text cases landed after it: `tests/test_panel_latency.py` + the redaction and
+  credential-canary suites re-run, 50 passed); ruff check / format clean; `node --test tests/*.test.mjs` 151/151;
+  `python -m conductor.soak` exit 0, every gating row PASS, the only FAIL the non-gating D65 stepped spread (p95
+  2.78 s, as before); mode change settled p95 3.49 → 3.40 s, the 1.2 s ripple's settled p95 5.53 → 5.13 s and ring
+  spread p95 1.98 → 1.80 s (the executor change; report updated). **`tests/test_panel_latency.py`** (16 tests): the
+  lane holds a change through the cooldown and runs only the latest, once, at its end; a plain 1 s gap is not
+  "held"; a broken hold never blocks; closing a waiting lane is immediate; on the real app (cooldown shortened to
+  2 s) three slider levels inside the cooldown → one engine call with the last, none refused, landed at the
+  cooldown's end, the panel saying `cooldown` + the "next" message + `state.next` meanwhile; switching off likewise;
+  the token keeper refreshes at < 30 s so a burst's check sends nothing, leaves a fresh bearer alone, never in sim
+  mode or for an account needing a sign-in, retries a failure only after 30 s; a newer command goes out at the
+  budget while the older readback GET (3 s) is on the wire, which finishes uncancelled; redaction equals the old
+  pass on 2,050 random texts (both paths) and costs the same at 50 and 8,800 secrets; `/kiosk/*` and `/static/*`
+  answer `no-cache` and 304 on their ETag; kiosk.js's imports carry index.html's version. **Mutation-checked:** the
+  lane without `hold=` → both app tests fail; the keeper without `_refresh_ahead` → its test fails; the executor
+  reading without `_read_unless_newer` → its test fails. **Browser** (sim dev server, port 8200, in-app browser): the
+  new page loads its modules at `?v=latency-1`, fetches a WS ticket after the first read, no console errors; tap →
+  card settled 2.17–2.21 s (3 taps) vs the old cached page 2.01–3.95 s (4 taps); a scene tap then a slider drag sent
+  exactly one brightness POST (on release), the header said "Your brightness is next…" with the knob held at 24, and
+  at the cooldown's end the canopy read back 24. **Not run here:** `make e2e` (Playwright's browser isn't installed
+  on this Mac; its slider test is updated to expect one send on release — UNVERIFIED locally).
+- **Deploy (Alon, after merging; on its own):** the PR A paste block (backup, checkout the merge sha, `canopy-mac
+  install`, rc 3 rollback). Then reload the guest iPad **once at `/kiosk/?r=1`** (leave Guided Access, open that
+  URL, Guided Access on): the iPad cached the old page without `no-cache`, so a plain reload may keep the old code
+  for a while (harmless — the old page works against the new server — but without the fixes). From then on a reload
+  always picks up a deploy.
+- **Needs the real box:** the real PUT-to-light time on Modules 1–2; that the iPad (WebKit) keeps the live socket
+  (ticket flow, 07 §2) — if it can't, the panel falls back to the 2 s poll on its own; a guest dimming right after a
+  scene on the kits (the level lands when the cooldown ends); how often a burst hit the inline token refresh before
+  (telemetry `token` events: `ensure_fresh` with a non-zero `elapsed_s` should become rare, `refresh_ahead` ~every
+  90 s per account).
 
 ## PR B2 — the operator repaint (D68), `claude/live-lab-repaint` → `main` (built Oct 17; plan `docs/live-lab/PLAN.md` §2.6–§2.8, §5.2 B2)
 **Merge PR B first ("merge #B first"); B2 targets `main` too; merge commits, not squash. Deploy B2 only after bench
@@ -348,6 +401,8 @@ Lab); both target `main`; merge commits, not squash.
   first registry edit clears them from the overlay (the line goes at the next restart).
 
 ## PR stack (merge order — merge commits, not squash)
+00. **Oct 18:** #28 (PR A), #29 (PR B), #30 (PR B2) are merged into `main`. **Open: PR C `claude/panel-latency` →
+    `main`** (D69, the guest panel's input-to-reaction pass; cut from `main` after #30, no other PR first).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -864,6 +919,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+00. **Alon (PR C, D69):** review and merge PR C (merge commit); deploy it on its own with the PR A paste block, then
+    reload the guest iPad once at `/kiosk/?r=1` (PR C block). On the kits: tap a scene, dim right after it — the
+    level should land when the cooldown ends and the panel should say so meanwhile.
 0a. **Alon (PR A, D67):** review CLAUDE.md's two changed lines in the PR (the lead asked stream R to apply them),
     merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above (no
     registry undo: the kits stay Modules 1–2). Then PR B (the live Lab): merge after A, deploy on its own (PR B

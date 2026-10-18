@@ -10,8 +10,10 @@ Rules implemented (binding text in `conductor/executor_api.py`):
 - **Latest-wins coalescing.** A device has at most one command in flight (sending, retrying or verifying) and at
   most one pending. A new submission replaces the pending one, which resolves SUPERSEDED without being sent. A
   newer submission also ends an older command that is waiting between retries, or waiting to verify its
-  readback: that older command resolves SUPERSEDED (its attempts are kept on the result). So the queue never
-  holds more than 2 commands per device, however fast guests tap.
+  readback — or whose verification GET is still on the wire: that older command resolves SUPERSEDED (its attempts
+  are kept on the result) and the newer one goes out without waiting for that GET's answer, which is left to finish
+  on its own and discarded (never cancelled: a request can be carrying the account's token refresh). So the queue
+  never holds more than 2 commands per device, however fast guests tap.
 - **Retries** only for retryable outcomes, waiting `backoff_s[n]` (and never less than the rate budget), up to
   `max_attempts`. DENIED, CLIENT_ERROR, NOT_FOUND and AUTH resolve at once.
 - **Readback.** After a 2xx with `verify`, GET after `readback_delay_s`, then every `readback_interval_s`, up to
@@ -133,6 +135,8 @@ class CommandExecutor:
         self._account_active: dict[str, int] = {}
         self._listeners: list[ResultListener] = []
         self._submit_listeners: list[SubmitListener] = []
+        # superseded verification GETs, left to finish on their own
+        self._orphan_reads: set[asyncio.Task] = set()
         self._closed = False
 
     # ---- public API ------------------------------------------------------------------------------------------
@@ -245,6 +249,9 @@ class CommandExecutor:
             if slot.worker is not None and not slot.worker.done():
                 slot.worker.cancel()
                 workers.append(slot.worker)
+        for t in list(self._orphan_reads):
+            t.cancel()
+            workers.append(t)
         for w in workers:
             with contextlib.suppress(asyncio.CancelledError):
                 await w
@@ -462,7 +469,10 @@ class CommandExecutor:
             if await self._wait_unless_newer(slot, delay):
                 self._finish(job, CommandStatus.SUPERSEDED, None)
                 return
-            rr = await self._read(slot, cmd)
+            rr = await self._read_unless_newer(slot, cmd)
+            if rr is None:  # a newer command for this device arrived while the GET was on the wire
+                self._finish(job, CommandStatus.SUPERSEDED, None)
+                return
             job.result.readback = rr
             if not rr.ok:
                 last_error = _describe(rr.outcome, rr.http_status, rr.error)
@@ -483,6 +493,29 @@ class CommandExecutor:
             names = ", ".join(sorted({m.function_class for m in mismatches}))
             error = f"The write was accepted but readback still differs after verification: {names}."
         self._finish(job, CommandStatus.MISMATCH, error)
+
+    async def _read_unless_newer(self, slot: _Slot, cmd: Command) -> ReadResult | None:
+        """A verification GET, or None as soon as a newer command for the device arrives while it is on the wire:
+        the newer command goes out now instead of after this answer, which no longer matters. The GET is left to
+        finish (and holds its account slot until it does), never cancelled — aioafero may be refreshing the
+        account's token inside it, and a refresh cut short can lose the rotated refresh token."""
+        if slot.pending is not None:
+            return None
+        read = asyncio.ensure_future(self._read(slot, cmd))
+        if not slot.newer.is_set():  # (a withdraw() can leave it set with nothing pending: then just read)
+            newer = asyncio.ensure_future(slot.newer.wait())
+            try:
+                await asyncio.wait({read, newer}, return_when=asyncio.FIRST_COMPLETED)
+            except asyncio.CancelledError:
+                read.cancel()  # shutdown (close() cancels the worker): as before, nothing outlives the executor
+                raise
+            finally:
+                newer.cancel()
+            if not read.done() and slot.pending is not None:
+                self._orphan_reads.add(read)
+                read.add_done_callback(self._orphan_reads.discard)
+                return None
+        return await read  # a cancelled worker cancels the read with it (shutdown), as before
 
     async def _read(self, slot: _Slot, cmd: Command) -> ReadResult:
         async with self._request_slot(slot.account):

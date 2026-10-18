@@ -933,3 +933,45 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
 - **Not changed:** `motion.stepped.live_enabled` (Gate R), `kiosk.ripple_stagger_s`, ladders, slot ownership; the
   Lab never changes them. `<data>/overrides/looks.yaml` (the Lab's version store) is unchanged and the show still
   never reads it; it reads only `show-looks.yaml`.
+
+**D69 — Input to reaction on the panels (the panel-latency pass, Oct 18).** Alon asked to cut the delay between a
+guest's input on the iPad and the reaction. Measured first, on the simulator (`make lab-dev`, port 8200): the server
+answers a tap in ~7 ms and sends the burst without waiting; the lights are the cloud's time; the delay was in how the
+panel and the engine handled input. What changed (the rate budget, the cooldown's length and every contract in 07 §6
+are unchanged):
+- **A brightness or power change inside the guest cooldown waits, it is never dropped.** The engine's 8 s cooldown
+  covers every guest input (D60), but the guest panel answered 200 and its lane then got refused: the slider snapped
+  back after 3 s and the lights never took the guest's level (the panel spec and the API both say brightness and power
+  "still work" in cooldown). Now the lane holds such a change until the cooldown ends (`Lane(hold=…)`, latest wins,
+  one burst), so guest bursts stay one per cooldown and the account budget holds. The panel says so truthfully:
+  phase `cooldown`, "Your brightness is next. It reaches the lights in a moment." / "The lights turn off (on) in a
+  moment.", and `state.next` (`{brightness?, power?}`) keeps the slider and switch where the guest put them. The engine
+  itself is unchanged (its D60 test still pins the refusal); only the guest panel stopped asking inside the cooldown.
+- **The slider sends once, on release** (and a tap on the track is a release). Its paced sends (first touch, then 1/s)
+  started the cooldown with the value under the first touch, so the guest's real level waited a whole cooldown;
+  `brightnessToSend` skips a release that changes nothing. (Supersedes guest-panel.md §2.7's "every 250 ms".)
+- **The panel reads its state the moment the server pushes a change.** It subscribes to the `canopy` WebSocket topic
+  it was always allowed (07 §2's ticket flow, `connectLive`) and uses each event only as a nudge to `GET
+  /api/kiosk/panel` (never its data: that is the ops view). The 2 s poll stays as the fallback, so a dead socket costs
+  speed, never correctness. Reads are single-flight with a re-read when a nudge lands mid-read; every request has a
+  timeout (6 s read, 10 s write) so a hung fetch can't stop the poll loop or leave a card pending. Tap to "ready" on
+  the panel: 2.0–3.9 s (avg ~2.8 s) before, ~2.2 s after, on the simulator — the server's own readback plus ≤ 0.25 s.
+- **Delivery.** `/kiosk/*` and `/static/*` are served `Cache-Control: no-cache` (a 304 on the LAN), and the kiosk's
+  modules load with one version tag (`?v=latency-1` on kiosk.js and its imports): before, the browser guessed a
+  freshness lifetime, so an iPad could keep old code for hours after a deploy or, worse, run a new kiosk.js over a
+  cached older module.
+- **The bearer is refreshed ahead, off the burst's path.** The AferoDriver's token keeper refreshes a connected live
+  account once it has < 30 s left (`PROACTIVE_REFRESH_LEFT_S`), so the burst's own check (≥ 15 s, 07 §6) finds it fresh
+  and ~13% of guest bursts no longer wait on a Keycloak round trip + users/me + the encrypted save before the first
+  PUT. Never in sim mode, never for an account needing a sign-in (07 §3), one try per 30 s while it fails.
+- **A newer command never waits on an older command's readback GET on the wire.** The executor stops waiting for it,
+  resolves the older command SUPERSEDED and sends the newer one at the rate budget; the GET is left to finish and its
+  answer discarded — never cancelled, since aioafero may be refreshing the token inside it.
+- **Small CPU on the hot path:** redaction indexes the registered secrets by their tail instead of checking every one
+  on every log line (the set grows with every token rotation: ~0.63 ms a call after 12 days, now ~0.014 ms, the same
+  output — a randomized test compares it with the old pass); the iPad's preview skips its 270-dot layout on every
+  animation frame of a ripple or stepped run.
+- **Not changed, and why:** `kiosk.cooldown_s` (it is what keeps guest bursts under the account's write budget),
+  `readback_delay_s` (the honest "ready" depends on real readback timing: bench it before shortening), the 2 s poll,
+  ripple/stepped settings. **Needs hardware:** the real PUT-to-light time, how often bursts used to hit the inline
+  refresh, and the cold-connection cost of a 9-wide burst (about 3 connections stay warm between bursts).

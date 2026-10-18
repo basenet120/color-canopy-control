@@ -8,14 +8,18 @@ same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
                                 so the iPad's code is unchanged). Each scene is `{id, name, mood, description, palette: [{name, hex}],
                                 frame: [[r, g, b] × 30], solid: "#RRGGBB", brightness_draft}`. `state` is `{power,
                                 brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit,
-                                waiting}`:
+                                waiting, next}`:
                                 power/brightness/scene are null when unknown; look is null (the engine's techniques
                                 aren't a 30-light frame: `lit` is what the lights show); phase is ready | changing | resting |
                                 paused | cooldown ("cooldown": the lights are steady and a new scene can be chosen in
-                                cooldown_remaining_s; brightness and power still work); message is a calm sentence for
+                                cooldown_remaining_s; brightness and power still work: a change made now waits for
+                                the cooldown's end, then goes out); message is a calm sentence for
                                 the guest (or ""); feature is the true Hubspace sentence for what is showing, or null;
                                 waiting is why every mood waits now — "try-on" (a Design Lab try-on, D66), "testing"
-                                (the stepped rehearsal) — or null (the panel drops a waiting toast once it is null).
+                                (the stepped rehearsal) — or null (the panel drops a waiting toast once it is null);
+                                next is `{brightness?, power?}` the guest asked for and that hasn't gone out yet
+                                (queued, or waiting out the cooldown), or null — the controls show it, not the
+                                engine's `brightness`/`power`, until it lands.
 
 The canopy picture (`conductor/canopy_view.py`; an older server may send `canopy: null` and `state.lit: null`,
 and the panel then draws its 30-light serpentine instead). A fixed contract:

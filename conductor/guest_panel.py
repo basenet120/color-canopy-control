@@ -9,9 +9,11 @@ second target for the shop kits until the canopy-only change):
 
 **One lane.** Every guest write runs in one background worker, one job at a time, jobs no closer together than the
 executor's `min_write_interval_s`. Pending work is coalesced and the latest request wins: at most one pending scene,
-one brightness and one power. A dragging slider therefore gives one brightness request at a time, ending on the last
-level. Scene choices also have the kiosk's cooldown (`settings.kiosk.cooldown_s`, 8 s, as /api/kiosk/select): a
-second choice inside it is a 429.
+one brightness and one power, so however fast requests come, the last level wins (the iPad's slider sends once, on
+release: D69). Scene choices also have the kiosk's cooldown (`settings.kiosk.cooldown_s`, 8 s, as /api/kiosk/select): a
+second choice inside it is a 429. The engine's cooldown covers every guest input (D60), so a brightness or power
+change made inside it **waits for its end and then goes out** (the latest wins; `state.next` and a "… in a moment"
+message say so) — it is never dropped after the panel was told 200, and guest bursts stay one per cooldown.
 
 **The canopy picture.** `canopy()` is the 270-light geometry and `state()["lit"]` what each canopy position truthfully
 shows (`conductor/canopy_view.py`: off, dark, unknown, lit or changing, with full-strength colours and the level).
@@ -23,6 +25,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
+import math
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
@@ -52,6 +55,12 @@ UNKNOWN_SCENE = "That scene isn't one of the panel's choices."
 SCENE_UNAVAILABLE = "That scene isn't available right now. Choose another."
 NOT_AVAILABLE = "That control isn't available right now."
 STILL_CHANGING_S = 2.0  # retry_after_s while a scene is still being applied past its cooldown
+# a held change goes out this long after the cooldown ends, so the engine never sees it inside the cooldown
+HOLD_MARGIN_S = 0.02
+# A brightness or power change waiting out the guest cooldown (it goes out when the cooldown ends; kiosk copy is true)
+NEXT_BRIGHTNESS = "Your brightness is next. It reaches the lights in a moment."
+NEXT_OFF = "The lights turn off in a moment."
+NEXT_ON = "The lights turn on in a moment."
 
 
 class GuestRefused(Exception):
@@ -101,7 +110,9 @@ class CommandLog:
 
 class Lane:
     """One background worker. Pending work is coalesced per kind (latest wins), run in arrival order one job at a
-    time, and jobs start at least `gap()` seconds apart. `on_idle` runs when the last job has finished."""
+    time, and jobs start at least `gap()` seconds apart — and, for a job `hold(kind)` holds (the guest cooldown), no
+    sooner than that many seconds from now: a held job waits, it is never dropped. `on_idle` runs when the last job
+    has finished."""
 
     def __init__(
         self,
@@ -109,11 +120,13 @@ class Lane:
         run: Callable[[str, Any], Awaitable[None]],
         gap: Callable[[], float],
         on_idle: Callable[[], None] = lambda: None,
+        hold: Callable[[str], float] = lambda _kind: 0.0,
     ):
         self.clock = clock
         self.run = run
         self.gap = gap
         self.on_idle = on_idle
+        self.hold = hold
         self.pending: dict[str, Any] = {}
         self.running: str | None = None
         self.task: asyncio.Task | None = None
@@ -123,8 +136,22 @@ class Lane:
     def busy(self) -> bool:
         return bool(self.pending) or self.running is not None
 
+    @property
+    def held(self) -> bool:
+        """The next job is waiting out a hold (not the short gap): nothing is being sent for it yet."""
+        if self.running is not None or not self.pending:
+            return False
+        return self._hold_left(next(iter(self.pending))) > 0
+
     def has(self, kind: str) -> bool:
         return self.running == kind or kind in self.pending
+
+    def _hold_left(self, kind: str) -> float:
+        try:
+            return max(0.0, float(self.hold(kind)))
+        except Exception:  # a hold that can't be read never blocks the guest's change
+            log.exception("guest panel: the %s hold failed", kind)
+            return 0.0
 
     def put(self, kind: str, value: Any, *, drop: Iterable[str] = ()) -> None:
         for k in drop:
@@ -142,6 +169,7 @@ class Lane:
                     if self._last_start is None
                     else self._last_start + self.gap() - self.clock.monotonic()
                 )
+                wait = max(wait, self._hold_left(next(iter(self.pending))))
                 if wait > 0:
                     await self.clock.sleep(wait)
                     continue  # the pending work may have changed meanwhile
@@ -167,6 +195,11 @@ class Lane:
         self.pending.clear()
         task = self.task
         if task is None or task.done():
+            return
+        if self.running is None:  # only waiting (a gap or a hold): nothing is on its way to the lights
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
             return
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout)
@@ -222,7 +255,7 @@ class EngineTarget:
     def __init__(self, services: Any, log: CommandLog | None = None):
         self.services = services
         self.log = log
-        self.lane = Lane(services.clock, self._run, self._gap, on_idle=self._lane_idle)
+        self.lane = Lane(services.clock, self._run, self._gap, on_idle=self._lane_idle, hold=self._hold)
         self.requested: dict[str, Any] = {}
         self.accepted: dict[str, Any] = {}  # the last brightness/power the engine took
         self.message = ""
@@ -291,6 +324,19 @@ class EngineTarget:
 
     def _gap(self) -> float:
         return float(self.services.settings.executor.min_write_interval_s)
+
+    def _hold(self, _kind: str) -> float:
+        """Seconds the engine's guest cooldown has left: a brightness or power change made inside it waits for its
+        end and then goes out (the latest wins), instead of being refused after the panel was told 200. The
+        cooldown still spaces guest bursts (one per `kiosk.cooldown_s`), so the account's write budget holds."""
+        engine = self.engine()
+        if engine is None:
+            return 0.0
+        until = getattr(self._engine_state(engine), "cooldown_until", None)
+        if until is None or not math.isfinite(until):
+            return 0.0
+        left = until - self.services.clock.now()
+        return left + HOLD_MARGIN_S if left > 0 else 0.0
 
     def _lane_idle(self) -> None:
         self.requested = {}
@@ -404,6 +450,7 @@ class EngineTarget:
             "cooldown_remaining_s": 0.0,
             "lit": None,
             "waiting": None,
+            "next": None,
         }
         if engine is None:
             return resting
@@ -422,12 +469,15 @@ class EngineTarget:
         # The look's own phase, over the strands it drives: on a partial canopy `phase` stays needs attention for
         # /ops (D62) while the guest still sees the change and its end. An engine without it: `phase`.
         look = getattr(st, "look_phase", None) or st.phase
+        held = self.lane.held and cooldown > 0
         if not st.guest_input:
             phase, message = "paused", K.PAUSED
         elif st.phase == CanopyPhase.RESTING:
             phase, message = "resting", (K.BEING_SET_UP if st.message == K.BEING_SET_UP else K.RESTING)
-        elif look == CanopyPhase.UPDATING or self.lane.busy:
+        elif look == CanopyPhase.UPDATING or (self.lane.busy and not held):
             phase, message = "changing", CHANGING
+        elif held:  # the lights are steady; the guest's change waits for the cooldown, then goes out
+            phase, message = "cooldown", self._next_message()
         elif cooldown > 0:
             phase, message = "cooldown", self.message
         else:
@@ -456,7 +506,21 @@ class EngineTarget:
             "cooldown_remaining_s": cooldown,
             "lit": self._lit(engine, st),
             "waiting": waiting,
+            # the guest's brightness / power still on its way (queued or waiting out the cooldown): the panel keeps
+            # its control there instead of snapping back to `brightness` / `power`, which stay the engine's truth
+            "next": self._next(),
         }
+
+    def _next(self) -> dict | None:
+        out = {kind: self.lane.pending[kind] for kind in ("brightness", "power") if kind in self.lane.pending}
+        return out or None
+
+    def _next_message(self) -> str:
+        """What the queued changes end with: they run in arrival order, so the last one decides."""
+        last = next(reversed(self.lane.pending), None)
+        if last == "brightness":
+            return NEXT_BRIGHTNESS
+        return NEXT_OFF if self.lane.pending.get("power") is False else NEXT_ON
 
     def lease_holders(self) -> dict[str, str | None]:
         out: dict[str, str | None] = {}

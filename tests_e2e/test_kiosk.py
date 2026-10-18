@@ -271,7 +271,8 @@ def test_panel_refusal_shows_the_calm_detail(design_context_factory):
     assert errors == []
 
 
-def test_panel_slider_paces_and_sends_the_final_value(design_context_factory):
+def test_panel_slider_sends_the_final_value_once_on_release(design_context_factory):
+    """D69: every guest input shares the engine's cooldown, so a drag sends one level, the final one, on release."""
     stub = StubPanel()
     _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
     _ready(page)
@@ -285,8 +286,7 @@ def test_panel_slider_paces_and_sends_the_final_value(design_context_factory):
     page.mouse.up()
     page.wait_for_timeout(300)
     levels = [b["level"] for kind, b in stub.writes if kind == "brightness"]
-    assert 1 <= len(levels) <= 3, levels  # ≤ 1/s while dragging, plus the final value
-    assert levels[-1] >= 90
+    assert len(levels) == 1 and levels[0] >= 90, levels  # nothing while dragging; the final value on release
     assert page.text_content("#bright-value") == str(levels[-1])
     assert errors == []
 

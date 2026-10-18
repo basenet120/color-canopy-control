@@ -1,8 +1,10 @@
 // The guest panel on the iPad stand (docs/design/guest-panel.md). ES module, no build step, vendored helpers only.
 //
-// Data: GET /api/kiosk/panel every 2 s (the scenes, capabilities, `canopy` and `state`), and POST /api/kiosk/scene|
+// Data: GET /api/kiosk/panel (the scenes, capabilities, `canopy` and `state`), and POST /api/kiosk/scene|
 // brightness|power. A 200 on a write means "accepted"; the page shows the server's state (phase "changing" until the
-// lights read back) and reconciles its optimistic switch and slider to it.
+// lights read back) and reconciles its optimistic switch and slider to it. The panel reads its state the moment the
+// server pushes a change on the live socket (topic "canopy", used only as that nudge), and every 2 s regardless, so a
+// dead socket costs speed, never correctness. Every request has a timeout: a hung read never stalls the panel.
 // Now showing draws the canopy's 270 lights from `state.lit` (canopy-preview.mjs; what each panel may truthfully
 // claim), and the 30-light serpentine only when there is no such picture (no look yet).
 // Honesty (CLAUDE.md, 07 §6): the feature sentence is always `state.feature` from the server and the subtitle prefers
@@ -11,8 +13,10 @@
 // Resilience (07 §10): the page never navigates away; every fetch failure is caught.
 // Ops: `?debug=1` (only when the server says the viewer is ops) adds a debug drawer; `?debug=1&frame=1` is the iPad
 // frame preview. A kiosk-role device gets the plain panel whatever the URL says.
+// Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
+// browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, setSimBadge } from "/static/app.js";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=latency-1";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -21,16 +25,18 @@ import {
   IDLE_MS,
   LOST_AFTER_FAILURES,
   POLL_MS,
+  POLL_TIMEOUT_MS,
   POWER_HOLD_MS,
   SAME_CARD_DEBOUNCE_MS,
+  WRITE_TIMEOUT_MS,
   attractDue,
+  brightnessToSend,
   cardsKey,
   cardState,
   cardTap,
   clampLevel,
   cooldownChip,
   cooldownLeft,
-  createPacer,
   debugAllowed,
   fractionForLevel,
   frameScale,
@@ -39,6 +45,7 @@ import {
   hexToRgb,
   levelFromX,
   nowShowing,
+  pendingValue,
   phaseOf,
   reconcile,
   isWaitRefusal,
@@ -49,8 +56,8 @@ import {
   stripGradient,
   switchView,
   waitToastOver,
-} from "/kiosk/panel-model.mjs";
-import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs";
+} from "/kiosk/panel-model.mjs?v=latency-1";
+import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs?v=latency-1";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -293,8 +300,20 @@ function paintSnake(frame) {
  * guest at the stand sees overhead. Rebuilt only when the geometry or view changes; painted on every render, and
  * every animation frame while `lit.motion` still has a frame to come.
  */
-const canopyView = { key: "", dots: [], panels: [], motionKey: null, prevLit: null, shown: null, raf: 0, label: "" };
+const canopyView = {
+  key: "",
+  canopy: null, // the geometry object last laid out: a ripple or stepped run repaints every frame from the same one
+  dots: [],
+  panels: [],
+  motionKey: null,
+  prevLit: null,
+  shown: null,
+  raf: 0,
+  label: "",
+};
 function buildCanopy(canopy) {
+  if (canopy === canopyView.canopy) return; // same read: skip the 270-dot layout and its key on every frame
+  canopyView.canopy = canopy;
   const drawing = layout(canopy);
   if (drawing.key === canopyView.key) return;
   const root = $("canopy-preview");
@@ -378,15 +397,21 @@ function setTint(layers, colors, alpha = 0.3) {
 const HEADER_LAYERS = Object.assign(["tint-a", "tint-b"], { key: null });
 const ATTRACT_LAYERS = Object.assign(["attract-a", "attract-b"], { key: null });
 
+/** The server's value, or the guest's own change still on its way to the lights (`state.next`). */
+function shownValue(state, kind) {
+  const queued = pendingValue(state, kind);
+  return queued !== undefined ? queued : state[kind];
+}
+
 function displayedPower(state) {
-  const r = reconcile(state.power, ui.powerHold, Date.now());
+  const r = reconcile(shownValue(state, "power"), ui.powerHold, Date.now());
   ui.powerHold = r.hold;
   return r.value;
 }
 
 function displayedBrightness(state) {
   if (ui.dragging) return ui.dragging.level;
-  const r = reconcile(state.brightness, ui.brightHold, Date.now());
+  const r = reconcile(shownValue(state, "brightness"), ui.brightHold, Date.now());
   ui.brightHold = r.hold;
   return r.value;
 }
@@ -516,14 +541,32 @@ function applyState(state, serverNow, sentAt = 0) {
   render();
 }
 
+/** `api()` with a timeout: a request that hangs is aborted (and fails like any network error). */
+async function timed(path, ms, options = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await api(path, { ...options, signal: ctl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 let pollTimer = null;
+let polling = false; // one read in flight at a time
+let pollAgain = false; // a nudge landed during a read: read again as soon as it ends
 async function poll() {
   clearTimeout(pollTimer);
+  if (polling) {
+    pollAgain = true;
+    return;
+  }
+  polling = true;
   const started = performance.now();
   const startedAt = Date.now();
   const seq = ui.writeSeq;
   try {
-    const panel = await api("/api/kiosk/panel");
+    const panel = await timed("/api/kiosk/panel", POLL_TIMEOUT_MS);
     ui.latencyMs = Math.round(performance.now() - started);
     ui.lastPollAt = Date.now();
     readServerClock(panel.server_now);
@@ -544,6 +587,7 @@ async function poll() {
       ui.stopped = true; // the frame preview replaced this page; its iframe runs its own panel
       return;
     }
+    if (first) wireLive();
     render();
     if (first) {
       // controls paint in their real state first; only later changes animate
@@ -567,13 +611,26 @@ async function poll() {
       }
     }
   } finally {
-    if (!document.hidden && !ui.stopped) pollTimer = setTimeout(poll, POLL_MS);
+    polling = false;
+    const again = pollAgain;
+    pollAgain = false;
+    if (!document.hidden && !ui.stopped) pollTimer = setTimeout(poll, again ? 0 : POLL_MS);
   }
+}
+
+/** The server pushed a change: read the panel's state now rather than at the next 2 s poll. */
+function pollSoon() {
+  if (!ui.stopped && !document.hidden) poll();
+}
+
+function wireLive() {
+  // only a nudge: the event's own data is the ops view of the engine, never shown here
+  connectLive({ topics: ["canopy"], onEvent: () => pollSoon() });
 }
 
 async function post(path, body) {
   ui.writeSeq += 1;
-  return api(path, { method: "POST", body });
+  return timed(path, WRITE_TIMEOUT_MS, { method: "POST", body });
 }
 
 function refused(err) {
@@ -632,7 +689,6 @@ async function togglePower() {
   }
 }
 
-const pacer = createPacer();
 async function sendBrightness(level) {
   try {
     const sentAt = Date.now();
@@ -641,7 +697,6 @@ async function sendBrightness(level) {
     applyState(res.state, res.server_now, sentAt);
   } catch (err) {
     ui.brightHold = null;
-    pacer.reset();
     render();
     refused(err);
   }
@@ -678,8 +733,6 @@ function wireSlider() {
     ui.dragging = { pointerId: e.pointerId, level };
     slider.classList.add("is-dragging");
     paintSlider(level, ui.panel.brightness_range);
-    const send = pacer.move(level, Date.now());
-    if (send !== null) sendBrightness(send);
   });
   slider.addEventListener("pointermove", (e) => {
     if (!ui.dragging || e.pointerId !== ui.dragging.pointerId) return;
@@ -687,17 +740,15 @@ function wireSlider() {
     if (level === ui.dragging.level) return;
     ui.dragging.level = level;
     paintSlider(level, ui.panel.brightness_range);
-    const send = pacer.move(level, Date.now());
-    if (send !== null) sendBrightness(send);
   });
   const end = (e) => {
     if (!ui.dragging || e.pointerId !== ui.dragging.pointerId) return;
     const level = ui.dragging.level;
     ui.dragging = null;
     slider.classList.remove("is-dragging");
+    const send = brightnessToSend(level, ui.panel.state);
     ui.brightHold = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
-    const send = pacer.release(level, Date.now());
-    if (send !== null) sendBrightness(send);
+    if (send !== null) sendBrightness(send); // once, on release (see brightnessToSend)
     render();
   };
   slider.addEventListener("pointerup", end);
@@ -710,9 +761,9 @@ function wireSlider() {
     const range = ui.panel.brightness_range || [10, 100];
     const from = displayedBrightness(ui.panel.state || {});
     const level = clampLevel((Number.isFinite(from) ? from : range[0]) + step, range);
+    const send = brightnessToSend(level, ui.panel.state);
     ui.brightHold = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
     render();
-    const send = pacer.release(level, Date.now());
     if (send !== null) sendBrightness(send);
   });
 }
@@ -901,7 +952,7 @@ function renderDebug() {
     card(
       "Live updates",
       kv([
-        ["method", `polling /api/kiosk/panel every ${POLL_MS / 1000} s`],
+        ["method", `reading /api/kiosk/panel on each live push and every ${POLL_MS / 1000} s`],
         ["status", ui.lost ? "reconnecting" : ui.failures ? `${ui.failures} failed` : "ok"],
         ["latency", ui.latencyMs === null ? "—" : `${ui.latencyMs} ms`],
         ["last poll", ui.lastPollAt ? new Date(ui.lastPollAt).toLocaleTimeString() : "—"],
@@ -1033,7 +1084,7 @@ function start() {
   wireSlider();
   wireIdle();
   pressable($("power"), togglePower);
-  poll().catch(() => {});
+  poll().catch(() => {}); // the first good read opens the live socket (wireLive)
 }
 
 start();

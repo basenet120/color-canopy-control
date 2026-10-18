@@ -24,7 +24,16 @@ from typing import Any
 _lock = threading.Lock()
 _secrets: set[str] = set()
 _MIN_LEN = 6  # never register something short enough to mangle ordinary words
-
+# An index of the secrets by their last `_ANCHOR` characters, rebuilt only when one is added. The set only grows
+# (every rotated refresh token, ~every 2 minutes per account), so checking every secret against every log line got
+# slower all show long (~0.6 ms a call after 12 days, several calls per record, on the event loop). A secret can only
+# occur in a text where its tail does, so `redact` slides an `_ANCHOR`-wide window over the text and checks just the
+# secrets whose tail it meets — the same result as checking them all.
+_ANCHOR = 8
+_by_tail: dict[str, tuple[str, ...]] = {}
+_anchored: tuple[str, ...] = ()  # every secret in `_by_tail`: a long text with few secrets just checks these
+_always: tuple[str, ...] = ()  # too short to anchor, or holding a MASK character: checked on every call
+_stale = False  # a secret was added since the index was built
 _PATTERNS = [
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*"),
     re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),  # JWTs
@@ -39,15 +48,44 @@ _ENROLL = re.compile(r"(/enroll/)[^/?#\s\"']+")
 
 
 def add_secret(value: str | None) -> None:
+    global _stale
     if value and len(value) >= _MIN_LEN:
         with _lock:
-            _secrets.add(value)
+            if value not in _secrets:
+                _secrets.add(value)
+                _stale = True
+
+
+def _index() -> tuple[dict[str, tuple[str, ...]], tuple[str, ...], tuple[str, ...]]:
+    global _by_tail, _anchored, _always, _stale
+    with _lock:
+        if _stale:
+            by_tail: dict[str, list[str]] = {}
+            always: list[str] = []
+            for secret in _secrets:
+                if len(secret) < _ANCHOR or "*" in secret:
+                    always.append(secret)
+                else:
+                    by_tail.setdefault(secret[-_ANCHOR:], []).append(secret)
+            _by_tail = {tail: tuple(found) for tail, found in by_tail.items()}
+            _anchored = tuple(secret for found in by_tail.values() for secret in found)
+            _always = tuple(always)
+            _stale = False
+        return _by_tail, _anchored, _always
 
 
 def redact(text: str) -> str:
-    with _lock:
-        secrets = sorted(_secrets, key=len, reverse=True)
-    for s in secrets:
+    by_tail, anchored, always = _index()
+    present = list(always)  # checked against the text as it is after each longer secret is masked
+    if len(anchored) * 4 < len(text):  # few secrets, long text (a traceback): checking each is cheaper
+        present.extend(s for s in anchored if s in text)
+    elif by_tail:
+        get = by_tail.get
+        for i in range(len(text) - _ANCHOR + 1):
+            found = get(text[i : i + _ANCHOR])
+            if found:
+                present.extend(found)
+    for s in sorted(set(present), key=len, reverse=True):  # longest first, as a secret may contain another
         if s in text:
             text = text.replace(s, MASK)
     for pattern in (*_PATTERNS, _ENROLL):
