@@ -25,7 +25,8 @@ Rules implemented:
 Canvas kinds (config/modes.yaml `techniques.canvas.canvas`):
 - `gradient`        colour stops at 0..1 along the canopy's x (0 = left edge) or y (0 = top edge).
 - `field`           colour stops at 0..1 over a 2-D design field (`conductor/looks/field.py`): linear at any angle,
-                    radial (rings) or a sweep, with mirror / invert / repeat. Linear at 0° is the x `gradient`.
+                    radial (rings), a sweep, or the fins' rings (the drawing's drops, D74), with mirror / invert /
+                    repeat (a fins design is never mirrored). Linear at 0° is the x `gradient`.
 - `pathway`         a meandering band `width_in` wide around y = H/2 + amplitude·sin(2π·periods·x/W), over a base.
 - `band_per_module` one soft band per module width, centred in each module column, over a base: every module shows
                     the same band at the same canopy-local x, so in-phase on-device motion reads as waves. With

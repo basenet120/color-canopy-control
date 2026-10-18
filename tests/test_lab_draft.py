@@ -531,6 +531,7 @@ LAYOUTS = [
     {"kind": "sweep", "centre_in": [0, 60]},
     {"kind": "sweep", "centre_in": [0, 0], "start_deg": 45},
     {"kind": "sweep", "centre_in": [100, 50]},
+    {"kind": "fins"},  # the drawing's rings (D74); mirror is refused for it
 ]
 
 
@@ -573,6 +574,10 @@ def test_generated_copy_passes_parse_modes_for_every_layout_kind_invert_and_dire
         (False, True), ("linear", "mirror"), ("forward", "reverse")
     ):
         if direction == "reverse" and scene_id not in STEPPED:
+            continue
+        if layout["kind"] == "fins" and transform == "mirror":
+            with pytest.raises(ValidationError, match="can't be mirrored"):
+                edit(scene_id, layout={**layout, "invert": invert, "transform": transform})
             continue
         _check_generated(scene_id, layout, invert, transform, direction)
 
@@ -810,3 +815,57 @@ def test_fins_module_level_reaches_these_stops(n):
     inverted = {2: [0, 1], 3: [1, 2], 4: [1, 2, 3], 5: [1, 2, 4], 6: [2, 3, 5]}
     assert D.reached_stops(F.FinsField(kind="fins"), n, CANOPY) == plain[n]
     assert D.reached_stops(F.FinsField(kind="fins", invert=True), n, CANOPY) == inverted[n]
+
+
+FIN_NAMES = ["c0", "c1", "c2", "c3", "c4", "c5"]
+FIN_HEXES = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF"]
+FIN_RINGS = [["r1c1"], ["r0c1", "r1c0", "r1c2", "r2c1"], ["r0c0", "r0c2", "r2c0", "r2c2"]]
+
+
+@pytest.mark.parametrize("invert", [False, True])
+@pytest.mark.parametrize("n", [2, 3, 4, 5, 6])
+def test_the_fins_t3_sentence_names_colours_in_the_order_the_strands_show_them(n, invert):
+    """The T3 sentence reads from the centre out: the stop nearest each module's t, centre panel first, then the
+    edge-middles, then the corners, each colour once; a stop no module is nearest to is never named."""
+    names = FIN_NAMES[:n]
+    draft = with_palette(
+        "golden-hour",
+        list(zip(names, FIN_HEXES[:n], strict=True)),
+        solid=0,
+        layout={"kind": "fins", "invert": invert},
+    )
+    t3 = D.generated_copy(TRIO.modes.mode("golden-hour"), draft, CANOPY)["modules"]
+    head = "from the centre out: "
+    assert head in t3
+    said = [
+        w.strip(" ,.")
+        for w in t3.split(head, 1)[1].replace(" and ", ", ").replace(", then ", ", ").split(",")
+    ]
+    centres = F.module_centres(CANOPY, [p for ring in FIN_RINGS for p in ring])
+    expected: list[str] = []
+    for ring in FIN_RINGS:
+        for pos in ring:
+            t = F.value(draft.layout, *centres[pos], CANOPY)
+            nearest = min(range(n), key=lambda i: abs(t - i / (n - 1)))
+            if names[nearest] not in expected:
+                expected.append(names[nearest])
+    assert said == expected, t3
+    assert set(said) <= {names[i] for i in D.reached_stops(draft.layout, n, CANOPY)}
+
+
+def test_a_fins_draft_over_a_canopy_without_fins_is_a_draft_error():
+    """The frozen baseline canopy.yaml has no fins section: the Lab says so plainly, before any field is read."""
+    bare = load_canopy_config(BASELINE / "canopy.yaml")
+    assert not F.has_fins(bare)
+    draft = edit("golden-hour", layout={"kind": "fins"})
+    want = [D.Problem("the draft of golden-hour → layout", "layout", F.NO_FIN_MAP)]
+    with pytest.raises(D.DraftError) as applied:
+        D.apply_drafts(TRIO, {"golden-hour": draft}, canopy=bare, settings=SETTINGS)
+    assert applied.value.problems == want
+    with pytest.raises(D.DraftError) as changed:
+        D.draft_changes(TRIO, draft, canopy=bare)
+    assert changed.value.problems == want
+    # over the real canopy the same draft applies and reads from the centre out
+    patched = apply(draft)
+    assert "from the centre out" in patched.modes.mode("golden-hour").techniques.modules.feature
+    assert D.draft_changes(TRIO, draft, canopy=CANOPY)["layout"]["words_to"] == "from the centre out"
