@@ -1,7 +1,7 @@
 # Status
 
 _Last updated: 2026-10-18 evening (PR G `claude/flagged-not-changing`: a flagged note no longer holds the panel at
-"changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Before that, PR F
+"changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
@@ -36,6 +36,27 @@ worth a decision (Lax would keep top-level navigations signed in; the writes sta
   instead of "changing" for the 10 s retry window; a real readback mismatch still gets its retries.
 - **Verified (sim, macOS):** `pytest -q`: 2473 passed, 5 skipped, 44 subtests (full suite, final tree); ruff clean.
 - **Deploy:** the usual paste block, on its own; no iPad reload. Then a scene and another ~2 s later should both land.
+
+## PLAN (not started) — three options per scene, motion on every option, fin visualizer, `claude/preset-options-plan` (Oct 18)
+Docs only: `docs/plans/preset-options/README.md`, plus the data extracted from VWBD's drawing A-20-1 (`fins.json`,
+`lights.json`, `fin-map.png`, `extract/`). Alon's decisions:
+- **18 iPad cards ("Scene #1/#2/#3"):** #1 keeps the approved palette, re-placed at module level on the fin rings;
+  #2 and #3 get new colours.
+- **Every option moves or breathes on the real lights this iteration.**
+- **Per-light first,** with a module-level fallback.
+- **The fin visualizer is a separate PR.**
+
+What the drawing says:
+- **canopy.yaml's lattice is VWBD's sheet rotated 90°** (all 270 lights match). p14 orientation is confirmed;
+  routing is `serpentine_rows`.
+- **The 650 fins hang 14–24.5″ in a bowl:** 3 rings at module level, 11 per light, a 6″ apron of 104 rim fins, and a
+  32° current through the centre.
+- **VWBD's P-01…P-09 ≠ our Module 1…9** (P-03 = r0c0, P-06 = r0c1; table in the plan §1.2). Record kit ↔ panel at
+  install.
+
+Next: PRs A (fins and visualizer), B (motion for every scene, with Gate R and `live_enabled` on the critical path) and
+C (iPad review menu, hide, promote), in parallel. Then D (the 18-option catalog), then E (cleanup after the client
+session). Briefs are in plan §10. Nothing is built; nothing is verified on hardware.
 
 ## PR F — fast guest pacing: 2 s whatever the size, backing off on real throttling (D72), `claude/guest-throttle-pacing` → `main` (Oct 18)
 Cut from `main` at `209e52b` (#31–#34 all merged; checked each branch tip is in `main`). Alon: D70's 7.5 s on nine
