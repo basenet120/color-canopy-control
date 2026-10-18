@@ -953,6 +953,25 @@ def test_motion_stepped_settings_load_with_the_lead_defaults_and_refuse_nonsense
             load_settings(tmp_path)
 
 
+def test_motion_idle_settings_load_off_and_refuse_nonsense(tmp_path):
+    """motion.idle (D75): the idle look's breath, off (null) as shipped; only Alon turns it on."""
+    assert load_settings().motion.idle is None
+    (tmp_path / "conductor.yaml").write_text("motion: {idle: {breathe_run_s: 60, every_s: 300}}\n")
+    idle = load_settings(tmp_path).motion.idle
+    assert (idle.breathe_run_s, idle.every_s) == (60.0, 300.0)
+    (tmp_path / "conductor.yaml").write_text("motion: {idle: {breathe_run_s: 60, every_s: 30}}\n")
+    with pytest.raises(ConfigError, match="must be longer than breathe_run_s"):
+        load_settings(tmp_path)
+    (tmp_path / "conductor.yaml").write_text("motion: {idle: {breathe_run_s: 200, every_s: 300}}\n")
+    with pytest.raises(ConfigError, match="breathe_run_s"):
+        load_settings(tmp_path)
+    (tmp_path / "conductor.yaml").write_text(
+        "motion: {idle: {breathe_run_s: 60, every_s: 300, burst: true}}\n"
+    )
+    with pytest.raises(ConfigError, match="burst"):
+        load_settings(tmp_path)
+
+
 def test_a_run_must_end_before_the_idle_hold_and_the_idle_mode_never_steps():
     _check_stepped(ConductorSettings(), MODES)  # 90 s runs, idle_return_s 180, a still idle mode
     short = settings_with(kiosk={"idle_return_s": 60})

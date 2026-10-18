@@ -208,8 +208,31 @@ class SteppedMotionSettings(_Strict):
         return self
 
 
+class IdleMotionSettings(_Strict):
+    """The idle look's breath (D75, `motion.idle`): one run of the idle mode's stepped rung, `breathe_run_s` long."""
+
+    breathe_run_s: float = Field(60.0, gt=0, le=180.0)
+    every_s: float = Field(300.0, gt=0, le=3600.0)
+
+    @model_validator(mode="after")
+    def _rests(self) -> IdleMotionSettings:
+        if self.every_s <= self.breathe_run_s:
+            raise ValueError(
+                f"every_s ({self.every_s:g} s) must be longer than breathe_run_s ({self.breathe_run_s:g} s), or the "
+                "idle look would never rest between breaths"
+            )
+        return self
+
+
 class MotionSettings(_Strict):
+    """Motion through the cloud. `stepped`: the stepped runner's pacing and gates (D65). `idle` (D75, off = null, the
+    shipped value; only Alon turns it on): while the idle look (`kiosk.idle_mode`) shows, on, with no guest setting in
+    force, it breathes once for `breathe_run_s` every `every_s` after the last change or breath, and an idle return
+    to it lands as one breath. It runs only through `tier_allowed`, so never on live hardware until
+    `motion.stepped.live_enabled`, and it yields at once to any guest input."""
+
     stepped: SteppedMotionSettings = Field(default_factory=SteppedMotionSettings)
+    idle: IdleMotionSettings | None = None
 
 
 class LabSettings(_Strict):

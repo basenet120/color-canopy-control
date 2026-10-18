@@ -70,6 +70,10 @@ motion:
     governor_throttled_share: 0.25  # ... that are ≥ this share of the attempts
     governor_cooloff_s: 300      # then stepped runs on that account wait this long (the still look holds)
     fold_guest_within_s: 2.0     # a guest brightness change this close to the next step goes out with that step
+  # D75: the idle look's breath. null = off (the shipped value). Alon sets it, e.g. {breathe_run_s: 60, every_s: 300},
+  # only after a 30-minute live soak: live_enabled on, then this on, watched on /ops (budget, readbacks), back to
+  # null to revert (a breath on nine ≈ 72 writes/min while it runs).
+  idle: null
 
 lab:
   # The Design Lab's try-on (D66 Slice B): a draft shown at module level on the real lights, one burst, for at most
