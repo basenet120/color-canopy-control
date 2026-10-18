@@ -14,8 +14,26 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
 ## PR B2 — the operator repaint (D68), `claude/live-lab-repaint` → `main` (built Oct 17; plan `docs/live-lab/PLAN.md` §2.6–§2.8, §5.2 B2)
 **Merge PR B first ("merge #B first"); B2 targets `main` too; merge commits, not squash. Deploy B2 only after bench
 item 6 (rewriting the showing slot, then the re-select) has been run once on a show kit with its own Gate C (from
-`/ops/module`).** Built on `claude/live-lab` at `c32f3f0` (B1 + U + R integrated); commits on the stream's worktree
-branch (the orchestrator names it `claude/live-lab-repaint`).
+`/ops/module`).** Built on `claude/live-lab` at `c32f3f0` (B1 + U + R integrated); the stream's commit `1803274` is
+merged into `claude/live-lab-repaint` (a clean merge: B2 was cut from `claude/live-lab`'s head).
+- **Integration check (Oct 17, macOS, sim, after the merge):** `nice -n 15 uv run --offline pytest -q` → 2354 passed,
+  5 skipped, 44 subtests (10 m 6 s); ruff check / format clean; `node --test tests/*.test.mjs` 144/144. **Smoke on a
+  sim dev server** (`scripts/dev_design_lab.py --port 8215`, throwaway data, killed after): the start-up commissioning
+  wrote 27 slots, the catalog then said sentence (c) "…repaints custom-3 on 9 modules…". (1) Golden Hour, one palette
+  stop changed → 200, the confirm listed only the 3 modules whose compiled slot differs (Modules 3, 6, 9: the others'
+  records already held the design), 3 slot writes (`publish repaint: Golden Hour → custom-3`, one per module, all
+  applied) in 2.5 s, the info alert. (2) A second publish 2 s later → 200 at once, "in 118 s", held, `queued_until` =
+  the first start + 120 s, no slot write. (3) Revert to approved 3 s after that → 200 at once (never blocked), it
+  replaced the queued job (latest wins, due time kept); at the due time 3 writes (Modules 3, 6, 9: git's design over
+  what (1) wrote), then held false. (4) After the gate, a layout change shown on the canopy (`show: true`): 9 module
+  writes now (held), the repaint's 9 slot writes (one per module), guest taps every 0.4 s during the window all 503
+  "One moment: the canopy is changing." (kiosk state `updating` with the same copy), the history row `applied: 9`. (5)
+  Again with no guest taps: after the repaint, exactly one T1 burst (`golden-hour` at `canvas`, 9 commands; telemetry
+  source "reconciler", the capability re-pick). In (4) a guest tap landed 0.3 s after the window and took the canopy
+  (coastal-tides) before the re-pick — a guest choice, so no T1 burst for Golden Hour then. Two small things seen,
+  not B2 regressions: the window's retry-after said 12–14 s for a 5 s window (an upper bound), and with `show: true`
+  the confirm still says "Nothing on the canopy changes now (no changed scene is showing)" while the cost line counts
+  the 9 writes (B1's sentence, unchanged by B2; the Lab shows the "Show <scene> on the canopy" checkbox beside it).
 - **What it does.** A publish of a new painted design no longer needs the reconciler: the scene installs at once,
   held below T1 (truthful module level), and the engine gets ONE repaint job (`CanopyEngine.start_repaint`,
   `RepaintJob`s): the scenes whose eligible modules — their own api record, Gate C at their address and, on a longer
