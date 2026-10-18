@@ -46,7 +46,9 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
 14. **Cable routing**: can every module be routed so the index rises with canvas X (B modules included), strings uncut, slack looped above the panel? Heads 20″ apart (same x in this lattice) can't be neighbours on the wire (the puck spacing is 19.7″).
     *Partly answered (Kingston, PHYSICAL, Sep 28):* entries 0–29 drive pucks 1–30, index 0 at the controller end; 30–59 drive nothing (probes at 0, 1, 29 and 30–59, the head-15 marker, a red→purple→blue gradient; intermediate heads not swept one by one — `docs/custom-pattern-session.md`, `docs/bench-capability-check/address-probe-*.json`). That is the kit's `framebuffer_mapping` (D54), not a panel route: routing on a panel, B-module flips and String light 1's order are unverified.
     *Default:* `serpentine_rows` in config; the calibration tool records the real order in the ops overlay.
+    *Drawn (A-20-1, Oct 18):* `serpentine_rows` along each module's 75″ side, not column-wise; head 0's end and the B flips still need calibration.
 15. **Orientation scheme**: deck p.14 (A/B/A across X) or the p.18 appendix (AAA/BBB/AAA)? Only p.14 keeps the 10″ pitch across seams. *Default:* p14.
+    *Closed (D74, Oct 18):* p14, by VWBD drawing A-20-1 (all 270 drawn lights on the p14 lattice; 150 under p18).
 16. **Plenum**: controllers and PSUs hidden but reachable and ventilated (PSU indoor/dry only; manual forbids enclosed spaces above 40 °C); per-module switched power, ideally a LAN-controllable PDU. *Default:* no remote power control in software; the runbook says "power-cycle module N at its switch".
 17. **Puck openings**: pucks are hexagonal with screw ears (~2″) — measure a real puck first. *Default:* n/a to software.
 18. **Closed — out of scope (D67, Oct 17):** the vignette devices left the registry. Was: **Final vignette device census.** *Default (placeholders, clearly labeled in config):*

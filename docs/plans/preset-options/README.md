@@ -94,7 +94,8 @@ corner. The two kits live today ("Module 1/2" = r0c0/r0c1) belong on **P-03 and 
 - `fins.json`: the 650 fins in canopy.yaml's frame. Each has `x, y` (centre, inches), `angle_deg` (plan axis, mod
   180) and `drop_in`. Also the drop key, the apron, the outer outline and the mapping.
 - `lights.json`: the 270 lights. Each has its module, its VWBD panel, `x, y`, `fin_drop_in` (Gaussian σ 6″ mean of
-  the fins around it), `fin_flow_deg` and `fins_within_7in`. It also includes the panel → module table.
+  the fins around it; see the erratum below for what "σ 6″" means), `fin_flow_deg` and `fins_within_7in`. It also
+  includes the panel → module table.
 - `fin-map.png`: a redraw of `fins.json` and `lights.json` in the canopy frame (pale = 14″, dark teal = 24.5″,
   orange = lights). Checked against the sheet by overlay: every fin and light in place.
 - `extract/`: the scripts (`extract.py` fins, `lattice.py` lights and orientation, `route.py` strand routing). To
@@ -109,7 +110,13 @@ corner. The two kits live today ("Module 1/2" = r0c0/r0c1) belong on **P-03 and 
   - Drop components ≤ 3 px wide. They are anti-aliasing slivers; 656 → 650.
   - Convert pixels to inches: (px − border) / 8.333.
   - Map into the canopy frame with x = v − 6, y = 126 − u. A fin axis at sheet angle a becomes atan2(−cos a, sin a).
-  - Take each light's drop as the Gaussian (σ 6″, cut at 12″) mean of the fins around it.
+  - Take each light's drop as the Gaussian (σ 6″, cut at 12″) mean of the fins around it (the erratum below).
+
+  **Erratum (D74, PR A):** "Gaussian σ 6″" in this plan means **w = exp(−(d/6)²)** for the fins within 12 in
+  (σ ≈ 4.24″ in the textbook sense). That is what `lights.json` was computed with (max error 0.0102 in over the 270
+  lights); the textbook exp(−d²/72) misses by up to 0.192 in. `conductor/fins.py` uses the first form and a test
+  pins it. `lights.json` and `fins.json` stay byte-identical: they are the acceptance data (copied to
+  `tests/fixtures_fins_lights.json` and `config/fins.json`).
 
 ## 2. What today's code allows, and what has to change
 Mapped by a read-only pass over the repo on Oct 18. File references are in §10's briefs.
@@ -363,8 +370,8 @@ Checks to run while building:
 1. **Data:** `config/fins.json` from this folder's `fins.json`. Validate on load: 650 fins, the count per drop matches
    the key, inside the outline, angle 0–180. Add a `fins` section to `canopy.yaml` (apron 6″, fin width 5″) and the
    VWBD panel per module (§1.2).
-2. **The `fins` field kind** (§3.1): per-head t from the Gaussian mean drop. Precompute per head at load; it equals
-   `lights.json`. It is shared with PR D.
+2. **The `fins` field kind** (§3.1): per-head t from the Gaussian mean drop (w = exp(−(d/6)²) within 12 in, the
+   erratum in §1.5). Precompute per head at load; it equals `lights.json`. It is shared with PR D.
 3. **Server:** `canopy_view.canopy_geometry` also sends `fins` (x, y, angle, drop) and the outline with the apron.
    `lit_state` is unchanged (head colours).
 4. **Client** (`web/kiosk/canopy-preview.mjs`, `kiosk.js` `buildCanopy`/`paintCanopy`):

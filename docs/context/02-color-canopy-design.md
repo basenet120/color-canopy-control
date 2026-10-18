@@ -3,7 +3,7 @@
 Source: VWBD deck `Ref Docs/Color Canopy.pdf`. This supersedes the earlier 20×10 grid of 200 smart A19 bulbs.
 
 ## Concept
-A sculptural overhead light installation: a modular white lighting plane hides all wiring and points light **downward** through a suspended landscape of **clear + frosted Mylar** ribbons (straight ribbons plus softened Spanish-moss-inspired cut profiles, hanging 6–24″ at variable depths). Guests choose Charleston-inspired light environments on a touchscreen; Home Depot orange and warm light are produced by the Hubspace lighting itself — the Mylar is colorless.
+A sculptural overhead light installation: a modular white lighting plane hides all wiring and points light **downward** through a suspended landscape of **clear + frosted Mylar** ribbons (straight ribbons plus softened Spanish-moss-inspired cut profiles, hanging 6–24″ at variable depths; the built design, VWBD drawing A-20-1: 650 fins hanging 14–24.5″ in a bowl, D74). Guests choose Charleston-inspired light environments on a touchscreen; Home Depot orange and warm light are produced by the Hubspace lighting itself — the Mylar is colorless.
 
 Design language: layered tree canopy and filtered shade, the drape and changing density of Spanish moss, shaded piazzas, warm coastal light shifting through **ivory, amber, Home Depot orange, peach and shadow**.
 
@@ -23,6 +23,11 @@ Physical facts that affect the build (details in `04`):
 - 30 lights per module, 270 lights total, staggered **8 / 7 / 8 / 7** rows.
 - **10.00″ light pitch maintained across every module seam.**
 - Orientation: module B = module A rotated 180°.
+- **VWBD drawing A-20-1** ('Fin diagram with lights', Oct 18; a mirrored plan at 1″ = 3′) shows an outline of
+  132″ × 237″: the 225″ × 120″ canopy plus a **6″ apron** all round. Canopy frame: x = v − 6, y = 126 − u (u, v =
+  inches from the sheet's top-left; the sheet turned 90° counter-clockwise). All 270 drawn lights land on this
+  lattice under p14. Under p18 only 150 do (r0c1, r1c0, r1c2 and r2c1 would be flipped), and under the clockwise
+  sheet turn none do. Source and extract: `docs/plans/preset-options/` (§1).
 
 ### Derived head positions (module-local inches, origin at module top-left, reflected-ceiling view)
 Working this backwards from the RCP and the 10″-across-seams rule:
@@ -33,8 +38,11 @@ Working this backwards from the RCP and the 10″-across-seams rule:
 
 With **A / B / A across X** (deck page 14), every canopy row alternates correctly across the vertical seams (e.g. A ends at 72.5, B's first head sits at 75 + 7.5 = 82.5 → 10″ gap). Across the canopy there are 12 rows of 23 or 22 heads (6 × 23 + 6 × 22 = 270). Stacking modules down Y with the same orientation keeps the 7/8 alternation across horizontal seams (row y = 35 of one module, y = 5 of the next → 10″).
 
-### ⚠ Open design point — orientation scheme
-The deck contradicts itself: page 14 says **A / B / A across X, same orientation repeated down Y**; the appendix plan on page 18 says **A A A / B B B / A A A** (orientation varies down Y instead). Only the page-14 scheme preserves the 10″ pitch across vertical seams with the lattice above. The software must therefore take **per-module orientation from config**, and VWBD must confirm which scheme is being fabricated.
+### Orientation scheme: closed (D74), p14
+The deck contradicted itself (page 14: **A / B / A across X, the same orientation repeated down Y**; the page-18
+appendix: A A A / B B B / A A A). VWBD's drawing A-20-1 settles it in favour of **p14**: every drawn light sits on the
+p14 lattice, and only p14 keeps the 10″ pitch across the seams. The software still takes per-module orientation from
+config; p18 stays in `config/canopy.yaml` only as `/api/canopy/layout?scheme=p18`'s comparison scheme.
 
 ### Which way is "left" (the designs and the guest picture)
 `config/canopy.yaml` is the reflected-ceiling view: you are looking up, and the origin is the canopy's top-left. The
@@ -47,6 +55,44 @@ that it matches what a guest at the stand sees overhead. Set it at install (`06`
 Per-head color control is addressed by index along the strand (head 0 nearest the controller, presumably). How VWBD routes the 50 ft cable behind each panel (serpentine by row? which corner is head 0? how rotation flips it for B modules?) determines the index → position map. On-device animations run in wire order, so for Golden Hour we're asking VWBD to route every module **column-wise from its canvas-left edge, B modules included**, so the index rises with canvas X everywhere. (No scene uses on-device animation now: Golden Hour's motion is D65's module-level steps, which don't depend on the wiring. The ask still holds for any later on-device motion.) The software must support:
 1. a config-declared default path (serpentine, start corner, per orientation), and
 2. a **calibration mode**: blink head *i* on module *m*, tech taps its position on the canopy visualizer, mapping saved to config.
+
+The drawing (A-20-1) shows `serpentine_rows` (run 1 → 2 → 3 → 4 along each module's 75″ side), not the column-wise
+routing asked for. That matters only for on-device motion, which no scene uses; head 0's end and the B flip still
+need calibration.
+
+### The fins (D74)
+The Mylar fins are data: `config/fins.json` (a byte copy of the drawing's extract), named by `canopy.yaml → canopy →
+fins` and validated wherever the canopy loads (`conductor/fins.py`, `geometry.load_canopy_config`). A missing or bad
+file stops the start and the deploy preflight with a sentence naming the file, the entry and the fix.
+
+| Drop | 14″ | 15″ | 16″ | 17″ | 18″ | 19″ | 20″ | 21″ | 22″ | 23″ | 24.5″ | total |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Fins | 160 | 88 | 52 | 44 | 48 | 40 | 38 | 42 | 38 | 48 | 52 | 650 |
+
+- Each fin is about 5″ wide in plan (`fin_width_in`); the key's inches are its hanging **drop**.
+- The drops form a bowl: 24.5″ across the centre panel, 14″ at the rim. The 104 fins in the apron are all 14″: they
+  catch only spill from the edge lights, a built-in vignette.
+- The fin angles flow: a coherent current crosses the centre panel at about 32° (coherence 0.84). The layout has
+  180° symmetry; the light lattice doesn't (columns of 22 and 23 heads).
+- **The `fins` design field** (`field: {kind: fins}`): t = (24.5 − D) / 10.5, clamped, where D is the mean drop of the
+  fins within 12″ weighted by **exp(−(d/6)²)**. This is not the textbook exp(−d²/2σ²) with σ 6: it is the form the
+  plan's `lights.json` was made with (0.0102″ at worst over the 270 heads; the textbook form misses by up to 0.19″).
+  `invert` swaps the ends. `transform: mirror` is refused: the fold would put the first colour on the rim too, and no
+  module reaches the rim. Its layout words are always "from the centre out" ("toward the centre" in reverse).
+- **Module level reads three rings**: the centre module at t 0, the four edge-middles at ≈ 0.39, the four corners at
+  ≈ 0.67. The rim's own colour never fills a strand, so the Lab's generated module-level sentence names only the
+  stops module level reaches (`draft.reached_stops`).
+- No shipped scene uses the kind yet (D77 does).
+
+### VWBD panel numbers (D74)
+VWBD numbers its panels row by row on its sheet, across our short axis, so P-0n is not Module n:
+
+| VWBD panel | P-01 | P-02 | P-03 | P-04 | P-05 | P-06 | P-07 | P-08 | P-09 |
+|---|---|---|---|---|---|---|---|---|---|
+| Canopy position | r2c0 | r1c0 | **r0c0** | r2c1 | r1c1 | **r0c1** | r2c2 | r1c2 | r0c2 |
+
+They are `canopy.yaml → canopy → vwbd_panels`, checked at load (all nine, each number once). At install, record
+each kit against the panel it hangs on (plan §9). Today's Modules 1–2 (r0c0, r0c1) belong on **P-03 and P-06**.
 
 ## Lowcountry Modes (the six guest choices)
 | Mode | Brief |
@@ -82,6 +128,11 @@ palettes, at the scene's brightness, at every tier.
   moves" for these two scenes only. Lowcountry Calm (the idle look) and The Goodnight Glow stay still. It runs in the
   simulator only. On real lights it stays **off until the stepped rehearsal (Gate R)** passes and Alon sets
   `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still.
+
+*Superseded again (D74):*
+- **D74: the fins are data and a design field.** VWBD's drawing A-20-1 gives the 650 fins (validated at load) and
+  closes the orientation question (p14). A design can be laid out on the fins' rings (`kind: fins`). No shipped
+  scene uses the kind until D77.
 
 See `04` "Canopy control model" for how each scene runs at each tier.
 

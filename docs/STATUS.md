@@ -20,6 +20,40 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## preset-options PR A — fins data, the `fins` field, the fin-lit iPad picture (D74), `claude/fin-visualizer` → `main` (Oct 18; in progress)
+Cut from `origin/claude/flagged-not-changing` (= `main` + #37): **merge #37 first**. Sim only; nothing sent to a
+device. Plan `docs/plans/preset-options/README.md` §8. **Built so far (spec steps 1–5 of 14):**
+- **The data:** `config/fins.json` (a byte copy of the plan's `fins.json`, VWBD drawing A-20-1's 650 fins) and two
+  new `canopy.yaml` sections: `fins` (file, 6″ apron, 5″ fin width) and `vwbd_panels` (P-01…P-09 per position).
+  The canopy.yaml comments now say p14 is what is built (270 drawn lights on the p14 lattice, 150 under p18) and the
+  routing drawn is `serpentine_rows`.
+- **The loader:** `conductor/fins.py` (strict models, the immutable `FinMap`, a cached loader, plain ConfigError
+  sentences) and `geometry.load_canopy_config`, which now reads through `config._read_yaml` and attaches `fins`,
+  `fin_map` and `vwbd_panels`. **Every device path loads the canopy through it, so a missing or broken fins.json
+  stops the start and the deploy preflight** (`FAILED in looks`; pinned in `tests/test_fins.py`). A canopy.yaml
+  without the sections loads as before (the frozen Lab baseline does).
+- **The field:** `{kind: fins}`, t = (24.5 − D)/10.5 with D the exp(−(d/6)²)-weighted drop within 12″ (the form
+  `lights.json` was made with: 0.0102″ at worst; the plan README has an erratum). Module centres read 0 / ≈ 0.39 /
+  ≈ 0.67; `bands` rounds to 2 decimals so the three rings stay whole; mirror is refused; the words are "from the
+  centre out".
+- **modes.yaml:** `load_modes` checks against the loaded canopy (with its fin map); a fins design over a canopy
+  without one is a plain sentence per canvas.
+- **Docs so far:** doc 02 (the orientation question closed, the apron, the fins, the panel table), doc 06 #14/#15,
+  the plan README erratum.
+- **Verified (sim, macOS, this branch at steps 1–5):** `nice -n 15 uv run --offline pytest -q -p no:cacheprovider`:
+  **2532 passed, 5 skipped, 44 subtests in 681 s** (PR G's base: 2473); `ruff check` and `ruff format --check`
+  clean; `scripts/regen_scene_pins.py --check` up to date (no scene changed); the preflight over an empty data dir
+  returns 0; `load_canopy_config()` gives `FinMap(650 fins, sha256 7a1754886f97)`; the 270 heads match
+  `lights.json`'s fin_drop_in to 0.0102″; module-centre t is 0 / 0.3905–0.3970 / 0.6666–0.6745; gitleaks over
+  the branch's commits: no leaks.
+- **Not built yet (spec steps 6–14):** the Lab (drafts, export, router, the Fins picker, lab-9), the kiosk payload
+  and the fin strokes on the iPad picture (fins-1), `/api/canopy/layout`'s `vwbd_panel` and the `/visualizer`
+  labels, the preflight comments, the node CI wrapper, guest-panel.md, D74 in DECISIONS.md and this block's final
+  form. No shipped scene uses the kind (D77 does).
+- Lab exports made before D77 lands propose a reserved D-number; renumber by hand.
+- **Needs real hardware:** nothing yet from these steps (the fin picture's iPad check comes with steps 9–10).
+  **Blocked:** nothing.
+
 ## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
 **Deployed first, Oct 18 16:23 (Alon asked): `7b21918`** (main after #35: D70 + D71 + D72) on the Mac show box —
 backup `canopy-data-20261018-162349-manual.tar.gz`, previous `0f8f38c` in `~/canopy-prev-sha.txt`, preflight ok,
