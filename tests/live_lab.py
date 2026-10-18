@@ -17,6 +17,7 @@ from typing import Any
 import anyio.to_thread
 import httpx
 import yaml
+from lab_edits import other_hex
 
 from conductor.clock import VirtualClock
 from conductor.config import CONFIG_DIR
@@ -32,7 +33,9 @@ TIDES = "coastal-tides"
 DEV = "canopy-r0c0"
 GIT = L.git_trio(CONFIG_DIR)
 PINKER = "Pinker Hour"
-NEW_PINK = "#FF8FBF"
+# The Done-means pink (#FF8FBF), unless config/ already approves it (after `make lab-roundtrip` applies an export, or
+# once Alon approves that edit into git): an edit must differ from the hex it replaces (tests/lab_edits.py).
+NEW_PINK = other_hex(GIT.scenes.get(GOLDEN).palette[2].hex)
 
 
 def seed(scene_id: str, trio: L.ConfigTrio = GIT) -> dict:
