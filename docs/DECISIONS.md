@@ -992,3 +992,19 @@ any 60 s (`tests/test_guest_budget.py`). Not done: letting a quiet canopy take a
 — it only helps until the budget runs out and makes the wait after a burst longer; revisit once Gate R measures the
 real cap. The brightness-readback re-send (STATUS, PR C) costs a second write per module on many changes; fixing it
 would let the budget pay for more changes.
+
+**D71 — A first readback that differs is echo lag, not a drop (Oct 18).** Live telemetry from Oct 17–18 (Modules 1–2)
+showed the first verification GET still holding the previous scene's rows on 33 of 56 scene changes and both guest
+brightness changes, ≈ 1.2 s after the ack. Brightness and colour were wrong together. Re-sending the identical rows
+then read back correct, and the same transitions sometimes read fresh at the first GET. So this is the cloud's echo
+lagging, not a clamp or a silent drop. Every one of those 35 commands was cut short by the engine's early re-send, so
+none ever got its own 2nd readback; on Oct 17, back-to-back re-sends ~1.2 s apart stayed stale up to 3 times
+(5.7 s). Decision: **a change's first early re-send waits for the command's 2nd readback that still differs**
+(`EARLY_REASSERT_FROM_READBACK = 2`). Once a module has been re-sent in a change, a differing first readback
+re-sends at once, as before, so three drops in a row still heal in ≤ 10 s (07 §6). The usual case now costs no
+extra PUT (or nine-module motion burst) and verifies at ≈ ack + 2.2 s instead of ≈ 2.6 s via a re-send. A real drop
+is re-sent ≈ 1.2 s later than before. Readback events now carry `n` and `differs` (sent vs read, for every row but a
+slot object), so the next live run shows the old value directly. Not changed: `readback_delay_s` /
+`readback_interval_s` (bench the lag first: `docs/reports/readback-echo-lag-2026-10-18.md`), the re-send limits,
+MISMATCH handling, 07 §5's meaning of "ready". This is the brightness-readback re-send D70 names: the write it saved
+goes back to the guests' budget.
