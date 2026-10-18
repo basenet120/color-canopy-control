@@ -1,0 +1,701 @@
+"""The iPad's scene menu (D76): `kiosk.hidden_scenes` and its never-fail ops overlay (overrides/settings.yaml), the
+menu over the live catalog, the /ops switch's write path and its "Needs attention" lines, the conductor.yaml fold,
+and the review cards' thumbnails.
+
+Proves (config and conductor/ipad_menu.py, without the routes): git's list is validated and can't hide the idle
+scene; the overlay replaces it, never fails a start and is written atomically with a history copy; ids that hide
+nothing are named and dropped by the next switch; a failed save changes nothing; the switch's words say what
+changed; the fold is a `git apply`-able hunk; the preflight reads the overlay without writing; a card's picture is the
+basis it is given. Nothing touches the network.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from conductor import ipad_menu as IM
+from conductor.canopy_view import canopy_geometry, load_canopy
+from conductor.config import (
+    CONFIG_DIR,
+    SETTINGS_OVERLAY_HEADER,
+    SETTINGS_OVERLAY_KEY,
+    SETTINGS_OVERLAY_PATH,
+    ConductorSettings,
+    ConfigError,
+    KioskSettings,
+    SettingsOverlayState,
+    apply_settings_overlay,
+    load_settings,
+    load_settings_overlay,
+    save_settings_overlay,
+)
+from conductor.looks import CompileContext
+from conductor.looks.live import git_trio
+from conductor.routes.design import mode_design
+from conductor.scenes import load_scenes
+from tests.review_fixture import APPROVED, OPTION_IDS, REVIEW_IDS, install_review, review_scenes, review_trio
+
+ROOT = Path(__file__).resolve().parent.parent
+CALM = "lowcountry-calm"
+GOLDEN = "golden-hour"
+
+
+def _kiosk(**kw) -> KioskSettings:
+    """A KioskSettings with `kw` set in place (as the overlay and the switch do: no validation)."""
+    kiosk = load_settings().kiosk.model_copy(deep=True)
+    for k, v in kw.items():
+        setattr(kiosk, k, v)
+    return kiosk
+
+
+def _snapshot(data: Path) -> dict[str, str]:
+    return {
+        p.relative_to(data).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(data.rglob("*"))
+        if p.is_file()
+    }
+
+
+def _write_overlay(data: Path, text: str | bytes) -> Path:
+    path = data / SETTINGS_OVERLAY_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode() if isinstance(text, str) else text)
+    return path
+
+
+def _services(tmp_path: Path, overlay: str | None = None):
+    from conductor.services import build_services
+
+    data = tmp_path / "data"
+    if overlay is not None:
+        _write_overlay(data, overlay)
+    return build_services({"CONDUCTOR_DATA_DIR": str(data), "CONDUCTOR_MODE": "sim"})
+
+
+def _ops_events(services) -> list[dict]:
+    return [e for e in services.telemetry.ring if e["kind"] == "ops"]
+
+
+class ShowingEngine:
+    """Just enough engine for the switch's "still showing" clause (and install_looks' T1 invalidation)."""
+
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+
+    def state(self):
+        return SimpleNamespace(mode=self.mode)
+
+    def invalidate_t1_plans(self) -> None:
+        pass
+
+
+# ---- kiosk.hidden_scenes in git -----------------------------------------------------------------------------------
+def test_kiosk_hidden_scenes_is_validated_and_the_idle_scene_cant_be_hidden():
+    with pytest.raises(ValidationError, match=r"idle scene \(kiosk\.idle_mode\)"):
+        KioskSettings(hidden_scenes=[CALM])
+    with pytest.raises(ValidationError, match=r"idle scene \(kiosk\.idle_scene\)"):
+        KioskSettings(idle_scene="goodnight-glow", hidden_scenes=["goodnight-glow"])
+    with pytest.raises(ValidationError, match="isn't a scene id"):
+        KioskSettings(hidden_scenes=["Golden Hour"])
+    with pytest.raises(ValidationError, match="twice"):
+        KioskSettings(hidden_scenes=["a1", "a1"])
+    with pytest.raises(ValidationError):
+        KioskSettings(hidden_scenes=[f"s{i:02d}" for i in range(65)])
+    assert KioskSettings(hidden_scenes=[GOLDEN, "golden-hour-2"]).hidden_scenes == [GOLDEN, "golden-hour-2"]
+    assert load_settings().kiosk.hidden_scenes == []
+
+
+def test_conductor_yaml_carries_the_list_as_one_foldable_line():
+    text = (CONFIG_DIR / "conductor.yaml").read_text(encoding="utf-8")
+    assert [line for line in text.splitlines() if "hidden_scenes:" in line] == ["  hidden_scenes: []"]
+    assert yaml.safe_load(text)["kiosk"]["hidden_scenes"] == []
+
+
+def test_a_git_list_that_hides_the_idle_scene_fails_the_start_naming_the_file(tmp_path):
+    config = tmp_path / "config"
+    shutil.copytree(CONFIG_DIR, config)
+    path = config / "conductor.yaml"
+    path.write_text(path.read_text().replace("  hidden_scenes: []", f"  hidden_scenes: [{CALM}]"))
+    with pytest.raises(ConfigError, match=r"conductor\.yaml.*\n.*kiosk.*idle scene \(kiosk\.idle_mode\)"):
+        load_settings(config)
+
+
+# ---- the settings overlay -------------------------------------------------------------------------------------------
+OVERLAY_CASES = {
+    "missing": (None, None, None),
+    "applied": ("kiosk: {hidden_scenes: [golden-hour-2]}\n", ["golden-hour-2"], None),
+    "no list": ("kiosk: {}\n", [GOLDEN], None),
+    "bad yaml": ("kiosk: [\n", [GOLDEN], "it isn't valid YAML"),
+    "unknown key": ("kiosk: {idle_mode: x}\n", [GOLDEN], "idle_mode"),
+    "too big": (
+        "kiosk: {hidden_scenes: []}\n" + "#" * 70_000 + "\n",
+        [GOLDEN],
+        "bytes, over the 65536-byte limit",
+    ),
+    "a list": ("- a\n", [GOLDEN], "it isn't a mapping with a kiosk section"),
+    "empty": ("", [GOLDEN], "it isn't a mapping with a kiosk section"),
+    "not an id": ("kiosk: {hidden_scenes: [Golden Hour]}\n", [GOLDEN], "isn't a scene id"),
+    "not utf-8": (b"kiosk: {hidden_scenes: [\xff\xfe]}\n", [GOLDEN], "it isn't valid YAML"),
+}
+
+
+@pytest.mark.parametrize("case", list(OVERLAY_CASES))
+def test_the_settings_overlay_replaces_gits_list_and_never_fails_the_start(tmp_path, case):
+    text, in_force, problem = OVERLAY_CASES[case]
+    data = tmp_path / "data"
+    path = _write_overlay(data, text) if text is not None else None
+    before = path.read_bytes() if path else None
+    state = load_settings_overlay(data)  # never raises
+    assert state.path == data / SETTINGS_OVERLAY_PATH
+    settings = load_settings()
+    settings.kiosk.hidden_scenes = [GOLDEN]  # git's list, say
+    kiosk = settings.kiosk
+    apply_settings_overlay(settings, state)
+    assert settings.kiosk is kiosk  # in place: the engine keeps this object
+    if case == "missing":
+        assert state.overlay is None and state.problem is None and settings.kiosk.hidden_scenes == [GOLDEN]
+        return
+    assert settings.kiosk.hidden_scenes == in_force
+    if problem is None:
+        assert state.problem is None and state.overlay is not None
+    else:
+        assert state.overlay is None and problem in (state.problem or ""), state.problem
+    assert path is not None and path.read_bytes() == before  # the file is left as it was
+
+
+def test_an_overlay_that_cant_be_read_is_a_problem_never_a_raise(tmp_path):
+    data = tmp_path / "data"
+    (data / SETTINGS_OVERLAY_PATH).mkdir(parents=True)  # a directory where the file should be
+    state = load_settings_overlay(data)
+    assert state.overlay is None and (state.problem or "").startswith("it can't be read (")
+    assert load_settings_overlay(None) == SettingsOverlayState(None)
+
+
+def test_saving_the_list_is_atomic_versioned_and_clears_the_problem(tmp_path):
+    data = tmp_path / "data"
+    path = _write_overlay(data, "kiosk: [\n")
+    state = load_settings_overlay(data)
+    assert state.problem == "it isn't valid YAML"
+    now = 1_792_000_000.25
+    save_settings_overlay(state, [GOLDEN], now=now)
+    save_settings_overlay(state, ["golden-hour-2"], now=now + 0.5)  # the same second
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith(SETTINGS_OVERLAY_HEADER)
+    assert SETTINGS_OVERLAY_HEADER.startswith("# The iPad's scene menu (D76)") and text.count("\n# ") == 0
+    assert yaml.safe_load(text) == {"kiosk": {"hidden_scenes": ["golden-hour-2"]}}
+    assert os.stat(path).st_mode & 0o777 == 0o600
+    history = sorted((data / "overrides" / "history").glob("settings-*.yaml"))
+    assert [p.name for p in history] == ["settings-20261014T174640Z-2.yaml", "settings-20261014T174640Z.yaml"]
+    assert all(os.stat(p).st_mode & 0o777 == 0o600 for p in history)
+    assert yaml.safe_load(history[0].read_text()) == {"kiosk": {"hidden_scenes": ["golden-hour-2"]}}
+    assert state.problem is None and state.overlay is not None
+    reloaded = load_settings_overlay(data)
+    assert reloaded.problem is None and reloaded.overlay.kiosk.hidden_scenes == ["golden-hour-2"]
+    with pytest.raises(ConfigError, match="No data directory"):
+        save_settings_overlay(SettingsOverlayState(None), [GOLDEN], now=now)
+    with pytest.raises(ConfigError, match="isn't a scene id"):
+        save_settings_overlay(state, ["Golden Hour"], now=now)
+    assert yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": ["golden-hour-2"]}}
+
+
+def test_a_start_puts_the_overlay_in_force_in_place_and_keeps_its_state(tmp_path):
+    services = _services(tmp_path, "kiosk: {hidden_scenes: [golden-hour-2, disco-inferno]}\n")
+    assert services.settings.kiosk.hidden_scenes == ["golden-hour-2", "disco-inferno"]
+    state = services.extras[SETTINGS_OVERLAY_KEY]
+    assert state.problem is None and state.path == Path(services.data) / SETTINGS_OVERLAY_PATH
+    assert IM.settings_overlay_of(services) is state
+    broken = _services(tmp_path / "b", "kiosk: {hidden_scenes: [Golden Hour]}\n")  # never a failed start
+    assert (
+        broken.settings.kiosk.hidden_scenes == []
+        and "isn't a scene id" in IM.settings_overlay_of(broken).problem
+    )
+
+
+# ---- the menu --------------------------------------------------------------------------------------------------------
+def test_the_menu_hides_listed_scenes_keeps_the_idle_one_and_names_what_hides_nothing():
+    catalog = review_scenes(load_scenes())
+    m = IM.menu(catalog, _kiosk(hidden_scenes=["golden-hour-2", CALM, "disco-inferno"]))
+    assert m.hidden == ("golden-hour-2",)
+    assert m.ignored_idle == (CALM,) and m.ignored_unknown == ("disco-inferno",)
+    assert m.ignored == ("disco-inferno", CALM)
+    assert [s.id for s in m.visible.scenes] == [x for x in REVIEW_IDS if x != "golden-hour-2"]
+    assert [s.id for s in m.catalog.scenes] == REVIEW_IDS
+    assert m.review is True and IM.GRID_MAX == 6
+    git = IM.menu(load_scenes(), load_settings().kiosk)
+    assert [s.id for s in git.visible.scenes] == APPROVED and git.hidden == () and git.review is False
+
+
+def test_a_visible_option_of_a_hidden_base_keeps_its_group():
+    m = IM.menu(review_scenes(load_scenes()), _kiosk(hidden_scenes=[GOLDEN]))
+    assert GOLDEN not in [s.id for s in m.visible.scenes]
+    option = m.visible.get("golden-hour-2")
+    assert option.group == GOLDEN and option.option_of == GOLDEN
+    assert [s.id for s in m.visible.options_of(GOLDEN)] == ["golden-hour-2", "golden-hour-3"]
+
+
+def test_six_visible_is_the_grid_seven_is_the_review_menu():
+    catalog = review_scenes(load_scenes())
+    six = IM.menu(catalog, _kiosk(hidden_scenes=list(OPTION_IDS)))
+    assert len(six.visible.scenes) == 6 and six.review is False
+    seven = IM.menu(catalog, _kiosk(hidden_scenes=[x for x in OPTION_IDS if x != "golden-hour-2"]))
+    assert len(seven.visible.scenes) == 7 and seven.review is True
+
+
+def test_the_idle_scene_settings_name_themselves():
+    assert IM.idle_ids(_kiosk()) == {CALM: "kiosk.idle_mode"}
+    assert IM.idle_ids(_kiosk(idle_scene="goodnight-glow")) == {
+        CALM: "kiosk.idle_mode",
+        "goodnight-glow": "kiosk.idle_scene",
+    }
+    assert IM.idle_ids(_kiosk(idle_scene=CALM)) == {CALM: "kiosk.idle_mode"}
+
+
+def test_the_live_menu_follows_the_installed_looks(tmp_path):
+    services = _services(tmp_path)
+    git = IM.live_menu(services)
+    assert [s.id for s in git.catalog.scenes] == APPROVED and git.trio is not None
+    trio = install_review(services, hide=["golden-hour-3"])
+    m = IM.live_menu(services)
+    assert [s.id for s in m.catalog.scenes] == REVIEW_IDS and m.hidden == ("golden-hour-3",)
+    assert m.generation == git.generation + 1 and m.trio.dump() == trio.dump()
+    install_review(services)  # hide=None keeps the list in force
+    assert services.settings.kiosk.hidden_scenes == ["golden-hour-3"]
+
+
+def test_the_ops_body_lists_every_scene_with_its_switch(tmp_path):
+    services = _services(tmp_path)
+    install_review(services)
+    body = IM.menu_json(services)
+    assert [s["id"] for s in body["scenes"]] == REVIEW_IDS
+    assert all(s["on_ipad"] is True for s in body["scenes"])
+    assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM]
+    gh2 = next(s for s in body["scenes"] if s["id"] == "golden-hour-2")
+    assert gh2 == {
+        "id": "golden-hour-2",
+        "name": "Golden Hour #2",
+        "group": GOLDEN,
+        "option_of": GOLDEN,
+        "on_ipad": True,
+        "idle": False,
+    }
+    assert {k: body[k] for k in ("visible", "total", "grid_max", "review", "notes", "file", "writable")} == {
+        "visible": 18,
+        "total": 18,
+        "grid_max": 6,
+        "review": True,
+        "notes": [],
+        "file": "overrides/settings.yaml",
+        "writable": True,
+    }
+
+
+# ---- the switch --------------------------------------------------------------------------------------------------------
+def test_the_switch_hides_and_shows_a_scene_and_says_so(tmp_path):
+    services = _services(tmp_path)
+    install_review(services)
+    kiosk = services.settings.kiosk
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    change = IM.set_on_ipad(services, "golden-hour-2", False)
+    assert change.changed is True
+    assert change.message == (
+        "Golden Hour #2 is off the iPad: guests no longer see its card. Ops can still choose it here and the "
+        "Design Lab still edits it."
+    )
+    assert services.settings.kiosk is kiosk and kiosk.hidden_scenes == ["golden-hour-2"]
+    assert yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": ["golden-hour-2"]}}
+    assert "golden-hour-2" not in [s.id for s in IM.live_menu(services).visible.scenes]
+    events = _ops_events(services)
+    assert len(events) == 1 and events[0]["action"] == "ipad_scenes"
+    assert (events[0]["scene"], events[0]["show"], events[0]["hidden"]) == (
+        "golden-hour-2",
+        False,
+        ["golden-hour-2"],
+    )
+    again = IM.set_on_ipad(services, "golden-hour-2", False)
+    assert (
+        again == IM.MenuChange(False, "Golden Hour #2 is already off the iPad.")
+        and len(_ops_events(services)) == 1
+    )
+    back = IM.set_on_ipad(services, "golden-hour-2", True)
+    assert back == IM.MenuChange(True, "Golden Hour #2 is back on the iPad.")
+    assert kiosk.hidden_scenes == [] and yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": []}}
+    assert IM.set_on_ipad(services, GOLDEN, True) == IM.MenuChange(
+        False, "Golden Hour is already on the iPad."
+    )
+
+
+def test_two_switches_keep_catalog_order(tmp_path):
+    services = _services(tmp_path)
+    install_review(services)
+    IM.set_on_ipad(services, "golden-hour-2", False)
+    IM.set_on_ipad(services, "rainbow-row-sunset-3", False)
+    assert services.settings.kiosk.hidden_scenes == ["rainbow-row-sunset-3", "golden-hour-2"]
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    assert yaml.safe_load(path.read_text())["kiosk"]["hidden_scenes"] == [
+        "rainbow-row-sunset-3",
+        "golden-hour-2",
+    ]
+
+
+def test_the_switch_says_when_the_menu_changes_shape_and_when_the_scene_is_showing(tmp_path):
+    services = _services(tmp_path)
+    install_review(services, hide=[x for x in OPTION_IDS if x != "golden-hour-2"])  # 7 visible
+    hid = IM.set_on_ipad(services, "golden-hour-2", False)
+    assert hid.message.endswith(" The iPad is back to its 3 × 2 grid.")
+    shown = IM.set_on_ipad(services, "golden-hour-2", True)
+    assert shown.message.endswith(" The iPad now shows the review menu (more than six scenes).")
+    services.extras["canopy"] = ShowingEngine("golden-hour-2")
+    showing = IM.set_on_ipad(services, "golden-hour-2", False)
+    assert " It is still showing; guests can't choose it again from the iPad." in showing.message
+    assert "until" not in showing.message
+    assert showing.message.index("still showing") < showing.message.index("3 × 2")
+
+
+def test_the_idle_scene_cant_be_hidden_and_an_unknown_one_is_404(tmp_path):
+    services = _services(tmp_path)
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    with pytest.raises(IM.MenuRefused) as idle:
+        IM.set_on_ipad(services, CALM, False)
+    assert idle.value.status == 409
+    assert (
+        idle.value.message
+        == "Lowcountry Calm is the idle scene (kiosk.idle_mode), so the iPad always offers it."
+    )
+    services.settings.kiosk.idle_scene = "goodnight-glow"
+    with pytest.raises(IM.MenuRefused) as reset:
+        IM.set_on_ipad(services, "goodnight-glow", False)
+    assert reset.value.status == 409 and "(kiosk.idle_scene)" in reset.value.message
+    with pytest.raises(IM.MenuRefused) as unknown:
+        IM.set_on_ipad(services, "disco-inferno", False)
+    assert (
+        unknown.value.status == 404 and unknown.value.message == "There is no scene called 'disco-inferno'."
+    )
+    assert not path.exists() and _ops_events(services) == []
+    assert IM.set_on_ipad(services, CALM, True).changed is False  # showing it is always fine
+
+
+def test_a_save_that_fails_changes_nothing(tmp_path, monkeypatch):
+    services = _services(tmp_path, "kiosk: {hidden_scenes: [golden-hour]}\n")
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    before = path.read_bytes()
+
+    def disk_full(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(IM, "save_settings_overlay", disk_full)
+    with pytest.raises(IM.MenuRefused) as refused:
+        IM.set_on_ipad(services, "coastal-tides", False)
+    assert refused.value.status == 503
+    assert refused.value.message == "The iPad's scene list couldn't be saved (disk full); nothing changed."
+    assert services.settings.kiosk.hidden_scenes == [GOLDEN]
+    assert "coastal-tides" in [s.id for s in IM.live_menu(services).visible.scenes]
+    assert path.read_bytes() == before and _ops_events(services) == []
+
+
+def test_without_a_data_directory_the_switch_is_refused_with_the_reason(tmp_path):
+    services = _services(tmp_path)
+    services.extras[SETTINGS_OVERLAY_KEY] = SettingsOverlayState(None)
+    with pytest.raises(IM.MenuRefused) as refused:
+        IM.set_on_ipad(services, GOLDEN, False)
+    assert refused.value.status == 409 and "No data directory is configured" in refused.value.message
+    assert services.settings.kiosk.hidden_scenes == [] and IM.menu_json(services)["writable"] is False
+
+
+# ---- the /ops lines ------------------------------------------------------------------------------------------------------
+def test_an_unusable_overlay_is_a_live_ops_line_and_the_next_switch_writes_it_again(tmp_path):
+    services = _services(tmp_path, "kiosk: {hidden_scenes: [golden-hour]\n")
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    before = path.read_bytes()
+    assert services.settings.kiosk.hidden_scenes == [] and len(IM.live_menu(services).visible.scenes) == 6
+    lines = IM.problem_lines(services)
+    assert lines == [
+        (
+            "The iPad's scene list (overrides/settings.yaml) couldn't be used (it isn't valid YAML), so the iPad "
+            "offers every scene config/conductor.yaml doesn't hide. Flip a “Show on the iPad” switch on /ops to "
+            "write it again."
+        )
+    ]
+    assert path.read_bytes() == before
+    IM.set_on_ipad(services, GOLDEN, False)
+    assert IM.problem_lines(services) == []
+    assert load_settings_overlay(Path(services.data)).problem is None
+
+
+def test_names_that_hide_nothing_are_an_ops_line_and_the_next_switch_drops_them(tmp_path):
+    services = _services(tmp_path, "kiosk: {hidden_scenes: [disco-inferno, lowcountry-calm]}\n")
+    install_review(services)  # keeps the overlay's list
+    assert IM.problem_lines(services) == [
+        (
+            "kiosk.hidden_scenes names 'disco-inferno', which isn't a scene now, so it hides nothing; the next "
+            "“Show on the iPad” switch on /ops drops it."
+        ),
+        "kiosk.hidden_scenes names 'lowcountry-calm', the idle scene (kiosk.idle_mode): the iPad offers it anyway.",
+    ]
+    assert IM.menu_json(services)["notes"] == IM.problem_lines(services)
+    services.settings.kiosk.hidden_scenes = ["disco-inferno", "disco-two"]
+    assert IM.problem_lines(services) == [
+        (
+            "kiosk.hidden_scenes names 'disco-inferno', 'disco-two', which aren't scenes now, so they hide "
+            "nothing; the next “Show on the iPad” switch on /ops drops them."
+        )
+    ]
+    IM.set_on_ipad(services, "golden-hour-2", False)
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    assert yaml.safe_load(path.read_text())["kiosk"]["hidden_scenes"] == ["golden-hour-2"]
+    assert IM.problem_lines(services) == []
+
+
+# ---- the conductor.yaml fold ---------------------------------------------------------------------------------------------
+def _git_apply(tmp_path: Path, diff: str) -> str:
+    work = tmp_path / "apply"
+    (work / "config").mkdir(parents=True)
+    shutil.copyfile(CONFIG_DIR / "conductor.yaml", work / "config" / "conductor.yaml")
+    (work / "fold.diff").write_text(diff, encoding="utf-8")
+    subprocess.run(["git", "apply", "fold.diff"], cwd=work, check=True, capture_output=True)
+    return (work / "config" / "conductor.yaml").read_text(encoding="utf-8")
+
+
+def test_the_fold_is_a_git_apply_hunk_for_conductor_yaml(tmp_path):
+    fold = IM.conductor_yaml_diff(CONFIG_DIR, [GOLDEN, "golden-hour-2"])
+    assert fold.problem is None
+    assert fold.diff.startswith("--- a/config/conductor.yaml\n+++ b/config/conductor.yaml\n")
+    assert "\n-  hidden_scenes: []\n" in fold.diff
+    assert "\n+  hidden_scenes: [golden-hour, golden-hour-2]\n" in fold.diff
+    changed = [line for line in fold.diff.splitlines() if line[:1] in "+-" and line[:3] not in ("+++", "---")]
+    assert len(changed) == 2
+    if shutil.which("git"):
+        assert _git_apply(tmp_path, fold.diff) == fold.after
+    reread = yaml.safe_load(fold.after)
+    assert reread["kiosk"]["hidden_scenes"] == [GOLDEN, "golden-hour-2"]
+    KioskSettings.model_validate(reread["kiosk"])
+    ConductorSettings.model_validate(reread)
+    nothing = IM.conductor_yaml_diff(CONFIG_DIR, [])
+    assert nothing == IM.ConductorYamlDiff("", (CONFIG_DIR / "conductor.yaml").read_text(), None)
+
+
+def test_the_fold_refuses_a_file_it_cant_edit_truthfully(tmp_path):
+    text = (CONFIG_DIR / "conductor.yaml").read_text()
+    two = tmp_path / "two"
+    two.mkdir()
+    (two / "conductor.yaml").write_text(
+        text.replace("  hidden_scenes: []", "  hidden_scenes: []\n  hidden_scenes: []")
+    )
+    fold = IM.conductor_yaml_diff(two, [GOLDEN])
+    assert (
+        fold.diff == ""
+        and fold.after is None
+        and "no one-line `hidden_scenes: [...]` under kiosk" in fold.problem
+    )
+    block = tmp_path / "block"
+    block.mkdir()
+    (block / "conductor.yaml").write_text(
+        text.replace("  hidden_scenes: []", "  hidden_scenes:\n    - golden-hour")
+    )
+    assert "set it by hand" in IM.conductor_yaml_diff(block, [GOLDEN]).problem
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "conductor.yaml").write_text(
+        text.replace("  hidden_scenes: []\n", "").replace(
+            "module_page:\n", "module_page:\n  hidden_scenes: []\n"
+        )
+    )
+    assert IM.conductor_yaml_diff(elsewhere, [GOLDEN]).problem is not None
+    missing = IM.conductor_yaml_diff(tmp_path / "nowhere", [GOLDEN])
+    assert missing.diff == "" and missing.problem.startswith("it can't be read (")
+
+
+# ---- the preflight ----------------------------------------------------------------------------------------------------------
+def _preflight(data: Path) -> tuple[int, str, str]:
+    from conductor import preflight
+
+    out, err = io.StringIO(), io.StringIO()
+    code = preflight.run(env={"CONDUCTOR_DATA_DIR": str(data), "CONDUCTOR_MODE": "sim"}, out=out, err=err)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_the_preflight_names_the_ipad_menu_truthfully(tmp_path):
+    data = tmp_path / "data"
+    code, out, err = _preflight(data)
+    assert code == 0, err
+    assert "overrides/settings.yaml" not in out  # nothing when the file is missing
+    _write_overlay(data, "kiosk: {hidden_scenes: [golden-hour, disco-inferno]}\n")
+    before = _snapshot(data)
+    code, out, err = _preflight(data)
+    assert code == 0, err
+    assert (
+        "settings   overrides/settings.yaml hides 1 scene(s); 1 listed id(s) aren't scenes now (ignored)\n"
+        in out
+    )
+    assert _snapshot(data) == before
+    _write_overlay(data, "kiosk: {hidden_scenes: [lowcountry-calm]}\n")
+    code, out, _ = _preflight(data)
+    assert code == 0 and "hides 0 scene(s); it lists the idle scene, which the iPad offers anyway" in out
+    _write_overlay(data, "kiosk: [\n")
+    before = _snapshot(data)
+    code, out, err = _preflight(data)
+    assert code == 0, err
+    assert (
+        "settings   overrides/settings.yaml couldn't be used (it isn't valid YAML); the iPad would offer every "
+        "scene config/conductor.yaml doesn't hide" in out
+    )
+    assert "preflight  ok" in out and _snapshot(data) == before
+
+
+# ---- card thumbnails ---------------------------------------------------------------------------------------------------------
+HEX12 = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _hex(rgb) -> str:
+    r, g, b = rgb
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _ctx(trio=None) -> CompileContext:
+    trio = trio or git_trio(CONFIG_DIR)
+    return CompileContext(
+        registry=[],
+        capabilities={},
+        modes=trio.modes,
+        recipes=trio.recipes,
+        canopy=load_canopy(str(CONFIG_DIR)),
+        config_dir=CONFIG_DIR,
+    )
+
+
+@pytest.mark.parametrize("mode_id", APPROVED)
+def test_design_thumb_draws_the_basis_it_is_given(mode_id):
+    ctx = _ctx()
+    order = [m["pos"] for m in canopy_geometry(ctx.canopy)["modules"]]
+    design = mode_design(mode_id, ctx)
+    thumb = IM.design_thumb(design, "heads")
+    assert thumb["basis"] == "heads" and [m["pos"] for m in thumb["modules"]] == order
+    for item in thumb["modules"]:
+        want = [_hex(h["rgb"]) for h in design["heads"] if h["module"] == item["pos"]]
+        assert len(want) == 30
+        if len(set(want)) == 1:
+            assert item == {"pos": item["pos"], "color": want[0], "colors": None}
+        else:
+            assert item["color"] is None and item["colors"] == want
+    flat = mode_design(mode_id, ctx, heads=False)
+    assert flat["heads"] is None and flat["modules"] == design["modules"]
+    modules = IM.design_thumb(flat, "modules")
+    assert modules["basis"] == "modules" and [m["pos"] for m in modules["modules"]] == order
+    for item, module in zip(modules["modules"], design["modules"], strict=True):
+        assert item == {
+            "pos": module["module"],
+            "color": _hex(module["rgb"]),
+            "colors": None,
+        }
+    for t in (thumb, modules):
+        assert HEX12.match(t["sig"])
+        text = json.dumps(t)
+        for word in ("canopy-r", "sim-", "Module ", "Hubspace", "label"):
+            assert word not in text
+    assert thumb["sig"] != modules["sig"]
+    assert IM.design_thumb(flat, "heads") is None  # no heads drawn: no per-light picture
+    assert IM.design_thumb(design, None) is None
+    assert IM.design_thumb({**design, "modules": None}, "modules") is None
+
+
+def test_a_thumbnail_sig_changes_with_one_colour_and_with_the_basis_alone():
+    ctx = _ctx()
+    design = mode_design(GOLDEN, ctx, heads=False)
+    sig = IM.design_thumb(design, "modules")["sig"]
+    assert IM.design_thumb(design, "modules")["sig"] == sig
+    one = [dict(m) for m in design["modules"]]
+    one[4] = {**one[4], "rgb": [1, 2, 3]}
+    assert IM.design_thumb({**design, "modules": one}, "modules")["sig"] != sig
+    # the same nine colours as heads (each module's 30 heads in its one colour) differ only in the basis
+    heads = [
+        {"module": m["module"], "x": 0, "y": 0, "rgb": m["rgb"]} for m in design["modules"] for _ in range(30)
+    ]
+    as_heads = IM.design_thumb({**design, "heads": heads}, "heads")
+    assert [m["color"] for m in as_heads["modules"]] == [
+        m["color"] for m in IM.design_thumb(design, "modules")["modules"]
+    ]
+    assert as_heads["sig"] != sig
+
+
+def test_catalog_thumbs_draws_only_the_ids_asked_and_never_fails(monkeypatch):
+    trio = review_trio(git_trio(CONFIG_DIR))
+    canopy = load_canopy(str(CONFIG_DIR))
+    got = IM.catalog_thumbs(
+        trio, canopy, CONFIG_DIR, {GOLDEN: "heads", "golden-hour-2": "modules", CALM: None}
+    )
+    assert set(got) == {GOLDEN, "golden-hour-2", CALM} and got[CALM] is None
+    assert got[GOLDEN] == IM.design_thumb(mode_design(GOLDEN, _ctx(trio)), "heads")
+    assert got["golden-hour-2"] == IM.design_thumb(
+        mode_design("golden-hour-2", _ctx(trio), heads=False), "modules"
+    )
+    sigs = {
+        sid: t["sig"]
+        for sid, t in IM.catalog_thumbs(
+            trio, canopy, CONFIG_DIR, dict.fromkeys(REVIEW_IDS, "modules")
+        ).items()
+    }
+    for base in APPROVED:  # each group's three module-level designs differ
+        assert len({sigs[base], sigs[f"{base}-2"], sigs[f"{base}-3"]}) == 3, base
+    assert IM.catalog_thumbs(trio, canopy, CONFIG_DIR, {"disco-inferno": "modules"}) == {
+        "disco-inferno": None
+    }
+
+    from conductor.routes import design as DS
+
+    real = DS.mode_design
+
+    def broken(mode_id, ctx, **kw):
+        if mode_id == "coastal-tides-2":
+            raise RuntimeError("no design")
+        return real(mode_id, ctx, **kw)
+
+    monkeypatch.setattr(DS, "mode_design", broken)
+    got = IM.catalog_thumbs(
+        trio, canopy, CONFIG_DIR, dict.fromkeys(["coastal-tides-2", "coastal-tides"], "modules")
+    )
+    assert got["coastal-tides-2"] is None and got["coastal-tides"] is not None
+
+
+def test_thumbnail_wall_time_is_bounded():
+    trio = review_trio(git_trio(CONFIG_DIR))
+    canopy = load_canopy(str(CONFIG_DIR))
+    IM.catalog_thumbs(trio, canopy, CONFIG_DIR, dict.fromkeys(REVIEW_IDS, "heads"))  # warm
+    timings = {}
+    for basis in ("heads", "modules"):
+        start = time.perf_counter()
+        thumbs = IM.catalog_thumbs(trio, canopy, CONFIG_DIR, dict.fromkeys(REVIEW_IDS, basis))
+        timings[basis] = (time.perf_counter() - start) * 1000
+        assert all(t is not None and t["basis"] == basis for t in thumbs.values())
+        size = len(json.dumps(list(thumbs.values()), separators=(",", ":")))
+        print(f"catalog_thumbs, 18 review scenes, basis {basis}: {timings[basis]:.1f} ms, {size} B of JSON")
+    assert timings["heads"] < 500  # the worst case: every card per light (a CI guard, not a target)
+    assert timings["modules"] < 100
+
+
+# ---- the Lab never writes the menu -------------------------------------------------------------------------------------------
+def test_the_lab_never_writes_the_ipad_menu():
+    """The Lab never hides a scene (/ops does): no Lab source names the switch or the overlay's writer."""
+    sources = sorted((ROOT / "conductor" / "design_lab").glob("*.py")) + [
+        ROOT / "conductor/routes/design_lab.py"
+    ]
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for word in (
+            "set_on_ipad",
+            "save_settings_overlay",
+            "SETTINGS_OVERLAY_PATH",
+            "SETTINGS_OVERLAY_FILE",
+        ):
+            assert word not in text, f"{path.name} names {word}"

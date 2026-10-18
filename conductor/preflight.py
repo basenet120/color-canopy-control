@@ -10,7 +10,9 @@ install exits 3 and prints the rollback; roll the checkout back at once.
 
 What it does — offline (no Hubspace, no network), binds no port, writes nothing in the data folder:
 - the runtime settings from the environment (`GateSettings.from_env`, the same checks as a start);
-- `config/conductor.yaml` (`load_settings`);
+- `config/conductor.yaml` (`load_settings`), and the iPad's scene menu `<data>/overrides/settings.yaml` (D76), read
+  only: how many scenes it hides, the ids in it that hide nothing (not a scene now, or the idle scene), or why it
+  can't be used (the iPad would offer every scene git doesn't hide) — named, never a failure, as at a start;
 - the registry: `config/devices.yaml` + `<data>/overrides/registry.yaml` (`load_registry`), naming the old data the
   canopy-only code ignores (removed vignette devices, removed `vignette`/`kind` fields, a removed simulator
   `profile`), and building every entry's simulator profile (startup's SimDriver does, in live mode too);
@@ -32,9 +34,17 @@ import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
-from conductor.config import CONFIG_DIR, data_dir, load_registry, load_settings
+from conductor.config import (
+    CONFIG_DIR,
+    SETTINGS_OVERLAY_PATH,
+    apply_settings_overlay,
+    data_dir,
+    load_registry,
+    load_settings,
+    load_settings_overlay,
+)
 from conductor.gate import GateSettings
 from conductor.roles import RoleStore
 from conductor.sim.profiles import DEFAULT_PROFILE, load_profile
@@ -48,8 +58,37 @@ class PreflightFailed(Exception):
 
 def _settings(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
     gate = GateSettings.from_env(env)
-    load_settings(config_dir)
-    return [f"settings   ok (mode {gate.mode}, environment {gate.environment})"]
+    settings = load_settings(config_dir)
+    lines = [f"settings   ok (mode {gate.mode}, environment {gate.environment})"]
+    menu_line = _ipad_menu(config_dir, data, settings)
+    if menu_line is not None:
+        lines.append(menu_line)
+    return lines
+
+
+def _ipad_menu(config_dir: Path, data: Path, settings: Any) -> str | None:
+    """The iPad's scene menu overlay (D76), read only: None when there is no file. Never a failure: a start over a
+    file it can't use offers every scene git doesn't hide, with an /ops line."""
+    from conductor.ipad_menu import menu
+    from conductor.scenes import load_scenes
+
+    state = load_settings_overlay(data)
+    if state.problem:
+        return (
+            f"settings   {SETTINGS_OVERLAY_PATH} couldn't be used ({state.problem}); the iPad would offer every "
+            "scene config/conductor.yaml doesn't hide"
+        )
+    if state.overlay is None:
+        return None
+    in_force = settings.model_copy(deep=True)
+    apply_settings_overlay(in_force, state)
+    m = menu(load_scenes(config_dir), in_force.kiosk)
+    line = f"settings   {SETTINGS_OVERLAY_PATH} hides {len(m.hidden)} scene(s)"
+    if m.ignored_unknown:
+        line += f"; {len(m.ignored_unknown)} listed id(s) aren't scenes now (ignored)"
+    if m.ignored_idle:
+        line += "; it lists the idle scene, which the iPad offers anyway"
+    return line
 
 
 def _registry(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
