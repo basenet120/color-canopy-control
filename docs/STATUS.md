@@ -5,9 +5,11 @@ _Last updated: 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026
 PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A `claude/canopy-only`: the
 Conductor controls the canopy only, D67; the Studio is screen only; see the three blocks below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
 `claude/design-lab-motion`; all three Lab slices built; see the PR stack), 2026-10-16.
-**The show box is the Mac mini** (D61, merged), live; **held** since Oct 13 evening so
-Paris could demo the Hubspace app (`canopy-mac start` hands back). **Temporarily, canopy Modules 1–2 are VWBD's two
-test kits** on the bench account — **undo by Oct 19**. A five-PR stack (#19 → #23) makes a partial canopy honest and
+**The show box is the Mac mini** (D61), **live since Oct 17** on `6ce971b` (`main` with the Design Lab #25–#27;
+Alon deployed it from paste-commands; no release tag yet). **Canopy Modules 1–2 are VWBD's two kits for real**
+(Kingston test = Module 1, String light 1 = Module 2) on VWBD's Hubspace account, which Alon says is the live show
+account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 17). The iPad guest panel drives them
+(Alon, Oct 17). A five-PR stack (#19 → #23) makes a partial canopy honest and
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
@@ -329,7 +331,6 @@ Lab); both target `main`; merge commits, not squash.
   canopy-mac backup
   git -C ~/canopy-show status --short                     # must print nothing
   git -C ~/canopy-show rev-parse HEAD | tee ~/canopy-prev-sha.txt
-  # (the Oct 19 registry undo first, exactly as below, under the code already running, then verify it)
   git -C ~/canopy-show fetch --tags origin
   git -C ~/canopy-show checkout --detach <A tag or merge sha>
   ~/canopy-show/deploy/mac/canopy-mac install; rc=$?    # uv sync, then --check runs conductor.preflight, then restarts
@@ -461,8 +462,7 @@ Lab); both target `main`; merge commits, not squash.
     # hand the box back to Paris (break-glass hold):
     canopy-mac stop --yes
     ```
-    If the stack isn't merged before the Oct 19 undo, the kit try-on happens in the Hubspace app or on `/ops/module`
-    and the Lab stays screen-only until after it.
+    (Done Oct 17: #24–#27 merged and `6ce971b` deployed; the kits stay Modules 1–2.)
 0h. **#27 `claude/design-lab-motion` → `main`, after #26** (Design Lab Slice C, the motion editor; D66's
     Slice C line; plan §7). **No show-path file touched:** `show.py`, `canopy.py`, `reconciler.py`, `executor.py`,
     `sequence.py`, the drivers and `config/` are unchanged; `motion.stepped.live_enabled` and
@@ -622,12 +622,12 @@ that fails before it). Sim only; nothing new has reached a light.
   against 05's 2 s (reported, not gating) — waves read as coarse steps.
 - **Live today:** unchanged. The Mac's two kits run T3; the stepped tier is refused on a non-sim driver
   (`STEPPED_LIVE_OFF`), proven through the show's own tier rules; downgrades skip the stepped rung.
-- **Hardware still needed:** Gate R rehearsal on the two test kits (before the Oct 19 undo) and on the nine show kits
+- **Hardware still needed:** Gate R rehearsal on Modules 1–2 (VWBD's kits, now) and on all nine show kits
   during install week (`docs/runbooks/stepped-rehearsal.md`); cut-vs-fade of a strand colour change (bench item 6) and
   start skew across kits (gate 12); Gate C + map + commissioning per kit before any per-head design shows; the iPad
   preview's orientation at the venue (`kiosk.preview`). Freeze the designs before install commissioning.
 
-## Two test kits as canopy Modules 1–2 (temporary, live) — 2026-10-13
+## VWBD's kits are canopy Modules 1–2 (for real since Oct 17; first set up Oct 13)
 Alon's call, for client demos: the iPad guest panel drives VWBD's two shop kits as the canopy's first two modules.
 Done on the Mac show box (Alon ran the commands; the auto-mode check kept Claude from changing the live box):
 - **What changed (ops overlay only, `~/Library/Application Support/ColorCanopy/data/overrides/registry.yaml`,
@@ -641,20 +641,18 @@ Done on the Mac show box (Alon ran the commands; the auto-mode check kept Claude
   strand shows one colour (module level, T3): neither kit has bench flags or a controller map on this Mac, so
   per-light painting is off. Not yet measured: readback timing, re-assert behaviour, brightness and power from the
   iPad on these kits.
-- **Until D62 is deployed on the box:** the T3 feature line still says the palette steps "across the canopy column by
-  column" and the ops Safe look still says "all nine" — avoid the Safe look button in front of guests. Nobody may
-  drive these two kits from the Hubspace app, the Studio or another Conductor meanwhile: the reconciler puts the Mac's
-  look back within seconds.
-- **Held since Oct 13 evening:** at Alon's request the Conductor was stopped (`canopy-mac stop --yes`) so Paris could
-  show the Hubspace app driving the kits; the hold survives a reboot; `canopy-mac start` hands back (it puts
-  Lowcountry Calm back on both strands).
-- **UNDO by Oct 19, before any real canopy kit is registered on Oct 20** (otherwise registering a real Module 1 or 2
-  from the canopy account fails with 409 "belongs to the bench account", and slot records or calibration taken on the
-  shop kits could follow the real modules): tell VWBD; `canopy-mac backup`; `canopy-mac stop --yes`; `cp -p
-  overrides/history/registry-before-canopy-test.yaml overrides/registry.yaml` (in the data folder, mode 0600); check
-  with `load_registry` that `canopy-r0c0`/`r0c1` are back on account canopy with no id; `canopy-mac start`. The kits
-  keep the Mac's last look. Never commit the /ops overlay diff while this is in place: it proposes `account: bench`
-  for `config/devices.yaml`.
+- **D62 is deployed (Oct 17, `6ce971b`):** the partial-canopy copy counts the two driven strands. Nobody may drive
+  these two kits from the Hubspace app, the Studio or another Conductor: the reconciler puts the show's look back
+  within seconds.
+- **The Oct 13 hold ended on Oct 17** when Alon deployed `6ce971b` (`canopy-mac install` lifts the hold).
+- **Oct 17: for real, no undo.** Alon: these shop kits are real canopy kits and VWBD's account is the live show
+  account, so the planned Oct 19 undo is **cancelled**. (The undo was run once on Oct 17 by mistake and reverted at
+  once from that day's 16:54 backup, `canopy-data-20261017-165403-manual.tar.gz`; the overlay is the Oct 13 mapping
+  again: `canopy-r0c0`/`canopy-r0c1` on account `bench` with their ids, `bench-kit` and `shop-string-1` empty —
+  checked with `load_registry`.) The show runs them at module level until each kit's own Gate C + map is recorded on
+  the Mac. The /ops overlay diff proposes `account: bench` for these two positions in `config/devices.yaml`; whether
+  git should say so is Alon's call, so don't commit that diff without him. Writes to the live account before Home
+  Depot's authorization letter (06 #20) are Alon's call.
 
 ## The Mac show box (D61) — 2026-10-13
 Alon moved the show onto the Mac mini (M2 Pro, macOS 26.2) instead of the Ubuntu mini PC. Runbook:
@@ -867,20 +865,18 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 
 ## Next step
 0a. **Alon (PR A, D67):** review CLAUDE.md's two changed lines in the PR (the lead asked stream R to apply them),
-    merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above, after
-    the Oct 19 registry undo. Then PR B (the live Lab): merge after A, deploy on its own (PR B block, "Needs the
-    show box"), reload the Lab once after the deploy. Then PR B2 (the operator repaint): merge after B; deploy only
-    after bench item 6 on a show kit with its own Gate C (install, Oct 20–23), with `/ops` open for the first repaint.
-0. **Alon:** (a) **by Oct 19, undo the test-kit Modules 1–2** (section above). (b) Review and merge #24 (it carries #20–#23 to
-   `main`; merge commit); then between demos `git -C ~/canopy-show switch main && git -C
-   ~/canopy-show pull --ff-only && ~/canopy-show/deploy/mac/canopy-mac install` (restarts; the sign-in survives). (c)
+    merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above (no
+    registry undo: the kits stay Modules 1–2). Then PR B (the live Lab): merge after A, deploy on its own (PR B
+    block, "Needs the show box"), reload the Lab once after the deploy. Then PR B2 (the operator repaint): merge
+    after B; deploy only after bench item 6 on a show kit with its own Gate C (install, Oct 20–23), with `/ops` open
+    for the first repaint.
+0. **Alon:** (a) ~~Undo the test-kit Modules 1–2 by Oct 19~~ — cancelled Oct 17: they are the real Modules 1–2. (b) Done Oct 17:
+   #24–#27 merged and `6ce971b` deployed. (c)
    Decide D63 (layouts, with Paris), D64 (ripple on: `kiosk.ripple_stagger_s: 1.2`) and D65 (which scenes move); run
-   Gate R on the two test kits before the undo. (d) Release tag for the freeze. (e) On the Mac: show accounts when
+   Gate R on Modules 1–2. (d) Release tag for the freeze. (e) On the Mac: show accounts when
    they exist, automatic login, wired + reserved address, restart and pull the plug once (`mac-show-box.md` §1–§2).
    Signing in a show account waits for Home Depot's authorization (06 #20).
-   (f) **Design Lab:** merge #24 → #25 → #26 → #27 in that order (each already targets main;
-   merge commits, not squash), then run #26's deploy block (in the PR stack above) when Paris can
-   spare the box; a kit try-on on Modules 1–2 needs it before the Oct 19 undo. All three Lab slices are built;
+   (f) **Design Lab:** merged and deployed Oct 17 (`6ce971b`). All three Lab slices are live;
    before the client session, open `make lab-dev` on the laptop and walk Golden Hour (colour, layout, brightness,
    save, compare, Present, export) and Coastal Tides' Motion section once. Stepped live and the ripple stay off
    (Gate R, D64) — the Lab only shows them.
