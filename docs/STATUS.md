@@ -1,8 +1,8 @@
 # Status
 
-_Last updated: 2026-10-18 evening (PLAN, not started: `claude/preset-options-plan`, three options per scene from VWBD's
-fin drawing; see its block). Before that, evening (PR F `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle
-back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
+_Last updated: 2026-10-18 evening (PR G `claude/flagged-not-changing`: a flagged note no longer holds the panel at
+"changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
+`claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
 merged as #31 and deployed on the show box at `0f8f38c`; see its block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
@@ -19,6 +19,23 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
+**Deployed first, Oct 18 16:23 (Alon asked): `7b21918`** (main after #35: D70 + D71 + D72) on the Mac show box —
+backup `canopy-data-20261018-162349-manual.tar.gz`, previous `0f8f38c` in `~/canopy-prev-sha.txt`, preflight ok,
+rc 0, `/healthz` OK, `bench` reconnected in ~2 s, the running config read back `fast_pacing: True, 2 s`. **True on
+hardware:** scene taps applied on both kits — ack 0.18–0.36 s, verified 1.34–1.56 s on one kit and ~2.5–2.7 s on the
+other (it now waits for its second readback instead of re-sending: D71 working; one Rainbow Row re-send at first);
+no throttling; the iPad's socket reconnected by itself. **Found:** Alon still waited ~8–12 s between scenes ("One
+moment, the lights are changing"): the next scene got through ~12 s after the previous, 0.17 s after a routine
+true-up read. Not the cooldown — D73's bug (below). Also seen: after the restart the iPad's reload got four 401s
+before a 200: the kiosk cookie is `SameSite=Strict`, so a navigation iOS treats as cross-site (home-screen icon,
+another app, Guided Access re-entry) arrives without it and the box answers the Basic challenge — pre-existing,
+worth a decision (Lax would keep top-level navigations signed in; the writes stay JSON + same-site checked).
+- **The fix (D73):** a module needing attention only for a flagged note, with its look confirmed, is "stuck" at once
+  instead of "changing" for the 10 s retry window; a real readback mismatch still gets its retries.
+- **Verified (sim, macOS):** `pytest -q`: 2473 passed, 5 skipped, 44 subtests (full suite, final tree); ruff clean.
+- **Deploy:** the usual paste block, on its own; no iPad reload. Then a scene and another ~2 s later should both land.
 
 ## PLAN (not started) — three options per scene, motion on every option, fin visualizer, `claude/preset-options-plan` (Oct 18)
 Docs only: `docs/plans/preset-options/README.md`, plus the data extracted from VWBD's drawing A-20-1 (`fins.json`,
@@ -528,9 +545,9 @@ Lab); both target `main`; merge commits, not squash.
   first registry edit clears them from the overlay (the line goes at the next restart).
 
 ## PR stack (merge order — merge commits, not squash)
-00. **Oct 18:** #28–#34 (PR A, B, B2, C, the C deploy notes, D, E) are merged into `main`; the show box runs `0f8f38c`
-    (main after #31: D70 and D71 aren't deployed yet). **Open: PR F `claude/guest-throttle-pacing`** (D72; no other
-    PR first).
+00. **Oct 18:** #28–#35 (PR A, B, B2, C, the C deploy notes, D, E, F) are merged into `main`; the show box runs
+    `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **Open: PR G `claude/flagged-not-changing`** (D73; no
+    other PR first).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -1047,9 +1064,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-000. **Alon (PR F, D72):** review and merge `claude/guest-throttle-pacing` (merge commit); deploy `main` (D70 + D71 +
-    D72 at once, or in steps); run the account probe (`docs/runbooks/account-rate-probe.md`) once, not during a demo;
-    on the kits a second scene 2 s after the first should land.
+0000. **Alon (PR G, D73):** review and merge `claude/flagged-not-changing`; deploy it (the box runs `7b21918`); then a
+    second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
+    some iPad reloads). Run the account probe once (`docs/runbooks/account-rate-probe.md`), not during a demo.
+000. **PR F (D72) merged (#35) and deployed with D70 + D71 (`7b21918`, Oct 18 16:23).**
 00. **PR C (D69) is merged and deployed (Oct 18, `0f8f38c`).** Still to try on the kits: tap a scene, dim right
     after it — the level should land when the cooldown ends and the panel should say so meanwhile. Then the
     brightness-readback bench check in the PR C block.
