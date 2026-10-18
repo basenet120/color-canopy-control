@@ -195,6 +195,13 @@ test("reduced motion: no pulse, and the current frame only", () => {
   const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
   assert.match(reduced, /\.canopy-preview \.dot \{[^}]*animation: none !important/);
   assert.match(css, /\.canopy-preview \.dot \{ transition: fill 600ms/);
+  // the fins (D74): they fade and pulse like the dots, an unknown one is dashed, and reduced motion snaps them
+  assert.match(css, /\.canopy-preview \.fin \{[^}]*transition: stroke 600ms/);
+  assert.match(css, /\.canopy-preview \.fin\.changing \{[^}]*animation: dot-pulse 1\.2s/);
+  assert.match(css, /\.canopy-preview \.fin\.is-unknown \{[^}]*stroke: var\(--slider-rest\)[^}]*stroke-dasharray/);
+  assert.match(reduced, /\.canopy-preview \.fin \{[^}]*transition: opacity 120ms[^}]*animation: none !important/);
+  assert.doesNotMatch(css, /\.fin\.is-unlit[^{]*\{[^}]*dasharray/);
+  assert.equal(finPaint({ alpha: 1, near: [{ i: 0, w: 1 }] }, [{ kind: "changing", fill: "#6FB5D5" }], { reduced: true }).pulse, false);
 });
 
 test("the accessible summary counts the panels lit", () => {
@@ -320,4 +327,35 @@ test("finPaint mixes lit heads at full strength and claims nothing it can't vouc
   assert.notEqual(u.kind, g.kind);
   assert.notEqual(u.stroke, g.stroke);
   assert.deepEqual(finPaint({ alpha: 1, near: [] }, []), none);
+});
+
+test("kiosk.js lays out only when the geometry changes, and paints fins only when a dot changed (D69)", () => {
+  const raw = readFileSync(new URL("../web/kiosk/kiosk.js", import.meta.url), "utf8");
+  const js = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+  const slice = (from, to) => js.slice(js.indexOf(from), js.indexOf(to));
+  const build = slice("function buildCanopy", "function paintCanopy");
+  const order = [
+    "if (canopy === canopyView.canopy) return;",
+    "geometryKey(canopy)",
+    "if (key === canopyView.key) return;",
+    "layout(canopy)",
+  ].map((needle) => build.indexOf(needle));
+  assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  const paint = slice("function paintCanopy", "function tickCanopy");
+  const at = (needle) => paint.indexOf(needle);
+  assert.ok(at("paints[i] = p") >= 0 && at("paints[i] = p") < at("if (paint === dot.paint) return;"));
+  assert.ok(at("if (dirty)") >= 0 && at("if (dirty)") < at("finPaint("));
+  const tick = slice("function tickCanopy", "function stopCanopy");
+  for (const part of [paint, tick]) {
+    assert.ok(part.length > 0);
+    assert.doesNotMatch(part, /\blayout\(/);
+    assert.doesNotMatch(part, /geometryKey\(/);
+  }
+  // the key: the same geometry gives the same key, a fin that moves gives a new one
+  const c = withFins(canopy(), [fin(10, 20), fin(30, 40, 90, 24.5)]);
+  assert.equal(geometryKey(c), geometryKey(structuredClone(c)));
+  const moved = structuredClone(c);
+  moved.fins[1].x += 0.5;
+  assert.notEqual(geometryKey(moved), geometryKey(c));
 });
