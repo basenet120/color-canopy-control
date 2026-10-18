@@ -1211,7 +1211,7 @@ before guests arrive."
 | Sat night | R done: PR A ready (suite, lint, node, soak, §1.6 grep, preflight, Studio/Lab browser load) |
 | Sun Oct 18 | P B1 (overlay + load + checklist + hold + routes; checklist and fallback tests first) and U; then P B2 |
 | Mon Oct 19 morning | integration (§0 steps 1–3), whole suite, soak, roundtrip, the B1 browser walk; PR B ready |
-| Mon Oct 19 | the registry undo first (§8.1 step 1); Alon merges A → deploys A; then merges B → deploys B (separate moments) |
+| Mon Oct 19 | Alon merges A → deploys A; then merges B → deploys B (separate moments). No registry undo: the kits are the real Modules 1–2 (Alon, Oct 17) |
 | Mon Oct 19 – Tue Oct 20 | §0 step 4: PR B2 ready (suite, B2 tests, browser walk B2) |
 | Oct 20–23 install | register the nine kits, Gate C + map + commissioning per kit (bench runbook §5a); bench item 6 once on a show kit from `/ops/module`; then merge + deploy B2; Gate R if time allows |
 | **End of install (Oct 22–23, before guests)** | live iteration: try-on → save → **Publish** → look at the canopy → adjust → publish again (painted repaints queued under the 2-min rule) → when happy, Export → PR → Alon merges (approve into git; the overlay is then followed as git) |
@@ -1223,7 +1223,7 @@ before guests arrive."
 canopy-mac backup
 git -C ~/canopy-show status --short                     # must print nothing
 git -C ~/canopy-show rev-parse HEAD | tee ~/canopy-prev-sha.txt
-# 1. The Oct 19 registry undo, exactly as STATUS says, under the code already running, then verify it
+# 1. (No registry undo: Kingston test and String light 1 stay Modules 1–2 — Alon, Oct 17)
 # 2. PR A on its own
 git -C ~/canopy-show fetch --tags origin
 git -C ~/canopy-show checkout --detach <A tag or merge sha>
