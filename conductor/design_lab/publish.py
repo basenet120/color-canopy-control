@@ -4,19 +4,24 @@ Undo last publish, and the LiveJSON the Lab's show bar reads.
     POST /api/lab/publish {version, confirm?, expected_live, who?, show?}
       build (threadpool): published_trio → plan_publish → confirm sentence + cost
       one synchronous section on the loop thread (no await between the checks and the install):
-        the publish lock · looks_refusal() · expected_live + generation · equals live · the slot locks · confirm
-        → write_looks (history copy first; OSError → 409 read_only, nothing installed)
-        → install_looks (every copy, §2.4) → engine.reload_looks' synchronous prefix (the re-pick is installed)
+        the publish lock · looks_refusal() · expected_live + generation · equals live · the app lock · confirm
+        → write_looks (history copy first, the repaint queue with it; OSError → 409 read_only, nothing installed)
+        → install_looks (every copy, §2.4) → engine.start_repaint (B2: ONE job, its marks set now)
+        → engine.reload_looks (the hold follows the marks; the re-pick is installed)
       then the awaits: the re-pick burst's results, the optional "show <scene>", telemetry
 
 - **Refusals** are Lab sentences (REFUSALS), never the guest copy; nothing is written or sent on any of them.
 - **Conflict:** a confirm computed against a live look someone has since replaced (`expected_live`, the plan's
   `generation`) is refused with the new LiveJSON, so two people on one ops login never silently replace each other.
-- **Slot locks (§2.6.0):** a painted design change where a module's slot is hand-painted in the app is refused (the
-  iPad would describe colours the lights don't show); B1, on hardware: one where the slot is commissioned (api) is
-  refused too (the repaint job is PR B2) — except Revert to approved and Undo, which are always allowed (and in the
-  simulator, as D66's T1 lock was off there, every such publish is): the scene is held off T1 (it shows truthfully at
-  module level) and the reconciler's stale rule rewrites the slots (≤ once per 10 min per slot), then the hold lifts.
+- **The app lock (§2.6.0):** a painted design change where a module's slot is hand-painted in the app is refused
+  (the iPad would describe colours the lights don't show).
+- **The operator repaint (B2, §2.6–§2.7):** a publish whose painted scene's commissioned slots won't hold the new
+  design installs at once (the scene is held off T1: it shows truthfully at module level) and hands the engine ONE
+  repaint job — the modules with their own api record, Gate C and map whose record differs — after the confirm names
+  them, the slot writes and when (`in_s`: at most one operator repaint per scene every `lab.repaint_min_interval_s`;
+  a sooner publish queues it, a newer publish replaces a queued job, and Revert / Undo are never refused by it). A
+  publish is refused only while a repaint is writing ("repainting"). The confirm names the wait in seconds, which
+  ticks down while ops reads it: a sentence shown up to one interval ago still matches (`confirm_matches`).
 - **Rollback:** an exception after the write puts the previous file back byte for byte, installs the previous trio
   and re-picks the current look under it (else the safe look), alerts, and answers a plain 500.
 
@@ -26,7 +31,10 @@ Calls only conductor.looks.live and the engine/wiring — never a driver or the 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
+import math
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -34,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from conductor.canopy import RepaintJob
 from conductor.config import ConfigError
 from conductor.design_lab import draft as D
 from conductor.design_lab import preview as P
@@ -73,7 +82,7 @@ REFUSALS: dict[str, str] = {
         "publish it once /ops says the canopy is back."
     ),
     "rehearsal": "A stepped rehearsal is running; stop it first.",
-    "repainting": "{scene}'s slots are being repainted (about {left} s left).",  # B2
+    "repainting": "{scene}'s slots are being repainted (about {left} s left).",
 }
 BUSY = "Another publish is in progress."
 NO_PREVIOUS = "There is no earlier publish to go back to."
@@ -90,10 +99,9 @@ FAILED = (
 NOT_WRITTEN = "The published looks couldn't be saved ({reason}); nothing was changed on the show."
 CANOPY_OFF = "The canopy is off (guest power) — publishing doesn't turn it on."
 GUEST_DIM = "A guest dimmed the canopy to {level}% — publishing keeps that level."
-HOLD_NOTE = (
-    " {scene} shows at module level until its slots hold this design again (the reconciler rewrites them, at most "
-    "once every 10 min per slot)."
-)
+HOLD_NOTE = " {scene} shows at module level until its slots are repainted."
+REPAINT_NOTE = " {scene}'s painted design is repainted into {slot} on {n}{when} (one slot write each)."
+IN_S = ", in {n} s"
 APPROVED_NAME = "the approved looks"
 HISTORY_IN_ANSWER = 20
 WHO_MAX = 40
@@ -121,7 +129,7 @@ class PublishBody(BaseModel):
 class PublishPlan:
     changed: list[str]  # scenes whose look differs from the live trio
     to_approved: list[str]  # of those, the ones that end equal to git's
-    repaint: dict[str, Any]  # ShowWiring.repaint_plan(new) (B1: the locks' counts)
+    repaint: dict[str, Any]  # ShowWiring.repaint_plan(new): per painted scene, who holds what (B2: the job)
     locked: dict[str, tuple[str, str]]  # scene → (§2.6.0 refusal sentence, field)
     held: list[str]  # painted scenes that will run at module level after the install
     driven: list[str]  # the current plan's modules when its scene changed or a try-on runs, else []
@@ -134,6 +142,8 @@ class PublishPlan:
     changes: list[dict] = field(default_factory=list)
     show_offer: str | None = None
     show_modules: list[str] = field(default_factory=list)
+    # B2: the operator repaint the publish queues — per scene {scene, slot, modules (ids), label, in_s}
+    repaints: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -275,12 +285,12 @@ def plan_publish(lab: LabService, candidate: Candidate) -> PublishPlan:
     services = lab.services
     looks = live_looks(services)
     live, git, new = looks.trio, looks.git, candidate.trio
-    exempt = candidate.kind in ("approved", "previous")  # Revert and Undo are never refused by the B1 lock
     changed = changed_scenes(live, new)
     vs_git = set(changed_scenes(git, new))
     to_approved = [s for s in changed if s not in vs_git]
     wiring = lab.show()
     repaint = wiring.repaint_plan(new) if wiring is not None else {}
+    engine = lab.engine()
     locked: dict[str, tuple[str, str]] = {}
     held: list[str] = []
     for scene_id in changed:
@@ -289,17 +299,14 @@ def plan_publish(lab: LabService, candidate: Candidate) -> PublishPlan:
             continue
         before, after = _seed(live, scene_id), _seed(new, scene_id)
         frame = D.painted_change(before, after) if before is not None and after is not None else "layout"
-        if frame is None:
-            continue  # brightness, the solid, copy, timing, a colour's name: never locked
-        api, app, _total = P.slot_records(lab, mode.slot)
-        if app:
-            locked[scene_id] = (P.app_lock_sentence(lab, scene_id, app), f"{scene_id}.{frame}")
-        elif api and not exempt and not lab.simulated:  # B1 on hardware; the simulator holds, then rewrites
-            locked[scene_id] = (P.api_lock_sentence(lab, scene_id, mode.slot, api), f"{scene_id}.{frame}")
+        if frame is not None:  # brightness, the solid, copy, timing, a colour's name: never locked
+            _api, app, _total = P.slot_records(lab, mode.slot)
+            if app:
+                locked[scene_id] = (P.app_lock_sentence(lab, scene_id, app), f"{scene_id}.{frame}")
         target = repaint.get(scene_id)
         if target is not None and target.listed:  # its commissioned slots won't hold the new design
             held.append(scene_id)
-    engine = lab.engine()
+    repaints = repaint_jobs(engine, repaint, changed)
     plan = engine.current_plan() if engine is not None else None
     trial = getattr(engine, "trial", None) if engine is not None else None
     driven = list(plan.modules) if plan is not None and (plan.mode_id in changed or trial is not None) else []
@@ -358,13 +365,48 @@ def plan_publish(lab: LabService, candidate: Candidate) -> PublishPlan:
         changes=changes,
         show_offer=show_offer,
         show_modules=show_modules,
+        repaints=repaints,
     )
 
 
+def repaint_jobs(engine: Any, repaint: dict[str, Any], changed: list[str]) -> list[dict]:
+    """B2: the scenes the publish repaints — each changed painted scene, and each scene of a queued job it replaces,
+    whose eligible modules' records don't hold the new design — with when each may start (`in_s`, the gate)."""
+    queued = (
+        set(engine.queued_repaints()) if engine is not None and hasattr(engine, "queued_repaints") else set()
+    )
+    wait = getattr(engine, "repaint_wait", None) if engine is not None else None
+    out = []
+    for scene_id, target in repaint.items():
+        if scene_id not in changed and scene_id not in queued:
+            continue
+        if target is None or not target.listed or target.plan is None:
+            continue
+        out.append(
+            {
+                "scene": scene_id,
+                "slot": target.slot,
+                "modules": list(target.listed),
+                "label": target.label or scene_id,
+                "in_s": float(wait(scene_id)) if callable(wait) else 0.0,
+            }
+        )
+    return out
+
+
+def _in_s(seconds: float) -> int:
+    """A repaint's wait as the confirm says it: whole seconds, 0 (no wait named) within a quarter second."""
+    return math.ceil(seconds) if seconds > 0.25 else 0
+
+
 # ---- what ops confirms --------------------------------------------------------------------------------------------------
-def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str) -> str:
-    """The sentence ops confirms (409 `confirm_required` until `confirm` equals it): what is published, what it
-    replaces, which scenes change (or go back to approved), the modules it reaches now, the holds, the try-on."""
+def confirm_sentence(
+    lab: LabService, plan: PublishPlan, *, name: str, kind: str, tokens: bool = False
+) -> str:
+    """The sentence ops confirms (409 `confirm_required` until `confirm_matches` says it is the one shown): what is
+    published, what it replaces, which scenes change (or go back to approved), the modules it reaches now, the holds,
+    the repaint (B2: where, the slot writes, and in how many seconds when it is queued), the try-on. `tokens`: each
+    repaint's wait as a marker `confirm_matches` turns into a pattern."""
     looks = live_looks(lab.services)
     live = looks.trio
     simulated = lab.simulated
@@ -405,24 +447,64 @@ def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str
         )
     for scene_id in plan.held:
         sentence += HOLD_NOTE.format(scene=_name(live, scene_id))
+    for job in plan.repaints:
+        n = _in_s(job["in_s"])
+        sentence += REPAINT_NOTE.format(
+            scene=_name(live, job["scene"]),
+            slot=job["slot"],
+            n=_count(len(job["modules"]), "module", "modules"),
+            when=f"\x00{job['scene']}\x00" if tokens else (IN_S.format(n=n) if n else ""),
+        )
     if plan.ends_trial:
         sentence += " The running try-on ends."
     return sentence
 
 
+def confirm_matches(
+    confirm: str | None, lab: LabService, plan: PublishPlan, *, name: str, kind: str, slack_s: float
+) -> bool:
+    """Is `confirm` the sentence ops was shown for this publish? A queued repaint's "in N s" ticks down while ops
+    reads it: a sentence whose waits are each between now's and `slack_s` more (or names none while now's is within
+    the slack) still matches — its numbers are then an upper bound, still true. Everything else must be identical."""
+    if not confirm:
+        return False
+    if confirm == confirm_sentence(lab, plan, name=name, kind=kind):
+        return True
+    if not plan.repaints:
+        return False
+    pieces = re.split("\x00([^\x00]*)\x00", confirm_sentence(lab, plan, name=name, kind=kind, tokens=True))
+    pattern = "".join(
+        re.escape(piece) if i % 2 == 0 else r"(?:, in (\d+) s)?" for i, piece in enumerate(pieces)
+    )
+    match = re.fullmatch(pattern, confirm)
+    if match is None:
+        return False
+    now = {j["scene"]: _in_s(j["in_s"]) for j in plan.repaints}
+    for scene_id, shown in zip(pieces[1::2], match.groups(), strict=True):
+        if shown is None:
+            if now[scene_id] > slack_s:
+                return False
+        elif not now[scene_id] <= int(shown) <= now[scene_id] + slack_s:
+            return False
+    return True
+
+
 def cost_line(plan: PublishPlan, *, show: bool = False) -> str:
-    """What the publish sends: one write per driven module now (+ one per module for "show <scene>"); B1 never
-    repaints a slot itself (a held scene's slots are the reconciler's, later)."""
+    """What the publish sends: one write per driven module now (+ one per module for "show <scene>"), and (B2) per
+    repainted slot: up to three slot writes per module (one unless a write doesn't land), one header read each, then
+    one T1 burst."""
     n = len(plan.driven) + (len(plan.show_modules) if show and plan.show_offer else 0)
     now = f"sends {_count(n, 'write', 'writes')} now (one per module)" if n else "sends nothing now"
-    later = ""
-    if plan.held:
-        slots = sorted({t.slot for s, t in plan.repaint.items() if s in plan.held and t is not None})
-        later = (
-            f"; later the reconciler rewrites {', '.join(slots) or 'the held slots'} (one slot write per module, at "
-            "most once every 10 min)"
+    if not plan.repaints:
+        return f"{now}; no slot repaint"
+    parts = []
+    for job in plan.repaints:
+        m = len(job["modules"])
+        parts.append(
+            f"repaints {job['slot']} on {_count(m, 'module', 'modules')}: up to {3 * m} slot writes (one each unless "
+            f"a write doesn't land), {_count(m, 'read', 'reads')}, then one T1 burst"
         )
-    return f"{now}; no slot repaint{later}"
+    return f"{now}; " + "; ".join(parts)
 
 
 def confirm_body(lab: LabService, plan: PublishPlan, sentence: str, *, show: bool) -> dict:
@@ -434,7 +516,16 @@ def confirm_body(lab: LabService, plan: PublishPlan, sentence: str, *, show: boo
         "cost": cost_line(plan, show=show),
         "replaces": {"id": current.id, "name": current.name} if current is not None else None,
         "changes": plan.changes,
-        "repaint": [],  # B2
+        "repaint": [
+            {
+                "scene": job["scene"],
+                "slot": job["slot"],
+                "modules": [_labels(lab, [d]) for d in job["modules"]],
+                "writes": len(job["modules"]),
+                "in_s": _in_s(job["in_s"]),
+            }
+            for job in plan.repaints
+        ],
         "ends_trial": plan.ends_trial,
         "show_offer": plan.show_offer,
         "notes": plan.notes,
@@ -516,10 +607,21 @@ def live_json(lab: LabService) -> dict:
             {**h.model_dump(mode="json"), "version_exists": exists(h)}
             for h in looks.file.history[:HISTORY_IN_ANSWER]
         ],
-        "repaint": looks.repaint,  # B2 (null in B1)
+        "repaint": _repaint_json(engine, looks),
         "canopy": canopy,
         "writable": looks.path is not None,
     }
+
+
+def _repaint_json(engine: Any, looks: LiveLooks) -> dict | None:
+    """RepaintJSON: the engine's (the running, queued or last job), else what the overlay's hook last kept."""
+    get = getattr(engine, "repaint_json", None) if engine is not None else None
+    if callable(get):
+        try:
+            return get()
+        except Exception:  # the show bar never fails on it
+            log.exception("RepaintJSON failed")
+    return looks.repaint
 
 
 def show_looks_brief(lab: LabService) -> dict:
@@ -531,12 +633,13 @@ def show_looks_brief(lab: LabService) -> dict:
 def show_looks_state(lab: LabService) -> dict:
     """StateJSON's `show_looks`: {id, source, generation, fallback, repainting}."""
     looks = live_looks(lab.services)
+    engine = lab.engine()
     return {
         "id": looks.live_id,
         "source": looks.source,
         "generation": looks.generation,
         "fallback": looks.problem is not None,
-        "repainting": False,  # B2
+        "repainting": bool(getattr(engine, "repainting", False)) if engine is not None else False,
     }
 
 
@@ -551,12 +654,24 @@ def refusal_sentence(lab: LabService, code: str) -> str:
     if code == "outage":
         outage = getattr(engine, "outage", None) or {}
         return REFUSALS["outage"].format(since=_clock(outage.get("since")))
+    if code == "repainting":
+        status = (getattr(engine, "repaint_status", None) or {}) if engine is not None else {}
+        left = getattr(engine, "repaint_left_total", None)
+        seconds = math.ceil(left()) if callable(left) else 10
+        return REFUSALS["repainting"].format(scene=status.get("label") or "A painted scene", left=seconds)
     return REFUSALS.get(code, "The show can't take a publish right now.")
 
 
 # ---- the new file -----------------------------------------------------------------------------------------------------------
 def _new_file(
-    looks: LiveLooks, candidate: Candidate, plan: PublishPlan, *, now: float, by: str, sha: str
+    looks: LiveLooks,
+    candidate: Candidate,
+    plan: PublishPlan,
+    *,
+    now: float,
+    by: str,
+    sha: str,
+    queued: dict[str, float] | None = None,
 ) -> tuple[ShowLooksFile, Publication]:
     old = looks.file
     seq = old.seq + 1
@@ -619,7 +734,14 @@ def _new_file(
         ],
     ][:MAX_HISTORY]
     new_file = old.model_copy(
-        update={"seq": seq, "current": current, "previous": old.current, "history": history}
+        update={
+            "seq": seq,
+            "current": current,
+            "previous": old.current,
+            "history": history,
+            # B2: this publication's repaint job (it replaces a queued one): re-queued after a restart
+            "queued": dict(queued or {}),
+        }
     )
     return new_file, current
 
@@ -690,11 +812,21 @@ async def _publish_locked(
     if plan.locked:
         detail, field_ = next(iter(plan.locked.values()))
         raise _refuse(lab, 409, "slot lock", body.version, detail, field=field_)
-    if body.confirm != sentence:
+    # the repaint waits moved on while the plan was built (and while ops read the sentence): as they stand now
+    plan = _with_waits(engine, plan)
+    slack = float(lab.settings.lab.repaint_min_interval_s)
+    if not confirm_matches(body.confirm, lab, plan, name=candidate.name, kind=candidate.kind, slack_s=slack):
         _record(lab, "publish_refused", why="confirm", version=body.version)
+        sentence = confirm_sentence(lab, plan, name=candidate.name, kind=candidate.kind)
         raise PublishAnswer(409, sentence, **confirm_body(lab, plan, sentence, show=body.show))
     now = services.clock.now()
-    new_file, current = _new_file(looks, candidate, plan, now=now, by=by, sha=looks.git_sha)
+    mono = services.clock.monotonic()
+    jobs = [
+        RepaintJob(j["scene"], j["slot"], tuple(j["modules"]), j["label"], mono + j["in_s"])
+        for j in plan.repaints
+    ]
+    queued = {j["scene"]: now + j["in_s"] for j in plan.repaints}
+    new_file, current = _new_file(looks, candidate, plan, now=now, by=by, sha=looks.git_sha, queued=queued)
     old_file, old_trio = looks.file, looks.trio
     old_state = (looks.source, looks.git_changed, looks.equals_approved)
     try:
@@ -716,6 +848,11 @@ async def _publish_locked(
         looks.equals_approved = False
         looks.git_changed = current.kind == "version" and current.base_config_sha != looks.git_sha
         repicked = engine.current_plan() is not None and bool(plan.driven)
+        # B2: ONE repaint job (a queued one is replaced; its marks are set now, so the hold below follows them)
+        start = getattr(engine, "start_repaint", None)
+        scheduled = (
+            start(jobs, generation=looks.generation, publication=current.id) if callable(start) else []
+        )
         st = await engine.reload_looks(changed=plan.changed, why=why)
     except Exception as exc:  # noqa: BLE001 - rolled back, alerted, a plain 500
         await _rollback(lab, engine, looks, old_bytes, old_file, old_trio, old_state, exc)
@@ -731,6 +868,15 @@ async def _publish_locked(
 
         services.telemetry.record("alert", level="warn", message=git_changed_line(looks), alert_key=GIT_KEY)
     held = sorted(set(plan.held) | (set(engine.t1_hold) & set(plan.changed)))
+    repaint = [
+        {
+            "scene": job.mode_id,
+            "slot": job.slot,
+            "modules": len(job.modules),
+            "in_s": _in_s(job.due_mono - services.clock.monotonic()),
+        }
+        for job in scheduled
+    ]
     report = {
         "id": current.id,
         "sent": sent,
@@ -738,7 +884,7 @@ async def _publish_locked(
         "ended_trial": plan.ends_trial,
         "copies": copies,
         "held": held,
-        "repaint": [],  # B2
+        "repaint": repaint,
     }
     _record(
         lab,
@@ -748,12 +894,20 @@ async def _publish_locked(
         name=current.name,
         by=by,
         changed=list(plan.changed),
-        repaint=[],
+        repaint=[r["scene"] for r in repaint],
         sent=sent,
         what=candidate.kind,
     )
     state = engine.state()
     return {"live": live_json(lab), "report": report, "state": state.to_json()}
+
+
+def _with_waits(engine: Any, plan: PublishPlan) -> PublishPlan:
+    """The plan's repaint waits as they stand now (the threadpool build ran a moment ago)."""
+    wait = getattr(engine, "repaint_wait", None)
+    if not plan.repaints or not callable(wait):
+        return plan
+    return dataclasses.replace(plan, repaints=[{**j, "in_s": float(wait(j["scene"]))} for j in plan.repaints])
 
 
 def _name_of(file: ShowLooksFile) -> str:
@@ -772,6 +926,12 @@ async def _rollback(
 ) -> None:
     services = lab.services
     log.error("The publish failed (%s: %s); rolling back", type(exc).__name__, exc)
+    cancel = getattr(engine, "cancel_repaint", None)
+    if callable(cancel):
+        try:
+            cancel("its publish was rolled back")  # the job's marks go before the previous trio is back
+        except Exception:
+            log.exception("Couldn't cancel the rolled-back publish's repaint")
     try:
         restore_file(looks, old_bytes, old_file)
     except OSError:

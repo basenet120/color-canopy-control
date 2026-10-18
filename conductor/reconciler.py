@@ -600,6 +600,8 @@ class Reconciler:
         self.stats["slot_checks"] += 1
         got_rows = {r.key: r.value for r in rows}
         for slot, expected, tier, _mode in engine.slot_expectations(device_id):
+            if (device_id, slot) in engine.repaint_pending:  # an operator repaint writes it (D68)
+                continue
             key = (device_id, slot)
             value = got_rows.get((R.FRAME_CLASS, slot))
             digest = R.slot_hash(value)

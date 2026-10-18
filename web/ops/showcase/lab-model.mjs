@@ -1758,7 +1758,8 @@ export function ipadCards(live, catalog) {
  * the B1 note when a new painted design can't be published here (commissioned slots, no repaint on this box yet). */
 export function repaintNote(info) {
   if (!info || typeof info !== "object") return "";
-  const blocked = info.available === false && Array.isArray(info.commissioned) && info.commissioned.length > 0;
+  // B1's note (a design change over commissioned slots, no repaint here); never under B2's app lock, whose sentence says it
+  const blocked = info.available === false && Array.isArray(info.commissioned) && info.commissioned.length > 0 && strs(info.app).length === 0;
   return [str(info.sentence), blocked ? LIVE_COPY.repaintOff : ""].filter(Boolean).join(" ");
 }
 

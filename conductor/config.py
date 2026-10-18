@@ -201,9 +201,14 @@ class MotionSettings(_Strict):
 class LabSettings(_Strict):
     """The Design Lab's try-on (D66 Slice B, docs/design-lab/PLAN.md §6): a draft shown at module level on the real
     lights for at most `trial_max_s` (None = `kiosk.idle_return_s`). Validated to be at most `kiosk.idle_return_s`,
-    so the idle hold never swaps the look under a try-on; `trial_bound_s` is the bound in force."""
+    so the idle hold never swaps the look under a try-on; `trial_bound_s` is the bound in force. A publish's operator
+    slot repaint (D68): at most once per `repaint_min_interval_s` per scene."""
 
     trial_max_s: float | None = Field(None, gt=0, le=600)
+    # The operator repaint (D68, PR B2): a publish of a new painted design repaints that scene's slot at most this
+    # often (a sooner publish installs at once and queues the repaint; a revert is never blocked). The reconciler's
+    # own drift/stale rewrite stays at reconciler.slot_rewrite_min_interval_s.
+    repaint_min_interval_s: float = Field(120, ge=60, le=600)
 
 
 class ConductorSettings(_Strict):

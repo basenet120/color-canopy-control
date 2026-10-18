@@ -200,10 +200,12 @@ def guest_level(level: int) -> int:
 # ---- the canopy engine ------------------------------------------------------------------------------------------
 # why guests wait on the canopy, from the engine's own flags: "try-on" (a Design Lab try-on, D66) or "testing" (the
 # stepped rehearsal); the iPad drops a waiting toast once it clears
-_WAITING_MESSAGES = {K.TRYING_ON: "try-on", K.TESTING: "testing"}
+_WAITING_MESSAGES = {K.TRYING_ON: "try-on", K.TESTING: "testing", K.CHANGING: "changing"}
 
 
 def _waiting(engine: Any) -> str | None:
+    if K._flag(engine, "repaint_quiet") is True:  # a publish's slot repaint (D68 PR B2): a few seconds
+        return "changing"
     if K._flag(engine, "trial_active") is True:
         return "try-on"
     if K._flag(engine, "rehearsal_active") is True:

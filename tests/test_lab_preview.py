@@ -533,21 +533,19 @@ def test_the_app_lock_refuses_design_edits_where_a_slot_is_hand_painted(tmp_path
         }
 
 
-def test_commissioned_api_slots_warn_in_the_preview_but_never_refuse_it(tmp_path):
-    """B1: where the slot is commissioned (api), a painted design change is refused at publish (repainting from the
-    Lab is PR B2) — the preview and the save only warn."""
+def test_commissioned_api_slots_publish_and_never_warn_in_the_preview(tmp_path):
+    """B2 (D68): where the slot is commissioned (api), a painted design change publishes — the operator repaint
+    rewrites the slots on the modules with their own Gate C and map — so the preview no longer warns. Without Gate C
+    no module is eligible: the count sentence (a) says so."""
     lab = make_lab(tmp_path, simulated=False, registry=_commissioned())
     lock = P.t1_lock(lab, "golden-hour")
     assert lock["locked"] is False and lock["sentence"] is None and lock["positions"] == list(D.GRID)
     info = lock["repaint"]
-    assert info["commissioned"] == list(D.GRID) and info["total"] == 9 and info["available"] is False
+    assert info["commissioned"] == list(D.GRID) and info["total"] == 9 and info["available"] is True
     assert info["eligible"] == 0  # no module has its own Gate C here (no t1_frames proven)
-    assert info["sentence"].startswith("Golden Hour's painted design is in custom-3 on 9 modules; repainting")
+    assert info["sentence"] == "No slot repaint: no module has custom-3 commissioned on this show box."
     answer = P.preview(lab, edit("golden-hour", **{"palette.2.hex": NEW_PINK}))
-    [warning] = [w for w in answer["warnings"] if w["rule"] == "repaint"]
-    assert warning["field"] == "palette" and "isn't on this box yet" in warning["message"]
-    renamed = P.preview(lab, edit("golden-hour", **{"palette.1.name": "Apricot"}))
-    assert not [w for w in renamed["warnings"] if w["rule"] == "repaint"]  # no frame change: no repaint
+    assert not [w for w in answer["warnings"] if w["rule"] == "repaint"]
 
 
 def test_the_slot_records_read_the_engines_view_when_it_runs(tmp_path):
