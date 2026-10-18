@@ -413,7 +413,7 @@ def test_every_accounts_page_url_forbids_framing_and_caching(app_client, path):
     assert r.headers["x-frame-options"] == "DENY" and r.headers["cache-control"] == "no-store", path
 
 
-# ---- a client that goes away mid-request (VWBD workshop, Sep 27 2026) ------------------------------------------
+# ---- a client that goes away mid-request (VWBD's shop, Sep 27 2026) ------------------------------------------
 def _post_and_vanish(client, path: str, content_type: str = "application/json") -> tuple[list[dict], list]:
     """POST `path` straight into the ASGI app with a client that disconnects before sending its body (what
     uvicorn does when the browser tab closes mid-request). Returns (ASGI messages sent back, errors raised)."""

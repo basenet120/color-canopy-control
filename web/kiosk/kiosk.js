@@ -4,7 +4,7 @@
 // brightness|power. A 200 on a write means "accepted"; the page shows the server's state (phase "changing" until the
 // lights read back) and reconciles its optimistic switch and slider to it.
 // Now showing draws the canopy's 270 lights from `state.lit` (canopy-preview.mjs; what each panel may truthfully
-// claim), and the 30-light serpentine only when there is no such picture (the workshop strands, or no look yet).
+// claim), and the 30-light serpentine only when there is no such picture (no look yet).
 // Honesty (CLAUDE.md, 07 §6): the feature sentence is always `state.feature` from the server and the subtitle prefers
 // `state.message`; this page only adds the spec's calm fallbacks (panel-model.mjs COPY). A refusal shows the server's
 // calm `detail`, never an HTTP code; anything else reads "Hang on, we're reconnecting."

@@ -2,7 +2,7 @@
 
 - Only refresh tokens are stored, and only here: `<CONDUCTOR_DATA_DIR>/tokens/<account-key>.token`, mode 0600.
 - Encrypted with Fernet using `CONDUCTOR_SECRET_KEY`. The ciphertext is bound to the runtime's environment name
-  and the account, so a staging token file won't load on the venue box.
+  and the account, so a staging token file won't load on the show box.
 - Every rotation is persisted atomically (temp file, fsync, `os.replace`), keeping the previous generation
   as `<account-key>.token.prev`.
 - A missing or invalid key disables the store (and with it live features) — it never crashes startup.

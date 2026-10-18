@@ -4,7 +4,8 @@ Two groups:
 - **Design, against a stubbed panel API** (always runs): /api/kiosk/panel and the scene/brightness/power writes are
   answered in the browser by a small stub (Playwright routing; nothing in the app changes), so the page's states can
   be driven and photographed: ready, changing, cooldown, a refusal, power off, paused, resting, a lost connection and
-  the solid-colour fallback. The workshop stub draws the 30-light serpentine; the canopy stub (`canopy=True`) serves
+  the solid-colour fallback. The plain stub (`canopy: null`, as before the first look) draws the 30-light
+  serpentine; the canopy stub (`canopy=True`) serves
   the real canopy geometry and a `state.lit`, and the page draws its 270 lights (full and partial canopy, a tap's
   pulse, power off, a turned view). Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes.
 - **Against the real engine** (skips until GET /api/kiosk/panel serves a non-resting canopy): tap a scene, the state
@@ -130,8 +131,8 @@ class StubPanel:
 
     def panel(self) -> dict:
         return {
-            "target": "canopy" if self.canopy else "workshop",
-            "target_label": "The Color Canopy" if self.canopy else "Two shop strands (60 lights)",
+            "target": "canopy",  # the only target (D67); the serpentine case is `canopy: null`
+            "target_label": "The Color Canopy",
             "simulated": True,
             "viewer": "ops",
             "scenes": self.scenes,
@@ -498,7 +499,7 @@ def test_debug_drawer_is_for_ops_only(design_context_factory, screenshots):
     _ready(page)
     page.tap(".dbg-btn")
     page.wait_for_selector(".dbg")
-    assert "workshop" in page.inner_text(".dbg")
+    assert "canopy" in page.inner_text(".dbg")
     page.screenshot(path=str(screenshots / "kiosk-debug.png"))
 
     stub_kiosk = StubPanel()

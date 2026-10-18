@@ -2,15 +2,14 @@
 
 Stepped looks (D65) send each canopy module its next colour every few seconds through the Hubspace cloud. They
 stay **off on real lights** (`motion.stepped.live_enabled: false`) until this rehearsal has measured, from the venue
-IP, that Hubspace takes that write rate without throttling us or the vignettes. The rehearsal is one bounded stepped
+IP, that Hubspace takes that write rate without throttling us. The rehearsal is one bounded stepped
 run that only someone at `/ops` can start. The code is `conductor/rehearsal.py`, `CanopyEngine.rehearse`, and
 `POST /api/canopy/stepped-rehearsal`.
 
 **Who:** Alon, or the on-duty tech with Alon on the phone, plus one observer standing under the lights.
 **When:** never during tours or the event, and never with guests at the kiosk.
 1. On the two VWBD test kits (Modules 1–2), from the Mac show box, on the bench account, as soon as convenient.
-2. On the nine show kits, on the canopy account, during install week (Oct 20–22) before tours start, with the four
-   vignette accounts connected.
+2. On the nine show kits, on the canopy account, during install week (Oct 20–22) before tours start.
 
 **How long:** 10 minutes of running, plus 5 minutes to set up and read the report.
 
@@ -27,7 +26,6 @@ presses **Rehearse** in the confirm dialog on `/ops`.
       It keeps the kiosk out by itself while it runs: guests see "Staff are testing the canopy's lights. Try again in
       a few minutes."
 - [ ] No module is held on `/ops/module` or a bench job. A held module is left alone, so it isn't measured.
-- [ ] The vignette tablets are idle, but their accounts stay connected so we can see if they suffer.
 - [ ] The observer is under the canopy with a phone ready to film.
 
 ## Run it
@@ -77,8 +75,8 @@ Write these down in the session log (`docs/current-live-test-session.md` or the 
 
 When it ends, `/ops` shows "Last rehearsal: … — pass/fail · report rehearsal-….json" under the controls, and the log
 gets a "Stepped rehearsal: …" line. A fail also appears under Needs attention until someone acknowledges it. The full report is on the box at
-`<CONDUCTOR_DATA_DIR>/bench/rehearsals/rehearsal-<UTC time>-<look>.json`. On the venue box that is the `/data`
-volume. A copy of the counts is in the telemetry as a `rehearsal` event.
+`<CONDUCTOR_DATA_DIR>/bench/rehearsals/rehearsal-<UTC time>-<look>.json`. On the show box that is
+`~/Library/Application Support/ColorCanopy/data`. A copy of the counts is in the telemetry as a `rehearsal` event.
 
 **Pass criteria (all must hold):**
 
@@ -89,7 +87,6 @@ volume. A copy of the counts is in the telemetry as a `rehearsal` event.
 | Throttled attempts (429 + 403) under 5% of the rehearsal's attempts | `throttled_share` |
 | No 403 on any account | `forbidden_403`, criterion `no_403` |
 | At most 90 writes on the rehearsal's account in any 60 s, by send time (steps, retries, re-sends, everything) | `max_writes_60s` against `cap_writes_per_min`, criterion `max_writes_60s` |
-| Vignette accounts clean: no 429/403, failed commands, sign-in problems or warn/error alerts | `vignette` |
 
 Also look at these. They don't decide pass or fail on their own:
 - `max_writes_60s` (also a pass criterion above): note the number for Alon. The runner plans its steps at 72 a
@@ -111,6 +108,6 @@ A report with `"simulated": true` (made on a laptop or staging) **never counts f
   `motion.stepped.live_enabled: true`, in a PR (D65 put the stepped rungs of Coastal Tides and Golden Hour in
   `config/modes.yaml`; that setting is all that keeps them off the real lights). Nobody else flips it, whatever the report says.
 - **Fail:** stepped motion stays off. Nothing else changes for the show. Send Alon the report. If the failure was a 403,
-  check `/ops/accounts` and every vignette before anything else. Don't run it again the same day without Alon.
+  check `/ops/accounts` before anything else. Don't run it again the same day without Alon.
 - In both cases the canopy is back on the look's still design at its usual tier (T3 on hardware before Gate C).
   It returns to Lowcountry Calm after the usual idle time.

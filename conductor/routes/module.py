@@ -23,7 +23,6 @@ command result (timings, HTTP result, readback) plus the updated state, and says
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -33,11 +32,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from conductor.module import ModuleError, ModuleManager, ModuleSession, scene_gradient
-from conductor.module.pair import PAIR_IDS, apply_pair
+from conductor.module import ModuleError, ModuleManager, ModuleSession
 from conductor.roles_api import Principal, Role
 from conductor.routes.accounts import same_origin
-from conductor.routes.deps import principal_of, require_device_access, require_ops, services_of
+from conductor.routes.deps import principal_of, require_device_access, services_of
 
 
 def _no_cross_site(request: Request) -> None:
@@ -88,91 +86,6 @@ class WholeBody(LeaseBody):
     look: dict[str, Any] | None = None
     power: bool | None = None
     brightness: int | None = None
-
-
-class PairBody(_Body):
-    leases: dict[str, str] = Field(min_length=2, max_length=2)
-    look: dict[str, Any] | None = None
-    power: bool | None = None
-    brightness: int | None = None
-    restart: bool = False
-
-
-@router.post("/api/studio/pair/whole")
-async def paired_whole(
-    request: Request, body: PairBody, _who: Annotated[Principal, Depends(require_ops)]
-) -> JSONResponse:
-    if set(body.leases) != set(PAIR_IDS):
-        raise HTTPException(400, "Only the two registered shop modules may be paired.")
-    sessions = [_session(request, key, body.leases[key]) for key in PAIR_IDS]
-    services = services_of(request)
-    lock = services.extras.setdefault("studio_pair_lock", asyncio.Lock())
-    if lock.locked():
-        raise HTTPException(409, "A paired command is already running. Wait for both readbacks.")
-
-    async def perform():
-        async with lock:
-            return await apply_pair(
-                sessions,
-                {"look": body.look, "power": body.power, "brightness": body.brightness},
-                restart=body.restart,
-            )
-
-    task = asyncio.create_task(perform())
-    pending = services.extras.setdefault("studio_pair_tasks", set())
-    pending.add(task)
-    task.add_done_callback(pending.discard)
-    try:
-        result = await asyncio.shield(task)
-    except ModuleError as e:
-        log.warning("studio: paired whole-module command refused (HTTP %s): %s", e.status, e.message)
-        raise _fail(e) from None
-    return JSONResponse(result, headers=NO_STORE)
-
-
-class GradientBody(_Body):
-    leases: dict[str, str] = Field(min_length=2, max_length=2)
-    action: Literal["apply", "restore"] = "apply"
-    colors: list[list[int]] = Field(default_factory=list, max_length=30)
-    brightness: int = Field(40, ge=1, le=100)
-    label: str = Field("Scene gradient", max_length=80)
-
-
-@router.get("/api/studio/pair/gradient")
-async def gradient_status(request: Request, _who: Annotated[Principal, Depends(require_ops)]) -> JSONResponse:
-    return JSONResponse(scene_gradient.status(services_of(request).data), headers=NO_STORE)
-
-
-@router.post("/api/studio/pair/gradient")
-async def paired_gradient(
-    request: Request, body: GradientBody, _who: Annotated[Principal, Depends(require_ops)]
-) -> JSONResponse:
-    if set(body.leases) != set(PAIR_IDS):
-        raise HTTPException(400, "Use the two registered shop modules.")
-    sessions = [_session(request, key, body.leases[key]) for key in PAIR_IDS]
-    services = services_of(request)
-    lock = services.extras.setdefault("studio_pair_lock", asyncio.Lock())
-    if lock.locked():
-        raise HTTPException(409, "A paired command is already running. Wait for both readbacks.")
-
-    async def perform():
-        async with lock:
-            if body.action == "restore":
-                return await scene_gradient.restore(sessions, services.data)
-            return await scene_gradient.apply(
-                sessions, body.colors, body.brightness, body.label, services.data
-            )
-
-    task = asyncio.create_task(perform())
-    pending = services.extras.setdefault("studio_pair_tasks", set())
-    pending.add(task)
-    task.add_done_callback(pending.discard)
-    try:
-        result = await asyncio.shield(task)
-    except ModuleError as e:
-        log.warning("studio: paired gradient %s refused (HTTP %s): %s", body.action, e.status, e.message)
-        raise _fail(e) from None
-    return JSONResponse(result, headers=NO_STORE)
 
 
 class CardBody(LeaseBody):
@@ -303,7 +216,7 @@ async def device_state(request: Request, device_id: str, _who: Access, refresh: 
     if session is None:
         try:
             return JSONResponse({"ok": True, "state": manager.closed_view(device_id)}, headers=NO_STORE)
-        except ModuleError as e:  # unknown id (404), or a vignette device: its room page, not this one (409)
+        except ModuleError as e:  # unknown id (404)
             raise _fail(e) from None
         except KeyError:
             raise HTTPException(status_code=404, detail=f"There's no device called {device_id}.") from None

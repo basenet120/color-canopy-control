@@ -16,7 +16,7 @@ NEW STUFF FROM PARIS/
 secrets/
 *.token.json
 
-# Release images (scripts/release.sh): tarballs never enter git
+# Build output (e.g. uv build): never enters git
 dist/
 
 # Local runtime data (the default CONDUCTOR_DATA_DIR) and bench output

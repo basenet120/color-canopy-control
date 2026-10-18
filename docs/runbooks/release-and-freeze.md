@@ -1,88 +1,82 @@
-# Releases, the Oct 12 freeze, hotfixes and rollback
+# Releases, the freeze, hotfixes and rollback (the Mac show box)
 
-**Who:** Alon cuts releases (laptop) and installs them on the box; the second on-duty tech can roll back.
-**When:** freeze **Mon Oct 12**; after that only hotfixes. **How long:** a release 5–10 min; install on the box
-5–15 min; a rollback about 1 min.
+**Who:** Alon cuts releases and installs them on the show box; the second on-duty tech can roll back.
+**When:** freeze before the tours (Oct 23); after that only hotfixes. **How long:** a release 2 min; an install on
+the box 5 min; a rollback about 2 min.
 
-A **release** is three things that name each other:
-1. a git tag `vYYYY.MM.DD-N` on a commit of `main` that CI passed (N counts releases that day: `-1`, `-2`, …);
-2. the image `canopy-conductor:<tag>`, built from exactly the tag's committed files, labelled with the commit;
-3. its saved copy `dist/canopy-conductor-<tag>.tar.gz` plus `.sha256` (on the box: `/opt/canopy/images/`).
-
-The box runs the tag named by `CONDUCTOR_TAG` in `/etc/canopy/box.env`. Nothing is ever pulled from a registry.
+A **release** is a git tag `vYYYY.MM.DD-N` on a commit of `main` that CI passed (N counts releases that day: `-1`,
+`-2`, …). The show box runs a dedicated checkout, `~/canopy-show`, switched to that tag (D61,
+`mac-show-box.md` §5). There is no image to build or copy: `canopy-mac install` syncs the tag's pinned Python
+environment (`uv sync --frozen`) and restarts the Conductor under launchd.
 
 ---
 
-## Cut a release (Alon, laptop, 5–10 min)
+## Cut a release (Alon, laptop, 2 min)
 
-- [ ] All the PRs for it are merged and CI is green on `main`.
+- [ ] All the PRs for it are merged (merge commits) and CI is green on `main`.
 - [ ] `git checkout main && git pull`
-- [ ] `scripts/release.sh --dry-run` — shows the tag it will make.
-- [ ] `scripts/release.sh` — tags, builds for **linux/amd64** (the box's CPU, even on an Apple-silicon laptop:
-      Docker Desktop emulates it), writes `dist/canopy-conductor-<tag>.tar.gz` + `.sha256`, and prints the commit,
-      image id and checksum. **It never pushes.** If the build fails, or the image isn't linux/amd64, it removes
-      the tag again.
-- [ ] `git push origin <tag>` so the box (and CI) can see it.
+- [ ] `git tag -a vYYYY.MM.DD-N -m "<what's in it>"` on that commit, then `git push origin vYYYY.MM.DD-N`.
 
-## The Oct 12 freeze (Alon, 30 min)
+## The freeze (Alon, 15 min)
 
-- [ ] Cut the release as above (e.g. `v2026.10.12-1`).
-- [ ] Install it on the box (below). Keep the tarball + `.sha256` on the USB stick with the backups too.
-- [ ] Install the same release on the **cold spare**, held: `sudo deploy/venue/install.sh --spare --image-tar …`
-      (`venue-box.md` → The cold spare), off the show network.
-- [ ] Record in `docs/STATUS.md`: tag, commit, image id, sha256. That's the frozen show build.
-- [ ] Freeze the box itself (`venue-box.md` step 5) and the staff phones' Hubspace app version.
+- [ ] Cut the release as above.
+- [ ] Install it on the box (below).
+- [ ] Set up the **cold spare** at the same tag, held (`mac-show-box.md` §6), off the show network.
+- [ ] Record in `docs/STATUS.md`: the tag and its commit. That's the frozen show build.
+- [ ] Freeze the box itself (no macOS or Homebrew updates, `mac-show-box.md` §1) and the staff phones' Hubspace app
+      version.
 - From now on the box only changes through a hotfix below. Railway staging keeps following `main`; that's fine,
   staging never holds show accounts.
 
-## Install a release on the box (Alon, 5–15 min)
+## Install a release on the box (Alon, 5 min)
 
-Do it outside public hours. Pause guest input on `/ops` first (the kiosk rests).
+Do it outside public hours. Pause guest input on `/ops` first (the iPad rests). The paste block, on the Mac:
 
-- [ ] `sudo canopy-backup` (a restore point).
-- [ ] **Either** build on the box from the tag:
-      ```
-      cd ~/color-canopy-control && git fetch --tags && git checkout <tag>
-      sudo deploy/venue/install.sh
-      ```
-      **or** copy `dist/canopy-conductor-<tag>.tar.gz` and its `.sha256` to the box (scp over Tailscale, or USB) and
-      load it instead of building (still from a checkout of the same tag, which supplies the helpers and units):
-      ```
-      sudo deploy/venue/install.sh --image-tar ~/canopy-conductor-<tag>.tar.gz
-      ```
-- [ ] The installer checks the tarball's checksum, that the image was built from that tag's commit and that it
-      runs on this box's CPU, keeps a copy under `/opt/canopy/images/`, and only then switches `CONDUCTOR_TAG`
-      (remembering the release it replaces as `CONDUCTOR_PREVIOUS_TAG`) and restarts the Conductor (about 30 s;
-      the canopy goes to Lowcountry Calm). If it stops before that, the box stays on the release it was running.
-- [ ] `sudo canopy-status` → the right tag, healthy; `/ops` → run the 7 am checklist and a test mode change.
+```
+canopy-mac backup                                        # a restore point (copy it off the box too)
+git -C ~/canopy-show status --short                      # must print nothing
+git -C ~/canopy-show rev-parse HEAD | tee ~/canopy-prev-sha.txt
+git -C ~/canopy-show fetch --tags origin
+git -C ~/canopy-show checkout --detach <tag>
+~/canopy-show/deploy/mac/canopy-mac install; rc=$?    # uv sync, then --check runs conductor.preflight, then restarts
+if [ $rc = 3 ]; then  # the preflight rejected this checkout: nothing restarted, but any restart would start it
+  prev=$(cat ~/Library/"Application Support"/ColorCanopy/state/installed_sha 2>/dev/null || cat ~/canopy-prev-sha.txt)
+  git -C ~/canopy-show checkout --detach "$prev" && (cd ~/canopy-show && uv sync --frozen --no-dev --extra live --quiet)
+fi                    # roll the checkout back at once (install printed the same line), then fix
+canopy-mac status; git -C ~/canopy-show describe --tags --always
+```
+
+- [ ] `canopy-mac install` re-syncs the Python environment, runs `run-conductor.sh --check` — which runs
+      `python -m conductor.preflight`: this checkout's code loads the live data folder (settings, the registry
+      overlay, the saved iPad session) offline, read-only — and only then removes any hold and restarts the
+      Conductor (about 30 s; the canopy goes to Lowcountry Calm). If the preflight fails, install exits 3 and
+      nothing was restarted — **but the checkout is now the rejected code**: the running Conductor is a KeepAlive
+      job, so a crash, the watchdog, a reboot or `canopy-mac start`/`restart` would start it. The paste block's
+      `rc = 3` lines roll the checkout back at once (no restart needed; install prints the same line, naming the
+      last installed commit). Roll back first, then read the preflight's message and fix. Any other non-zero exit
+      came after the restart (or before the preflight, e.g. `uv sync`): read `canopy-mac status` and use Rollback.
+- [ ] `canopy-mac status` → healthy; `git describe` names the tag (`/api/version` says `commit: local` on the Mac);
+      `/ops` → run the 7 am checklist and a test mode change.
 - [ ] Resume guest input.
 
 ## Hotfix path (during install week or the show)
 
 1. **PR** with the fix → **CI** green (ruff, pytest, gitleaks, the Docker build and container smoke test) → Alon
    merges.
-2. **Tag:** `scripts/release.sh` on `main` (or `scripts/release.sh --from <hotfix branch>` when `main` holds changes
-   that shouldn't go to the show yet — the branch must have passed CI too).
-3. **Manual pull on the box:** install it as above. Never during public hours unless it fixes something guests
+2. **Tag** the merge commit as above.
+3. **Install on the box** with the paste block above. Never during public hours unless it fixes something guests
    can see; if so, pause guest input first and say so to the floor.
-4. **The cold spare too:** copy the same tarball to the cold spare and install it there held
-   (`sudo deploy/venue/install.sh --spare --image-tar …`, off the show network), the same day.
+4. **The cold spare too:** switch its checkout to the same tag and `canopy-mac install` it, then
+   `canopy-mac stop --yes` so it stays held, the same day.
 
-## Rollback (anyone with the box password, about 1 min)
+## Rollback (anyone with the Mac's login, about 2 min)
 
-Every release that has run on the box is still there, and `box.env` remembers the one the current release
-replaced (`CONDUCTOR_PREVIOUS_TAG`: the installer and `canopy-restart --tag` both record it).
-
-- [ ] `sudo canopy-status` — shows the current release, the previous one, and every release on the box
-      (also `sudo docker images canopy-conductor`). If the previous one is itself a release you know is bad, pick
-      an older one from that list.
-- [ ] `sudo canopy-restart --tag <previous tag>` — switches `CONDUCTOR_TAG`, restarts, waits for the Conductor.
-- [ ] If the image isn't on the box any more: `sudo docker load -i /opt/canopy/images/canopy-conductor-<tag>.tar.gz`
-      (or the copy on the USB stick), then the command above.
-- [ ] If the older release refuses the data (the Conductor doesn't come up; `sudo canopy-logs service` or
-      `sudo canopy-logs service --since 1h` shows a config error about the overlay), restore the backup taken before the
-      upgrade: `sudo canopy-restore /var/backups/canopy/<file from before>.tar.gz`.
-- `--tag` switches only the Conductor. The helpers and units stay from the newer install; if they must go back
-  too, check out the older tag and run `sudo deploy/venue/install.sh` again (it doesn't rebuild an image that
-  exists).
+- [ ] Switch back to the commit recorded before the install, and install it:
+      ```
+      git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)" && ~/canopy-show/deploy/mac/canopy-mac install
+      ```
+      (or `git -C ~/canopy-show checkout --detach <previous tag>` when you know the tag).
+- [ ] If the older release refuses the data (its preflight fails, or the Conductor doesn't come up: `canopy-mac
+      logs` shows a config error about the overlay), restore the backup taken before the upgrade:
+      `canopy-mac restore <file from before> --yes`.
 - Tell Alon, and write what happened in `docs/STATUS.md`.

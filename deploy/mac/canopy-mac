@@ -210,7 +210,7 @@ cmd_install() {
 		*) die "install doesn't take $1 (see --help)" ;;
 		esac
 	done
-	[ "$(uname -s)" = Darwin ] || [ $no_load -eq 1 ] || die "This is the Mac show box; use deploy/venue/ on Linux."
+	[ "$(uname -s)" = Darwin ] || [ $no_load -eq 1 ] || die "This is the Mac show box's helper; it runs only on macOS."
 	case $ROOT in
 	"$HOME/Desktop"* | "$HOME/Documents"* | "$HOME/Downloads"*)
 		die "macOS keeps LaunchAgents out of Desktop, Documents and Downloads. Clone the repo somewhere else (e.g. ~/canopy-show)."
@@ -223,7 +223,16 @@ cmd_install() {
 		(cd "$ROOT" && uv sync --frozen --no-dev --extra live --quiet)
 		"$ROOT/.venv/bin/python" -c 'import aioafero' || die "aioafero didn't install."
 	fi
-	"$RUNNER" --check >/dev/null
+	if ! "$RUNNER" --check >/dev/null; then
+		# Nothing was restarted, but the checkout is now the rejected code and the running Conductor is a KeepAlive
+		# job: a crash, the watchdog, a reboot or canopy-mac start/restart would start this code. Exit 3 (only here)
+		# so the paste block can roll the checkout back at once.
+		local prev
+		prev=$(cat "$STATE_DIR/installed_sha" 2>/dev/null || cat "$HOME/canopy-prev-sha.txt" 2>/dev/null || true)
+		prev=${prev//[[:space:]]/}
+		warn "$ROOT is now $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo 'a new checkout'), which can't load the data (see above). The running Conductor is still the previous code, but a crash, the watchdog, a reboot or canopy-mac start/restart would start this one. Roll back now (no restart needed): git -C $ROOT checkout --detach ${prev:-<the previous release>} && (cd $ROOT && uv sync --frozen --no-dev --extra live --quiet)"
+		exit 3
+	fi
 	write_agents
 	if [ $no_load -eq 1 ]; then
 		say "Wrote the LaunchAgents to $AGENTS_DIR (not loaded)."
@@ -231,6 +240,8 @@ cmd_install() {
 	fi
 	rm -f "$HOLD"
 	load_agent "$LABEL"
+	# The code launchd now runs: the rollback target a later install prints if its preflight fails.
+	git -C "$ROOT" rev-parse HEAD >"$STATE_DIR/installed_sha" 2>/dev/null || rm -f "$STATE_DIR/installed_sha"
 	load_agent "$WATCHDOG_LABEL"
 	load_agent "$BACKUP_LABEL"
 	wait_healthy

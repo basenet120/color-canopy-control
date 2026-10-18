@@ -1,4 +1,4 @@
-.PHONY: setup test lint run guest-dev lab-dev lab-roundtrip scene-pins e2e soak docker-smoke
+.PHONY: setup test lint run lab-dev lab-roundtrip scene-pins e2e soak docker-smoke
 
 setup:
 	uv sync --frozen --all-extras
@@ -11,11 +11,6 @@ lint:
 
 run:
 	uv run uvicorn conductor.app:app --reload --port 8000
-
-# The guest panel on the simulator, no hardware: both shop modules mapped, CONDUCTOR_ENV=workshop-sim, auth off, a
-# throwaway data dir. Open http://127.0.0.1:8100/kiosk/?debug=1 (scripts/dev_guest_panel.py).
-guest-dev:
-	uv run python scripts/dev_guest_panel.py
 
 # The Design Lab on the simulator: the Studio's Lab panel at http://127.0.0.1:8200/ops/showcase/#lab, auth off
 # (this machine only), a throwaway data dir, every HUBSPACE_* and secret variable stripped. Never port 8000: that is

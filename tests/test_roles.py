@@ -12,7 +12,6 @@ from conductor.roles_api import ENROLLMENT_TTL_S, OPS, Principal, Role
 
 TESTER = Principal(Role.TESTER, "VWBD shop phone", frozenset({"bench-kit"}))
 KIOSK = Principal(Role.KIOSK, "canopy kiosk")
-VIGNETTE = Principal(Role.VIGNETTE, "kitchen iPad", frozenset({"kitchen"}))
 # The Design Lab (D66): its API and the Studio page it lives in are ops only, for every method.
 LAB_PATHS = [
     ("GET", "/api/lab/catalog"),
@@ -74,7 +73,7 @@ def test_sessions_survive_a_restart_and_only_hashes_are_stored(tmp_path):
     clock = VirtualClock()
     store = RoleStore(tmp_path, clock)
     token, _ = store.create_enrollment("tester", "VWBD shop phone", ["bench-kit"])
-    pending, _ = store.create_enrollment("vignette", "kitchen iPad", ["kitchen"])
+    pending, _ = store.create_enrollment("kiosk", "guest iPad")
     session_id, principal = store.redeem_enrollment(token)
 
     again = RoleStore(tmp_path, clock)
@@ -143,7 +142,7 @@ def test_in_memory_store_writes_nothing(tmp_path, monkeypatch):
         ("ops", [], "ops password"),
         ("admin", [], "isn't a role"),
         ("tester", [], "at least one device"),
-        ("vignette", [], "at least one vignette"),
+        ("vignette", ["living"], "Use kiosk or tester"),  # the role is gone (D67)
         ("kiosk", ["bench-kit"], "doesn't take grants"),
         ("tester", ["../accounts"], "don't look like"),
         ("tester", "bench-kit", "must be a list"),
@@ -160,6 +159,50 @@ def test_a_corrupt_file_is_set_aside_not_fatal(tmp_path):
     store = RoleStore(tmp_path, VirtualClock())
     assert "set aside" in store.problem
     assert store.list_sessions() == []
+    assert (tmp_path / "roles" / "sessions.json.corrupt").exists()
+
+
+def _record(role: str, digest: str, now: float = 0.0) -> dict:
+    return {
+        "digest": digest,
+        "role": role,
+        "name": f"a {role}",
+        "grants": [],
+        "created_at": now,
+        "expires_at": now + 3600,
+    }
+
+
+def test_a_saved_record_of_the_removed_vignette_role_is_skipped_and_the_kiosk_session_survives(tmp_path):
+    """D67: old data, not corruption. The kiosk record loads, nothing is set aside, the next save drops the other."""
+    clock = VirtualClock()
+    store = RoleStore(tmp_path, clock)
+    session_id, kiosk = store.redeem_enrollment(store.create_enrollment("kiosk", "guest iPad")[0])
+    path = tmp_path / "roles" / "sessions.json"
+    raw = json.loads(path.read_text())
+    raw["records"].append({**_record("vignette", "ab" * 32, clock.now()), "grants": ["living"]})
+    path.write_text(json.dumps(raw))
+
+    again = RoleStore(tmp_path, clock)
+    assert again.principal(session_id) == kiosk
+    assert again.problem == ""
+    assert not (tmp_path / "roles" / "sessions.json.corrupt").exists()
+    assert again.skipped == [("sessions.json", "vignette", "ab" * 6)]
+    assert [s["role"] for s in again.list_sessions()] == ["kiosk"]
+    again.redeem_enrollment(
+        again.create_enrollment("tester", "crew phone", ["bench-kit"])[0]
+    )  # saves the file
+    assert "vignette" not in path.read_text()
+
+
+def test_an_unreadable_record_of_a_role_that_exists_still_sets_the_file_aside(tmp_path):
+    """The skip is only for a role that no longer exists: a kiosk record with a bad digest is a corrupt file."""
+    (tmp_path / "roles").mkdir()
+    records = [_record("kiosk", "cd" * 32), _record("kiosk", "zz")]
+    (tmp_path / "roles" / "sessions.json").write_text(json.dumps({"v": 1, "records": records}))
+    store = RoleStore(tmp_path, VirtualClock())
+    assert "set aside" in store.problem
+    assert store.skipped == []
     assert (tmp_path / "roles" / "sessions.json.corrupt").exists()
 
 
@@ -212,6 +255,8 @@ def test_tester_reaches_its_module_page(method, path):
         ("GET", "/ops/module/.."),
         ("GET", "/ops/module\\..\\accounts"),
         ("GET", "/visualizer/"),
+        ("GET", "/vignette/living/"),  # the vignette pages are gone (D67): 401 for every cookie role
+        ("POST", "/api/vignette/living/action"),
         ("GET", "/api/canopy/design"),  # the Studio's scene designs: ops only (P12)
         *LAB_PATHS,  # the Design Lab: ops only (D66)
         ("GET", "/ops/module/../../api/lab/state"),
@@ -246,6 +291,8 @@ def test_kiosk_paths():
         ("GET", "/kiosk/../ops/accounts"),
         ("GET", "/kiosks"),
         ("GET", "/vignette/kitchen/"),
+        ("GET", "/vignette/living/"),
+        ("POST", "/api/vignette/living/action"),
         ("GET", "/api/canopy/design"),
         *LAB_PATHS,
         ("GET", "/kiosk/../api/lab/state"),
@@ -254,25 +301,10 @@ def test_kiosk_paths():
         assert not path_allowed(KIOSK, method, path), path
 
 
-def test_vignette_paths():
-    assert path_allowed(VIGNETTE, "GET", "/vignette/kitchen/")
-    assert path_allowed(VIGNETTE, "GET", "/vignette/kitchen/app.js")
-    assert path_allowed(VIGNETTE, "POST", "/api/vignette/kitchen/scene")
-    assert not path_allowed(VIGNETTE, "GET", "/vignette/porch/")
-    assert not path_allowed(VIGNETTE, "POST", "/api/vignette/porch/scene")
-    assert not path_allowed(VIGNETTE, "GET", "/kiosk/")
-    assert not path_allowed(VIGNETTE, "GET", "/ops/module")
-    assert not path_allowed(VIGNETTE, "GET", "/api/canopy/design")
-    for method, path in LAB_PATHS:
-        assert not path_allowed(VIGNETTE, method, path), path
-    assert not path_allowed(VIGNETTE, "POST", "/api/vignette/kitchen/../../lab/versions")
-
-
 def test_ops_reaches_everything_and_homes_are_per_role():
     assert path_allowed(OPS, "POST", "/api/accounts/login")
     assert home_path(KIOSK) == "/kiosk/"
     assert home_path(TESTER) == "/ops/module/"
-    assert home_path(Principal(Role.VIGNETTE, "x", frozenset({"porch", "kitchen"}))) == "/vignette/kitchen/"
 
 
 def test_normalize_path():

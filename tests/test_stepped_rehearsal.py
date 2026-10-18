@@ -52,13 +52,12 @@ REPORT_FIELDS = {
     "verification_s",
     "governor_trips",
     "outages",
-    "vignette",
     "alerts",
     "criteria",
     "verdict",
     "summary",
 }
-CRITERIA = ["completed", "failed_throttled", "throttled_share", "no_403", "max_writes_60s", "vignettes_clean"]
+CRITERIA = ["completed", "failed_throttled", "throttled_share", "no_403", "max_writes_60s"]
 QUIET_S = (
     70.0  # start-up (capability reads, simulator commissioning, the idle look) is over and out of the window
 )
@@ -108,7 +107,7 @@ async def show(*, live: bool = False, sim: SimSettings | None = None, monkeypatc
         {"CONDUCTOR_DATA_DIR": str(data)}, clock=VirtualClock(), config_dir=CONFIG_DIR, sim_settings=settings
     )
     services.telemetry.dir = None
-    if live:  # the venue box's tier rules (no Gate B/C flags) over the simulator's transport
+    if live:  # the show box's tier rules (no Gate B/C flags) over the simulator's transport
         monkeypatch.setattr(services.engine_driver, "simulated", False)
     await services.start()
     wiring = ShowWiring(services)
@@ -178,12 +177,7 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert report["cap_writes_per_min"] == 90
     assert set(report["max_writes_60s"]) == {"canopy"} and 72 <= report["max_writes_60s"]["canopy"] <= 81
     assert report["governor_trips"] == 0 and report["outages"] == 0
-    assert report["vignette"]["clean"] and report["vignette"]["accounts"] == [
-        "bedroom",
-        "entry",
-        "garden",
-        "living",
-    ]
+    assert "vignette" not in report  # the vignettes are outside this system (D67)
     assert name == f"{report['run_id']}.json" and report["run_id"].endswith("-golden-hour")
     # telemetry carries it too
     assert [e["action"] for e in events] == ["start", "end"]
@@ -285,7 +279,6 @@ def test_it_stops_at_the_first_403_and_fails():
         "throttled_share": True,
         "no_403": False,
         "max_writes_60s": True,
-        "vignettes_clean": True,
     }
     assert report["steps"]["reached"] < report["steps"]["planned"]
     assert len([a for a in alerts if "403 (forbidden)" in a["message"]]) == 1
@@ -300,7 +293,7 @@ def test_after_a_403_nothing_more_is_sent_and_ops_cant_rehearse_again_until_the_
     look on that account for governor_cooloff_s, then the still look — only where it differs."""
 
     async def main():
-        w = await show(live=True, monkeypatch=monkeypatch)  # the venue box's rules: T3 is the still look
+        w = await show(live=True, monkeypatch=monkeypatch)  # the show box's rules: T3 is the still look
         w.services.settings.motion.stepped.governor_cooloff_s = 90  # shorter than the idle return (180 s)
         await w.engine.rehearse("golden-hour", 5, source="ops")
         await w.run_for(20)  # steps 1 and 2 are out and verified
@@ -450,41 +443,6 @@ def test_guests_wait_the_idle_hold_waits_and_the_run_lasts_its_minutes():
     assert dim.refused and dim.message == REHEARSAL_MESSAGE
     assert held == ("golden-hour", "golden-hour", True)
     assert report["completed"] and report["steps"]["planned"] == 32 and report["run_s"] == 240.0
-
-
-def test_problems_on_a_vignette_account_fail_it():
-    async def main():
-        w = await show()
-        await w.engine.rehearse("golden-hour", 1, source="ops")
-        await w.run_for(10)
-        telemetry = w.services.telemetry
-        telemetry.record("attempt", device_id="sim-living-lamp-1", n=1, outcome="throttled", http_status=429)
-        telemetry.record("alert", level="error", account="bedroom", message="Bedroom account signed out.")
-        telemetry.record("token", account="entry", action="ensure_fresh", outcome="auth")
-        telemetry.record(
-            "alert", level="warn", device_id="sim-living-lamp-2", message="Wash left is offline."
-        )
-        telemetry.record("alert", level="info", account="living", message="Living room reconnected.")
-        telemetry.record("attempt", device_id="sim-canopy-r0c0", n=1, outcome="denied", http_status=None)
-        telemetry.record("command", device_id="sim-living-lamp-1", status="failed", timings={})
-        await w.run_for(55)
-        await w.ended()
-        out = w.report()
-        await w.close()
-        return out
-
-    report = run_virtual(main)
-    vignette = report["vignette"]
-    assert vignette["attempts"] == 1 and vignette["throttled_429"] == 1 and not vignette["clean"]
-    assert (
-        vignette["failed_commands"] == 1 and "failed" not in report["commands"]
-    )  # theirs, not the rehearsal's
-    assert vignette["alerts"] == ["Bedroom account signed out.", "Wash left is offline."]
-    assert vignette["token_problems"] == ["entry: auth"]
-    # the vignette's attempt isn't the rehearsal's; a denied one never left the process (not a PUT)
-    assert report["attempts"] == 9 * 9 + 1 and report["puts"] == 9 * 9  # the hold, 7 steps, the hold
-    assert report["completed"] and report["verdict"] == "fail"
-    assert [c["id"] for c in report["criteria"] if not c["ok"]] == ["vignettes_clean"]
 
 
 def test_stopping_the_engine_ends_it_and_still_writes_the_report():
@@ -713,15 +671,15 @@ def test_throttled_attempts_at_5_percent_fail_it_and_writes_count_by_send_time()
         await w.engine.rehearse("golden-hour", 2, source="ops")
         await w.run_for(5)
         t = w.services.telemetry
-        t.record("attempt", device_id="sim-living-lamp-1", n=1, outcome="ok", http_status=200, elapsed_s=0.0)
+        t.record("attempt", device_id="sim-bench-kit", n=1, outcome="ok", http_status=200, elapsed_s=0.0)
         w.engine.enter_outage("test")
         w.engine.exit_outage("test")
         await w.run_for(62)
         # 11 throttled among about 200 attempts (over 5 %), late, so the governor's 60 s window holds ~90 (≈ 11 %)
         for _ in range(11):
             t.record("attempt", device_id="sim-canopy-r1c1", n=2, outcome="throttled", http_status=429)
-        # answered 4 s after it was sent, 58 s after the first: both within one minute on the living account
-        t.record("attempt", device_id="sim-living-lamp-2", n=1, outcome="ok", http_status=200, elapsed_s=4.0)
+        # answered 4 s after it was sent, 58 s after the first: both within one minute on the bench account
+        t.record("attempt", device_id="sim-bench-kit", n=1, outcome="ok", http_status=200, elapsed_s=4.0)
         await w.run_for(60)
         await w.ended()
         out = w.report()
@@ -731,7 +689,7 @@ def test_throttled_attempts_at_5_percent_fail_it_and_writes_count_by_send_time()
     report = run_virtual(main)
     assert report["throttled_429"] == 11 and report["throttled_share"] >= 0.05
     assert [c["id"] for c in report["criteria"] if not c["ok"]] == ["throttled_share"]
-    assert report["max_writes_60s"]["living"] == 2 and report["outages"] == 1
+    assert report["max_writes_60s"]["bench"] == 2 and report["outages"] == 1
 
 
 def test_a_report_that_cant_be_saved_says_so():

@@ -515,27 +515,17 @@ function capsLine(d) {
   return d.capabilities_error ? `Profile not read: ${d.capabilities_error}` : "Profile not read yet";
 }
 
-const KIND_TEXT = {
-  bulb: "Colour bulb",
-  plug: "Smart plug",
-  lock: "Smart lock",
-  fan: "Ceiling fan",
-  string: "String lights",
-  path: "Path lights",
-};
-
 function profileLine(d) {
-  const kind = KIND_TEXT[d.kind] || d.kind || "Device";
+  const kind = d.model || "Device";
   if (d.capabilities) return `${kind} · profile read`;
   return `${kind} · ${d.capabilities_error ? `profile not read: ${d.capabilities_error}` : "profile not read yet"}`;
 }
 
-// One device. Strands (canopy modules, bench kit, spares) get the head count, the module page and the bench;
-// vignette devices get their room page (the module page and bench are for strands only).
+// One device. Strands (canopy modules, bench kit, spares: every registered device, D67) get the head count, the
+// module page and the bench.
 function deviceItem(d, strand) {
   const q = encodeURIComponent(d.id);
   const lock = d.lock ? `In use by ${d.lock.owner}` : null;
-  const room = d.vignette ? `/vignette/${encodeURIComponent(d.vignette)}/` : null;
   return h(
     "li",
     { "data-device": d.id },
@@ -557,9 +547,7 @@ function deviceItem(d, strand) {
           h("a", { class: "btn secondary", href: `/ops/module/?device=${q}` }, "Open module page"),
           h("a", { class: "btn secondary", href: `/ops/bench/?device=${q}` }, "Bench"),
         )
-      : room
-        ? h("div", { class: "actions" }, h("a", { class: "btn secondary", href: room }, "Open room page"))
-        : null,
+      : null,
   );
 }
 
@@ -582,7 +570,6 @@ function renderDevices(list, groups) {
           { class: "group-title" },
           h("span", {}, g.title),
           h("span", { class: "muted count" }, `${members.length}`),
-          g.link ? h("a", { class: "group-link", href: g.link }, "Room page") : null,
         ),
         h("ul", { class: "list" }, members.map((d) => deviceItem(d, g.strand))),
       );
@@ -634,12 +621,11 @@ function enrollRole() {
   return (document.querySelector('#enroll-role input[name="role"]:checked') || {}).value || "kiosk";
 }
 
-const NAME_HINT = { kiosk: "e.g. Canopy kiosk", vignette: "e.g. Living room iPad", tester: "e.g. VWBD shop phone" };
+const NAME_HINT = { kiosk: "e.g. Guest iPad", tester: "e.g. Crew phone" };
 
 function syncEnrollRole() {
   const role = enrollRole();
   $("enroll-kiosk-note").hidden = role !== "kiosk";
-  $("enroll-vignette").hidden = role !== "vignette";
   $("enroll-devices").hidden = role !== "tester";
   $("enroll-name").placeholder = NAME_HINT[role];
   document.querySelectorAll("#enroll-role label").forEach((l) =>
@@ -735,9 +721,6 @@ async function createLink(event) {
   if (role === "tester") {
     grants = [...document.querySelectorAll('#enroll-devices input[name="grant"]:checked')].map((i) => i.value);
     if (!grants.length) return show($("enroll-error"), "Choose at least one device.");
-  } else if (role === "vignette") {
-    grants = $("enroll-vignettes").value.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-    if (!grants.length) return show($("enroll-error"), "Type at least one vignette id.");
   }
   try {
     const link = await api("/api/roles/enrollments", { method: "POST", body: { role, name, grants } });

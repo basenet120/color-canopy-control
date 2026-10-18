@@ -26,18 +26,6 @@ MANAGER_KEY = "module_manager"
 log = logging.getLogger(__name__)
 
 
-NOT_A_STRAND = (
-    "{label} is a vignette device: it's controlled from its room page (/vignette/{room}/), not the module page, "
-    "so its tablet keeps working. Nothing was opened."
-)
-
-
-def module_page_device(entry: Any) -> bool:
-    """The module page is for strands only — canopy modules, the bench kit, spares (D34). A vignette device has its
-    room page; opening it here would take its lock away from the room's tablet (review V1)."""
-    return entry.role != "vignette"
-
-
 def owner_label(principal: Principal) -> str:
     return f"module page · {principal.name or principal.role.value}"
 
@@ -111,7 +99,7 @@ class ModuleManager:
         """Devices this principal may open, with who holds each one."""
         out = []
         for entry in self.services.registry.devices:
-            if not principal.can_device(entry.id) or not module_page_device(entry):
+            if not principal.can_device(entry.id):
                 continue
             try:
                 target = self.services.target(entry.id, Purpose.BENCH)
@@ -135,16 +123,11 @@ class ModuleManager:
         return out
 
     def strand(self, device_id: str) -> Any:
-        """The registry entry, or ModuleError: 404 for an unknown id, 409 for a vignette device (its room page)."""
+        """The registry entry (every registered device is a strand, D67), or ModuleError 404 for an unknown id."""
         try:
-            entry = self.services.registry.get(device_id)
+            return self.services.registry.get(device_id)
         except KeyError:
             raise ModuleError(f"There's no device called {device_id}.", 404) from None
-        if not module_page_device(entry):
-            raise ModuleError(
-                NOT_A_STRAND.format(label=entry.label or entry.id, room=entry.vignette or ""), 409
-            )
-        return entry
 
     def closed_view(self, device_id: str) -> dict:
         """What GET /api/module/{id} shows when no page has the device open."""

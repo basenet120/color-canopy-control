@@ -4,21 +4,22 @@
 (Oct 23, 24, 25 and Oct 29), and after any restart or swap. **How long:** 10–15 minutes.
 
 Open `/ops` on your phone (`http://<box address>:8000/ops/`, the ops password) → **7 am checklist** → **Run**.
-Each item is PASS, WARN or FAIL, with the fix next to it. The same list is in `sudo canopy-status` on the box.
+Each item is PASS, WARN or FAIL, with the fix next to it. On the show box, `canopy-mac status` shows the box's
+side (Conductor, watchdog, backups, clock).
 Work top to bottom: a failure near the top often explains the ones below it.
 
 ---
 
 - [ ] **Clock synced** — the box's clock is set by the internet (NTP), and your phone agrees within a few seconds.
-  - *FAIL, box not synced:* on the box `timedatectl` → "System clock synchronized: yes"? If not:
-    `sudo systemctl restart chrony`, check the internet, wait 2 min, **Run** again. (A lagging clock may get
-    Hubspace writes accepted and silently dropped — unverified, so don't ignore it.)
+  - *FAIL, box not synced:* on the show box run `canopy-mac status` → Clock (the offset from Apple time); if it's
+    more than a second or two off, check the internet, then System Settings → General → Date & Time → Set time
+    automatically, and **Run** again. (A lagging clock may get Hubspace writes accepted and silently dropped —
+    unverified, so don't ignore it.)
   - *WARN, phone differs:* your phone's clock is off; set it to automatic time. Harmless for the show.
-  - *WARN, "can't see whether the box's clock is synced":* the Conductor can't read the box's clock state (on the
-    venue box the watchdog passes it along every 30 s). Check `sudo canopy-status` → Box → NTP synchronized. If it
-    says yes, carry on; if not, treat it as the FAIL above.
+  - *WARN, "can't see whether the box's clock is synced":* expected on the Mac (the Conductor can't read its clock
+    state): use `canopy-mac status` → Clock. Within a second or two, carry on; if not, treat it as the FAIL above.
 
-- [ ] **Sign-in: Canopy account** (and one line per vignette account) — the box is signed in to Hubspace and the
+- [ ] **Sign-in: Canopy account** — the box is signed in to Hubspace and the
       sign-in refreshed in the last few minutes.
   - *FAIL "needs a new sign-in":* someone must sign in again with the password and the account's inbox open for
     the emailed code (`outages.md` → Re-sign-in). The lights hold their look meanwhile; the kiosk can't change them.
@@ -68,7 +69,6 @@ successful rewrite or Hubspace answering again clears its line by itself.
 
 **Also, by eye (2 min):**
 - [ ] The kiosk shows the canopy page (not "resting"); tap one mood, the canopy changes, the kiosk says Ready.
-- [ ] Each vignette tablet (or the stock app on it) loads and controls its room.
-- [ ] `sudo canopy-status` → Backups: last night's backup is there.
+- [ ] `canopy-mac status` → Backups: last night's backup is there.
 
 All PASS (or WARN you understand) → doors can open. Anything else: call Alon.

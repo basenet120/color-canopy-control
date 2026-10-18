@@ -8,7 +8,7 @@ Who gets through the middleware, in order:
 - `/enroll/...` HTTP requests — always; the one-time link token is the credential (D5).
 - An enrolled device's `cc_session` cookie — only for the paths its role may use (`roles.path_allowed`).
 - The kiosk page (`/kiosk`, `/kiosk/...`) without an enrolled kiosk's cookie gets 401 with a calm "not set up yet"
-  page and **no** Basic challenge, so Chromium never puts a sign-in dialog on the guest touchscreen (a cold-spare
+  page and **no** Basic challenge, so Safari never puts a sign-in dialog on the guest iPad (a cold-spare
   takeover, a revoked or expired kiosk session). A request carrying the ops credential still gets through, but a
   browser is never asked for it here.
 - Everything else gets 401 with the Basic challenge (a WebSocket is closed with 1008 before the handshake).

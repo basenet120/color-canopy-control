@@ -12,12 +12,12 @@ account, with the app **Group "Canopy"** holding the nine modules (made on insta
 ## Take over
 
 1. **Pause the Conductor first.** Otherwise it undoes every change you make in the app within about a minute.
-   On the box (keyboard from the tech kit, or `ssh` over Tailscale from a phone or laptop):
+   On the show box (Terminal on the Mac: keyboard, Screen Sharing, or `ssh` over Tailscale from a phone or laptop):
    ```
-   sudo canopy-stop
+   canopy-mac stop --yes
    ```
-   Type `stop` when asked. The Conductor stops and stays stopped — the watchdog and even a reboot won't start it —
-   until someone runs `canopy-start`. The lights keep their look; the kiosk shows "The canopy is resting" (after
+   The Conductor stops and stays stopped — the watchdog and even a reboot won't start it — until someone runs
+   `canopy-mac start`. The lights keep their look; the kiosk shows "The canopy is resting" (after
    a reboot too).
    - Can't reach a terminal? **Pause guest input** on `/ops` at least, and know that the Conductor will still put
      its look back within about a minute of any app change. For one module only, opening it on `/ops/module`
@@ -32,9 +32,9 @@ account, with the app **Group "Canopy"** holding the nine modules (made on insta
 ## Hand back
 
 1. Put the phone down: close the Hubspace app.
-2. On the box:
+2. On the show box:
    ```
-   sudo canopy-start
+   canopy-mac start
    ```
    Within about a minute the Conductor puts Lowcountry Calm back on all nine modules — **anything changed in the
    app is undone** — and rewrites any slot that no longer matches what was commissioned (at most once per 10

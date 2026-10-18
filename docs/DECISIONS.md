@@ -799,3 +799,46 @@ client (Home Depot / Hearst, with Paris from VWBD). We are past the Oct 12 featu
   word for word, and once Alon sets `motion.stepped.live_enabled` every Lab line (live line, show-box pace note,
   the export's D65 section) says it is on. Present plays the steps too (button or Space).
   `docs/reports/sim-acceptance.md` is regenerated and committed with this slice (plan §1).
+
+## 2026-10-17 — canopy only
+
+**D67 — The Conductor controls the canopy only (supersedes the vignette parts of 05 #11/#13, 06 #11/#18, 07 §2's
+vignette role, D34's room pages and P4; the Ubuntu venue box of 07 §10 and D61's "deploy/venue/ stays"; the VWBD
+workshop kit, D56's workshop home and the Studio's shop-kit commands).** Alon's call on Oct 17 on site, after the
+guest panel worked on the two live kits: "remove all the stuff that isn't the canopy control". Plan:
+`docs/live-lab/PLAN.md` §1.
+- **Gone:** the four vignette rooms (pages, service, routes, `config/vignettes.yaml`, their 15 registry entries and
+  four accounts, the `vignette` role and its enrollment, the vignette WebSocket topic, the synthesized vignette sim
+  profiles, Gate R's "vignette accounts clean" criterion); the Ubuntu venue box (`deploy/venue`, `scripts/release.sh`,
+  the Chromium resting page, `venue-box.md`); the VWBD workshop kit and Paris's tooling (`workshop/`, the launcher,
+  the kit builder, TEST-CENTER and its inventory, the Windows geometry tool, the Oct 2 hand-off docs — all in git
+  history at `6ce971b`); the guest panel's workshop target and `make guest-dev`; **every live shop-kit control in the
+  Studio** (Alon's override of the plan's default, Oct 17: the Studio is screen only) — the "Both modules" pair and
+  paired gradient (`/api/studio/pair/*`, `pair.py`, `scene_gradient.py`), Connect, Apply scene gradient, Apply
+  selected solid, brightness/power, the module select, the "Not connected" indicator, the fine-tune looks/colour/
+  white/effect tools, the saved-Custom-3 button and the motion demo's live run.
+- **Kept:** everything the canopy needs (engine, executor, drivers, live gate, accounts, registry, bench gates and
+  Apply map, `/ops/module` unchanged, /ops, the guest panel, the visualizer, the Mac show box, the soak), the Studio
+  as a **screen preview** (the six scenes over the full canopy from the show's own design, the tour, the angle and
+  level toggles) with its Design Lab panel — **the Lab is the only live control** — the Dockerfile (CI builds and
+  smoke-tests it), Railway staging, and every hardware evidence file. `CONDUCTOR_ENV=venue` remains the Mac's
+  environment name. Home (`/`) is the visualizer everywhere.
+- **Old data is tolerated, not migrated:** a saved enrollment or session of the removed role is skipped (the kiosk
+  iPad's session survives; an unreadable record of a role that exists still sets the file aside); a registry-overlay
+  entry for a removed vignette device (`REMOVED_DEVICE_IDS`, or any `role: vignette` entry), and a `vignette`/`kind`
+  key — or a `profile` naming a removed vignette sim profile (`REMOVED_PROFILES`) — on a surviving one, is ignored
+  with a "Needs attention" line and pruned by the next /ops registry edit; a leftover `studio-gradients/` folder is
+  ignored. `canopy-mac install` runs `conductor.preflight` against the data folder (through `run-conductor.sh
+  --check`; it also builds every registry entry's sim profile, as startup's SimDriver does in live mode too) before
+  it restarts the show, so new code that can't load it never restarts the show. A rejected checkout is still the
+  checkout, though, and the running Conductor is a KeepAlive job: install then exits 3 and prints the rollback, and
+  the paste block (`release-and-freeze.md`) rolls the checkout back at once — any restart would start the rejected
+  code. The vignettes, if the activation still has them, run on the stock Hubspace app outside this
+  system.
+- **Contract text changed:** 07 §1 (the show box, the writer list), §2 (the role table), §8 (the data folder's
+  home), §10 (the Mac); 05 #3, #11, #13; CLAUDE.md's opening line and the show-accounts rule (applied in PR A, for
+  Alon to review there).
+- **Modules 1–2 for real (Alon, Oct 17):** VWBD's two shop kits are real canopy kits — Kingston test is Module 1
+  (`canopy-r0c0`) and String light 1 is Module 2 (`canopy-r0c1`), on VWBD's Hubspace account, which is the live show
+  account (logical account `bench`). The Oct 19 registry undo that the Oct 13 test set-up planned (STATUS) is
+  cancelled; D66's "Show box today (Modules 1–2)" view now shows the real Modules 1–2.

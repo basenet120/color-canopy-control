@@ -3,7 +3,7 @@
 Starts the Conductor on the SIMULATOR at http://127.0.0.1:8200 with:
 - CONDUCTOR_MODE=sim and every HUBSPACE_*, RAILWAY_* and secret variable removed, so nothing can reach Hubspace or a
   show account (07 §1);
-- CONDUCTOR_ENV removed: the canopy engine target, as on the show box (not the workshop);
+- CONDUCTOR_ENV removed, as on the show box;
 - auth off (CONDUCTOR_AUTH=off), so it binds loopback only: any other host is refused;
 - a throwaway data dir (deleted on exit unless --keep), or --data <dir> (kept); never one under ~/canopy-show or
   ~/Library/Application Support/ColorCanopy.
@@ -23,9 +23,17 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from dev_guest_panel import UNSAFE_ENV  # scripts/ isn't a package
-
+# Environment that could point a dev run at real lights or real credentials: never inherited.
+UNSAFE_ENV = (
+    "HUBSPACE_LIVE",
+    "HUBSPACE_LIVE_UNTIL",
+    "HUBSPACE_DEVICE_ALLOWLIST",
+    "HUBSPACE_ACCOUNT_ALLOWLIST",
+    "CONDUCTOR_BASIC_AUTH",
+    "CONDUCTOR_SECRET_KEY",
+    "CONDUCTOR_ACCOUNT_CONNECT",
+    "RAILWAY_ENVIRONMENT_NAME",
+)
 DEFAULT_PORT = 8200
 SHOW_PORT = 8000
 LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})

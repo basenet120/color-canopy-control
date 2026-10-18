@@ -24,7 +24,6 @@ Topics:
   telemetry       — every telemetry event (ops only)
   bench           — bench job progress (ops only)
   module:<id>     — the single-module page for device <id> (ops; tester with a grant for <id>)
-  vignette:<id>   — a vignette page (ops; vignette tablet enrolled for <id>)
 """
 
 from __future__ import annotations
@@ -48,12 +47,10 @@ def topic_allowed(role: str, grants: frozenset[str], topic: str) -> bool:
     if role == "ops":
         return True
     if topic == "canopy":
-        return role in ("kiosk", "vignette")
+        return role == "kiosk"
     kind, _, target = topic.partition(":")
     if kind == "module":
         return role == "tester" and target in grants
-    if kind == "vignette":
-        return role == "vignette" and target in grants
     return False
 
 

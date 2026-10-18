@@ -232,7 +232,7 @@ def test_note_command_without_an_executor_and_snapshot_all():
     clock = VirtualClock()
     tracker = DeviceStateTracker(clock, Telemetry(None, clock))
     rows = full_state_vector(CALM)
-    tracker.set_desired("sim-b", rows, label="vignette", source="ops", meta={"room": "porch"})
+    tracker.set_desired("sim-b", rows, label="module page", source="ops", meta={"page": "module"})
     command = Command("sim-b", rows, Purpose.ENGINE)
     tracker.note_submitted(command)
     assert tracker.status("sim-b") is DeviceStatus.UPDATING
@@ -246,6 +246,6 @@ def test_note_command_without_an_executor_and_snapshot_all():
     )
     assert tracker.status("sim-b") is DeviceStatus.READY
     everything = tracker.snapshot_all()
-    assert list(everything) == ["sim-b"] and everything["sim-b"]["meta"] == {"room": "porch"}
+    assert list(everything) == ["sim-b"] and everything["sim-b"]["meta"] == {"page": "module"}
     assert tracker.snapshot("sim-unknown")["status"] == "unknown"
     json.dumps(everything)

@@ -645,7 +645,7 @@ async def show(
     )
     services.telemetry.dir = None
     AlertBoard.of(services)
-    if live:  # the venue box's tier rules over the simulator's transport
+    if live:  # the show box's tier rules over the simulator's transport
         monkeypatch.setattr(services.engine_driver, "simulated", False)
     await services.start()
     if prepare is not None:

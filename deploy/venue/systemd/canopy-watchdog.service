@@ -1,8 +1,0 @@
-# Run by canopy-watchdog.timer every 30 s. Installed to /etc/systemd/system/.
-[Unit]
-Description=Color Canopy watchdog: restart the Conductor after 3 failed health checks in a row
-After=canopy-conductor.service
-
-[Service]
-Type=oneshot
-ExecStart=/opt/canopy/lib/watchdog.sh

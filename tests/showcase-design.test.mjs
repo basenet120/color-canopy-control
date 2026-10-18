@@ -121,9 +121,9 @@ test('studio.js loads the design for the scene, views it at S.level and paints t
   assert.match(body('sceneView'),/return sceneDesignView\(designs\.get\(S\.scene\),S\.level\);/);
   assert.match(body('loadDesign'),/designs\.set\(id,await api\('\/api\/canopy\/design\?mode='\+encodeURIComponent\(id\)\)\)/);
   assert.match(body('selectScene'),/S\.scene=id;[^\n]*loadDesign\(id\);/);
-  const render=body('renderCanopy'),scene=render.slice(render.indexOf('if(S.scenePreview)'),render.indexOf('}else{'));
+  const scene=body('renderCanopy');
   assert.match(scene,/view=sceneView\(\)/);
   assert.match(scene,/const painters=scenePainters\(view,S\.scene,canopyView\.layout\.width\);\s*paintCanopy\(canopyView,painters\.head,painters\.spill,brightness\);/);
-  assert.equal((scene.match(/paintCanopy\(/g)||[]).length,1,'the scene illustration paints once, through scenePainters');
+  assert.equal((js.match(/paintCanopy\(/g)||[]).length,1,'the Studio paints once, through scenePainters (D67: it is screen only)');
   assert.match(js,/\$\('design-level'\)\.addEventListener\('click',\(\)=>\{S\.level=nextDesignLevel\(sceneView\(\)\);/);
 });

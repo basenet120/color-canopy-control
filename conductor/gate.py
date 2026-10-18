@@ -34,7 +34,7 @@ class RuntimeMode(StrEnum):
 class Purpose(StrEnum):
     """Why a caller wants to reach Afero. The gate allows or denies per purpose and mode."""
 
-    ENGINE = "engine"  # the show engine: executor, reconciler, idle hold, slot manager, vignettes
+    ENGINE = "engine"  # the show engine: executor, reconciler, idle hold, slot manager
     BENCH = "bench"  # bench jobs and the single-module test page (/ops/module)
     ACCOUNT = "account"  # account connect: login, OTP, token refresh, account id lookup
 

@@ -245,7 +245,7 @@ test("now showing draws the canopy's picture when the server sends state.lit, th
   assert.equal(shown.lit, lit);
   assert.equal(shown.frame, undefined); // no serpentine claim next to the real picture
   assert.equal(shown.scene, scenes[0]);
-  // the workshop target, an older server, or no look yet: the serpentine of the scene (or grey)
+  // an older server, or no look yet: the serpentine of the scene (or grey)
   for (const st of [ready({ lit: null }), ready()]) {
     const fallback = nowShowing(scenes, st);
     assert.equal(fallback.lit, undefined);
