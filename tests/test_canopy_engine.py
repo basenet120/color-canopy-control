@@ -48,7 +48,7 @@ def test_mode_change_bursts_one_command_per_module_and_all_nine_become_correct()
 
 def test_kiosk_cooldown_and_paused_guest_input():
     async def main():
-        w = make_world()
+        w = make_world(settings=settings_with(kiosk={"fast_pacing": False}))  # the budget rule's 7.5 s (D70)
         await w.engine.start(apply_initial=False)
         out = {"first": await w.engine.request_mode("holiday", source="kiosk")}
         await w.run_for(2)

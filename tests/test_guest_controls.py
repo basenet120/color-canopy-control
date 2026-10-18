@@ -377,7 +377,9 @@ def test_guest_input_restarts_the_idle_hold_and_the_idle_hold_clears_the_guest_s
 
 def test_guest_input_shares_the_cooldown_and_is_refused_while_paused():
     async def main():
-        w = make_world(settings=QUIET)
+        w = make_world(
+            settings=settings_with(kiosk={**QUIET.kiosk.model_dump(), "fast_pacing": False})
+        )  # D70's 7.5 s
         await w.engine.start(apply_initial=False)
         await settled_on(w, "lowcountry-calm")
         out = {"select": await w.engine.request_mode("holiday", source="kiosk")}

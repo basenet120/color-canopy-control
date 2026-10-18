@@ -1,7 +1,8 @@
 # Status
 
-_Last updated: 2026-10-18 late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo lag, D71; see
-its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
+_Last updated: 2026-10-18 evening (PR F `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle
+back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
+lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
 merged as #31 and deployed on the show box at `0f8f38c`; see its block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
 blocks below still read as before the merge. Before that 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
@@ -17,6 +18,34 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR F — fast guest pacing: 2 s whatever the size, backing off on real throttling (D72), `claude/guest-throttle-pacing` → `main` (Oct 18)
+Cut from `main` at `209e52b` (#31–#34 all merged; checked each branch tip is in `main`). Alon: D70's 7.5 s on nine
+modules is cushion — how low can it go? Only ~1 write/s per device is published; the 90/min account cap was a D65
+planning number, never measured; the show box has never sent more than 15 writes/min nor been throttled. **The
+switch `kiosk.fast_pacing` (on, Alon's call):** every guest input waits only `cooldown_min_s` (2 s), nine modules
+included; ≥ 2 write attempts answered 429/403 on an account in 60 s → guests there wait D70's budget gap until 120 s
+after the last one (one info alert per back-off; 503/504 never count). `fast_pacing: false` = D70 exactly. **On
+today's two kits both give 2 s** — it matters once all nine are driven.
+- **Known cost in sim (accepted by Alon):** six soak seeds, nine modules — settle p95 avg 4.89 s (2 s) vs 4.64 s (D70);
+  gating rows fail on 4/6 seeds vs 1/6 (seed 3 fails under every setting); a 3 s floor: 4.64 s, 3/6. Only the
+  button-mash burst pays: changes overlap the previous one's retries and verification; one heal took 20 s (seed 4).
+  `docs/reports/sim-acceptance.md` now reads **FAIL** (seed 0: settle p95 5.19 s). Watch settle times and heal alerts
+  in install week; flip the switch off if they slip on the real kits.
+- **Verified (sim, macOS):** `nice -n 15 uv run --offline pytest -q` → 2470 passed, 5 skipped, 44 subtests (11 min, final
+  tree; `tests/test_soak.py`'s short soak still passes); ruff clean; node 151/151; the soak as above (seeds 0–5 each
+  way, plus a 3 s floor). **`tests/test_fast_pacing.py`** (8 tests): on by default and 2 s for 0, 2 and 9 modules;
+  off = D70 exactly (2 / 2.5 / 7.5 s); one throttle doesn't back off, two in a minute (a 429 and a 403) do — 7.5 s
+  on nine, held 120 s after the last, one alert, then 2 s again; 503/504 and two throttles 61 s apart never back off;
+  off, throttles change nothing and alert nothing; end to end, real simulator 429s on a guest's burst make the next
+  guest wait 7.5 s; a minute of mashing every control on nine modules gets an input through every ≥ 2 s and every
+  device still ≤ 1 write/s; two strands give 2 s either way. D70's tests run with the switch off
+  (`tests/test_guest_budget.py`, two older cooldown tests pinned to it). **Mutation-checked:** ignoring the switch →
+  5 of 8 fail; not counting throttles → 2 of 8 fail.
+- **The first real account number:** `docs/runbooks/account-rate-probe.md` (Alon runs it on the Mac: both kits at 1
+  write/s for 3 min ≈ 120 writes/min on `bench`; throttled → `fast_pacing: false`).
+- **Deploy:** the usual paste block, on its own (no iPad reload). Reversing it: set `kiosk.fast_pacing: false` in
+  `config/conductor.yaml` through a PR (or flip it in the show checkout's config and `canopy-mac install`).
 
 ## PR E — the first readback's echo lag (D71), `claude/readback-echo-lag` → `main` (Oct 18)
 Cut from `main` at `0f8f38c` (after #31), with `main` merged in after #33 (PR D below, which took D70); stands alone. The findings are in
@@ -477,9 +506,9 @@ Lab); both target `main`; merge commits, not squash.
   first registry edit clears them from the overlay (the line goes at the next restart).
 
 ## PR stack (merge order — merge commits, not squash)
-00. **Oct 18:** #28 (PR A), #29 (PR B), #30 (PR B2) and #31 (PR C, D69) are merged into `main`; the show box runs
-    `0f8f38c` (main after #31). **Open: #32** (STATUS: PR C deployed), then **PR D `claude/guest-budget`** (D70; carries
-    #32 — merge #32 first).
+00. **Oct 18:** #28–#34 (PR A, B, B2, C, the C deploy notes, D, E) are merged into `main`; the show box runs `0f8f38c`
+    (main after #31: D70 and D71 aren't deployed yet). **Open: PR F `claude/guest-throttle-pacing`** (D72; no other
+    PR first).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -996,7 +1025,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-000. **Alon (PR D, D70):** merge #32, then review and merge `claude/guest-budget` (merge commits); deploy it on its own;
+000. **Alon (PR F, D72):** review and merge `claude/guest-throttle-pacing` (merge commit); deploy `main` (D70 + D71 +
+    D72 at once, or in steps); run the account probe (`docs/runbooks/account-rate-probe.md`) once, not during a demo;
     on the kits a second scene 2 s after the first should land.
 00. **PR C (D69) is merged and deployed (Oct 18, `0f8f38c`).** Still to try on the kits: tap a scene, dim right
     after it — the level should land when the cooldown ends and the panel should say so meanwhile. Then the

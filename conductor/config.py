@@ -121,6 +121,14 @@ class KioskSettings(_Strict):
     # account's cap (`motion.stepped.account_writes_per_min`): a lower cap there lowers the guests' budget with it.
     cooldown_min_s: float = Field(2.0, ge=1.0, le=30.0)
     guest_writes_per_min: float = Field(72.0, gt=0)
+    # Fast pacing (D72), the switch: true = every guest input waits only `cooldown_min_s`, whatever the canopy's size,
+    # and backs off to the budget rule above only while Hubspace is actually throttling the account (≥
+    # `fast_backoff_throttles` write attempts answered 429/403 on it in 60 s; the back-off holds `fast_backoff_s`
+    # after the last one). false = always the budget rule (D70). The only published limit is ~1 write/s per device,
+    # which the executor enforces either way; the account's 90/min is a planning number nobody has measured.
+    fast_pacing: bool = True
+    fast_backoff_throttles: int = Field(2, ge=1)
+    fast_backoff_s: float = Field(120.0, ge=0)
     idle_return_s: float = 180
     idle_mode: str = "lowcountry-calm"
     # Guest brightness / power (D60): the lowest brightness a guest can set, and how long after the last guest input

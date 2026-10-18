@@ -7,8 +7,9 @@
 Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
 - **Requests.** A kiosk request is refused (a plain sentence + retry-after) during the cooldown (D70: after the
   last accepted kiosk change, the time the guests' write budget takes to pay for it — one write per driven module,
-  the most on any one account, at `kiosk.guest_writes_per_min` — never under `kiosk.cooldown_min_s`; `guest_gap_s`),
-  while guest input is paused, while the canopy is resting (outage) and while commissioning runs. Ops, idle and reconciler requests bypass the cooldown and the
+  the most on any one account, at `kiosk.guest_writes_per_min` — never under `kiosk.cooldown_min_s`; `guest_gap_s`;
+  with `kiosk.fast_pacing` (D72) only `cooldown_min_s`, unless Hubspace throttled the account lately), while guest
+  input is paused, while the canopy is resting (outage) and while commissioning runs. Ops, idle and reconciler requests bypass the cooldown and the
   pause. Refusals come back as a `CanopyState` with `refused=True` (never an exception).
 - **Tier.** The first tier on the mode's ladder that `tier_allowed` permits and that compiles, starting at any
   hysteresis floor currently in force for that mode (the reconciler sets floors). If nothing at or below the floor
@@ -145,6 +146,7 @@ import contextlib
 import json
 import logging
 import math
+from collections import deque
 from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -181,6 +183,8 @@ OUTAGE_OUTCOMES = frozenset({str(Outcome.CONNECTION), str(Outcome.TIMEOUT), str(
 # 503/504 come back THROTTLED (retryable, D15) but are an outage signature, not rate limiting: they rest the canopy
 # like SERVER_ERROR and never count toward the throttle downgrade. Only 429/403 are throttling.
 OUTAGE_HTTP_STATUSES = frozenset({503, 504})
+THROTTLE_HTTP_STATUSES = frozenset({429, 403})  # what fast guest pacing (D72) backs off on
+FAST_BACKOFF_WINDOW_S = 60.0  # ... counted per account over this window
 REPLAN_DELAY_S = 1.0  # re-pick the current look this long after its slots' records changed (coalesced)
 OUTAGE_MIN_MODULES = 3  # distinct modules failing (no success in between) before the canopy rests
 _RESEND_STATUSES = (CommandStatus.FAILED, CommandStatus.MISMATCH)
@@ -364,6 +368,9 @@ class CanopyEngine:
         self._started = False
         self._last_kiosk_mono: float | None = None
         self._kiosk_gap_s = 0.0  # the cooldown the last accepted kiosk change bought (guest_gap_s, D70)
+        # fast guest pacing (D72): account → monotonic times of recent 429/403 attempts, and when its back-off ends
+        self._throttled: dict[str, deque[float]] = {}
+        self._fast_backoff_until: dict[str, float] = {}
         self.last_change_mono: float = self.clock.monotonic()  # any accepted change (idle hold)
         # the last look chosen (not a re-pick, not a guest setting): a stepped look's run counts from it
         self._chosen_mono: float = self.last_change_mono
@@ -1194,7 +1201,8 @@ class CanopyEngine:
         """D70: how long the next guest input waits after one that sends `plan` — the time the guests' write budget
         (`kiosk.guest_writes_per_min`, never above the account cap) takes to pay for one write per driven module,
         counted on the account that carries the most of them, and never less than `kiosk.cooldown_min_s`. Two
-        strands: 2 s; nine: 7.5 s."""
+        strands: 2 s; nine: 7.5 s. With `kiosk.fast_pacing` (D72) it is `cooldown_min_s` alone, unless Hubspace is
+        throttling one of the plan's accounts (`fast_backoff`): then the budget gap again."""
         kiosk = self.deps.settings.kiosk
         per_account: dict[str, int] = {}
         for device_id in plan.modules if plan is not None else ():
@@ -1205,7 +1213,48 @@ class CanopyEngine:
         budget = min(
             float(kiosk.guest_writes_per_min), float(self.deps.settings.motion.stepped.account_writes_per_min)
         )
-        return max(float(kiosk.cooldown_min_s), writes * 60.0 / budget)
+        floor = float(kiosk.cooldown_min_s)
+        if kiosk.fast_pacing and not self.fast_backoff(per_account):
+            return floor  # D72: only the floor, unless Hubspace is throttling one of these accounts
+        return max(floor, writes * 60.0 / budget)
+
+    def fast_backoff(self, accounts: Collection[str] | None = None) -> list[str]:
+        """D72: the accounts (of `accounts`, or all) on which fast guest pacing is backed off now, because Hubspace
+        answered ≥ `kiosk.fast_backoff_throttles` write attempts there with 429/403 in the last minute."""
+        now = self.clock.monotonic()
+        return sorted(
+            a
+            for a, until in self._fast_backoff_until.items()
+            if until > now and (accounts is None or a in accounts)
+        )
+
+    def _note_throttle(self, address: str) -> None:
+        """A write attempt to `address` was throttled (429/403): count it for its account; at
+        `kiosk.fast_backoff_throttles` in a minute, fast guest pacing there backs off for `kiosk.fast_backoff_s`."""
+        kiosk = self.deps.settings.kiosk
+        now = self.clock.monotonic()
+        account = self._account_of(address)
+        recent = self._throttled.setdefault(account, deque())
+        recent.append(now)
+        while recent and now - recent[0] > FAST_BACKOFF_WINDOW_S:
+            recent.popleft()
+        if len(recent) < kiosk.fast_backoff_throttles:
+            return
+        was_backed_off = self._fast_backoff_until.get(account, float("-inf")) > now
+        self._fast_backoff_until[account] = now + float(kiosk.fast_backoff_s)
+        if was_backed_off or not kiosk.fast_pacing:
+            return
+        self.stats["fast_backoffs"] = self.stats.get("fast_backoffs", 0) + 1
+        self.telemetry.record(
+            "alert",
+            level="info",
+            message=(
+                f"Guest pacing backed off on account {account}: Hubspace throttled {len(recent)} write attempts "
+                f"(429/403) in the last minute, so guests wait the write-budget gap again for "
+                f"{float(kiosk.fast_backoff_s):g} s after the last one."
+            ),
+            alert_key=f"guest-pacing:{account}",
+        )
 
     # ---- the stepped rehearsal (Gate R, conductor/rehearsal.py) ----------------------------------------------------
     def _rehearsal_plan(self, mode_id: str) -> ModePlan:
@@ -2603,6 +2652,12 @@ class CanopyEngine:
         if kind == "command":
             return
         outcome = event.get("outcome")
+        if (
+            kind == "attempt"
+            and outcome == str(Outcome.THROTTLED)
+            and event.get("http_status") in THROTTLE_HTTP_STATUSES
+        ):
+            self._note_throttle(address)
         if outcome == str(Outcome.OK):
             self._bad_streak.clear()
             # A verification readback that still differs in a row a re-send can fix (not only a slot's stored
