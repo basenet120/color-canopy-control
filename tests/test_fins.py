@@ -33,6 +33,7 @@ from conductor.fins import (
     parse_vwbd_panels,
 )
 from conductor.geometry import build_layout, lattice_heads, load_canopy_config
+from conductor.looks import field as F
 
 ROOT = Path(__file__).resolve().parent.parent
 PLAN = ROOT / "docs" / "plans" / "preset-options"
@@ -139,10 +140,13 @@ def test_650_fins_match_the_drop_key_and_hang_inside_the_apron():
 
 def test_every_lights_fin_drop_matches_lights_json():
     fin_map = CANOPY["fin_map"]
+    fins = F.FinsField(kind="fins")
     assert len(LIGHTS["lights"]) == 270
     for light in LIGHTS["lights"]:
         x, y, drop = light["x"], light["y"], light["fin_drop_in"]
         assert abs(fin_map.drop_at(x, y) - drop) <= 0.05  # 0.0102 measured
+        expected = min(1.0, max(0.0, (24.5 - drop) / 10.5))
+        assert abs(F.value(fins, x, y, CANOPY) - expected) <= 0.05 / 10.5 + 1e-9
 
 
 def test_the_weight_is_exp_minus_d_over_6_squared_cut_at_12_in():
