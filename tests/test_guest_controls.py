@@ -400,7 +400,8 @@ def test_guest_input_shares_the_cooldown_and_is_refused_while_paused():
     out = run_virtual(main)
     assert not out["select"].refused
     dim = out["dim_in_cooldown"]
-    assert dim.refused and "Try again in 6 s" in dim.message and 5.9 <= dim.retry_after_s <= 6.0
+    # D70: nine modules on one account → a 7.5 s guest gap (9 × 60 / 72), 5.5 s of it left 2 s in
+    assert dim.refused and "Try again in 6 s" in dim.message and 5.4 <= dim.retry_after_s <= 5.5
     assert dim.guest_brightness is None  # nothing changed
     assert out["off_in_cooldown"].refused and out["off_in_cooldown"].guest_power is True
     assert not out["ops_in_cooldown"].refused and out["ops_in_cooldown"].guest_brightness == 50

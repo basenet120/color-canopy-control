@@ -10,8 +10,8 @@ second target for the shop kits until the canopy-only change):
 **One lane.** Every guest write runs in one background worker, one job at a time, jobs no closer together than the
 executor's `min_write_interval_s`. Pending work is coalesced and the latest request wins: at most one pending scene,
 one brightness and one power, so however fast requests come, the last level wins (the iPad's slider sends once, on
-release: D69). Scene choices also have the kiosk's cooldown (`settings.kiosk.cooldown_s`, 8 s, as /api/kiosk/select): a
-second choice inside it is a 429. The engine's cooldown covers every guest input (D60), so a brightness or power
+release: D69). Scene choices also have the kiosk's cooldown (D70: the guests' write budget for what the last input
+sent, never under `kiosk.cooldown_min_s`; as /api/kiosk/select): a second choice inside it is a 429. The engine's cooldown covers every guest input (D60), so a brightness or power
 change made inside it **waits for its end and then goes out** (the latest wins; `state.next` and a "… in a moment"
 message say so) — it is never dropped after the panel was told 200, and guest bursts stay one per cooldown.
 
@@ -328,7 +328,7 @@ class EngineTarget:
     def _hold(self, _kind: str) -> float:
         """Seconds the engine's guest cooldown has left: a brightness or power change made inside it waits for its
         end and then goes out (the latest wins), instead of being refused after the panel was told 200. The
-        cooldown still spaces guest bursts (one per `kiosk.cooldown_s`), so the account's write budget holds."""
+        cooldown still spaces guest bursts by their cost in writes (D70), so the account's write budget holds."""
         engine = self.engine()
         if engine is None:
             return 0.0

@@ -976,7 +976,24 @@ are unchanged):
   ripple/stepped settings. **Needs hardware:** the real PUT-to-light time, how often bursts used to hit the inline
   refresh, and the cold-connection cost of a 9-wide burst (about 3 connections stay warm between bursts).
 
-**D70 — A first readback that differs is echo lag, not a drop (Oct 18).** Live telemetry from Oct 17–18 (Modules 1–2)
+**D70 — Guests are paced by the account's write budget, not a fixed 8 s (supersedes D21's fixed cooldown; 07 §6's
+kiosk constant).** Alon asked whether the 8 s between presets is an API rule and to cut it for everything. It is not:
+Afero publishes no cooldown; the only API guidance is ~1 write/s per device (03), which the executor already enforces
+per device, and the account limit is unpublished — we plan at 90 writes in any 60 s (06 #27, unmeasured until Gate R).
+The 8 s was a product/safety number. Now, after an accepted guest input (a mood, a brightness or an on/off), the next
+waits `guest_gap_s`: one write per module the look drives, counted on the account that carries the most, × 60 /
+`kiosk.guest_writes_per_min` (72: the 90 cap less the 20% reserve the stepped runner also keeps; never above
+`motion.stepped.account_writes_per_min`), and never less than `kiosk.cooldown_min_s` (2 s, so a look lands and reads
+back — ~1.4 s on the kits — before the next). **Two strands (today's Modules 1–2): 2 s. All nine: 7.5 s.** Ops, idle
+and the reconciler bypass it as before; the guest panel's lane (D69) waits out whatever gap is left; the Design Lab's
+try-on keeps its own 8 s apply gap (`lab.apply_min_gap_s`), and the soak keeps its seeded schedule (≥ 8 s apart). A
+guest mashing every control for two minutes on nine modules: accepted inputs ≥ 7.5 s apart, the account ≤ 90 writes in
+any 60 s (`tests/test_guest_budget.py`). Not done: letting a quiet canopy take a quick second change (a token bucket)
+— it only helps until the budget runs out and makes the wait after a burst longer; revisit once Gate R measures the
+real cap. The brightness-readback re-send (STATUS, PR C) costs a second write per module on many changes; fixing it
+would let the budget pay for more changes.
+
+**D71 — A first readback that differs is echo lag, not a drop (Oct 18).** Live telemetry from Oct 17–18 (Modules 1–2)
 showed the first verification GET still holding the previous scene's rows on 33 of 56 scene changes and both guest
 brightness changes, ≈ 1.2 s after the ack. Brightness and colour were wrong together. Re-sending the identical rows
 then read back correct, and the same transitions sometimes read fresh at the first GET. So this is the cloud's echo
@@ -989,4 +1006,5 @@ extra PUT (or nine-module motion burst) and verifies at ≈ ack + 2.2 s instead 
 is re-sent ≈ 1.2 s later than before. Readback events now carry `n` and `differs` (sent vs read, for every row but a
 slot object), so the next live run shows the old value directly. Not changed: `readback_delay_s` /
 `readback_interval_s` (bench the lag first: `docs/reports/readback-echo-lag-2026-10-18.md`), the re-send limits,
-MISMATCH handling, 07 §5's meaning of "ready".
+MISMATCH handling, 07 §5's meaning of "ready". This is the brightness-readback re-send D70 names: the write it saved
+goes back to the guests' budget.

@@ -1,4 +1,4 @@
-# The first readback after a scene change shows the old look (D70)
+# The first readback after a scene change shows the old look (D71)
 
 _2026-10-18. Read-only investigation of the live show box's telemetry
 (`~/Library/Application Support/ColorCanopy/data/telemetry/2026-10-17.jsonl` and `2026-10-18.jsonl`, Modules 1–2 =

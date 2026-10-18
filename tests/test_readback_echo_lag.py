@@ -1,4 +1,4 @@
-"""Cloud echo lag vs a silent drop (D70): a first verification readback that still shows the previous look is not a
+"""Cloud echo lag vs a silent drop (D71): a first verification readback that still shows the previous look is not a
 drop. Live on Oct 17–18 it was the usual case on a scene change; the engine re-sent at once and wasted a write per
 module. The change's first early re-send now waits for the command's second readback; a real drop still heals
 within 10 s (the drop tests in test_reconciler.py / test_engine_program.py)."""

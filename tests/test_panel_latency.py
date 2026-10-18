@@ -24,7 +24,9 @@ from conductor.drivers.base import Outcome
 from conductor.gate import RuntimeMode
 from conductor.guest_panel import NEXT_BRIGHTNESS, NEXT_OFF, NEXT_ON, Lane
 
-COOLDOWN_S = 2.0  # the real 8 s, shortened so the app tests run in real time
+COOLDOWN_S = (
+    2.0  # the nine-module canopy's 7.5 s guest gap (D70), shortened so the app tests run in real time
+)
 
 
 # ---- the lane on virtual time --------------------------------------------------------------------------------------
@@ -42,7 +44,7 @@ def _lane(hold_until: dict, runs: list):
 
 def test_a_held_change_waits_for_the_hold_then_goes_out_and_the_latest_wins():
     runs: list = []
-    hold_until = {"t": 6.0}  # e.g. a scene was chosen 2 s ago: 6 s of the 8 s cooldown left
+    hold_until = {"t": 6.0}  # e.g. a scene was chosen 2 s ago: 6 s of its guest gap left
 
     async def main():
         _clock, lane = _lane(hold_until, runs)
@@ -129,6 +131,13 @@ def _brightness_log(c) -> list[dict]:
     return [e for e in c.get("/api/kiosk/debug").json()["commands"] if e["action"] == "brightness"]
 
 
+def _short_cooldown(c) -> None:
+    """A COOLDOWN_S guest gap on the nine-module show: the floor, and a budget (and cap) that pays for nine writes."""
+    settings = _services(c).settings
+    settings.kiosk.cooldown_min_s = COOLDOWN_S
+    settings.kiosk.guest_writes_per_min = settings.motion.stepped.account_writes_per_min = 9 * 60 / COOLDOWN_S
+
+
 def _other_scene(engine) -> str:
     current = engine.current_plan().mode_id
     return next(s for s in ("garden-gathering", "goodnight-glow") if s != current)
@@ -139,7 +148,7 @@ def test_dimming_right_after_a_scene_lands_when_the_cooldown_ends_not_never(app_
     200: the slider snapped back and the lights never changed. Now the last level goes out once, at the end."""
     c = app_client_show
     engine = showing(c)
-    _services(c).settings.kiosk.cooldown_s = COOLDOWN_S
+    _short_cooldown(c)
     r = c.post("/api/kiosk/scene", json={"scene": _other_scene(engine)})
     assert r.status_code == 200, r.text
     chosen = time.monotonic()
@@ -170,7 +179,7 @@ def test_dimming_right_after_a_scene_lands_when_the_cooldown_ends_not_never(app_
 def test_switching_off_inside_the_cooldown_says_so_and_lands_at_its_end(app_client_show):
     c = app_client_show
     engine = showing(c)
-    _services(c).settings.kiosk.cooldown_s = COOLDOWN_S
+    _short_cooldown(c)
     assert c.post("/api/kiosk/scene", json={"scene": _other_scene(engine)}).status_code == 200
     r = c.post("/api/kiosk/power", json={"on": False})
     assert r.status_code == 200 and r.json()["state"]["next"] == {"power": False}

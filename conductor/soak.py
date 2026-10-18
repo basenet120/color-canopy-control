@@ -304,6 +304,9 @@ class _Hub:
         return None
 
 
+SCHEDULE_GAP_S = 8.0  # the seeded kiosk changes keep at least this apart (the fixed cooldown before D70)
+
+
 @dataclass
 class SoakConfig:
     hours: float = 8.0
@@ -767,7 +770,11 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         results["recoveries"][name] = None
 
     # -- schedule -------------------------------------------------------------------------------------------------
-    cooldown = world.engine.deps.settings.kiosk.cooldown_s
+    kiosk = world.engine.deps.settings.kiosk
+    # changes at least a guest gap apart (D70: what a nine-module look buys), and never closer than the 8 s the
+    # schedule always used, so the seeded schedule (and every pinned row's sample) stays the one it was
+    nine = len(world.registry.canopy_modules()) * 60.0 / kiosk.guest_writes_per_min
+    cooldown = max(SCHEDULE_GAP_S, kiosk.cooldown_min_s, nine)
     times: list[float] = []
     lo, hi = t0 + 60.0, t0 + duration - 600.0
     attempts = 0
