@@ -142,7 +142,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -285,6 +285,10 @@ class EngineDeps:
     repaint_target: Callable[[str], Any] | None = None
     looks_generation: Callable[[], int] | None = None
     on_repaint: Callable[[str, dict], Any] | None = None
+    # Awaited by a due scene before its window opens: the show's start-up is over (hardware: the first round of
+    # capability reads; sim: the start-up commissioning), so a job re-queued at engine start never compiles its
+    # target before any profile is read. None = no wait.
+    repaint_ready: Callable[[], Awaitable[Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -849,10 +853,14 @@ class CanopyEngine:
     async def reassert_all(self, *, source: str) -> CanopyState:
         """Send the full state vector to every non-locked module, now (one burst). During an outage, probe instead:
         the first good readback re-applies the look to every module."""
+        if self._commissioning:
+            return self._refused(COMMISSIONING_MESSAGE, 30.0)
+        if self._repaint_quiet:  # a publish's slot repaint is writing (D68 PR B2): nothing else writes
+            return self._refused(REPAINT_MESSAGE, self._repaint_left())
         if self._outage is not None:
             await self.reconciler.probe()
             return self.state()
-        if self._plan is not None and not self.quiet:
+        if self._plan is not None:
             self.send(None, source=source, label=f"re-assert all: {self._plan.mode_id}")
         return self.state()
 
@@ -1878,6 +1886,9 @@ class CanopyEngine:
             if last is not None:
                 due = max(due, last + interval)
             scheduled.append(replace(job, due_mono=min(due, now + interval)))
+        # the scenes run one after another: the one due first goes first, so a scene due now never waits behind
+        # another scene's gate (stable: equal due times keep the publish's order)
+        scheduled.sort(key=lambda j: j.due_mono)
         for mode_id in set(previous) - {j.mode_id for j in scheduled}:
             # its queued repaint went: its slots may hold the live design already
             self._maybe_lift_hold(mode_id)
@@ -2058,6 +2069,9 @@ class CanopyEngine:
             if wait > 0:  # the 2-min gate: held at module level meanwhile, its marks pending
                 self._set_repaint_status(job, publication, listed, queued_until=self.clock.now() + wait)
                 await self.clock.sleep(wait)
+            # after a restart: never before the show's first capability reads (and, in sim, its commissioning)
+            if self.deps.repaint_ready is not None:
+                await self.deps.repaint_ready()
             if self._repaint_waiting.get(mode_id) is job:
                 del self._repaint_waiting[mode_id]
             looks_generation = self.deps.looks_generation
@@ -2080,8 +2094,17 @@ class CanopyEngine:
             target = self.deps.repaint_target(mode_id) if self.deps.repaint_target is not None else None
             plan = getattr(target, "plan", None) if target is not None else None
             listed = list(getattr(target, "listed", None) or []) if target is not None else []
-            if plan is None or not listed:  # recomputed now: the slots already hold the live design
-                outcome.update(ok=True, listed=[], reason="its slots already hold the live design")
+            if plan is None or not listed:  # recomputed now
+                unread = list(getattr(target, "unread", None) or []) if target is not None else []
+                # unread: nothing to judge them by, so never "already holds" (the reconciler takes them once read)
+                if unread:
+                    n = len(unread)
+                    outcome.update(
+                        listed=[],
+                        reason=f"the Hubspace profile of {n} module{'s' if n != 1 else ''} hadn't been read yet",
+                    )
+                else:  # the slots already hold the live design
+                    outcome.update(ok=True, listed=[], reason="its slots already hold the live design")
                 return outcome
             for device_id in listed:
                 self._repaint_pending.setdefault((device_id, slot), serial)
@@ -3288,6 +3311,7 @@ def engine_from_services(
     repaint_target: Callable[[str], Any] | None = None,
     looks_generation: Callable[[], int] | None = None,
     on_repaint: Callable[[str, dict], Any] | None = None,
+    repaint_ready: Callable[[], Awaitable[Any]] | None = None,
 ) -> CanopyEngine:
     """The engine wired to the Services container (the lead's one-liner). Slot hashes are saved to the registry
     overlay (`slot_hashes` per device, merged), which needs CONDUCTOR_DATA_DIR; stepped rehearsal reports go to
@@ -3328,5 +3352,6 @@ def engine_from_services(
             repaint_target=repaint_target,
             looks_generation=looks_generation,
             on_repaint=on_repaint,
+            repaint_ready=repaint_ready,
         )
     )

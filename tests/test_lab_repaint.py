@@ -506,7 +506,8 @@ def test_a_partly_commissioned_canopy_repaints_only_its_own_commissioned_modules
     assert info["eligible"] == 5 and info["available"] is True and len(info["commissioned"]) == 6
     assert info["sentence"] == (
         "custom-3 is commissioned on 5 of 9 modules (Module 1, Module 2, Module 3, Module 4, Module 5); publishing "
-        "repaints those 5 (one slot write each). The other 4 get the published design when they are commissioned."
+        "repaints those of the 5 whose design changes (one slot write each; the confirm names them). The other 4 get "
+        "the published design when they are commissioned."
     )
     [job] = first["repaint"]
     assert job["writes"] == 5 and job["modules"] == [

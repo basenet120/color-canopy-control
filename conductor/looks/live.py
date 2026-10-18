@@ -581,7 +581,8 @@ def note_repaint(services: Any, event: str, info: Any) -> None:
     queued = {k: v for k, v in file.queued.items() if k != mode}
     history = list(file.history)
     publication = info.get("publication")
-    if info.get("started") or info.get("reason"):
+    # a row when it wrote, or didn't start for a reason; never for "its slots already hold the live design"
+    if info.get("started") or (info.get("reason") and not info.get("ok")):
         row = {
             "slot": str(info.get("slot") or ""),
             "applied": int(info.get("applied") or 0),

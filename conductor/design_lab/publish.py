@@ -399,23 +399,34 @@ def plan_publish(lab: LabService, candidate: Candidate) -> PublishPlan:
 
 def repaint_jobs(engine: Any, repaint: dict[str, Any], changed: list[str]) -> list[dict]:
     """B2: the scenes the publish repaints — each changed painted scene, and each scene of a queued job it replaces,
-    whose eligible modules' records don't hold the new design — with when each may start (`in_s`, the gate)."""
+    whose eligible modules' records don't hold the new design — with when each may start (`in_s`, the gate). A
+    queued scene's modules whose profiles haven't been read yet (right after a restart) stay in its job — all of
+    them when the scene can't be judged at all and this publish doesn't change it — since the job recomputes what to
+    write when its window opens: a publish never drops a queued scene or opens its slots to the reconciler early."""
     queued = (
-        set(engine.queued_repaints()) if engine is not None and hasattr(engine, "queued_repaints") else set()
+        dict(engine.queued_repaints()) if engine is not None and hasattr(engine, "queued_repaints") else {}
     )
     wait = getattr(engine, "repaint_wait", None) if engine is not None else None
     out = []
     for scene_id, target in repaint.items():
-        if scene_id not in changed and scene_id not in queued:
+        old = queued.get(scene_id)
+        if scene_id not in changed and old is None:
             continue
-        if target is None or not target.listed or target.plan is None:
+        unread = set(target.unread) if target is not None else set()
+        if target is not None and target.listed and target.plan is not None:
+            slot, modules, label = target.slot, list(target.listed), target.label or scene_id
+            if old is not None:  # the queued job's modules not read yet stay marked until the window
+                modules += [m for m in old.modules if m in unread and m not in modules]
+        elif scene_id not in changed and old is not None and unread:
+            slot, modules, label = old.slot, list(old.modules), old.label or scene_id
+        else:
             continue
         out.append(
             {
                 "scene": scene_id,
-                "slot": target.slot,
-                "modules": list(target.listed),
-                "label": target.label or scene_id,
+                "slot": slot,
+                "modules": modules,
+                "label": label,
                 "in_s": float(wait(scene_id)) if callable(wait) else 0.0,
             }
         )

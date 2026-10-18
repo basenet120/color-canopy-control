@@ -655,6 +655,17 @@ test("the panel's controls show only when the trial API exists and the engine ru
     const a = M.trialAvailability({ api: "ready", engine: { ...engineOk, [flag]: true }, trial: trialJSON() });
     assert.deepEqual(a, { controls: true, canApply: false, canStop: true, reason }, flag);
   }
+  // a publish's slot repaint (review 5, UI-3): the engine's public commissioning flag is true in its window too, and
+  // the panel names the repaint, never commissioning
+  for (const engine of [
+    { ...engineOk, repaint_quiet: true },
+    { ...engineOk, repaint_quiet: true, commissioning: true },
+  ]) {
+    const a = M.trialAvailability({ api: "ready", engine });
+    assert.equal(a.reason, M.TRIAL_COPY.repainting);
+    assert.equal(a.canApply, false);
+    assert.doesNotMatch(a.reason, /commission/i);
+  }
   // a draft the server refused can't be tried on
   assert.equal(M.trialAvailability({ api: "ready", engine: engineOk, problems: 2 }).canApply, false);
   // before /state answers, the server decides

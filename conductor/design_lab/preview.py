@@ -368,11 +368,17 @@ APP_LOCK = (
 )
 # B2 (the operator repaint, §2.6): the count-based sentences of a painted scene's RepaintInfo.
 NO_REPAINT = "No slot repaint: no module has {slot} commissioned {where}."
+# A maximum: a publish repaints only the modules whose slot design changes (the confirm names them), e.g. a palette
+# stop that leaves some modules' frames as they are.
 SOME_REPAINT = (
-    "{slot} is commissioned on {eligible} of {total} modules ({labels}); publishing repaints those {eligible} (one slot "
-    "write each). The other {rest} get the published design when they are commissioned."
+    "{slot} is commissioned on {eligible} of {total} modules ({labels}); publishing repaints those of the {eligible} "
+    "whose design changes (one slot write each; the confirm names them). The other {rest} get the published design "
+    "when they are commissioned."
 )
-ALL_REPAINT = "Publishing a new painted design repaints {slot} on {n} (one slot write each)."
+ALL_REPAINT = (
+    "Publishing a new painted design repaints {slot} on up to {n}: only the modules whose design changes (one slot "
+    "write each; the confirm names them)."
+)
 
 
 def _count(n: int) -> str:

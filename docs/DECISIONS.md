@@ -897,7 +897,8 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
   are marked pending at once; the reconciler's `check_slots` skips them (its only edit) and the scene stays held while
   any is pending. When a scene comes due the engine opens a quiet window (the public `commissioning` flag reads it, so
   the reconciler, idle hold, stepped runner and capability re-pick hold still; guests, ops, a try-on and Gate R are
-  refused with "One moment: the canopy is changing." and a retry-after; a running try-on ends first), waits for the
+  refused with "One moment: the canopy is changing." and a retry-after — ops' Re-assert all and the Lab's try-on
+  panel name the repaint, never "commissioning" (review 5); a running try-on ends first), waits for the
   commands in flight, recomputes the target from the live looks, and writes each listed module's slot under its
   `_slot_lock` through `_commission_plan(min_interval=0, only=…, verb="publish repaint", locked=True)`: header from
   the readback, `slot_written` stamped at submit, at most two retries only when a write didn't land, never over an
@@ -909,9 +910,12 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
   of a scene's last operator writing); a sooner publish is never refused — it installs and queues (`in_s` in the
   confirm, which may tick down by up to one interval while ops reads it); a newer publish replaces a queued job (the
   due time stays); Revert and Undo queue the same way. The overlay keeps `repaints` (the gate) and `queued` (the
-  job), so a restart re-queues it (the gate seeded from the wall times, clamped to one interval, so a clock step can't
-  stretch or skip it); in the simulator the start-up commissioning writes the live design itself and the queue
-  settles. A publish is refused only while a repaint is writing ("repainting"); commissioning is refused while a job
+  job), so a restart re-queues it as the engine starts, before any profile is read (review 5: the gate seeded from
+  the wall times, clamped to one interval, so a clock step can't stretch or skip it; the queued scenes pending at once
+  over the api-record modules, so a module unreadable at boot opens neither the gate nor its slots to the reconciler,
+  and a publish carries them over; a window opens only after the show's first capability round); in the simulator
+  the start-up commissioning writes the live design itself, replaces the restored job, and the queue settles. A job's
+  scenes run one after another in due order. A publish is refused only while a repaint is writing ("repainting"); commissioning is refused while a job
   is queued or running. The Lab reads the job as RepaintJSON (`LiveJSON.repaint`: `queued_until`, `started_at`,
   per-module status) and the history row's `repaint` counts. **Deploy B2 only after bench item 6** (rewriting the
   showing slot, then the re-select) has been run once on a show kit with its own Gate C.

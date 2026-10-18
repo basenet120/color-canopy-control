@@ -1,6 +1,7 @@
 # Status
 
-_Last updated: 2026-10-17 night (PR B2 `claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
+_Last updated: 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
+`claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
 PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A `claude/canopy-only`: the
 Conductor controls the canopy only, D67; the Studio is screen only; see the three blocks below). Before that 2026-10-17 (Design Lab Slice C integrated as #27
 `claude/design-lab-motion`; all three Lab slices built; see the PR stack), 2026-10-16.
@@ -34,6 +35,28 @@ merged into `claude/live-lab-repaint` (a clean merge: B2 was cut from `claude/li
   not B2 regressions: the window's retry-after said 12–14 s for a 5 s window (an upper bound), and with `show: true`
   the confirm still says "Nothing on the canopy changes now (no changed scene is showing)" while the cost line counts
   the 9 writes (B1's sentence, unchanged by B2; the Lab shows the "Show <scene> on the canopy" checkbox beside it).
+- **Review 5 (Oct 18, 9 findings, all fixed; `tests/test_lab_repaint_review.py`, 21 tests, each failing before its
+  fix or on its mutant).** First merged the fixed `claude/live-lab` (review 4) in: conflicts in `canopy.py`,
+  `publish.py` (the confirm takes both `show` and B2's `tokens`; the queued map and the fallback's no-Undo both go
+  into the new file) and `tests/live_lab.py`; review 4's rolled-back-Revert test keeps the publish's repaint from
+  running so its premise stands. Then: **B2-1** the persisted gate and queue reached the engine only once every module
+  was read — with one module unreadable at boot a publish repainted inside the gate, the reconciler rewrote the queued
+  slots 36–41 s after the last repaint, and a publish dropped the queued scene. Now `ShowWiring._restore_repaints`
+  runs right after `engine.start`: the gate seeded, the queued scenes started at their due times over every module
+  with an api record for the slot (pending at once, shown queued), a publish carries them over (`repaint_jobs` keeps
+  a queued job's unread modules), and a window opens only after `repaint_ready` (the first capability round; in sim
+  the start-up commissioning, which cancels a restored job first); the window's target is recomputed then, an unread
+  module is left to the reconciler, and with nothing judgeable the repaint "didn't start (the Hubspace profile of N
+  modules hadn't been read yet)" — never "already holds". No history row for a repaint whose slots already held the
+  design. **B2-2** a job's scenes now run in due order (stable). **B2-3 / UI-3** StateJSON.engine gains
+  `repaint_quiet` (and `commissioning` is only a real one); ops' Re-assert all answers 409 "A publish is repainting a
+  painted scene's slot right now (about N s left)…" + Retry-After; `reassert_all` refuses in the window and while
+  commissioning; the try-on panel's `TRIAL_COPY.repainting` (`?v=lab-8`). **UI-6** sentences (b)/(c) say "up to" /
+  "those … whose design changes". **Mutation gaps** Q3, Q5, Q7, Q30, Q31, S2, P3, L3 — tests added; 16 mutants of
+  the fixes and those guards (`scratchpad` runner) each killed by its named test. **Verified (macOS, sim, Oct 18):**
+  `nice -n 15 uv run --offline pytest -q` → 2434 passed, 5 skipped, 44 subtests (10 m 48 s); ruff check / format
+  clean; `node --test tests/*.test.mjs` 150/150. Not run: a browser walk of the new try-on reason or a sim dev
+  server smoke of the restart (the restart paths are covered on the virtual clock with the simulator's devices kept).
 - **What it does.** A publish of a new painted design no longer needs the reconciler: the scene installs at once,
   held below T1 (truthful module level), and the engine gets ONE repaint job (`CanopyEngine.start_repaint`,
   `RepaintJob`s): the scenes whose eligible modules — their own api record, Gate C at their address and, on a longer
@@ -59,9 +82,10 @@ merged into `claude/live-lab-repaint` (a clean merge: B2 was cut from `claude/li
   with it; the due time stays); Revert and Undo queue the same way. The overlay keeps `repaints` (the gate) and
   `queued` (the job, written with the publication); the engine's hook (`looks.live.note_repaint`, no history copy)
   writes the gate when a scene starts, drops the scene from the queue and fills its history row's `repaint` counts
-  when it ends. After a restart the queue goes back to the engine once every module is read (in sim: after the
-  start-up commissioning, which writes the live design, so it settles), the gate seeded from the wall times clamped
-  to one interval (a ±1 h clock step can't stretch or skip it).
+  when it ends. After a restart the gate and the queue go back to the engine as it starts, before any profile is
+  read (review 5, below; in sim the start-up commissioning, which writes the live design, replaces the restored job
+  and the queue settles), the gate seeded from the wall times clamped to one interval (a ±1 h clock step can't
+  stretch or skip it).
 - **The Lab's view.** The confirm adds "<Scene>'s painted design is repainted into custom-3 on N modules<, in S s>
   (one slot write each)." and the cost "repaints custom-3 on N modules: up to 3N slot writes (one each unless a write
   doesn't land), N reads, then one T1 burst"; a confirm shown earlier still matches while its "in S s" ticks down (by
@@ -97,8 +121,8 @@ merged into `claude/live-lab-repaint` (a clean merge: B2 was cut from `claude/li
   are now checked against the real answer, during and after). **Mutation checks (16, each killed by the named
   test):** the `check_slots` pending guard; `commissioning` → `quiet`; `wait_idle` before the first header read; the
   `_slot_lock` (`locked=True`); the submit-time `slot_written` stamp; `min_interval=0` (→ 600 s); the `only` filter;
-  the gate clamp (its three layers together: the restart seed, `start_repaint`'s bound, the requeue's wait — each alone
-  is covered by the other two); `start_repaint`'s own due enforcement; `commission`'s refusal while repainting; the
+  the gate clamp (its three layers together: the restart seed, `start_repaint`'s bound, the requeue's wait — the
+  restart seed alone is NOT covered by the others when nothing is queued: review 5's S2 test covers it); `start_repaint`'s own due enforcement; `commission`'s refusal while repainting; the
   generation abort; `looks_refusal`'s "repainting"; the marks set in `start_repaint`; the kiosk's copy in the window;
   both requeue paths (show box, simulator).
 - **Notes for review (deviations from the plan's letter).** (1) `start_repaint(jobs: Sequence[RepaintJob], *,

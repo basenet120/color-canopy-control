@@ -57,6 +57,7 @@ import asyncio
 import difflib
 import inspect
 import logging
+import math
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -130,6 +131,11 @@ def _no_cross_site(request: Request) -> None:
     if media_type != "application/json":
         raise HTTPException(status_code=415, detail="Send JSON (Content-Type: application/json).")
 
+
+REASSERT_REPAINTING = (
+    "A publish is repainting a painted scene's slot right now (about {n} s left), so nothing else is sent to the "
+    "canopy; press Re-assert all once it ends."
+)
 
 router = APIRouter(dependencies=[Depends(_no_cross_site)])
 Ops = Annotated[Principal, Depends(require_ops)]
@@ -372,6 +378,15 @@ async def reassert(request: Request, _ops: Ops) -> JSONResponse:
     engine = engine_of(services)
     before = await _engine_call("report its state", engine.state)
     outage = engine_flag(engine, "outage")
+    # a publish's slot repaint first: the engine's public `commissioning` is true in its quiet window too
+    if engine_flag(engine, "repaint_quiet") is True:
+        left = engine.repaint_left_total() if callable(getattr(engine, "repaint_left_total", None)) else 5.0
+        seconds = max(1, math.ceil(left))
+        raise HTTPException(
+            status_code=409,
+            detail=REASSERT_REPAINTING.format(n=seconds),
+            headers={"Retry-After": str(seconds)},
+        )
     if engine_flag(engine, "commissioning") is True:
         raise HTTPException(
             status_code=409,
