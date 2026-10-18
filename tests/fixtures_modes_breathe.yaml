@@ -1,0 +1,98 @@
+# TEST FIXTURE — not show config. Breathe and shimmer stepped looks (Tier.STEPPED, D75) over the 3×3 grid, on the
+# frozen recipe keys (tests/fixtures_recipes_frozen.yaml) and the kiosk block of fixtures_modes_stepped.yaml.
+# tests/test_compile_breathe.py loads it; tests/test_engine_program.py merges these modes into its own.
+#
+# Each mode's stepped design is its modules sample's canvas (one YAML anchor), so the first step is the still look
+# the ladder's later `modules` rung holds:
+# - `breathe-rings`: radial from the canopy's centre in the canopy's proportions, radius 150 in (r1c1 at t = 0, the
+#   four edge-middle modules at t = ½, the corners ≈ 0.707; fixtures_modes_stepped.yaml). lag_steps 4 → lags
+#   {r1c1: 0, edges: 2, corners: 3}, a cycle of 4 + 3 = 7 steps; colour and level both breathe.
+# - `breathe-level`: column by column, every module breathing its level together (lag 0): 28, 32, 28, 24.
+# - `shimmer-seeded`: row by row, each module's breath starting where seed 7 puts it (up to 3 steps apart).
+kiosk:
+  title: The Color Canopy
+  prompt: "Choose a mood. Watch the light change."
+  tagline: "Make it your mood."
+  resting: "The canopy is resting. It will be back shortly."
+  updating: "Changing the light…"
+  ready: "Ready"
+
+modes:
+  breathe-rings:
+    label: Breathe Rings
+    blurb: A test breath from the centre
+    preview: ["#FF9E96", "#FFD2E0", "#C4B3EC"]
+    ladder: [stepped, modules]
+    techniques:
+      stepped:
+        canvas: &rings-design
+          kind: field
+          field: {kind: radial, centre_in: [112.5, 60], metric: canopy, radius_in: 150}
+          stops:
+            - {at: 0.0, color: pastel-coral}
+            - {at: 0.5, color: blush-pink}
+            - {at: 1.0, color: lilac}
+          recipe: rgb_only
+        mode: breathe
+        steps_per_cycle: 4
+        shift: 0.15
+        brightness_swing: 8
+        lag_steps: 4
+        brightness: 70
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour and a brighter or softer level every few seconds, so the palette swells and softens from the centre out."
+      modules:
+        sample: {canvas: *rings-design, at: centre, brightness: 70}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from the centre out."
+
+  breathe-level:
+    label: Breathe Level
+    blurb: A test breath across the canopy
+    preview: ["#659BD5", "#79CED4", "#B2E8D2", "#E9F3E7"]
+    ladder: [stepped, modules]
+    techniques:
+      stepped:
+        canvas: &level-design
+          kind: field
+          field: {kind: linear, angle_deg: 0}
+          stops:
+            - {at: 0.0, color: ocean-blue}
+            - {at: 0.3333333333333333, color: aqua}
+            - {at: 0.6666666666666666, color: seafoam}
+            - {at: 1.0, color: foam-white}
+          recipe: rgb_only
+        mode: breathe
+        steps_per_cycle: 4
+        brightness_swing: 4
+        brightness: 28
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the canopy swells and softens."
+      modules:
+        sample: {canvas: *level-design, at: centre, brightness: 28}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out column by column."
+
+  shimmer-seeded:
+    label: Shimmer Seeded
+    blurb: A test shimmer down the canopy
+    preview: ["#FFDB9B", "#FFB69D", "#FF9BC4", "#E779B0", "#B59AE2"]
+    ladder: [stepped, modules]
+    techniques:
+      stepped:
+        canvas: &shimmer-design
+          kind: field
+          field: {kind: linear, angle_deg: 90}
+          stops:
+            - {at: 0.0, color: soft-gold}
+            - {at: 0.25, color: golden-hour-peach}
+            - {at: 0.5, color: sunset-pink}
+            - {at: 0.75, color: rose}
+            - {at: 1.0, color: lavender}
+          recipe: rgb_only
+        mode: shimmer
+        steps_per_cycle: 5
+        brightness_swing: 6
+        lag_steps: 3
+        seed: 7
+        brightness: 75
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the strands glow and soften on their own."
+      modules:
+        sample: {canvas: *shimmer-design, at: centre, brightness: 75}
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out row by row."
