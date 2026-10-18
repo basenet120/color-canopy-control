@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -1019,3 +1020,244 @@ def test_an_unusable_overlay_is_an_ops_summary_line_and_every_scene_stays_on(mon
         ]
         assert lines[0] in client.get("/api/ops/summary").json()["problems"]
         assert path.read_bytes() == before
+        r = client.post("/api/ops/ipad-scenes", json={"scene": GOLDEN, "show": False})
+        assert r.status_code == 200, r.text
+        assert not [m for m in _attention(client) if m.startswith("The iPad's scene list")]
+        assert yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": [GOLDEN]}}
+        assert load_settings_overlay(tmp_path / "data").problem is None
+
+
+# ---- /ops: the switch over HTTP --------------------------------------------------------------------------------------------
+def _published(services) -> list[dict]:
+    """Record what the routes publish on the WS hub (topic "ops")."""
+    seen: list[dict] = []
+    real = services.hub.publish
+
+    def publish(topic, data):
+        if topic == "ops":
+            seen.append(data)
+        return real(topic, data)
+
+    services.hub.publish = publish
+    return seen
+
+
+def test_the_ipad_switch_hides_and_shows_a_scene_without_an_engine(app_client):
+    services = _svc(app_client)
+    install_review(services)
+    assert services.extras.get("canopy") is None
+    published = _published(services)
+    body = app_client.get("/api/ops/ipad-scenes").json()
+    assert [s["id"] for s in body["scenes"]] == REVIEW_IDS and all(s["on_ipad"] for s in body["scenes"])
+    assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM]
+    assert body["review"] is True and body["notes"] == [] and body["visible"] == body["total"] == 18
+    r = app_client.post("/api/ops/ipad-scenes", json={"scene": "golden-hour-2", "show": False})
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+    res = r.json()
+    assert res["ok"] is True and res["message"].startswith("Golden Hour #2 is off the iPad")
+    assert next(s for s in res["scenes"] if s["id"] == "golden-hour-2")["on_ipad"] is False
+    assert res["visible"] == 17
+    assert "golden-hour-2" not in [s["id"] for s in _panel(app_client)["scenes"]]
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    assert yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": ["golden-hour-2"]}}
+    assert [(e["action"], e["scene"], e["show"]) for e in published] == [
+        ("ipad_scenes", "golden-hour-2", False)
+    ]
+    assert published[0]["kind"] == "control" and len(_ops_events(services)) == 1
+    again = app_client.post("/api/ops/ipad-scenes", json={"scene": "golden-hour-2", "show": False}).json()
+    assert again["message"] == "Golden Hour #2 is already off the iPad." and len(published) == 1
+    back = app_client.post("/api/ops/ipad-scenes", json={"scene": "golden-hour-2", "show": True}).json()
+    assert back["message"] == "Golden Hour #2 is back on the iPad." and len(published) == 2
+    assert "golden-hour-2" in [s["id"] for s in _panel(app_client)["scenes"]]
+
+
+def test_the_ipad_switch_refuses_the_idle_scene_and_an_unknown_one(app_client):
+    services = _svc(app_client)
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    r = app_client.post("/api/ops/ipad-scenes", json={"scene": CALM, "show": False})
+    assert r.status_code == 409
+    assert (
+        r.json()["detail"]
+        == "Lowcountry Calm is the idle scene (kiosk.idle_mode), so the iPad always offers it."
+    )
+    services.settings.kiosk.idle_scene = "goodnight-glow"
+    r = app_client.post("/api/ops/ipad-scenes", json={"scene": "goodnight-glow", "show": False})
+    assert r.status_code == 409 and "(kiosk.idle_scene)" in r.json()["detail"]
+    r = app_client.post("/api/ops/ipad-scenes", json={"scene": "disco-inferno", "show": False})
+    assert r.status_code == 404 and r.json()["detail"] == "There is no scene called 'disco-inferno'."
+    assert not path.exists() and _ops_events(services) == []
+
+
+def test_a_save_that_fails_over_http_changes_nothing(app_client, monkeypatch):
+    services = _svc(app_client)
+    install_review(services)
+    published = _published(services)
+
+    def disk_full(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(IM, "save_settings_overlay", disk_full)
+    r = app_client.post("/api/ops/ipad-scenes", json={"scene": "golden-hour-2", "show": False})
+    assert r.status_code == 503
+    assert r.json()["detail"] == "The iPad's scene list couldn't be saved (disk full); nothing changed."
+    assert services.settings.kiosk.hidden_scenes == []
+    assert "golden-hour-2" in [s["id"] for s in _panel(app_client)["scenes"]]
+    assert not (Path(services.data) / SETTINGS_OVERLAY_PATH).exists()
+    assert published == [] and _ops_events(services) == []
+
+
+def test_two_switches_back_to_back_both_stick(app_client):
+    from conductor.routes import ops as O
+
+    assert inspect.iscoroutinefunction(O.ipad_scenes) and inspect.iscoroutinefunction(O.ipad_scenes_set)
+    services = _svc(app_client)
+    install_review(services)
+    for sid in ("golden-hour-2", "rainbow-row-sunset-3"):
+        assert app_client.post("/api/ops/ipad-scenes", json={"scene": sid, "show": False}).status_code == 200
+    assert services.settings.kiosk.hidden_scenes == ["rainbow-row-sunset-3", "golden-hour-2"]
+    path = Path(services.data) / SETTINGS_OVERLAY_PATH
+    assert yaml.safe_load(path.read_text())["kiosk"]["hidden_scenes"] == [
+        "rainbow-row-sunset-3",
+        "golden-hour-2",
+    ]
+
+
+def test_the_switch_is_ops_only(app_client_auth):
+    from test_kiosk_routes import OPS, _enroll
+
+    client = app_client_auth
+    assert client.get("/api/ops/ipad-scenes").status_code == 401
+    _enroll(client, "kiosk")
+    assert client.get("/api/ops/ipad-scenes").status_code in (401, 403)
+    r = client.post("/api/ops/ipad-scenes", json={"scene": GOLDEN, "show": False})
+    assert r.status_code in (401, 403)
+    assert client.get("/api/ops/ipad-scenes", auth=OPS).status_code == 200
+    assert _svc(client).settings.kiosk.hidden_scenes == []
+
+
+def test_the_switch_is_json_only_and_same_site(app_client):
+    r = app_client.post(
+        "/api/ops/ipad-scenes",
+        content=json.dumps({"scene": GOLDEN, "show": False}),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert r.status_code == 415
+    r = app_client.post(
+        "/api/ops/ipad-scenes",
+        json={"scene": GOLDEN, "show": False},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+    assert (
+        app_client.post("/api/ops/ipad-scenes", json={"scene": GOLDEN, "show": False, "x": 1}).status_code
+        == 422
+    )
+    assert app_client.post("/api/ops/ipad-scenes", json={"scene": GOLDEN, "show": "false"}).status_code == 422
+    assert app_client.post("/api/ops/ipad-scenes", json={"scene": "", "show": False}).status_code == 422
+    assert _svc(app_client).settings.kiosk.hidden_scenes == []
+
+
+def test_the_list_survives_a_restart(monkeypatch, tmp_path):
+    with _client(monkeypatch, tmp_path) as client:
+        install_review(_svc(client))
+        assert (
+            client.post("/api/ops/ipad-scenes", json={"scene": "golden-hour-2", "show": False}).status_code
+            == 200
+        )
+    with _client(monkeypatch, tmp_path) as client:  # the restart, on the same data dir
+        services = _svc(client)
+        assert services.settings.kiosk.hidden_scenes == ["golden-hour-2"]
+        install_review(services)  # hide=None keeps the list the overlay put in force
+        ids = [s["id"] for s in _panel(client)["scenes"]]
+        assert "golden-hour-2" not in ids and len(ids) == 17
+
+
+def test_names_that_hide_nothing_are_an_ops_summary_line_and_the_next_switch_drops_them(
+    monkeypatch, tmp_path
+):
+    with _client(monkeypatch, tmp_path, "kiosk: {hidden_scenes: [disco-inferno]}\n") as client:
+        install_review(_svc(client))
+        line = (
+            "kiosk.hidden_scenes names 'disco-inferno', which isn't a scene now, so it hides nothing; the next "
+            "“Show on the iPad” switch on /ops drops it."
+        )
+        assert line in _attention(client)  # before any switch
+        assert _switch(client, "golden-hour-2", False)
+        path = tmp_path / "data" / SETTINGS_OVERLAY_PATH
+        assert yaml.safe_load(path.read_text())["kiosk"]["hidden_scenes"] == ["golden-hour-2"]
+        assert line not in _attention(client)
+
+
+def _switch(client: TestClient, scene: str, show: bool) -> bool:
+    r = client.post("/api/ops/ipad-scenes", json={"scene": scene, "show": show})
+    assert r.status_code == 200, r.text
+    return True
+
+
+# ---- /ops: the overlay download folds the list into conductor.yaml ---------------------------------------------------------
+def test_the_overlay_download_folds_the_list_into_conductor_yaml(app_client, tmp_path):
+    nothing = app_client.get("/api/ops/overlay").text
+    assert "--- a/config/conductor.yaml" not in nothing
+    assert (
+        "kiosk.hidden_scenes: none." in nothing and "config/conductor.yaml already says the same" in nothing
+    )
+    assert (
+        "--- a/config/conductor.yaml" not in app_client.get("/api/ops/overlay", params={"part": "diff"}).text
+    )
+    assert _switch(app_client, GOLDEN, False)
+    response = app_client.get("/api/ops/overlay")
+    assert response.status_code == 200
+    text = response.text
+    head = text.split("\n---", 1)[0]
+    assert "kiosk.hidden_scenes: [golden-hour]" in head and "`git apply` this file" in head
+    hunk = text[text.index("--- a/config/conductor.yaml") :]
+    assert hunk.startswith("--- a/config/conductor.yaml\n+++ b/config/conductor.yaml\n")
+    assert "\n-  hidden_scenes: []\n" in hunk and "\n+  hidden_scenes: [golden-hour]\n" in hunk
+    fold = IM.conductor_yaml_diff(CONFIG_DIR, [GOLDEN])
+    assert hunk == fold.diff
+    if shutil.which("git"):
+        after = _git_apply(tmp_path, hunk)
+    else:
+        after = fold.after
+    reread = yaml.safe_load(after)
+    assert reread["kiosk"]["hidden_scenes"] == [GOLDEN]
+    KioskSettings.model_validate(reread["kiosk"])
+    diff = app_client.get("/api/ops/overlay", params={"part": "diff"})
+    disposition = diff.headers["content-disposition"]
+    assert disposition.startswith('attachment; filename="canopy-config-') and disposition.endswith('.diff"')
+    assert diff.text.endswith(fold.diff) and "--- a/config/conductor.yaml" in diff.text
+    assert "hidden_scenes" not in app_client.get("/api/ops/overlay", params={"part": "yaml"}).text
+
+
+def test_the_overlay_download_says_why_it_cant_fold(app_client, tmp_path, monkeypatch):
+    assert _switch(app_client, GOLDEN, False)
+    config = tmp_path / "config"
+    shutil.copytree(CONFIG_DIR, config)
+    path = config / "conductor.yaml"
+    path.write_text(
+        path.read_text().replace("  hidden_scenes: []", "  hidden_scenes: []\n  hidden_scenes: []")
+    )
+    monkeypatch.setattr(_svc(app_client), "config_dir", config)
+    text = app_client.get("/api/ops/overlay").text
+    assert "   No diff: config/conductor.yaml has no one-line `hidden_scenes: [...]` under kiosk" in text
+    assert "--- a/config/conductor.yaml" not in text
+
+
+# ---- the pure models under node (CI runs pytest only) ------------------------------------------------------------------------
+@pytest.mark.skipif(
+    shutil.which("node") is None, reason="Node isn't installed; ops-ipad.test.mjs is UNVERIFIED here"
+)
+def test_the_ops_ipad_model_under_node():
+    """tests/ops-ipad.test.mjs (the /ops card's words). tests/test_kiosk_node.py (PR A) runs canopy-preview and
+    guest-panel; PR D consolidates the wrappers."""
+    result = subprocess.run(
+        [shutil.which("node"), "--test", str(ROOT / "tests" / "ops-ipad.test.mjs")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
+    # "ℹ fail 0" with the spec reporter (newer Node, macOS), "# fail 0" in TAP (CI's runner)
+    assert re.search(r"(?m)^(?:ℹ|#) fail 0$", result.stdout), result.stdout[-2000:]

@@ -3,6 +3,7 @@
 import { api, connectLive, copyJSON, simBadge } from "/static/app.js";
 import { fill, fmtAge, h, pill, show, simTag, statusPill } from "/ops/dom.js";
 import { commissionScope, headsCounts, moduleScope, positions, testWaitNote } from "/ops/counts-model.mjs";
+import { ipadKey, ipadRows, ipadSummary } from "/ops/ipad-model.mjs";
 import { rehearsalText, steppedLines } from "/ops/stepped-model.mjs";
 
 const POLL_MS = 10000;
@@ -20,6 +21,7 @@ let rehearsal = null; // /api/canopy/state's `rehearsal`: the stepped rehearsal 
 let rehearsalPending = null; // {mode, minutes, confirm}: the preview the confirm dialog is showing
 let headsData = null;
 let modesDrawn = "";
+let ipadDrawn = ""; // ipadKey of the "On the iPad" rows on screen
 let logSeq = null;
 let logsPaused = false;
 let refreshTimer = null;
@@ -195,13 +197,71 @@ function setupRehearsal() {
 }
 
 function drawModes(modes, current) {
-  const key = modes.map((m) => m.id).join(",");
+  const key = modes.map((m) => `${m.id}:${m.on_ipad}`).join(",");
   const select = $("mode-select");
   if (key !== modesDrawn) {
     modesDrawn = key;
-    fill(select, modes.map((m) => h("option", { value: m.id }, m.label)));
+    // ops can still choose a scene that is off the iPad (D76): the picker says which ones guests can't
+    fill(
+      select,
+      modes.map((m) => h("option", { value: m.id }, m.on_ipad === false ? `${m.label} (off the iPad)` : m.label)),
+    );
   }
   if (current && document.activeElement !== select) select.value = current;
+}
+
+// ---- On the iPad (D76; conductor/ipad_menu.py): which scenes guests can choose ------------------------------------
+function drawIpad(body) {
+  show($("ipad-summary"), ipadSummary(body));
+  show($("ipad-notes"), (body.notes || []).join(" "));
+  const key = ipadKey(body);
+  if (key === ipadDrawn) return;
+  ipadDrawn = key;
+  fill(
+    $("ipad-scenes"),
+    ipadRows(body).map((row) =>
+      h(
+        "li",
+        { class: row.option ? "ipad-row is-option" : "ipad-row" },
+        h("span", { class: "ipad-name" }, row.name),
+        h(
+          "button",
+          {
+            type: "button",
+            class: row.on ? "ipad-switch on" : "ipad-switch secondary",
+            role: "switch",
+            "aria-checked": String(row.on),
+            "aria-label": row.label,
+            "data-scene": row.id,
+            disabled: row.disabled,
+            onclick: (e) => flipIpad(e.currentTarget, row),
+          },
+          row.text,
+        ),
+      ),
+    ),
+  );
+}
+
+async function loadIpad() {
+  try {
+    drawIpad(await api("/api/ops/ipad-scenes"));
+  } catch (err) {
+    note($("ipad-result"), err.message, "error");
+  }
+}
+
+async function flipIpad(button, row) {
+  button.disabled = true;
+  try {
+    const res = await api("/api/ops/ipad-scenes", { method: "POST", body: { scene: row.id, show: !row.on } });
+    note($("ipad-result"), res.message, "ok");
+    drawIpad(res);
+  } catch (err) {
+    note($("ipad-result"), err.message, "error");
+    button.disabled = row.disabled;
+  }
+  loadState(); // the mode picker's "(off the iPad)"
 }
 
 function moduleSvg(mod, heads, canopy) {
@@ -812,6 +872,7 @@ async function refresh(full = false) {
   }
   loadState();
   loadHeads();
+  loadIpad();
 }
 
 function soon() {
