@@ -140,7 +140,7 @@ order. Not in PR B: the operator slot repaint (B2, `claude/live-lab-repaint`, af
   painted design change publishes** (held at module level, then the reconciler's stale rewrite), as D66's lock was
   off there — a deviation from the plan's §5.2 wording, recorded in D68 (one condition in `plan_publish` if Alon wants
   the sim locked too).
-- **The Lab page (U).** `lab.js` / `lab-model.mjs` / `lab.css` (`?v=lab-6`): the show bar (live / published,
+- **The Lab page (U).** `lab.js` / `lab-model.mjs` / `lab.css` (`?v=lab-6`; `lab-7` after review 4): the show bar (live / published,
   simulator vs hardware, the fallback line, held scenes, git-changed), the two badges per scene (Live: Approved /
   Published, and Live / Draft / In try-on against the **live** look), working drafts seeded from the live look,
   Publish to the show / Save & publish / Live now, the confirm dialog with the server's sentence verbatim and the
@@ -187,6 +187,30 @@ order. Not in PR B: the operator slot repaint (B2, `claude/live-lab-repaint`, af
 - **Needs the show box:** the deploy (§8.1 step 3: note the Lab's show bar before; after, the same name or "the
   approved looks" and no "Published looks: … couldn't be used" line), a publish of a non-painted scene on the two
   kits, then Revert.
+- **Review 4 fixes (Oct 17, on this branch after merging the fixed `claude/canopy-only`; PLAN §10 has the list).**
+  Each was reproduced first and fixed at its root, with a regression test that failed on the code before the fix
+  (17 of the 24 new route/engine tests fail there; the other 7 cover guards that already worked and each fails on its
+  mutant — 18 mutants, all killed). Behaviour changes: **Revert to approved clears a fallback** (it used to be refused
+  as "already what the show runs", so the red line and the /ops alert could never be cleared); a publish is
+  **refused while config/ on disk differs from the git the show loaded** (a deploy under way), and the Lab builds on
+  that git (no re-read when it is first opened); a **rollback** restores a fallback's problem and its warns,
+  recomputes the T1 hold under the restored trio and names what really runs; the rollback warn is resolved by the
+  next good publish, and can't-be-shown has its own key `looks:show:<mode>`, resolved when the mode is shown again;
+  the **"Show <scene>" box is part of the confirm** (sentence, notes and cost follow it; a toggle re-asks; off by
+  default for Undo and Revert); "today" at T1 paints the live painted design (`heads: "published"` when it is) and
+  is never T1 while the scene is held; the try-on line no longer claims the slots keep the approved design; the
+  **Studio reads the scenes as the show runs them** (`GET /api/canopy/scenes`, `web/ops/showcase/studio-model.mjs`,
+  re-read on focus, on leaving #lab and every 15 s while visible; demo-model's SCENES is the fallback, and the export
+  notes say so); the preflight is the show's own load (read only), so it never calls a usable file unusable. Pins:
+  `lab.js`/`lab.css`/`lab-model.mjs` `?v=lab-7`, `studio.js` `?v=screen-2`. `tests/test_lab_routes_preview.py`'s
+  "today in sim" test now waits for the show's start-up (the Lab used to take ~40 ms re-reading config/, which
+  covered a race in the test). Browser check on a dev server (`--port 8216`, throwaway data, killed): a bad-YAML
+  overlay → Revert dialog with the fallback sentence → 200, red line gone, `previous: null`; a Golden Hour publish
+  with the box ticked said "switches to Golden Hour now on 9 modules … sends 9 writes", unticking re-asked ("Nothing
+  on the canopy changes now … sends nothing"), the confirm sent `show: false` and the canopy stayed on Lowcountry
+  Calm; the Undo dialog opened unticked; the Studio's Golden Hour chips and tile showed the published `#FFD080`. Suite after the fixes: `nice -n 15 uv run --offline
+  pytest -q` → 2392 passed, 5 skipped, 44 subtests (10 m; `tests/test_deploy.py` passes now that PR A moved its
+  checks); `ruff check` + `ruff format --check` clean; `node --test tests/*.test.mjs` → 150/150.
 
 ## PR A — canopy only (D67), `claude/canopy-only` → `main` (Oct 17; plan `docs/live-lab/PLAN.md` §1, stream R)
 Alon on site, Oct 17: "remove all the stuff that isn't the canopy control". **Merge this before PR B** (the live
@@ -208,30 +232,46 @@ Lab); both target `main`; merge commits, not squash.
 - **Old data on the live Mac is tolerated, not migrated** (§1.5): a saved session/enrollment of the removed role is
   skipped per record (the guest iPad's kiosk session survives; an unreadable record of a role that exists still sets
   the file aside); a registry-overlay entry for a removed vignette device (`REMOVED_DEVICE_IDS`, 15 ids, or any
-  `role: vignette` entry) and a `vignette`/`kind` key on a surviving entry are ignored with a "Needs attention" line
-  and pruned by the next /ops registry edit (`save_overlay_patch`); `overlay_diff` ignores them too.
+  `role: vignette` entry) and a `vignette`/`kind` key — or a `profile` naming one of the six deleted vignette sim
+  profiles (`REMOVED_PROFILES`) — on a surviving entry are ignored with a "Needs attention" line and pruned by the
+  next /ops registry edit (`save_overlay_patch`); `overlay_diff` ignores them too.
   **`conductor/preflight.py`** (offline, read-only, binds nothing): settings, registry, the role store from a temp
-  copy; `deploy/mac/run-conductor.sh --check` runs it, so `canopy-mac install` (which runs `--check` after `uv sync`
-  and before it removes the hold or reloads launchd) never restarts the show onto code that can't load its data.
+  copy, and every registry entry's sim profile (startup builds a SimDriver over them, live mode too);
+  `deploy/mac/run-conductor.sh --check` runs it, so `canopy-mac install` (which runs `--check` after `uv sync` and
+  before it removes the hold or reloads launchd) never restarts the show onto code that can't load its data. When it
+  fails, install **exits 3** and prints the checkout rollback (the last installed commit, `state/installed_sha`,
+  else `~/canopy-prev-sha.txt`): the checkout is the rejected code and any restart of the KeepAlive job would start
+  it, so the paste block rolls it back at once.
 - **Contract text:** 07 §1/§2/§8/§10, 05 #3/#11/#13 (+ diagram), 04/06/01/03 notes, D67, and CLAUDE.md's opening line
   and show-accounts rule (lead's instruction: applied here for Alon to review in the PR). Runbooks are Mac-only now
   (`release-and-freeze.md` rewritten: a release is a tag; deploy = the paste block below; rollback = the previous
   commit + `canopy-mac install`).
-- **Verified (sim, macOS):** `nice -n 15 uv run --offline pytest -q` (no `--ignore` any more: `tests/test_deploy.py` is gone): 2236 passed, 5 skipped, 44 subtests;
+- **Review fixes (R1–R3, Oct 17):** R1 a surviving overlay entry with a deleted vignette sim profile
+  (`outdoor-plug-2` …) passed the preflight and then crashed startup's SimDriver — now ignored/pruned by value and
+  the preflight builds every entry's profile; R2 after a failed preflight the checkout stayed on the rejected code
+  while the docs said the show was safe — `canopy-mac install` exits 3 with the rollback and the paste blocks (here,
+  `release-and-freeze.md`, PLAN §8.1) roll back on rc 3; `mac-show-box.md` §5 says so; R3 two comments named the
+  deleted `release.sh`/`install.sh`/`canopy-start` (`.gitignore`, `test_review3_fixes.py`) — fixed, and a test now
+  scans code, tests, deploy, web, config and the runbooks for the deleted tooling names. Each regression test was
+  run failing before its fix; R1's two halves are each mutation-checked (no profile pop → the old-overlay app start
+  and preflight fail; no preflight profile build → the unknown-profile preflight test fails).
+- **Verified (sim, macOS):** `nice -n 15 uv run --offline pytest -q` (no `--ignore` any more: `tests/test_deploy.py` is gone): 2242 passed, 5 skipped, 44 subtests (after R1–R3);
   `uv run --offline ruff check . && uv run --offline ruff format --check .`; `node --test tests/*.test.mjs` 123/123;
   `nice -n 15 uv run --offline python -m conductor.soak` exit 0, 21 PASS rows, the only FAIL the non-gating
   "(reported)" D65 landing spread (p95 2.78 s), as in #27.
-  `tests/test_canopy_only.py` (20 tests): the removed surfaces 404 for ops; no conductor module imports what went
+  `tests/test_canopy_only.py` (23 tests after R1–R3): the removed surfaces 404 for ops; no conductor module imports what went
   (AST); no vignette role/account/device, `len(REMOVED_DEVICE_IDS) == 15`; a vignette enrollment → 400 "…Use kiosk or
   tester."; WebSocket topics; **old data**: a kiosk + vignette `sessions.json` loads the kiosk (its cookie opens the
   panel through the app), nothing set aside; an overlay with a removed-id patch, a full `role: vignette` entry,
-  `bench-kit: {kind}` and a full spare with `vignette`/`kind` loads, the app starts (`/healthz` 200), `/ops` names
+  `bench-kit: {kind}`, a full spare with `vignette`/`kind` and a full spare with `profile: outdoor-plug-2` loads, the app starts (`/healthz` 200), `/ops` names
   them, the next `save_overlay_patch` prunes them and `overlay_diff().problem == ""`; the guest panel's target is the
   engine with `CONDUCTOR_ENV=workshop-sim`; the preflight passes over that data and names it, fails (exit 1) over an
-  overlay naming an unknown id, a session file the store would set aside, or a bad `CONDUCTOR_MODE`, and never
+  overlay naming an unknown id or a sim profile SimDriver can't build (enabled or disabled), a session file the store
+  would set aside, or a bad `CONDUCTOR_MODE`, and never
   changes the data dir's bytes; the Studio makes no request but `GET /api/canopy/design`. `tests/test_mac_box.py`:
   `--check` runs `python -m conductor.preflight` from the checkout over the pinned data folder, and a failing
-  preflight stops `--check` and `canopy-mac install` before the agents are written. **20 mutants, each killed by its
+  preflight stops `--check` and `canopy-mac install` before the agents are written, and install then exits 3 with
+  the rollback line (the installed sha, else `~/canopy-prev-sha.txt`, else a placeholder). **20 mutants, each killed by its
   named test** (the `_merge` id tolerance and key pop, both `save_overlay_patch` prunes, the `overlay_diff` skip, the
   `_load` per-record skip and a widened skip, a vignette route back, the WS topic, the Needs-attention line, the
   preflight's temp copy / roles failure / registry check, the `--check` preflight call and its `die`, a Fernet-shaped
@@ -243,8 +283,8 @@ Lab); both target `main`; merge commits, not squash.
   are `GET /api/canopy/design`; the Lab opens on `#lab` and its stage draws 270 lights; `/ops` offers kiosk and
   tester only and lists canopy, bench, spares.
 - **The final grep** (`git grep -n -i -E
-  'vignette|workshop|PAIR_IDS|scene_gradient|module\.pair|TEST-CENTER|deploy/venue|dev_guest_panel|kiosk-resting|venue[- ]box|canopy-status|systemctl|chrony|docker compose|guest-dev|VWBD-HANDOFF|shop-string-1'
-  -- . ':!research'`) leaves only this **allowlist**: history docs (`docs/BUILD_PLAN.md`,
+  'vignette|workshop|PAIR_IDS|scene_gradient|module\.pair|TEST-CENTER|deploy/venue|dev_guest_panel|kiosk-resting|venue[- ]box|canopy-status|systemctl|chrony|docker compose|guest-dev|VWBD-HANDOFF|shop-string-1|release\.sh|install\.sh|canopy-(start|stop|restart|backup|restore|logs|kiosk-enroll)\b'
+  -- . ':!research'`; the last three alternatives added for R3) leaves only this **allowlist**: history docs (`docs/BUILD_PLAN.md`,
   `docs/ULTRACODE_BUILD_PROMPT.md`, `docs/CLOUD_SESSION_PROMPT.md`, `docs/design-lab/PLAN.md` + `PROMPT.md`,
   `docs/live-lab/PLAN.md`, `docs/DECISIONS.md`, this file's history); the §1.0 evidence files
   (`docs/current-live-test-session.md`, `docs/live-workshop-2026-09-28.test-center.json`); `.gitignore`'s
@@ -268,8 +308,11 @@ Lab); both target `main`; merge commits, not squash.
   # (the Oct 19 registry undo first, exactly as below, under the code already running, then verify it)
   git -C ~/canopy-show fetch --tags origin
   git -C ~/canopy-show checkout --detach <A tag or merge sha>
-  ~/canopy-show/deploy/mac/canopy-mac install            # uv sync, then --check runs conductor.preflight; a failure
-                                                         # stops here, before the restart (the old process keeps running)
+  ~/canopy-show/deploy/mac/canopy-mac install; rc=$?    # uv sync, then --check runs conductor.preflight, then restarts
+  if [ $rc = 3 ]; then  # the preflight rejected this checkout: nothing restarted, but any restart would start it
+    prev=$(cat ~/Library/"Application Support"/ColorCanopy/state/installed_sha 2>/dev/null || cat ~/canopy-prev-sha.txt)
+    git -C ~/canopy-show checkout --detach "$prev" && (cd ~/canopy-show && uv sync --frozen --no-dev --extra live --quiet)
+  fi                    # roll the checkout back at once (install printed the same line), then fix
   canopy-mac status; git -C ~/canopy-show describe --tags --always
   #  /ops "Needs attention": at most the "removed vignette devices/fields" lines; the kiosk iPad's panel still loads
   # Rollback: git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)" && ~/canopy-show/deploy/mac/canopy-mac install

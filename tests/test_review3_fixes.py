@@ -28,7 +28,7 @@ def test_a_pause_is_saved_atomically_and_restored_by_the_next_engine(tmp_path):
         saved = json.loads((state_dir / "guest_input.json").read_text())
         mode = oct((state_dir / "guest_input.json").stat().st_mode & 0o777)
         await w.close()
-        # A restart (watchdog, reboot, install.sh, canopy-start): a new engine on the same data dir.
+        # A restart (the watchdog, a reboot, `canopy-mac install` / `start` / `restart`): a new engine on the same data dir.
         w2 = make_world(settings=QUIET, state_dir=state_dir)
         await w2.engine.start()
         state = w2.engine.state()

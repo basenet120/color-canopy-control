@@ -59,10 +59,14 @@ SIM_TITLE = "What this simulator shows"
 LIVE_TITLE = "What the lights can show today"
 SHOW_BOX_TITLE = "Show box today (Modules 1–2, module level)"
 NO_ENGINE = "The canopy engine isn't running here."
-HEADS_APPROVED = (
-    "The slots hold the approved painted design; your draft's painted design reaches the lights only after export, "
-    "merge and commissioning."
+# "today" at T1/T2 paints what the slots hold: the show's painted design (the live looks: approved or published),
+# never the draft's. A scene held off T1 (D68: its slots don't hold the live design yet) is never "today" at T1.
+HEADS_SLOTS = (
+    "The slots hold the {which} painted design, the one the show runs; your draft's painted design isn't in them "
+    "until they are rewritten."
 )
+HEADS_APPROVED = HEADS_SLOTS.format(which="approved")
+HELD_WHY = "its slots don't hold the show's painted design yet (they are rewritten first)"
 SHOW_BOX_NOTE = (
     "Until the Oct 19 undo the Mac show box drives VWBD's two test kits as Modules 1–2 only (D62), with no painted "
     "slot commissioned: nothing painted."
@@ -240,28 +244,41 @@ def today_view(lab: LabService, patched: ConfigTrio, scene_id: str) -> dict:
     trying = _trial_view(lab, wiring, title, scene_id, patched)
     if trying is not None:
         return trying
-    plan, reasons = _first_plan(
-        scene_id, patched.modes, ctx, lambda tier: wiring.tier_allowed(scene_id, tier)
-    )
+    engine = lab.engine()
+    held = set(getattr(engine, "t1_hold", ()) or ()) if engine is not None else set()
+
+    def allowed(tier: Tier) -> tuple[bool, str]:
+        if tier is Tier.T1 and scene_id in held:
+            return False, HELD_WHY
+        return wiring.tier_allowed(scene_id, tier)
+
+    plan, reasons = _first_plan(scene_id, patched.modes, ctx, allowed)
     if plan is None:
         return _view(title, None, note="No rung of this scene can run here now: " + "; ".join(reasons))
     level = patched.modes.mode(scene_id).techniques.modules.sample.brightness  # type: ignore[union-attr]
     devices = ctx.devices
     positions = _positions(devices, plan)
     if plan.tier in (Tier.T1, Tier.T2):
-        # The slots hold the approved painted design: the heads are the approved trio's, never the draft's.
-        actx = dataclasses.replace(wiring.context(modes=lab.approved.modes), recipes=lab.approved.recipes)
+        # The slots hold the show's painted design: the heads are the live trio's (approved or published), never
+        # the draft's.
+        from conductor.looks.live import live_looks, scene_source
+
+        looks = live_looks(lab.services)
+        live = looks.trio
+        which = scene_source(looks, scene_id)
+        note = HEADS_SLOTS.format(which=which)
+        actx = dataclasses.replace(wiring.context(modes=live.modes), recipes=live.recipes)
         try:
             shown = compile_mode(scene_id, plan.tier, actx)
         except PlanError as exc:
-            return _view(title, plan, heads="approved", positions=positions, note=f"{HEADS_APPROVED} ({exc})")
+            return _view(title, plan, heads=which, positions=positions, note=f"{note} ({exc})")
         return _view(
             title,
             shown,
             lit=_lit(ctx.canopy or lab.canopy, devices, shown, level),
-            heads="approved",
+            heads=which,
             positions=positions,
-            note=HEADS_APPROVED,
+            note=note,
         )
     return _view(
         title,

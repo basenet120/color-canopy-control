@@ -38,16 +38,23 @@ git -C ~/canopy-show status --short                      # must print nothing
 git -C ~/canopy-show rev-parse HEAD | tee ~/canopy-prev-sha.txt
 git -C ~/canopy-show fetch --tags origin
 git -C ~/canopy-show checkout --detach <tag>
-~/canopy-show/deploy/mac/canopy-mac install              # uv sync, then --check runs conductor.preflight; a failure
-                                                         # stops here, before the restart (the old process keeps running)
+~/canopy-show/deploy/mac/canopy-mac install; rc=$?    # uv sync, then --check runs conductor.preflight, then restarts
+if [ $rc = 3 ]; then  # the preflight rejected this checkout: nothing restarted, but any restart would start it
+  prev=$(cat ~/Library/"Application Support"/ColorCanopy/state/installed_sha 2>/dev/null || cat ~/canopy-prev-sha.txt)
+  git -C ~/canopy-show checkout --detach "$prev" && (cd ~/canopy-show && uv sync --frozen --no-dev --extra live --quiet)
+fi                    # roll the checkout back at once (install printed the same line), then fix
 canopy-mac status; git -C ~/canopy-show describe --tags --always
 ```
 
 - [ ] `canopy-mac install` re-syncs the Python environment, runs `run-conductor.sh --check` — which runs
       `python -m conductor.preflight`: this checkout's code loads the live data folder (settings, the registry
       overlay, the saved iPad session) offline, read-only — and only then removes any hold and restarts the
-      Conductor (about 30 s; the canopy goes to Lowcountry Calm). If the preflight fails, nothing was restarted:
-      read its message, fix or roll back (below).
+      Conductor (about 30 s; the canopy goes to Lowcountry Calm). If the preflight fails, install exits 3 and
+      nothing was restarted — **but the checkout is now the rejected code**: the running Conductor is a KeepAlive
+      job, so a crash, the watchdog, a reboot or `canopy-mac start`/`restart` would start it. The paste block's
+      `rc = 3` lines roll the checkout back at once (no restart needed; install prints the same line, naming the
+      last installed commit). Roll back first, then read the preflight's message and fix. Any other non-zero exit
+      came after the restart (or before the preflight, e.g. `uv sync`): read `canopy-mac status` and use Rollback.
 - [ ] `canopy-mac status` → healthy; `git describe` names the tag (`/api/version` says `commit: local` on the Mac);
       `/ops` → run the 7 am checklist and a test mode change.
 - [ ] Resume guest input.

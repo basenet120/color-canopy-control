@@ -1146,4 +1146,4 @@ def test_a_refused_repick_during_a_try_on_puts_the_safe_look_up_never_the_draft(
     refused, trial, same, mode, keys = run_virtual(main)
     assert refused and trial is None and not same
     assert mode == CALM  # the safe look
-    assert f"looks:repaint:{GOLDEN}" in keys
+    assert f"looks:show:{GOLDEN}" in keys

@@ -112,6 +112,7 @@ async def show(
     quiet: bool = True,
     settings=None,
     sim: SimSettings | None = None,
+    config_dir: Path | None = None,
 ) -> Show:
     """The show on virtual time, its live looks built before ShowWiring (the lifespan's order). `live`: the show
     box's tier rules over the simulator's transport (no automatic commissioning, no bench flags). `sim`: the
@@ -124,7 +125,10 @@ async def show(
     data = data or Path(tempfile.mkdtemp(prefix="canopy-live-lab-"))
     sim = sim or SimSettings.from_acceptance().with_(throttle_429_rate=0.0, silent_drop_rate=0.0)
     services = build_services(
-        {"CONDUCTOR_DATA_DIR": str(data)}, clock=VirtualClock(), config_dir=CONFIG_DIR, sim_settings=sim
+        {"CONDUCTOR_DATA_DIR": str(data)},
+        clock=VirtualClock(),
+        config_dir=config_dir or CONFIG_DIR,
+        sim_settings=sim,
     )
     if settings is not None:
         services.settings = settings

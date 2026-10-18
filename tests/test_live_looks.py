@@ -159,6 +159,17 @@ def _ladder() -> dict:
     return _doc(trio=trio, trio_sha=L._sha(trio))
 
 
+def _blocking(**edit) -> dict:
+    """PINK with one edit only validate_trio's blocking scene rules refuse (the checksum recomputed: a valid file)."""
+    trio = PINK.dump()
+    if "canvas_brightness" in edit:
+        trio["modes"]["modes"][GOLDEN]["techniques"]["canvas"]["brightness"] = edit["canvas_brightness"]
+    if "description" in edit:
+        golden = next(s for s in trio["scenes"]["scenes"] if s["id"] == GOLDEN)
+        golden["description"] = edit["description"]
+    return _doc(trio=trio, trio_sha=L._sha(trio))
+
+
 def _deep(n: int) -> str:
     return "format: 1\nseq: " + "[" * n + "]" * n + "\n"
 
@@ -179,6 +190,8 @@ CAUSES = {
     "schema refusal": _schema(),
     "a ladder that differs from git's": _ladder(),
     "a bad current": _doc(id="not-an-id"),
+    "a blocking scene rule": _blocking(canvas_brightness=37),
+    "scene copy that isn't true": _blocking(description="All 270 lights glow gold."),
 }
 
 
@@ -187,6 +200,9 @@ WHO_SAYS = {
     "trio_sha mismatch": "doesn't match its trio_sha",
     "an anchor": "anchors or aliases",
     "an alias bomb": "anchors or aliases",
+    # the scene ↔ mode rules (validate_trio's last step) are the only guard for these two (B1-4)
+    "a blocking scene rule": "isn't the scene's brightness",
+    "scene copy that isn't true": "can't say '270'",
 }
 
 
@@ -297,6 +313,98 @@ def test_a_bad_history_row_never_resets_seq_or_the_repaint_gate(tmp_path):
     assert looks.source == "approved" and looks.problem
     assert looks.file.seq == 7 and looks.file.repaints == {GOLDEN: 1792700000.0}
     assert [h.id for h in looks.file.history] == ["p0001"]
+
+
+@pytest.mark.parametrize("seq", ["x", None, -4, True, 1])
+def test_a_missing_or_garbled_seq_never_reissues_an_id(monkeypatch, tmp_path, seq):
+    """B1-5: ids are never reissued (expected_live depends on it): a seq that is missing, garbled or below the ids
+    the file already uses is raised to the highest of them, and the next publish is p0004."""
+    doc = publication_document(PINK)
+    doc["current"]["id"] = "p0003"
+    doc["history"] = [{**doc["history"][0], "id": f"p000{n}"} for n in (3, 2, 1)]
+    if seq is None:
+        doc.pop("seq")
+    else:
+        doc["seq"] = seq
+    write_document(tmp_path, doc)
+    looks = load(tmp_path)
+    assert looks.source == "published" and looks.file.seq == 3
+    install_no_threads(monkeypatch)
+
+    async def main():
+        w = await show(data=tmp_path)
+        async with client_of(w) as c:
+            vid = await save(c, {"lowcountry-calm": brighter("lowcountry-calm")})
+            r = await publish(c, vid)
+        ids = [h.id for h in w.looks.file.history]
+        await w.close()
+        return r.status_code, r.text, r.json()["report"]["id"] if r.status_code == 200 else None, ids
+
+    status, text, new_id, ids = run_virtual(main)
+    assert status == 200, text
+    assert new_id == "p0004" and len(ids) == len(set(ids))
+
+
+LENIENT = {  # what load_live_looks keeps leniently (the show runs the publication): the preflight must agree
+    "a bad history row": {"history_row": {"id": "nope", "kind": "version"}},
+    "a bad repaints entry": {"repaints": {GOLDEN: 1792700000.0, "bad": "x"}},
+    "a bad previous": {"previous": {"id": "nope"}},
+    "201 history rows": {"rows": 201},
+    "a negative seq": {"seq": -1},
+}
+
+
+def _lenient(kind: dict) -> dict:
+    doc = publication_document(PINK)
+    if "history_row" in kind:
+        doc["history"].insert(0, kind["history_row"])
+    if "repaints" in kind:
+        doc["repaints"] = kind["repaints"]
+    if "previous" in kind:
+        doc["previous"] = kind["previous"]
+    if "rows" in kind:
+        doc["history"] = [{**doc["history"][0], "id": f"p{n:04d}"} for n in range(kind["rows"], 0, -1)]
+        doc["current"]["id"] = f"p{kind['rows']:04d}"
+    if "seq" in kind:
+        doc["seq"] = kind["seq"]
+    return doc
+
+
+@pytest.mark.parametrize("case", [*CAUSES, *LENIENT])
+def test_the_preflight_says_exactly_what_the_load_makes_of_the_file(tmp_path, case):
+    """B1-1: the preflight is the show's own load (read only), so it never calls a usable file unusable (or the
+    reverse), and its reason is the one /ops will show."""
+    document = CAUSES[case] if case in CAUSES else _lenient(LENIENT[case])
+    path = tmp_path / "overrides" / L.LOOKS_FILE
+    path.parent.mkdir(parents=True)
+    if isinstance(document, bytes):
+        path.write_bytes(document)
+    else:
+        write_document(tmp_path, document)
+    before = path.read_bytes()
+    line = L.preflight_line(CONFIG_DIR, tmp_path, SETTINGS)
+    looks = load(tmp_path)
+    assert (line is None) == (looks.problem is None), (line, looks.problem)
+    if case in LENIENT:
+        assert line is None and looks.source == "published"
+    else:
+        assert (
+            line
+            == f"{L.LOOKS_PATH} couldn't be used ({looks.problem}); the show would run the approved looks"
+        )
+    assert path.read_bytes() == before
+
+
+def test_the_preflight_prints_ok_for_a_file_with_a_bad_history_row(tmp_path):
+    import io
+
+    from conductor import preflight
+
+    write_document(tmp_path, _lenient(LENIENT["a bad history row"]))
+    out, err = io.StringIO(), io.StringIO()
+    code = preflight.run(env={"CONDUCTOR_DATA_DIR": str(tmp_path), "CONDUCTOR_MODE": "sim"}, out=out, err=err)
+    text = out.getvalue() + err.getvalue()
+    assert code == 0 and "looks      ok (overrides/show-looks.yaml loads)" in text, text
 
 
 # ---- equal to git, and git changed --------------------------------------------------------------------------------------

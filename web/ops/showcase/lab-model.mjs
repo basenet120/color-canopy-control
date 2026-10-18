@@ -37,6 +37,11 @@ export const LINEAR_DEFAULT_DEG = 45; // 0° reads as stripes at module level (a
 // on a corner a quarter, so some palette colours would never reach a strand. Never a module centre (schema.py refuses).
 export const SWEEP_DEFAULT_CENTRE = Object.freeze([75, 60]);
 export const HEADS_APPROVED_CAPTION = "the approved design (the slots hold it)";
+export const HEADS_PUBLISHED_CAPTION = "the published design (the slots hold it)";
+/** Whether today's view paints the slots' design (the server's `heads`: "approved" | "published", D68), not the draft. */
+export function slotHeads(today) {
+  return !!today && (today.heads === "approved" || today.heads === "published");
+}
 export const CONFIG_CHANGED =
   "The approved config changed (the Conductor restarted on a new config). Save your changes as a version, then reload the Lab; edits made now aren’t kept in this browser.";
 
@@ -99,6 +104,7 @@ export function tierCaption(view, preview) {
   if (!today) return "";
   const title = today.title || viewLabel(view, preview);
   const caption = today.label ? `${title} · ${today.label}` : title;
+  if (today.heads === "published") return `${caption} · ${HEADS_PUBLISHED_CAPTION}`;
   return today.heads === "approved" ? `${caption} · ${HEADS_APPROVED_CAPTION}` : caption;
 }
 
@@ -106,7 +112,7 @@ export function tierCaption(view, preview) {
  * design (whatever the draft), else the draft's own state. */
 export function stageState(view, preview, draftStateValue) {
   const today = todayOf(view, preview);
-  if (today && today.heads === "approved" && draftStateValue !== "in try-on") return "approved design";
+  if (slotHeads(today) && draftStateValue !== "in try-on") return `${today.heads} design`;
   return draftStateValue;
 }
 
@@ -377,7 +383,7 @@ export function draftState(approvedDraft, draft, trial) {
   return "draft";
 }
 
-export const BADGE_TEXT = { approved: "Approved", draft: "Draft", "in try-on": "In try-on", "approved design": "Approved design", live: "Live" };
+export const BADGE_TEXT = { approved: "Approved", draft: "Draft", "in try-on": "In try-on", "approved design": "Approved design", "published design": "Published design", live: "Live" };
 
 /** True when colour `i` of `draft` renames or rehexes the approved colour at that index (D59: needs sign-off). */
 export function changesApprovedColour(approvedDraft, draft, i) {
@@ -817,7 +823,7 @@ export const TRIAL_COPY = Object.freeze({
   loading: "Checking whether a try-on is running…",
   moduleLevel:
     "A try-on is module level only: one colour per strand (or one colour on every strand if module level can’t be compiled).",
-  painted: "The painted design isn’t on the lights during a try-on; the slots keep the approved one.",
+  painted: "The painted design isn’t on the lights during a try-on: a try-on never writes the slots, so they keep the painted design they hold now.",
   stepped: "A try-on never steps: the lights hold the still module-level look.",
   guests: "Guests on the iPad are asked to wait while it runs. A look chosen on /ops, a pause or a stop ends it early.",
 });
@@ -1004,7 +1010,7 @@ export function editedSinceApply(trial, sceneId, working, applied) {
 export function trialStageNote(view, preview, trial, sceneId) {
   if (!trial || trial.scene_id !== sceneId) return "";
   const today = todayOf(view, preview);
-  if (view !== "canvas" && !(today && today.heads === "approved")) return "";
+  if (view !== "canvas" && !slotHeads(today)) return "";
   return `During the try-on the lights show the tried draft ${TIER_PHRASE[trial.tier] || TIER_PHRASE.modules}, not this picture.`;
 }
 
@@ -1471,6 +1477,13 @@ export function publishBody({ version, confirm = null, expected = APPROVED, who 
   if (name) body.who = name;
   if (show !== null && show !== undefined) body.show = !!show;
   return body;
+}
+
+/** Whether the dialog's "Show <scene> on the canopy after publishing" box starts ticked: on for a version (PLAN
+ * §3.1), off for Undo and Revert — the mid-show recovery path never switches the scene guests see unless asked. The
+ * dialog asks the server with it, so the sentence and the cost always say what Publish now sends. */
+export function publishShowDefault(kind) {
+  return kind !== "approved" && kind !== "previous";
 }
 
 /** The dialog's title for what is being published. */

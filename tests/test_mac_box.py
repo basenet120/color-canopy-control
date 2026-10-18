@@ -231,6 +231,26 @@ def test_runner_check_stops_when_the_preflight_fails_and_install_goes_no_further
     assert not (box["agents"] / "com.colorcanopy.conductor.plist").exists()
 
 
+@pytest.mark.parametrize("known", ["installed", "paste-block", "none"])
+def test_install_exits_3_and_prints_the_rollback_when_the_preflight_rejects_the_checkout(box, known):
+    """The checkout is already the rejected code and the old Conductor is a KeepAlive job: any restart would start
+    it. Install says so, prints the rollback (no restart needed) and exits 3, so the paste block can roll back."""
+    install(box)
+    if known == "installed":
+        (box["home"] / "state" / "installed_sha").write_text("1111111aaaaaaa\n")
+    if known in ("installed", "paste-block"):
+        (box["tmp"] / "canopy-prev-sha.txt").write_text("2222222bbbbbbb\n")  # HOME is tmp
+    failing = _stub_python(box["tmp"] / "failing-python", box["python_calls"], exit_code=1)
+    result = run([HELPER, "install", "--no-load"], {**box["env"], "CANOPY_MAC_PYTHON": str(failing)})
+    assert result.returncode == 3, result.stderr
+    prev = {"installed": "1111111aaaaaaa", "paste-block": "2222222bbbbbbb", "none": "<the previous release>"}[
+        known
+    ]
+    assert f"checkout --detach {prev}" in result.stderr
+    assert "uv sync --frozen --no-dev --extra live" in result.stderr
+    assert "would start" in result.stderr and "canopy-mac start/restart" in result.stderr
+
+
 def test_runner_refuses_missing_settings(box):
     result = run([RUNNER, "--check"], box["env"])
     assert result.returncode != 0 and "canopy-mac install" in result.stderr

@@ -51,18 +51,20 @@ SLOT_REPAINT = (
     "Deploy only in a commissioning window — or publish it from the Lab: on restart the reconciler rewrites {slot} "
     "on every module (stale slot)."
 )
+# The Studio reads each scene's palette, name, mood, description and brightness from the show's live looks
+# (GET /api/canopy/scenes, D68); demo-model.mjs SCENES is only its fallback copy, shown when that read fails.
 STUDIO_SCENES = (
-    "demo-model.mjs SCENES still has {hexes} for {scene}; the Studio's shop-kit Apply buttons (studio.js "
-    "`scene-apply` and the pair gradient) send it until SCENES is updated by hand."
+    "demo-model.mjs SCENES (the Studio's fallback copy, shown only when the show's live looks can't be read) still has "
+    "{hexes} for {scene}; update it by hand."
 )
 # A palette that changed with no approved hex changed (a colour added, or renamed): SCENES still has the old list.
 STUDIO_SCENES_PALETTE = (
-    "demo-model.mjs SCENES still has {scene}'s approved {n}-colour palette ({palette}); the Studio's shop-kit Apply "
-    "buttons (studio.js `scene-apply` and the pair gradient) send it until SCENES is updated by hand."
+    "demo-model.mjs SCENES (the Studio's fallback copy) still has {scene}'s approved {n}-colour palette ({palette}); "
+    "update it by hand."
 )
-# SCENES also holds the scene's name, its default colour and its brightness, which the Studio opens the scene on.
+# SCENES also holds the scene's name, its default colour and its brightness (the fallback copy's).
 STUDIO_SCENES_OPENS = (
-    'demo-model.mjs SCENES still opens {scene} as "{name}" on {solid} at {brightness}% in the Studio (studio.js) '
+    'demo-model.mjs SCENES (the Studio\'s fallback copy) still opens {scene} as "{name}" on {solid} at {brightness}% '
     "until SCENES is updated by hand."
 )
 # D65: what an edited stepped timing means on the canopy (the runner's own pace, `stepped.effective_step_s`)

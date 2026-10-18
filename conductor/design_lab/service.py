@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import Request
 from starlette.concurrency import run_in_threadpool
 
-from conductor.design_lab.draft import ConfigTrio, load_trio
+from conductor.design_lab.draft import ConfigTrio
 from conductor.design_lab.store import LookStore, config_sha
 from conductor.geometry import load_canopy_config
 from conductor.routes.deps import services_of
@@ -31,11 +31,19 @@ class LabService:
     engine except to read it (Slice A)."""
 
     def __init__(self, services: Any) -> None:
+        from conductor.looks.live import live_looks
+
         self.services = services
         config_dir = Path(services.config_dir)
-        self.approved: ConfigTrio = load_trio(config_dir)
-        self.config_sha: str = config_sha(config_dir)  # what `approved` was read from
-        self.canopy: dict = load_canopy_config(config_dir / "canopy.yaml")
+        # One git per process (D68): the approved trio, its sha and the canopy are the ones the running show loaded
+        # and validated at start (LiveLooks.git), never config/ re-read when the Lab is first opened — a deploy's
+        # `git checkout` before its restart would otherwise give the Lab (and Revert) a git the show never checked.
+        looks = live_looks(services)
+        self.approved: ConfigTrio = looks.git.copy()
+        self.config_sha: str = looks.git_sha or config_sha(config_dir)  # what `approved` was read from
+        self.canopy: dict = (
+            looks.canopy if looks.canopy is not None else load_canopy_config(config_dir / "canopy.yaml")
+        )
         self.store = LookStore(Path(services.data), clock=services.clock, telemetry=services.telemetry)
         self.store.load()  # never raises (§3.5)
         # (generation, scene id) → the live look's seed draft (D68): read off the live looks once per publish
