@@ -1,7 +1,7 @@
 # Status
 
-_Last updated: 2026-10-18 afternoon (PR C `claude/panel-latency`: input to reaction on the guest panel, D69; see its
-block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
+_Last updated: 2026-10-18 afternoon (PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
+merged as #31 and deployed on the show box at `0f8f38c`; see its block). **#28–#30 (PR A, B, B2) were merged into `main` on Oct 18** (checked with `gh pr list --state merged`); the
 blocks below still read as before the merge. Before that 2026-10-18 (PR B2 review 5 fixed, see its block; before that 2026-10-17 night: PR B2
 `claude/live-lab-repaint`: the operator slot repaint, D68's B2 part, on top of
 PR B `claude/live-lab`: the Design Lab publishes to the live show, D68, built on PR A `claude/canopy-only`: the
@@ -17,6 +17,29 @@ across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before th
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
 ## PR C — input to reaction on the guest panel (D69), `claude/panel-latency` → `main` (Oct 18)
+**Merged (#31) and deployed Oct 18 12:06 on the Mac show box: `0f8f38c`** (Alon asked; the PR's paste block run from
+this session: backup `canopy-data-20261018-120607-manual.tar.gz`, previous sha `96b31ad` in `~/canopy-prev-sha.txt`,
+preflight ok, `canopy-mac install` rc 0, `/healthz` OK, `bench` reconnected with 12 devices within seconds; `canopy`
+not connected, as before). **True on hardware (Modules 1–2, telemetry + the Conductor log):**
+- PUT acks 0.18–0.34 s; readback-verified 1.35–1.45 s after send (the 1.0 s `readback_delay_s` + a ~0.15 s GET).
+- The background token refresh fired every ~90 s (12:07:55, 12:09:26, 12:10:56, all ok), and every guest burst's
+  own check found the bearer fresh (`ensure_fresh` 0.0 s): no burst waited on Keycloak.
+- The iPad loaded the new page (`kiosk.js?v=latency-1` and its three modules at the same tag) and its live socket was
+  accepted (`WebSocket /ws/live`); three scene taps (Rainbow Row Sunset, Garden Gathering, Golden Hour) applied.
+- **The deploy's first iPad reload broke the panel briefly (my bug):** the iPad ran its cached *old* kiosk.js, whose
+  unversioned import of `/kiosk/panel-model.mjs` fetched the *new* module, which no longer exported `createPacer` — a
+  missing ES-module export stops the page. The version tags only guard the other mix. Loading the panel again on its
+  own address picked up the whole new version. (A `/kiosk/` on the Mac's IP got 401: the kiosk cookie belongs to the
+  address the iPad was enrolled on — give the iPad's own address, never the IP, in a reload instruction.) Any other
+  browser that had `/kiosk/` cached before Oct 18 can hit the same break once; `/kiosk/?r=1` fixes it. From now on
+  everything under `/kiosk/` and `/static/` is `no-cache`, so this can't recur — but **never drop an export the
+  kiosk's modules had without bumping the `?v=` tag in index.html and kiosk.js together.**
+- **Not tested live:** a brightness or on/off change inside the cooldown (Alon stopped the test before the slider
+  part); it is covered in sim (`tests/test_panel_latency.py`, browser check).
+- **Seen, pre-existing (not D69):** on these kits the first verification readback after a PUT often still shows the
+  old `brightness` (66 times on Oct 18, most before this deploy), so the reconciler re-sends at once and "ready" comes
+  at ~2.75 s instead of ~1.4 s, with one extra write per kit. Worth a bench check: does a second GET (no re-send)
+  match? If the cloud only echoes brightness late, waiting for it would save the write and ~1.3 s.
 Alon: "minimize delay between input and reaction on the panels". Cut from `main` at `96b31ad` (after #28–#30); one
 PR, merge commit. Measured on the simulator first (`make lab-dev`, port 8200): a tap is answered in ~7 ms and the
 burst goes out without waiting; the delay was in the panel and in how guest input met the engine's cooldown.
@@ -401,8 +424,8 @@ Lab); both target `main`; merge commits, not squash.
   first registry edit clears them from the overlay (the line goes at the next restart).
 
 ## PR stack (merge order — merge commits, not squash)
-00. **Oct 18:** #28 (PR A), #29 (PR B), #30 (PR B2) are merged into `main`. **Open: PR C `claude/panel-latency` →
-    `main`** (D69, the guest panel's input-to-reaction pass; cut from `main` after #30, no other PR first).
+00. **Oct 18:** #28 (PR A), #29 (PR B), #30 (PR B2) and #31 (PR C, D69) are merged into `main`; the show box runs
+    `0f8f38c` (main after #31).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -919,9 +942,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-00. **Alon (PR C, D69):** review and merge PR C (merge commit); deploy it on its own with the PR A paste block, then
-    reload the guest iPad once at `/kiosk/?r=1` (PR C block). On the kits: tap a scene, dim right after it — the
-    level should land when the cooldown ends and the panel should say so meanwhile.
+00. **PR C (D69) is merged and deployed (Oct 18, `0f8f38c`).** Still to try on the kits: tap a scene, dim right
+    after it — the level should land when the cooldown ends and the panel should say so meanwhile. Then the
+    brightness-readback bench check in the PR C block.
 0a. **Alon (PR A, D67):** review CLAUDE.md's two changed lines in the PR (the lead asked stream R to apply them),
     merge PR A (merge commit), then deploy it **on its own** with the paste block in the PR A section above (no
     registry undo: the kits stay Modules 1–2). Then PR B (the live Lab): merge after A, deploy on its own (PR B
