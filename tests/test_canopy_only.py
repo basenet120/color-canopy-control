@@ -61,10 +61,21 @@ OLD_OVERLAY = {
             "vignette": "garden",
             "kind": "string",
         },
+        # a spare naming a simulator profile that went with the vignettes (R1): SimDriver would refuse it at start
+        "shop-string-2": {
+            "role": "spare",
+            "account": "bench",
+            "label": "String light 2",
+            "profile": "outdoor-plug-2",
+        },
     }
 }
 DROPPED_IDS = ["living-lamp-1", "porch-lamp"]
-DROPPED_FIELDS = {"bench-kit": ["kind"], "shop-string-1": ["vignette", "kind"]}
+DROPPED_FIELDS = {
+    "bench-kit": ["kind"],
+    "shop-string-1": ["vignette", "kind"],
+    "shop-string-2": ["profile"],
+}
 
 
 def _env(monkeypatch, data: Path, **extra) -> None:
@@ -239,6 +250,9 @@ def test_an_old_registry_overlay_loads_and_the_next_ops_edit_prunes_it(monkeypat
     assert registry.dropped == DROPPED_IDS
     assert registry.dropped_fields == DROPPED_FIELDS
     assert registry.get("shop-string-1").role == "spare" and registry.get("bench-kit").role == "bench"
+    assert (
+        registry.get("shop-string-2").profile is None
+    )  # the removed profile is ignored: the default applies
     for gone in DROPPED_IDS:
         with pytest.raises(KeyError):
             registry.get(gone)
@@ -259,8 +273,10 @@ def test_an_old_registry_overlay_loads_and_the_next_ops_edit_prunes_it(monkeypat
         registry, "bench-kit", {"label": "x"}, now=1_792_000_000.0
     )  # … and an ops edit
     written = yaml.safe_load(path.read_text())["devices"]
-    assert set(written) == {"bench-kit", "shop-string-1"}
+    assert set(written) == {"bench-kit", "shop-string-1", "shop-string-2"}
     assert not any(k in entry for entry in written.values() for k in ("kind", "vignette"))
+    assert written["shop-string-2"] == {"role": "spare", "account": "bench", "label": "String light 2"}
+    assert written["shop-string-1"]["profile"] == "sqhdk03-sim"  # a profile that still exists is kept
     assert written["bench-kit"] == {"label": "x"}
     assert saved.dropped == [] and saved.dropped_fields == {}
     assert load_registry(CONFIG_DIR, data).dropped == []
@@ -274,6 +290,39 @@ def test_the_guest_panel_target_is_the_engine_with_conductor_env_workshop_sim(mo
         assert c.get("/api/kiosk/panel", auth=OPS).json()["target"] == "canopy"
         panel = GuestPanel.of(c.app.state.services)
         assert isinstance(c.portal.call(panel.target), EngineTarget)
+
+
+DELETED_TOOLING = re.compile(
+    r"release\.sh|install\.sh|canopy-(start|stop|restart|backup|restore|logs|kiosk-enroll)\b"
+)
+
+
+def test_nothing_outside_the_history_docs_names_the_deleted_venue_tooling():
+    """The venue box's installer, `bin/canopy-*` commands and `scripts/release.sh` went with D67 (review R3): only the
+    history (DECISIONS, STATUS, live-lab/PLAN, research/) may still name them."""
+    files = [ROOT / name for name in (".gitignore", "Makefile", "Dockerfile", "pyproject.toml", "CLAUDE.md")]
+    for folder in (
+        "conductor",
+        "tests",
+        "tests_e2e",
+        "deploy",
+        "scripts",
+        "web",
+        "config",
+        "docs/runbooks",
+        "docs/context",
+    ):
+        files += [
+            p for p in (ROOT / folder).rglob("*") if p.is_file() and p.suffix not in (".png", ".jpg", ".pyc")
+        ]
+    hits = [
+        f"{p.relative_to(ROOT)}:{n}"
+        for p in files
+        if p.exists() and p != Path(__file__).resolve() and ".venv" not in p.parts
+        for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+        if DELETED_TOOLING.search(line)
+    ]
+    assert hits == [], hits
 
 
 # ---- the preflight -------------------------------------------------------------------------------------------
@@ -293,6 +342,7 @@ def test_the_preflight_passes_over_old_data_names_it_and_writes_nothing(tmp_path
     assert "ignored removed vignette devices (D67): living-lamp-1, porch-lamp" in out
     assert "ignored removed fields on bench-kit (D67): kind" in out
     assert "ignored removed fields on shop-string-1 (D67): vignette, kind" in out
+    assert "ignored removed fields on shop-string-2 (D67): profile" in out
     assert "skipped a sessions record of the removed role 'vignette' (abababababab; D67)" in out
     assert "roles      ok (1 sessions" in out and "preflight  ok" in out
     assert _snapshot(data) == before, "the preflight wrote in the data dir"
@@ -307,6 +357,21 @@ def test_the_preflight_fails_over_a_registry_overlay_this_code_cant_load(tmp_pat
     assert code == 1 and "FAILED in registry" in err and "porch-plug" in err
     assert "preflight  ok" not in out
     assert _snapshot(data) == before
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_the_preflight_fails_over_a_simulator_profile_this_code_cant_build(tmp_path, enabled):
+    """`build_services` builds a SimDriver over the registry on the live box too, so a profile it refuses would
+    crash every launchd restart: the preflight builds every entry's profile (a disabled one too: /ops can enable
+    it later) and fails before the restart."""
+    data = tmp_path / "data"
+    spare = {"role": "spare", "account": "bench", "profile": "no-such-profile", "enabled": enabled}
+    _write_overlay(data, {"devices": {"shop-string-9": spare}})
+    load_registry(CONFIG_DIR, data)  # the registry itself loads: profile names aren't validated there
+    code, out, err = _preflight(data)
+    assert code == 1 and "FAILED in registry" in err, (out, err)
+    assert "shop-string-9" in err and "no-such-profile" in err
+    assert "preflight  ok" not in out
 
 
 def test_the_preflight_fails_over_a_session_file_the_store_would_set_aside_and_leaves_it_in_place(tmp_path):

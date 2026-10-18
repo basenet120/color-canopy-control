@@ -391,7 +391,7 @@ class Registry:
     overlay_path: Path | None
     # Old data tolerated, not migrated (D67): overlay entries for the removed vignette devices, ignored …
     dropped: list[str] = field(default_factory=list)
-    # … and removed fields (`vignette`, `kind`) found on surviving entries, ignored: device id → field names.
+    # … and removed fields (`vignette`, `kind`, a removed `profile`) found on surviving entries, ignored: id → fields.
     dropped_fields: dict[str, list[str]] = field(default_factory=dict)
 
     # -- queries
@@ -455,6 +455,12 @@ REMOVED_ROLES = frozenset({"vignette"})
 # Device fields that went with the vignettes; on a surviving entry (e.g. a spare copied from an older overlay) they are
 # ignored rather than refused by `extra="forbid"`.
 REMOVED_FIELDS = ("vignette", "kind")
+# Simulator profiles that went with the vignettes (conductor/sim/profiles, 6ce971b). A surviving entry naming one would
+# make SimDriver refuse to start (it builds every enabled entry, on the live box too), so the overlay's `profile` is
+# ignored when its value is one of these — the devices.yaml or role default applies — and pruned like the fields above.
+REMOVED_PROFILES = frozenset(
+    {"ecosmart-a19-rgb", "outdoor-plug-2", "indoor-plug", "defiant-deadbolt", "ceiling-fan", "path-lights"}
+)
 
 
 @dataclass
@@ -462,7 +468,9 @@ class Dropped:
     """What `_merge` ignored from the overlay as old data (D67)."""
 
     ids: list[str] = field(default_factory=list)  # whole entries: removed device ids or role: vignette
-    fields: dict[str, list[str]] = field(default_factory=dict)  # device id → removed field names
+    fields: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # device id → removed field names (or `profile`)
 
 
 def _is_removed(device_id: str, patch: Mapping[str, Any]) -> bool:
@@ -480,6 +488,8 @@ def _merge(base: dict, overlay: Mapping[str, dict[str, Any]], path: Path | str) 
             continue
         patch = dict(raw_patch)
         gone = [k for k in REMOVED_FIELDS if k in patch]
+        if patch.get("profile") in REMOVED_PROFILES:
+            gone.append("profile")
         for key in gone:
             patch.pop(key)
         if gone:

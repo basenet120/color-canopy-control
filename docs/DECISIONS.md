@@ -826,10 +826,14 @@ guest panel worked on the two live kits: "remove all the stuff that isn't the ca
 - **Old data is tolerated, not migrated:** a saved enrollment or session of the removed role is skipped (the kiosk
   iPad's session survives; an unreadable record of a role that exists still sets the file aside); a registry-overlay
   entry for a removed vignette device (`REMOVED_DEVICE_IDS`, or any `role: vignette` entry), and a `vignette`/`kind`
-  key on a surviving one, is ignored with a "Needs attention" line and pruned by the next /ops registry edit; a
-  leftover `studio-gradients/` folder is ignored. `canopy-mac install` runs `conductor.preflight` against the data
-  folder (through `run-conductor.sh --check`) before it restarts the show, so new code that can't load it never
-  restarts the show. The vignettes, if the activation still has them, run on the stock Hubspace app outside this
+  key — or a `profile` naming a removed vignette sim profile (`REMOVED_PROFILES`) — on a surviving one, is ignored
+  with a "Needs attention" line and pruned by the next /ops registry edit; a leftover `studio-gradients/` folder is
+  ignored. `canopy-mac install` runs `conductor.preflight` against the data folder (through `run-conductor.sh
+  --check`; it also builds every registry entry's sim profile, as startup's SimDriver does in live mode too) before
+  it restarts the show, so new code that can't load it never restarts the show. A rejected checkout is still the
+  checkout, though, and the running Conductor is a KeepAlive job: install then exits 3 and prints the rollback, and
+  the paste block (`release-and-freeze.md`) rolls the checkout back at once — any restart would start the rejected
+  code. The vignettes, if the activation still has them, run on the stock Hubspace app outside this
   system.
 - **Contract text changed:** 07 §1 (the show box, the writer list), §2 (the role table), §8 (the data folder's
   home), §10 (the Mac); 05 #3, #11, #13; CLAUDE.md's opening line and the show-accounts rule (applied in PR A, for

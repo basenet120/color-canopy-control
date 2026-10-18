@@ -4,13 +4,16 @@
 
 `deploy/mac/run-conductor.sh --check` runs it with the show box's settings exported and the data folder pinned, and
 `canopy-mac install` runs `--check` after `uv sync` and **before** it removes the hold and reloads launchd: new code
-that can't load the live data stops there, and the running Conductor keeps the show going.
+that can't load the live data stops there. The running Conductor keeps going for now, but the checkout is the
+rejected code — any restart (a crash, the watchdog, a reboot, `canopy-mac start`/`restart`) would start it — so
+install exits 3 and prints the rollback; roll the checkout back at once.
 
 What it does — offline (no Hubspace, no network), binds no port, writes nothing in the data folder:
 - the runtime settings from the environment (`GateSettings.from_env`, the same checks as a start);
 - `config/conductor.yaml` (`load_settings`);
 - the registry: `config/devices.yaml` + `<data>/overrides/registry.yaml` (`load_registry`), naming the old data the
-  canopy-only code ignores (removed vignette devices, removed `vignette`/`kind` fields);
+  canopy-only code ignores (removed vignette devices, removed `vignette`/`kind` fields, a removed simulator
+  `profile`), and building every entry's simulator profile (startup's SimDriver does, in live mode too);
 - the saved enrollments and sessions (`<data>/roles/*.json`), loaded by the real `RoleStore` from a temporary copy
   (so nothing is set aside), naming any record of a removed role it skips. A file this code would set aside as
   corrupt is a failure: after the restart the guest iPad would need a new link;
@@ -34,6 +37,7 @@ from typing import TextIO
 from conductor.config import CONFIG_DIR, data_dir, load_registry, load_settings
 from conductor.gate import GateSettings
 from conductor.roles import RoleStore
+from conductor.sim.profiles import DEFAULT_PROFILE, load_profile
 
 ROLE_FILES = ("enrollments.json", "sessions.json")
 
@@ -50,6 +54,14 @@ def _settings(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]
 
 def _registry(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
     registry = load_registry(config_dir, data)
+    # Startup builds a SimDriver over the registry (in live mode too), which loads every enabled entry's simulator
+    # profile; one it can't build is a failed start. Check them all — a disabled entry too, since /ops can enable it.
+    for entry in registry.file.devices:
+        name = entry.profile or DEFAULT_PROFILE
+        try:
+            load_profile(name)
+        except Exception as exc:  # noqa: BLE001 - whatever SimDriver would raise
+            raise PreflightFailed(f"device {entry.id!r}: {str(exc).strip() or type(exc).__name__}") from None
     overlay = "an overlay" if registry.overlay_path and registry.overlay_path.exists() else "no overlay"
     lines = [f"registry   ok ({len(registry.devices)} devices, {overlay})"]
     if registry.dropped:
