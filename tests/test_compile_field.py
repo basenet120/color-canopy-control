@@ -26,6 +26,8 @@ MODULES = REGISTRY.canopy_modules()
 BY_POSITION = {m.module: m for m in MODULES}
 SCENES = load_scenes()
 CANOPY = load_canopy_config()
+EDGE_MIDDLES = ["r0c1", "r1c0", "r1c2", "r2c1"]
+CORNERS = ["r0c0", "r0c2", "r2c0", "r2c2"]
 
 
 # D59's module-level columns (config/modes.yaml before D63): each scene's x / 225 gradient at x = 37.5, 112.5, 187.5 in
@@ -272,3 +274,23 @@ def test_a_channel_exactly_on_a_half_rounds_up_at_the_centre_and_in_the_mean():
     halves = _recipes_with("test-colour", 1, 3, 5, 50)
     assert _sampled_with(halves, "centre") == (1, 2, 3)
     assert _sampled_with(halves, "mean") == (1, 2, 3)
+
+
+def test_a_fins_design_compiles_at_module_level_with_three_ring_ripple():
+    """D74: the fins' rings at module level read three rings (the centre, the edge-middles, the corners), and the
+    D64 ripple lands them centre first."""
+    data = yaml.safe_load(PATH.read_text(encoding="utf-8"))
+    modules = data["modes"]["coastal-tides"]["techniques"]["modules"]
+    modules["sample"]["canvas"]["field"] = {"kind": "fins"}
+    modules["feature"] = (
+        "Colour and dimming: each Hubspace strand set to a single colour, so the palette steps from the centre out."
+    )
+    modes = parse_modes(data, recipes=RECIPES, canopy=CANOPY, path=PATH)
+    plan = compile_mode("coastal-tides", Tier.T3, _ctx(modes=modes))
+    colours = _colours("coastal-tides", _ctx(modes=modes))
+    assert colours["r1c1"] == RECIPES.colors["ocean-blue"].strand.rgb  # the first stop, on the deep centre
+    assert colours["r0c1"] == colours["r2c1"]
+    for m in MODULES:
+        assert R.color_rgb(*colours[m.module]) in plan.modules[m.id].rows
+    rings = [{BY_POSITION[p].id for p in ring} for ring in (["r1c1"], EDGE_MIDDLES, CORNERS)]
+    assert [set(ring) for ring in plan.waves] == rings

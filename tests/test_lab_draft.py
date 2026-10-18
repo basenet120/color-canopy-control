@@ -800,3 +800,13 @@ def test_a_flat_stepped_frame_is_blamed_on_the_layout_not_the_read_only_run():
     assert [(p.field, "each step shows more than two" in p.message) for p in caught.value.problems] == [
         ("layout", True)
     ]
+
+
+# ---- the fins' rings (D74) ----------------------------------------------------------------------------------------
+@pytest.mark.parametrize("n", [2, 3, 4, 5, 6])
+def test_fins_module_level_reaches_these_stops(n):
+    """Module level reads each module's centre: t 0 / ≈ 0.39 / ≈ 0.67, never the rim (PR D designs for this)."""
+    plain = {2: [0, 1], 3: [0, 1], 4: [0, 1, 2], 5: [0, 2, 3], 6: [0, 2, 3]}
+    inverted = {2: [0, 1], 3: [1, 2], 4: [1, 2, 3], 5: [1, 2, 4], 6: [2, 3, 5]}
+    assert D.reached_stops(F.FinsField(kind="fins"), n, CANOPY) == plain[n]
+    assert D.reached_stops(F.FinsField(kind="fins", invert=True), n, CANOPY) == inverted[n]
