@@ -133,7 +133,7 @@ scene_gradient|module\.pair|dev_guest_panel|deploy/venue|TEST-CENTER|kiosk-resti
 | `conductor/gate.py:37` | comment drops "vignettes" (strings at `:69`, `:100`, `:203` say "venue box": leave; tests pin them) |
 | `scripts/dev_design_lab.py:6, :27` | define `UNSAFE_ENV` here (copy the tuple from `dev_guest_panel.py:29-38`), drop the import; docstring "as on the show box" |
 | `deploy/mac/run-conductor.sh:32` | comment: "(the variables a parent shell might leak)" |
-| `deploy/mac/run-conductor.sh:59-71` (`--check`) | before `exit 0`, run `"$ROOT/.venv/bin/python" -m conductor.preflight` and `die` on a non-zero exit. `canopy-mac install` already runs `--check` after `uv sync` and **before** removing the HOLD and reloading launchd (canopy-mac:225-235), so new code that can't load the live data folder never restarts the show |
+| `deploy/mac/run-conductor.sh:59-71` (`--check`) | before `exit 0`, run `"$ROOT/.venv/bin/python" -m conductor.preflight` and `die` on a non-zero exit. `canopy-mac install` already runs `--check` after `uv sync` and **before** removing the HOLD and reloading launchd (canopy-mac:225-235), so new code that can't load the live data folder never restarts the show; install then exits 3 with the checkout rollback (review R2) |
 | `conductor/preflight.py` (new, R; P adds the looks line in B1) | offline, binds no port, read-only: `load_settings`, `load_registry(CONFIG_DIR, CONDUCTOR_DATA_DIR)`, `RoleStore` load of `data/roles/*.json` (in a temp copy, so nothing is set aside), and (B1) `load_live_looks`; prints dropped ids/fields, skipped role records and any looks fallback; exit 1 on `ConfigError`/exception. Test: over a data dir with a vignette patch, a `kind:` key and a vignette session it exits 0 and names them; over a registry overlay naming an unknown non-vignette id it exits 1; the data dir's bytes are unchanged |
 | `deploy/mac/canopy-mac:213` | message "This is the Mac show box's helper; it runs only on macOS." (check `tests/test_mac_box.py` doesn't pin the old text) |
 | `deploy/mac/conductor.env.example:14, :19, :35` | "canopy first" (no vignette accounts); "from staging or a laptop"; "(these must stay unset)"; add commented lines `# CONDUCTOR_DATA_DIR=` (pinned by run-conductor.sh), `# CONDUCTOR_URL=`, `# RAILWAY_GIT_COMMIT_SHA=`, `# PORT=` (Railway/image only) so the moved env-doc test passes |
@@ -226,10 +226,14 @@ The deploy runs PR A's code over the Mac's existing data folder. Two files could
 - `data/overrides/registry.yaml`: `_merge` raises `ConfigError` for a patch whose id isn't in `devices.yaml` → the
   Conductor refuses to start → launchd restarts it forever. Per-entry drop fixes it. The same crash follows a
   `vignette:` or `kind:` key on a **surviving** entry (`extra=forbid`; `shop-string-1` was copied from VWBD's overlay
-  and its keys can't be read) — the key pop fixes it. `save_overlay_patch` (every install-day register) uses `_merge`
-  too and prunes what was dropped, so the leftovers go with the first ops edit.
+  and its keys can't be read) — the key pop fixes it. So does a `profile:` naming one of the six deleted vignette sim
+  profiles (SimDriver, built at every start, live mode too, would refuse it): `REMOVED_PROFILES` pops it by value
+  (review R1). `save_overlay_patch` (every install-day register) uses `_merge` too and prunes what was dropped, so the
+  leftovers go with the first ops edit.
 All are covered by `tests/test_canopy_only.py` (4), and `conductor.preflight` (run by `canopy-mac install` before the
-restart) catches anything else the new code can't load. Token files of removed accounts (if any) are left alone and
+restart; it also builds every entry's sim profile) catches anything else the new code can't load. After a failed
+preflight the checkout is the rejected code, so install exits 3 with the rollback and the paste block (§8.1) rolls
+the checkout back at once (review R2): any restart of the KeepAlive job would start the rejected code. Token files of removed accounts (if any) are left alone and
 unused (`afero.py` looks tokens up by registry account). A leftover `studio-gradients/` folder is ignored.
 
 ### 1.6 R verification (put in STATUS)
@@ -1211,8 +1215,11 @@ git -C ~/canopy-show rev-parse HEAD | tee ~/canopy-prev-sha.txt
 # 2. PR A on its own
 git -C ~/canopy-show fetch --tags origin
 git -C ~/canopy-show checkout --detach <A tag or merge sha>
-~/canopy-show/deploy/mac/canopy-mac install            # uv sync, then --check runs conductor.preflight; a failure
-                                                       # stops here, before the restart (the old process keeps running)
+~/canopy-show/deploy/mac/canopy-mac install; rc=$?    # uv sync, then --check runs conductor.preflight, then restarts
+if [ $rc = 3 ]; then  # the preflight rejected this checkout: nothing restarted, but any restart would start it
+  prev=$(cat ~/Library/"Application Support"/ColorCanopy/state/installed_sha 2>/dev/null || cat ~/canopy-prev-sha.txt)
+  git -C ~/canopy-show checkout --detach "$prev" && (cd ~/canopy-show && uv sync --frozen --no-dev --extra live --quiet)
+fi                    # roll the checkout back at once (install printed the same line), then fix
 canopy-mac status; git -C ~/canopy-show describe --tags --always
 #    /ops "Needs attention": at most the "removed vignette devices/fields" lines; the kiosk iPad's panel still loads
 # 3. PR B, later, the same way (<B sha>). Before: note the Lab show bar. After: it says the same name (or "the

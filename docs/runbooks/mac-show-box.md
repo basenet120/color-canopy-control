@@ -107,8 +107,11 @@ deploy/mac/canopy-mac install          # re-syncs the Python environment, runs t
 
 `install` runs `run-conductor.sh --check` before it restarts anything, and `--check` runs `python -m
 conductor.preflight`: the new checkout's code loads the live data folder (settings, the registry overlay, the saved
-iPad session), offline and read-only. If it can't, install stops there and the running Conductor keeps the show
-going (D67). The full paste block, with the backup and the previous commit recorded first, is in
+iPad session), offline and read-only. If it can't, install stops there with exit 3 and restarts nothing (D67) —
+but the checkout is now the rejected code, and the running Conductor is a KeepAlive job: a crash, the watchdog, a
+reboot or `canopy-mac start`/`restart` would start it. **Roll the checkout back at once** with the line install
+prints (`git checkout --detach <the last installed commit>` and a `uv sync`; no restart needed), then fix. The full
+paste block, with the backup and the previous commit recorded first and the exit-3 rollback, is in
 `release-and-freeze.md`.
 
 Rollback is the same with the previous tag. Never point the show at the development checkout or at a branch.

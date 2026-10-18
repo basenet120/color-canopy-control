@@ -90,8 +90,11 @@ Lab); both target `main`; merge commits, not squash.
   # (the Oct 19 registry undo first, exactly as below, under the code already running, then verify it)
   git -C ~/canopy-show fetch --tags origin
   git -C ~/canopy-show checkout --detach <A tag or merge sha>
-  ~/canopy-show/deploy/mac/canopy-mac install            # uv sync, then --check runs conductor.preflight; a failure
-                                                         # stops here, before the restart (the old process keeps running)
+  ~/canopy-show/deploy/mac/canopy-mac install; rc=$?    # uv sync, then --check runs conductor.preflight, then restarts
+  if [ $rc = 3 ]; then  # the preflight rejected this checkout: nothing restarted, but any restart would start it
+    prev=$(cat ~/Library/"Application Support"/ColorCanopy/state/installed_sha 2>/dev/null || cat ~/canopy-prev-sha.txt)
+    git -C ~/canopy-show checkout --detach "$prev" && (cd ~/canopy-show && uv sync --frozen --no-dev --extra live --quiet)
+  fi                    # roll the checkout back at once (install printed the same line), then fix
   canopy-mac status; git -C ~/canopy-show describe --tags --always
   #  /ops "Needs attention": at most the "removed vignette devices/fields" lines; the kiosk iPad's panel still loads
   # Rollback: git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)" && ~/canopy-show/deploy/mac/canopy-mac install

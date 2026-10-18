@@ -70,7 +70,8 @@ if [ "${1:-}" = "--check" ]; then
 	printf '%-26s %s\n' CONDUCTOR_SECRET_KEY set
 	# Can this checkout's code load the live data folder (registry overlay, saved sessions, settings)? Offline,
 	# read-only, binds no port. `canopy-mac install` runs --check before it restarts the show (D67), so new code
-	# that can't load the data stops here and the running Conductor keeps going.
+	# that can't load the data stops here; install then exits 3 with the rollback for the checkout (any restart of the
+	# running Conductor would start this code).
 	[ -x "$PYTHON" ] || die "No Python environment at $ROOT/.venv. Run: deploy/mac/canopy-mac install"
 	(cd "$ROOT" && "$PYTHON" -m conductor.preflight) ||
 		die "conductor.preflight: this checkout can't load the data in $CONDUCTOR_DATA_DIR (see above). Nothing was restarted."
