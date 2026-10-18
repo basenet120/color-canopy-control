@@ -854,21 +854,27 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
   guest panel, /ops, alert labels and the design route read the live trio per request), and the engine re-picks the
   current look (`CanopyEngine.reload_looks`, source `looks`: one burst, guest brightness/power kept; nothing is sent
   when the scene showing didn't change and no try-on runs). Ops confirms the server's sentence (what it replaces,
-  the scenes that change or go back to approved, the modules it reaches now, the holds, "the running try-on ends")
-  and sees the cost; a publish computed against a look someone else has since replaced is refused as a conflict
+  the scenes that change or go back to approved, the modules it reaches now, the "Show <scene> on the canopy after
+  publishing" switch when that box is ticked — on by default for a version, off for Undo and Revert; a toggle asks
+  the server again —, the holds, "the running try-on ends") and sees the cost; a publish computed against a look someone else has since replaced is refused as a conflict
   (`expected_live`, with the new LiveJSON); the publisher's name is recorded. Refused while the engine is stopped,
   commissioning, resting (outage) or rehearsing (Gate R), and while another publish runs; allowed while guest input
-  is paused. An exception after the write rolls back: the previous file byte for byte, the previous trio, a re-pick
-  under it (else the safe look), an alert, a plain 500. Routes: `GET /api/lab/live`, `POST /api/lab/publish`;
+  is paused, and while config/ on disk differs from the git the show loaded (a deploy under way). The Lab builds on
+  that same git (one git per process: the trio, sha and canopy the show validated at start). An exception after the
+  write rolls back: the previous file byte for byte, the previous trio and the state it described (a fallback stays a
+  fallback, with its /ops line and alert), the T1 hold recomputed under it, a re-pick under it (else the safe look),
+  an alert naming what really runs (resolved by the next good publish), a plain 500. Routes: `GET /api/lab/live`, `POST /api/lab/publish`;
   deleting the live version is refused (409).
 - **Fail-safe.** A missing file is the approved looks; an unreadable or invalid one (too big — never read —, not
   YAML, anchors/aliases, too deep, a bad top level or format, a version without its trio, a trio whose `trio_sha`
   doesn't match, or one `validate_trio` refuses) is the approved looks plus an /ops line and a warn alert — never a
-  failed start — and is left exactly as it was. A published trio that equals git is followed as git (persisted as
+  failed start — and is left exactly as it was. **Revert to approved** clears it: the show already runs git, so
+  nothing is sent, but the unusable file is replaced by `current: {kind: approved}` (a copy kept in
+  overrides/history/) and the /ops line and alert go. A published trio that equals git is followed as git (persisted as
   `current: {kind: approved, name: "approved (in git)"}`), so a later deploy is never masked; one that differs from a
   changed git raises an /ops warn ("… masks config/ changes deployed since …"). `conductor.preflight` (run by
-  `canopy-mac install` before the restart) reads the file with the new code and names one it can't use, without
-  failing the deploy (the show would start on the approved looks).
+  `canopy-mac install` before the restart) reads the file through the show's own load (read only) and names one it
+  can't use, without failing the deploy (the show would start on the approved looks).
 - **Painted scenes: copy stays true.** A painted scene whose commissioned (api) slots don't hold the live design runs
   below T1 (`CanopyEngine._t1_hold`, skipped in `compile_best`, never in `tier_allowed`, so the reconciler still
   sees the slot as stale and rewrites it) until a slot record makes it current, then one T1 re-pick; the hold is
@@ -887,7 +893,8 @@ before guests arrive." Plan: `docs/live-lab/PLAN.md` §2 (server), §3 (the Lab 
   /ops warn names the masked change); Revert to approved takes git's.
 - **The try-on stays** (temporary, module level, from the live trio); a publish ends it. Kiosk copy stays true: every
   published sentence passes the same rules as git's, the iPad's cards follow the live catalog, and the tier in use
-  matches the slots.
+  matches the slots. The Studio (screen only, D67) shows the scenes as the show runs them (`GET /api/canopy/scenes`),
+  re-read after a publish; demo-model's SCENES is only its fallback.
 - **Not changed:** `motion.stepped.live_enabled` (Gate R), `kiosk.ripple_stagger_s`, ladders, slot ownership; the
   Lab never changes them. `<data>/overrides/looks.yaml` (the Lab's version store) is unchanged and the show still
   never reads it; it reads only `show-looks.yaml`.

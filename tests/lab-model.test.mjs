@@ -1463,3 +1463,29 @@ test("the A/B side 'Live on the show' paints the live look; the eyebrow says a p
   assert.equal(M.labelList(["Module 1", "Module 2", "Module 3", "Module 5"]), "Modules 1–3 and 5");
   assert.equal(M.labelList(["Module 1", "Spare"]), "Module 1 and Spare");
 });
+
+// ---- PR B review fixes (2026-10-17): UI-1, UI-4 ------------------------------------------------------------------------
+
+test("UI-1: the Show <scene> box starts on for a version, off for Undo and Revert (the recovery path)", () => {
+  assert.equal(M.publishShowDefault("version"), true);
+  assert.equal(M.publishShowDefault("approved"), false);
+  assert.equal(M.publishShowDefault("previous"), false);
+  // the ask carries it, so the server's sentence and cost are built for what Publish now sends
+  assert.deepEqual(M.publishBody({ version: "v0003", expected: "p0005", show: true }), { version: "v0003", expected_live: "p0005", show: true });
+  assert.deepEqual(M.publishBody({ version: "previous", expected: "p0005", show: false }), { version: "previous", expected_live: "p0005", show: false });
+});
+
+test("UI-4: the try-on line is true whatever the slots hold, and today names the published design it paints", () => {
+  assert.doesNotMatch(M.TRIAL_COPY.painted, /approved/);
+  assert.match(M.TRIAL_COPY.painted, /never writes the slots/);
+  const p = preview();
+  const published = { ...p, today: { ...p.today, heads: "published", note: "The slots hold the published painted design, …" } };
+  assert.equal(
+    M.tierCaption("today", published),
+    `What this simulator shows · Module level (one colour per strand) · ${M.HEADS_PUBLISHED_CAPTION}`,
+  );
+  assert.equal(M.stageState("today", published, "draft"), "published design");
+  assert.equal(M.BADGE_TEXT[M.stageState("today", published, "draft")], "Published design");
+  assert.equal(M.stageState("today", published, "in try-on"), "in try-on");
+  assert.ok(M.slotHeads(published.today) && !M.slotHeads({ heads: "draft" }));
+});

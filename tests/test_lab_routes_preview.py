@@ -145,6 +145,12 @@ def test_the_catalog_starts_every_scene_from_its_approved_draft(app_client):
 
 
 def test_today_in_sim_is_titled_what_this_simulator_shows(app_client_show):
+    # the show's start-up (capability reads) is over: every module has a look. (Building the Lab used to re-read
+    # config/ for ~40 ms, which happened to cover this; since D68 it reuses the show's own git and is instant.)
+    engine = app_client_show.app.state.services.extras["canopy"]
+    deadline = time.monotonic() + 30
+    while (engine.current_plan() is None or engine.current_plan().skipped) and time.monotonic() < deadline:
+        time.sleep(0.05)
     r = post(app_client_show, "coastal-tides", draft_json("coastal-tides", **{"palette.1.hex": "#6FD0D8"}))
     assert r.status_code == 200, r.text[:400]
     today = r.json()["today"]
@@ -194,11 +200,9 @@ def test_no_yaml_is_parsed_on_the_loop_thread_after_construction(app_client, mon
     watch(SVC, "load_canopy_config")
     assert post(app_client, "golden-hour", draft_json("golden-hour", **DONE_MEANS)).status_code == 200
     assert app_client.get("/api/lab/catalog").status_code == 200
-    assert {n for n, _ in seen} >= {
-        "load_scenes",
-        "load_modes",
-        "load_recipes",
-        "parse_modes",
-        "load_canopy_config",
-    }
+    names = {n for n, _ in seen}
+    assert "parse_modes" in names  # the draft's re-validation
+    # one git per process (D68, PR B review LL-PUB-2): the Lab never re-reads config/ — it reuses the trio, sha and
+    # canopy the show loaded and validated at start
+    assert not names & {"load_scenes", "load_modes", "load_recipes", "load_canopy_config"}, seen
     assert not [n for n, loop in seen if loop], seen

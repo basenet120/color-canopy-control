@@ -18,7 +18,7 @@
 
 import { api as baseApi, connectLive, copyJSON } from "/static/app.js";
 import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-3";
-import * as M from "./lab-model.mjs?v=lab-6";
+import * as M from "./lab-model.mjs?v=lab-7";
 
 const API = "/api/lab";
 const UI_KEY = "lab-ui"; // remembered scene / view / angle / the publisher's name (not a draft key: staleDraftKeys never matches it)
@@ -1977,6 +1977,11 @@ function wireLive() {
     renderShowBar();
   });
   $("#lab-publish-go").addEventListener("click", confirmPublish);
+  // the box is part of what ops confirms: the server's sentence, notes and cost follow it, so a toggle asks again
+  $("#lab-publish-show").addEventListener("change", (e) => {
+    const d = L.publish.dialog;
+    if (d) askPublish(d.version, d.kind, d.name, { show: !!e.target.checked, reask: true });
+  });
   $("#lab-publish-cancel").addEventListener("click", () => closePublishDialog());
   $("#lab-publish-close").addEventListener("click", () => closePublishDialog());
   $("#lab-publish").addEventListener("cancel", () => closePublishDialog({ fromEvent: true })); // Esc
@@ -2178,37 +2183,50 @@ async function publishWorking() {
 }
 
 /** POST /api/lab/publish without `confirm`: the server answers with its confirm sentence (409 confirm_required), or
- * refuses. `conflict`: the sentence of a conflict that brought the dialog back (shown on top). */
-async function askPublish(version, kind, name = "", { conflict = "" } = {}) {
+ * refuses. `conflict`: the sentence of a conflict that brought the dialog back (shown on top). `show`: the
+ * "Show <scene> after publishing" box (M.publishShowDefault: on for a version, off for Undo and Revert), asked with
+ * so the sentence and the cost say what it sends; `reask`: the box was toggled in an open dialog. */
+async function askPublish(version, kind, name = "", { conflict = "", show = M.publishShowDefault(kind), reask = false } = {}) {
   if (L.publish.busy || !version) return;
   L.publish.busy = true;
   renderPublishBusy();
   const expected = M.expectedLive(L.live);
   try {
-    const answer = await api(`${API}/publish`, { method: "POST", body: M.publishBody({ version, expected }) });
+    const answer = await api(`${API}/publish`, { method: "POST", body: M.publishBody({ version, expected, show }) });
     onPublished(answer); // a server that publishes without asking first (not this one: it always asks)
   } catch (err) {
     const out = M.publishOutcome(err);
-    if (out.kind === "confirm") openPublishDialog({ version, kind, name, expected, view: out.dialog, conflict });
+    if (out.kind === "confirm") openPublishDialog({ version, kind, name, expected, view: out.dialog, conflict, show }, { reask });
     else if (out.kind === "conflict") {
       // the show changed between our read and the ask: read it and ask again (once per click)
       if (out.live) applyLive(out.live);
       L.publish.busy = false;
-      if (!conflict) return askPublish(version, kind, name, { conflict: out.text });
+      if (reask) closePublishDialog();
+      if (!conflict) return askPublish(version, kind, name, { conflict: out.text, show });
       publishRefused(out, version);
-    } else publishRefused(out, version);
+    } else {
+      if (reask) closePublishDialog();
+      publishRefused(out, version);
+    }
   } finally {
     L.publish.busy = false;
     renderPublishBusy();
   }
 }
 
-function openPublishDialog(d) {
+function openPublishDialog(d, { reask = false } = {}) {
   const P = L.publish;
-  P.dialog = { ...d, waitS: 0, waitAt: 0 };
   const dlg = $("#lab-publish");
+  if (reask && P.dialog && dlg.open) {
+    // the same dialog, the server's sentence for the box as it is now (the name typed so far stays)
+    P.dialog = { ...P.dialog, ...d, changed: "" };
+    $("#lab-publish-show").checked = !!d.show;
+    renderPublishDialog();
+    return;
+  }
+  P.dialog = { ...d, waitS: 0, waitAt: 0 };
   $("#lab-publish-who").value = L.who || "";
-  $("#lab-publish-show").checked = true;
+  $("#lab-publish-show").checked = !!d.show;
   renderPublishDialog();
   if (!dlg.open) dlg.showModal ? dlg.showModal() : dlg.setAttribute("open", "");
   const scroll = $(".lab-publish-scroll", dlg);
@@ -2268,6 +2286,8 @@ function renderPublishWait() {
   if (!d || !go) return;
   const left = M.gateCountdown(d.waitS, Date.now(), d.waitAt);
   go.disabled = P.busy || left > 0;
+  const box = $("#lab-publish-show");
+  if (box) box.disabled = P.busy;
   go.textContent = P.busy ? "Publishing…" : left > 0 ? `Publish now (in ${left} s)` : "Publish now";
   const wait = $("#lab-publish-wait");
   wait.textContent = d.waitText && left > 0 ? d.waitText : d.waitText && !left ? `${d.waitText} You can try again now.` : "";
@@ -2292,7 +2312,8 @@ async function confirmPublish() {
   if (M.gateCountdown(d.waitS, Date.now(), d.waitAt) > 0) return;
   L.who = M.whoValue($("#lab-publish-who").value);
   rememberUi();
-  const show = d.view.showOffer ? $("#lab-publish-show").checked : null;
+  // the `show` the dialog's sentence was asked with (a toggle asks again before this is possible)
+  const show = d.view.showOffer ? !!d.show : null;
   P.busy = true;
   renderPublishBusy();
   try {
@@ -2309,7 +2330,7 @@ async function confirmPublish() {
       if (out.live) applyLive(out.live);
       P.busy = false;
       closePublishDialog();
-      await askPublish(d.version, d.kind, d.name, { conflict: out.text });
+      await askPublish(d.version, d.kind, d.name, { conflict: out.text, show: !!d.show });
       return;
     }
     if (out.kind === "confirm") {

@@ -17,8 +17,16 @@ Undo last publish, and the LiveJSON the Lab's show bar reads.
   refused too (the repaint job is PR B2) — except Revert to approved and Undo, which are always allowed (and in the
   simulator, as D66's T1 lock was off there, every such publish is): the scene is held off T1 (it shows truthfully at
   module level) and the reconciler's stale rule rewrites the slots (≤ once per 10 min per slot), then the hold lifts.
-- **Rollback:** an exception after the write puts the previous file back byte for byte, installs the previous trio
-  and re-picks the current look under it (else the safe look), alerts, and answers a plain 500.
+- **Rollback:** an exception after the write puts the previous file back byte for byte, installs the previous trio,
+  puts back the state it described (a fallback's problem and its /ops warn, a masked git's warn), recomputes the T1
+  hold of the changed scenes under it, re-picks the current look under it (else the safe look), alerts, and answers a
+  plain 500 naming what the show really runs.
+- **Out of a fallback** (overrides/show-looks.yaml couldn't be used, so the show runs git): Revert to approved is
+  never "already what the show runs" — it replaces the unusable file with `current: {kind: approved}` (a history
+  copy first), which clears the /ops line and alert; nothing is sent. Any publish out of a fallback leaves no Undo
+  target (the unusable publication is never offered back).
+- **Show <scene> after publishing** is part of what ops confirms: the sentence, the notes and the cost are built
+  with the `show` the dialog asks with, so a confirm whose `show` differs from its ask's is a new confirm_required.
 
 Calls only conductor.looks.live and the engine/wiring — never a driver or the executor (every write is the engine's).
 """
@@ -40,7 +48,9 @@ from conductor.design_lab import preview as P
 from conductor.design_lab import store as S
 from conductor.looks import scene_rules
 from conductor.looks.live import (
+    ALERT_PREFIX,
     LOCK_KEY,
+    LOOKS_PATH,
     MAX_HISTORY,
     ConfigTrio,
     HistoryEntry,
@@ -49,10 +59,12 @@ from conductor.looks.live import (
     ShowLooksFile,
     _sha,
     changed_scenes,
+    config_sha,
     install_looks,
     live_looks,
     restore_file,
     scene_source,
+    standing_alerts,
     trio_sha,
     validate_trio,
     write_looks,
@@ -86,6 +98,17 @@ LIVE_VERSION = "This version is live on the show; publish another (or revert) fi
 FAILED = (
     "The publish failed on the server ({name}) and was rolled back: the show runs “{live}” again (the alert on /ops "
     "says more)."
+)
+ROLLED_BACK = "{prefix} a publish at {time} failed ({error}) and was rolled back to “{live}”."
+PUBLISH_KEY = "looks:publish"  # the rollback warn; resolved by the next publish that fully succeeds
+DEPLOYING = (
+    "config/ changed on disk since the show started (a deploy is under way): finish it with canopy-mac install, or "
+    "roll it back, then publish."
+)
+FALLBACK_REVERT = (
+    "Revert {where} to the approved looks: it already runs them, because {path} couldn't be used ({problem}); this "
+    "replaces that file (a copy stays in overrides/history/), so the /ops alert clears and every restart starts on "
+    "the approved looks."
 )
 NOT_WRITTEN = "The published looks couldn't be saved ({reason}); nothing was changed on the show."
 CANOPY_OFF = "The canopy is off (guest power) — publishing doesn't turn it on."
@@ -134,6 +157,7 @@ class PublishPlan:
     changes: list[dict] = field(default_factory=list)
     show_offer: str | None = None
     show_modules: list[str] = field(default_factory=list)
+    clears_fallback: bool = False  # Revert out of a fallback: replaces the unusable file, sends nothing
 
 
 @dataclass(frozen=True)
@@ -276,6 +300,9 @@ def plan_publish(lab: LabService, candidate: Candidate) -> PublishPlan:
     looks = live_looks(services)
     live, git, new = looks.trio, looks.git, candidate.trio
     exempt = candidate.kind in ("approved", "previous")  # Revert and Undo are never refused by the B1 lock
+    # A fallback runs git already, so Revert's trio equals the live one; it still has a job: replace the unusable
+    # file (which every restart would fall back on again) and clear the /ops line and alert.
+    clears_fallback = candidate.kind == "approved" and looks.problem is not None
     changed = changed_scenes(live, new)
     vs_git = set(changed_scenes(git, new))
     to_approved = [s for s in changed if s not in vs_git]
@@ -352,29 +379,33 @@ def plan_publish(lab: LabService, candidate: Candidate) -> PublishPlan:
         generation=looks.generation,
         live_id=looks.live_id,
         ends_trial=trial is not None,
-        equals_live=trio_sha(new) == trio_sha(live),
+        equals_live=trio_sha(new) == trio_sha(live) and not clears_fallback,
         warnings=warnings,
         notes=notes,
         changes=changes,
         show_offer=show_offer,
         show_modules=show_modules,
+        clears_fallback=clears_fallback,
     )
 
 
 # ---- what ops confirms --------------------------------------------------------------------------------------------------
-def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str) -> str:
+def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str, show: bool = False) -> str:
     """The sentence ops confirms (409 `confirm_required` until `confirm` equals it): what is published, what it
-    replaces, which scenes change (or go back to approved), the modules it reaches now, the holds, the try-on."""
+    replaces, which scenes change (or go back to approved), the modules it reaches now, the "show <scene>" switch
+    when `show` asks for it, the holds, the try-on."""
     looks = live_looks(lab.services)
     live = looks.trio
     simulated = lab.simulated
     current = looks.file.current
+    where = "this simulator" if simulated else "the show"
     to_approved = [_name(live, s) for s in plan.to_approved]
     to_new = [_name(live, s) for s in plan.changed if s not in plan.to_approved]
-    if kind == "approved":
+    if kind == "approved" and plan.clears_fallback and not plan.changed:
+        sentence = FALLBACK_REVERT.format(where=where, path=LOOKS_PATH, problem=looks.problem)
+    elif kind == "approved":
         names = _and([_name(live, s) for s in plan.changed])
         verb = "changes" if len(plan.changed) == 1 else "change"
-        where = "this simulator" if simulated else "the show"
         sentence = f"Revert {where} to the approved looks: {names} {verb} back."
     else:
         parts = []
@@ -383,8 +414,11 @@ def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str
         if to_approved:
             parts.append(f"{_and(to_approved)} {'goes' if len(to_approved) == 1 else 'go'} back to approved")
         what = ", ".join(parts)
+        # only a publication the show really runs is "replaced" (in a fallback it runs the approved looks)
         replacing = (
-            f", replacing “{current.name}”" if current is not None and current.kind == "version" else ""
+            f", replacing “{current.name}”"
+            if current is not None and current.kind == "version" and looks.problem is None
+            else ""
         )
         if kind == "previous":
             sentence = f"Go back to “{name}”{replacing}: {what}."
@@ -393,11 +427,26 @@ def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str
         else:
             sentence = f"Publish “{name}” to the show{replacing}: {what}."
     canopy = "The simulated canopy" if simulated else "The canopy"
+    switch = bool(show and plan.show_offer)
     if plan.driven:
         sentence += (
             f" {canopy} shows it now on {_count(len(plan.driven), 'module', 'modules')} "
             f"({_labels(lab, plan.driven)}) and after every restart."
         )
+        if switch:
+            sentence += f" Then it switches to {_switch(lab, plan)}."
+    elif switch:
+        others = len(plan.changed) - 1
+        sentence += (
+            f" {canopy} switches to {_switch(lab, plan)}; the published looks show after every restart."
+        )
+        if others:
+            sentence += (
+                f" The other changed {'scene shows' if others == 1 else 'scenes show'} the next time "
+                f"{'it is' if others == 1 else 'they are'} chosen."
+            )
+    elif not plan.changed:
+        sentence += " Nothing on the canopy changes now."
     else:
         sentence += (
             f" Nothing on the canopy changes now (no changed scene is showing); {'it shows' if len(plan.changed) == 1 else 'they show'} "
@@ -408,6 +457,26 @@ def confirm_sentence(lab: LabService, plan: PublishPlan, *, name: str, kind: str
     if plan.ends_trial:
         sentence += " The running try-on ends."
     return sentence
+
+
+def _switch(lab: LabService, plan: PublishPlan) -> str:
+    """ "<Scene> now on N modules (labels), at its designed brightness…": the "show <scene>" burst is an ops choice
+    (source ops, D60): it turns guest power back on and drops a guest's dimming."""
+    looks = live_looks(lab.services)
+    engine = lab.engine()
+    scene = _name(looks.trio, plan.show_offer or "")
+    n = len(plan.show_modules)
+    out = f"{scene} now on {_count(n, 'module', 'modules')}"
+    if plan.show_modules:
+        out += f" ({_labels(lab, plan.show_modules)})"
+    out += ", at its designed brightness"
+    if engine is not None and not getattr(engine, "guest_power", True):
+        out += ", and turns the canopy back on (a guest had turned it off)"
+    else:
+        level = getattr(engine, "_guest_brightness", None) if engine is not None else None
+        if isinstance(level, int):
+            out += f" (not the {level}% a guest set)"
+    return out
 
 
 def cost_line(plan: PublishPlan, *, show: bool = False) -> str:
@@ -428,16 +497,19 @@ def cost_line(plan: PublishPlan, *, show: bool = False) -> str:
 def confirm_body(lab: LabService, plan: PublishPlan, sentence: str, *, show: bool) -> dict:
     looks = live_looks(lab.services)
     current = looks.file.current
+    # in a fallback the show runs the approved looks, not the unusable `current`: nothing named is replaced
+    replaces = current is not None and looks.problem is None
     return {
         "confirm_required": True,
         "confirm": sentence,
         "cost": cost_line(plan, show=show),
-        "replaces": {"id": current.id, "name": current.name} if current is not None else None,
+        "replaces": {"id": current.id, "name": current.name} if replaces else None,
         "changes": plan.changes,
         "repaint": [],  # B2
         "ends_trial": plan.ends_trial,
         "show_offer": plan.show_offer,
-        "notes": plan.notes,
+        # "the canopy is off / a guest dimmed it, publishing keeps that": not true once "show <scene>" switches it
+        "notes": [] if show and plan.show_offer else plan.notes,
         "warnings": plan.warnings,
     }
 
@@ -618,8 +690,11 @@ def _new_file(
             for h in old.history
         ],
     ][:MAX_HISTORY]
+    # Out of a fallback the show ran the approved looks, not `old.current` (which couldn't be used): never offer it
+    # back as Undo (it would answer 422)
+    previous = old.current if looks.problem is None else None
     new_file = old.model_copy(
-        update={"seq": seq, "current": current, "previous": old.current, "history": history}
+        update={"seq": seq, "current": current, "previous": previous, "history": history}
     )
     return new_file, current
 
@@ -657,9 +732,11 @@ async def _publish_locked(
     services = lab.services
 
     def build() -> tuple[Candidate, PublishPlan, str]:
+        if looks.config_dir is not None and looks.git_sha and config_sha(looks.config_dir) != looks.git_sha:
+            raise PublishAnswer(409, DEPLOYING)  # never publish over a git the running show didn't load
         candidate = published_trio(lab, body.version)
         plan = plan_publish(lab, candidate)
-        sentence = confirm_sentence(lab, plan, name=candidate.name, kind=candidate.kind)
+        sentence = confirm_sentence(lab, plan, name=candidate.name, kind=candidate.kind, show=body.show)
         return candidate, plan, sentence
 
     try:
@@ -696,7 +773,9 @@ async def _publish_locked(
     now = services.clock.now()
     new_file, current = _new_file(looks, candidate, plan, now=now, by=by, sha=looks.git_sha)
     old_file, old_trio = looks.file, looks.trio
-    old_state = (looks.source, looks.git_changed, looks.equals_approved)
+    old_state = (looks.source, looks.git_changed, looks.equals_approved, looks.problem)
+    # what the show really runs now (in a fallback: the approved looks, never the unusable `current`)
+    old_name = looks.name if looks.problem is None else APPROVED_NAME
     try:
         old_bytes = write_looks(looks, new_file, now=now)
     except OSError as exc:
@@ -718,9 +797,24 @@ async def _publish_locked(
         repicked = engine.current_plan() is not None and bool(plan.driven)
         st = await engine.reload_looks(changed=plan.changed, why=why)
     except Exception as exc:  # noqa: BLE001 - rolled back, alerted, a plain 500
-        await _rollback(lab, engine, looks, old_bytes, old_file, old_trio, old_state, exc)
+        await _rollback(
+            lab,
+            engine,
+            looks,
+            old_bytes,
+            old_file,
+            old_trio,
+            old_state,
+            exc,
+            changed=plan.changed,
+            live=old_name,
+        )
         _record(lab, "publish_failed", version=body.version, error=type(exc).__name__)
-        raise PublishAnswer(500, FAILED.format(name=type(exc).__name__, live=_name_of(old_file))) from None
+        raise PublishAnswer(500, FAILED.format(name=type(exc).__name__, live=old_name)) from None
+    # a publish that fully succeeded: an earlier "a publish failed and was rolled back" warn no longer stands
+    services.telemetry.record(
+        "alert", level="info", message=f"{ALERT_PREFIX} “{current.name}” is live.", alert_key=PUBLISH_KEY
+    )
     sent = len(plan.driven) if repicked else 0
     if body.show and plan.show_offer is not None and not st.refused:
         shown = await engine.show_after_publish(plan.show_offer)
@@ -756,10 +850,6 @@ async def _publish_locked(
     return {"live": live_json(lab), "report": report, "state": state.to_json()}
 
 
-def _name_of(file: ShowLooksFile) -> str:
-    return file.current.name if file.current is not None else APPROVED_NAME
-
-
 async def _rollback(
     lab: LabService,
     engine: Any,
@@ -769,7 +859,13 @@ async def _rollback(
     old_trio: ConfigTrio,
     old_state: tuple,
     exc: BaseException,
+    *,
+    changed: list[str],
+    live: str,
 ) -> None:
+    """The previous file, trio and state back (a fallback's problem included: the file put back still can't be used),
+    the warns that state raises again (the rollback's own install_looks resolved them), the T1 hold of the changed
+    scenes recomputed under the restored trio, the current look re-picked, and the rollback's warn."""
     services = lab.services
     log.error("The publish failed (%s: %s); rolling back", type(exc).__name__, exc)
     try:
@@ -777,22 +873,29 @@ async def _rollback(
     except OSError:
         log.exception("Couldn't put the previous overrides/show-looks.yaml back")
         looks.file = old_file
+    installed = True
     try:
         install_looks(services, old_trio, why="a rollback after a failed publish")
     except Exception:
         log.exception("The rollback's install failed")
         looks.trio = old_trio
-    looks.source, looks.git_changed, looks.equals_approved = old_state
+        installed = False
+    looks.source, looks.git_changed, looks.equals_approved, looks.problem = old_state
+    standing_alerts(services, looks)
     try:
-        await engine.repick_after_rollback("a failed publish")
+        await engine.repick_after_rollback("a failed publish", changed=changed, installed=installed)
     except Exception:
         log.exception("The re-pick after a rolled-back publish failed")
     services.telemetry.record(
         "alert",
         level="warn",
-        message=f"Published looks: a publish failed ({type(exc).__name__}: {exc}) and was rolled back; the show runs "
-        f"“{_name_of(old_file)}” again.",
-        alert_key="looks:publish",
+        message=ROLLED_BACK.format(
+            prefix=ALERT_PREFIX,
+            time=_clock(services.clock.now()),
+            error=f"{type(exc).__name__}: {exc}",
+            live=live,
+        ),
+        alert_key=PUBLISH_KEY,
     )
 
 

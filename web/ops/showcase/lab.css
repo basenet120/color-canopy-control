@@ -76,7 +76,7 @@ textarea.lab-input { resize: vertical; line-height: 1.4; }
 .lab-badge { align-self: center; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: #e4eadc; color: #3d5b3f; white-space: nowrap; }
 .lab-badge.draft { background: #fbe6d6; color: #8a4a1f; }
 .lab-badge.in-try-on { background: var(--orange); color: #fff; }
-.lab-badge.approved-design { background: #e4eadc; color: #3d5b3f; }
+.lab-badge.approved-design, .lab-badge.published-design { background: #e4eadc; color: #3d5b3f; }
 
 /* the stage (the Studio's dark card around its light canopy view) */
 .lab-stage-col { background: var(--lab-stage); border-radius: 12px; color: #edf1df; padding: 14px 14px 16px; min-width: 0; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }

@@ -67,14 +67,14 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-6">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-7">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
-    assert '<script type="module" src="./studio.js?v=screen-1"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-6"')
+    assert '<script type="module" src="./studio.js?v=screen-2"></script>' in html
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-7"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
-    assert 'from "./lab-model.mjs?v=lab-6"' in _text("lab.js")
+    assert 'from "./lab-model.mjs?v=lab-7"' in _text("lab.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -246,7 +246,13 @@ def test_the_publish_dialog_shows_the_servers_sentence_and_sends_it_back():
     # which sends back the server's own sentence and the live id the dialog was opened against
     calls = re.findall(r'api\(`\$\{API\}/publish`, \{ method: "POST", body: ([^\n]*)', js)
     assert len(calls) == 2, calls
-    assert calls[0].startswith("M.publishBody({ version, expected })"), calls[0]
+    # the ask carries the "Show <scene>" box (UI-1): the server's sentence and cost are built for it, and a toggle of
+    # the box asks again, so what ops reads is what Publish now sends
+    assert calls[0].startswith("M.publishBody({ version, expected, show })"), calls[0]
+    assert "show = M.publishShowDefault(kind)" in _function(js, "askPublish")
+    assert "askPublish(d.version, d.kind, d.name, { show: !!e.target.checked, reask: true })" in js
+    assert "const show = d.view.showOffer ? !!d.show : null;" in _function(js, "confirmPublish")
+    assert '$("#lab-publish-show").checked = !!d.show;' in _function(js, "openPublishDialog")
     assert calls[1].startswith(
         "M.publishBody({ version: d.version, confirm: d.view.sentence, expected: d.expected, who: L.who, show })"
     ), calls[1]

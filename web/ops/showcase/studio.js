@@ -1,27 +1,50 @@
 // The Studio: a screen-only preview of the six scenes over the full canopy (D67). It sends no light command: no
 // connect, no shop-kit lease, no module, pair, bench or motion-demo call. The Design Lab (lab.js, #lab) is the only
-// live control. The illustration paints the show's own design per scene (GET /api/canopy/design, a read).
+// live control. The illustration paints the show's own design per scene (GET /api/canopy/design, a read); the chips,
+// tiles and copy are the scenes as the show runs them (GET /api/canopy/scenes, a read: the live looks, D68), re-read
+// while the page is visible so a publish never leaves the page mixing two looks. demo-model's SCENES is the fallback.
 import {api} from '/static/app.js';
 import {SCENES,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-3';
+import {liveScenes,scenesChanged,palettePainters,LIVE_CAPTION,FALLBACK_CAPTION,REFRESH_MS} from './studio-model.mjs?v=screen-2';
 
 const $=id=>document.getElementById(id);
 const S={scene:'coastal-tides',sceneColor:1,level:null,angle:'perspective',tour:null,raf:null};
 let canopyView=null,canopyKey=null,lastScenePaint=null;
 // The show's design per scene id (GET /api/canopy/design): the design, or {error} when it couldn't be loaded.
 const designs=new Map();
+// The scenes shown: demo-model's six until the show's live looks are read ({scenes, live, generation}).
+let LIVE={scenes:SCENES,live:false,generation:null};
 function showError(message){$('alert').textContent=message||'';$('alert').hidden=!message;}
-function selectedScene(){return SCENES.find(x=>x.id===S.scene);}
+function selectedScene(){return LIVE.scenes.find(x=>x.id===S.scene);}
 // What the scene illustration paints: the show's design at the chosen level (S.level, once someone picks one; until
 // then the level the show tries first for the scene), or why it falls back to the palette left to right.
 function sceneView(){return sceneDesignView(designs.get(S.scene),S.level);}
 const designLoads=new Set();
+let designEpoch=0;
 async function loadDesign(id){
   if((designs.has(id)&&!designs.get(id).error)||designLoads.has(id))return;
-  designLoads.add(id);
-  try{designs.set(id,await api('/api/canopy/design?mode='+encodeURIComponent(id)));}
-  catch(e){designs.set(id,{error:e.message||'the Conductor did not answer'});}
+  designLoads.add(id);const epoch=designEpoch;
+  let design;
+  try{design=await api('/api/canopy/design?mode='+encodeURIComponent(id));}
+  catch(e){design={error:e.message||'the Conductor did not answer'};}
   finally{designLoads.delete(id);}
+  if(epoch!==designEpoch){loadDesign(id);return;} // the looks changed while it loaded: read it again
+  designs.set(id,design);
   if(id===S.scene){lastScenePaint=null;updateScenePresentation();}
+}
+// The scenes as the show runs them; a newer generation (a publish, a revert) drops every cached design.
+let scenesLoading=false;
+async function loadScenes(){
+  if(scenesLoading)return;scenesLoading=true;
+  let next;
+  try{next=liveScenes(SCENES,await api('/api/canopy/scenes'));}
+  catch{next={scenes:SCENES,live:false,generation:null};}
+  finally{scenesLoading=false;}
+  const changed=scenesChanged(LIVE,next)||(LIVE.live&&!next.live);
+  if(!changed&&LIVE.live===next.live)return;
+  LIVE=next;
+  if(changed){designEpoch++;designs.clear();}
+  renderSceneList();selectScene(S.scene,true,true);
 }
 function sceneNote(view){
   const tail=' Screen only: nothing here changes the lights.';
@@ -45,7 +68,7 @@ function renderCanopy(){
   const brightness=Number($('brightness').value),view=sceneView(),paintKey=[S.scene,brightness,view.level,view.state].join(':');
   if(lastScenePaint!==paintKey&&view.state!=='loading'){
     // the show's design head for head (or module by module); only if it can't be had, the palette left to right
-    const painters=scenePainters(view,S.scene,canopyView.layout.width);
+    const painters=view.paint?scenePainters(view,S.scene,canopyView.layout.width):palettePainters(selectedScene(),canopyView.layout.width);
     paintCanopy(canopyView,painters.head,painters.spill,brightness);
     lastScenePaint=paintKey;
     canopyView.svg.setAttribute('aria-label',selectedScene().name+' · full canopy, nine panels, 270 lights'+(view.level==='modules'?' · module level, one colour per panel':''));
@@ -57,7 +80,8 @@ function frame(){
 }
 function updateScenePresentation(){
   const scene=selectedScene();if(!scene)return;
-  const color=scene.palette[S.sceneColor];
+  const color=scene.palette[Math.min(S.sceneColor,scene.palette.length-1)];
+  $('scene-live-plan').textContent=LIVE.live?LIVE_CAPTION:FALLBACK_CAPTION;
   $('scene-select').value=S.scene;
   $('scene-title').textContent=scene.name;
   $('scene-kicker').textContent='THE FULL CANOPY / '+scene.mood.toUpperCase();
@@ -70,16 +94,17 @@ function updateScenePresentation(){
   document.querySelectorAll('.scene-tile').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.scene===S.scene)));
   document.querySelectorAll('.scene-color').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.color)===S.sceneColor)));
 }
-function selectScene(id,fromTour=false){
-  const scene=SCENES.find(x=>x.id===id);if(!scene)return;if(!fromTour)stopTour();
-  S.scene=id;S.sceneColor=scene.defaultColor||0;loadDesign(id);
+function selectScene(id,fromTour=false,keepColor=false){
+  const scene=LIVE.scenes.find(x=>x.id===id);if(!scene)return;if(!fromTour)stopTour();
+  S.scene=id;S.sceneColor=keepColor?Math.min(S.sceneColor,scene.palette.length-1):scene.defaultColor||0;loadDesign(id);lastScenePaint=null;
   $('brightness').value=scene.brightness;$('brightness-value').textContent=scene.brightness+'%';
   $('scene-colors').replaceChildren();
   scene.palette.forEach((color,index)=>{const b=document.createElement('button');b.className='scene-color';b.dataset.color=index;b.setAttribute('aria-label',color.name);b.setAttribute('aria-pressed',String(index===S.sceneColor));const swatch=document.createElement('i');swatch.style.background=color.hex;const label=document.createElement('span');label.textContent=color.name;b.append(swatch,label);b.addEventListener('click',()=>{stopTour();S.sceneColor=index;updateScenePresentation();});$('scene-colors').append(b);});
   updateScenePresentation();
 }
-function buildScenes(){
-  SCENES.forEach((scene,index)=>{
+function renderSceneList(){
+  $('scene-select').replaceChildren();$('scene-list').replaceChildren();
+  LIVE.scenes.forEach((scene,index)=>{
     const option=document.createElement('option');option.value=scene.id;option.textContent=scene.name;$('scene-select').append(option);
     const b=document.createElement('button');b.className='scene-tile '+scene.style;b.dataset.scene=scene.id;b.setAttribute('aria-pressed',String(S.scene===scene.id));b.setAttribute('aria-label',scene.name);
     const art=document.createElement('span');art.className='scene-art';art.setAttribute('aria-hidden','true');
@@ -87,14 +112,23 @@ function buildScenes(){
     const number=document.createElement('small');number.className='scene-number';number.textContent=String(index+1).padStart(2,'0');art.append(number);
     const name=document.createElement('strong');name.textContent=scene.name;const mood=document.createElement('span');mood.className='scene-mood';mood.textContent=scene.mood;b.append(art,name,mood);b.addEventListener('click',()=>selectScene(scene.id));$('scene-list').append(b);
   });
+}
+function buildScenes(){
+  renderSceneList();
   $('scene-select').addEventListener('change',()=>selectScene($('scene-select').value));
-  $('scene-tour').addEventListener('click',()=>{if(S.tour){stopTour();return;}updateScenePresentation();$('scene-tour').textContent='Pause scene tour';$('scene-tour').setAttribute('aria-pressed','true');S.tour=setInterval(()=>{if(!document.hidden)selectScene(SCENES[(SCENES.findIndex(s=>s.id===S.scene)+1)%SCENES.length].id,true);},6000);});
+  $('scene-tour').addEventListener('click',()=>{if(S.tour){stopTour();return;}updateScenePresentation();$('scene-tour').textContent='Pause scene tour';$('scene-tour').setAttribute('aria-pressed','true');S.tour=setInterval(()=>{if(!document.hidden)selectScene(LIVE.scenes[(LIVE.scenes.findIndex(s=>s.id===S.scene)+1)%LIVE.scenes.length].id,true);},6000);});
   $('view-angle').addEventListener('click',()=>{S.angle=S.angle==='perspective'?'plan':'perspective';$('view-angle').textContent=S.angle==='plan'?'Perspective':'Ceiling plan';$('view-angle').setAttribute('aria-pressed',String(S.angle==='plan'));});
   $('design-level').addEventListener('click',()=>{S.level=nextDesignLevel(sceneView());lastScenePaint=null;updateScenePresentation();});
   selectScene(S.scene);
 }
 
 buildScenes();
+loadScenes();
+// re-read when the page comes back, when the Lab (#lab, where publishing happens) closes, and slowly while visible
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)loadScenes();});
+window.addEventListener('focus',()=>loadScenes());
+window.addEventListener('hashchange',()=>{if(location.hash!=='#lab')loadScenes();});
+setInterval(()=>{if(!document.hidden)loadScenes();},REFRESH_MS);
 $('brightness').addEventListener('input',()=>{$('brightness-value').textContent=$('brightness').value+'%';});
 $('fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{showError('Full screen is unavailable here. Use your browser’s full-screen control.');}});
 window.addEventListener('pagehide',()=>{stopTour();cancelAnimationFrame(S.raf);});

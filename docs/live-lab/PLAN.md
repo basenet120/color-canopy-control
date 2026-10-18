@@ -651,10 +651,11 @@ repaints those 5 (one slot write each). The other 4 get the published design whe
 | the trio fails `validate_trio` (also for "previous") | 422 `{detail, problems}` (Lab shape) | nothing |
 | a painted design change over an "app" slot (§2.6.0) | 409 `{detail, field}` | nothing |
 | B1: a painted design change over api records (§2.6.0; not Revert/Undo) | 409 `{detail, field}` | nothing |
-| equals what the show runs | 409 `{detail: "This is already what the show runs.", nothing: true}` | nothing |
+| equals what the show runs | 409 `{detail: "This is already what the show runs.", nothing: true}` — **except Revert to approved during a fallback** (review 4, LL-PUB-1): the show runs git already, but Revert still replaces the unusable file with `current: {kind: approved}` (history copy first) and `install_looks` clears the /ops line and the `looks:load` alert; its own confirm sentence says so; `changed: []`, so nothing is sent | nothing |
+| config/ on disk ≠ the git the show loaded (`config_sha` ≠ `LiveLooks.git_sha`: a deploy's checkout before its restart) | 409 "config/ changed on disk since the show started (a deploy is under way): finish it with canopy-mac install, or roll it back, then publish." (review 4, LL-PUB-2) | nothing |
 | no / stale `confirm` | 409 `{detail, confirm_required: true, confirm, cost, changes, repaint, ends_trial, replaces}` | nothing |
 | overlay can't be written (read-only, OSError) | 409 `{detail, read_only: true}` | nothing (memory untouched: the write precedes the install) |
-| an exception during install/re-pick | 500 plain; **rollback**: previous file restored, `install_looks(previous)`, the B2 job cancelled (marks cleared), then `await engine._request(mode, source=LOOKS_SOURCE, ripple=False)` under the restored trio (else the safe look), alert warn | possibly two bursts |
+| an exception during install/re-pick | 500 plain, naming what really runs (in a fallback: the approved looks); **rollback**: previous file restored, `install_looks(previous)`, the state it described put back (`problem`, `source`, `git_changed`, `equals_approved`) and its standing warns raised again (`looks:load`, `looks:git`: the rollback's install resolved them), the B2 job cancelled (marks cleared), the T1 hold of the changed scenes recomputed under the restored trio (`repick_after_rollback(changed=…)`), then `await engine._request(mode, source=LOOKS_SOURCE, ripple=False)` under the restored trio (else the safe look), alert warn `looks:publish` ("a publish at 12:04 failed (…) and was rolled back to “X”"), resolved by the next publish that fully succeeds (review 4, LL-PUB-3/4/5) | possibly two bursts |
 **Order in `publish()`:** build + plan (threadpool: `published_trio`, `plan_publish`, the confirm sentence) → then
 **one synchronous section on the loop thread**: lock held; `looks_refusal()`; `expected_live` and the plan's
 `generation` still current (else conflict); confirm matches; `write_looks` (sync, small file; history copy first; an
@@ -694,6 +695,10 @@ never blocks the others; T1 for the scene stays off until every canopy position 
 `expected_live` = the live `current.id`, or `"approved"` when current is null. `who` is stored as `by` (else "ops").
 `show: true` (the dialog's "Show <scene> on the canopy after publishing" checkbox, offered when no changed scene is
 showing) → after `reload_looks`, `engine.request_mode(<scene>, source="ops")` (one burst; the cost line counts it).
+**`show` is part of what ops confirms** (review 4, UI-1): the ask carries the box's state, the sentence says "The
+canopy switches to <scene> now on N modules (…), at its designed brightness" (and "turns the canopy back on" / "not
+the N% a guest set": source ops, D60), the canopy-off / guest-dim notes are dropped, the cost counts the burst; a
+confirm whose `show` differs from its ask's is a new 409 `confirm_required`; toggling the box asks again.
 ```jsonc
 // LiveJSON
 {"source": "approved" | "published", "simulated": false,
@@ -776,8 +781,13 @@ labels `publish repaint: <label> → custom-N`. AlertBoard keys (`alerts.py` `_k
 - "Published looks: overrides/show-looks.yaml couldn't be used…" → `looks:load`; resolved by `install_looks`
   (it records an info "Published looks: loaded …" carrying the same prefix).
 - "Published looks: “<name>” is live and masks config/ changes…" → `looks:git`; resolved by the next install.
-- "Published looks: <Scene>…" (repaint, can't-be-shown) → `looks:repaint:<mode_id>` — the event carries
-  `mode_id=` and `_key_of` uses it — resolved only by that scene's own success info.
+- "Published looks: <Scene>…" (repaint) → `looks:repaint:<mode_id>` — the event carries `mode_id=` and `_key_of`
+  uses it — resolved only by that scene's own success info.
+- "Published looks: <Scene> can't be shown under the published looks…" → `looks:show:<mode_id>` (review 4,
+  LL-PUB-5): resolved by the engine's info the next time that mode is on the canopy under the live looks (never a
+  try-on's draft) — so a B2 repaint warn under `looks:repaint:` is never cleared by a mere re-pick.
+- "Published looks: a publish at 12:04 failed (…) and was rolled back to “X”." → `looks:publish`; resolved by the
+  next publish that fully succeeds (its info "“<name>” is live.").
 So scene B's success never clears scene A's warn, and a repaint success never clears a load-fallback warn. Slot keys
 (`slot:<device>:<slot>`) clear on "… rewrote it (applied)" today; the pending marks keep the reconciler from raising
 "waiting" ones during a repaint. `_mode_labels` reads `live_trio(services)` (2.4 #13).
@@ -836,7 +846,9 @@ Files: `web/ops/showcase/lab.js`, `lab-model.mjs`, `lab.css`, `tests/lab-model.t
   sentence verbatim, the cost line, the changes list (scenes, what changed, "changes an approved colour — needs the
   client's sign-off" when `needs_d59`), the repaint lines with modules, warnings (D63, non-blocking), "The running
   try-on ends", the `notes` (canopy off / guest brightness low), a checkbox **Show <scene> on the canopy after
-  publishing** (on by default, when `show_offer`), a field **Your name, for the show's history** (asked once per
+  publishing** (when `show_offer`; on by default for a version, **off for Undo and Revert** — the mid-show
+  recovery path never switches the scene guests see unless asked; review 4, UI-1 — and part of the confirm: the ask
+  carries it and a toggle asks again, so the sentence and the cost always say what Publish now sends), a field **Your name, for the show's history** (asked once per
   browser, kept as a UI pref in localStorage, sent as `who`) → **Publish now** (sends `confirm` = the sentence,
   `expected_live` = the live id the dialog was opened from) / Cancel. A 409 `conflict` re-shows the dialog from the
   answer's `live` with its sentence on top; a 409 with `retry_after_s` shows its sentence with a countdown on the
@@ -1312,3 +1324,33 @@ git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)" && ~/canop
 - PR-A R1 a surviving overlay entry naming a deleted vignette sim profile passed the preflight, then SimDriver (built at every start, live mode too) refused it — **fixed both ways**: `REMOVED_PROFILES` pops it by value (ignored, named, pruned) and the preflight builds every entry's profile (§1.5).
 - PR-A R2 after a failed preflight the checkout stays on the rejected code, and any restart of the KeepAlive job starts it — **fixed**: `canopy-mac install` exits 3 with the rollback line; the paste blocks roll back on rc 3 (§8.1, `release-and-freeze.md`, `mac-show-box.md` §5).
 - PR-A R3 two comments named the deleted `release.sh`/`install.sh`/`canopy-start` — **fixed**, and the §1.6 grep (plus a test) now covers those names.
+
+**Build review of PR B (Oct 17, review 4; each fixed at its root with a regression test that failed first, plus a
+mutation check of every new guard — `tests/test_live_lab_review_fixes.py`, `tests/test_live_looks.py`, the node tests)**
+- LL-PUB-1 / UI-2 in a fallback, Revert to approved was refused as "already what the show runs", so the red line and
+  the /ops alert it names as the remedy could never be cleared — **fixed**: the SAME row is skipped for Revert while
+  `looks.problem` is set (§2.8); its own confirm sentence; a publish out of a fallback never moves the unusable
+  `current` into `previous` (Undo would answer 422).
+- LL-PUB-2 the Lab's approved trio was config/ re-read when the Lab was first opened, so a deploy's checkout before
+  its restart could give Revert (unvalidated) and every version a git the show never loaded — **fixed**: LabService
+  takes `LiveLooks.git` (copy), `git_sha` and `canopy`; a publish is refused while config/ on disk differs (§2.8).
+- LL-PUB-3 / B1-6 a rolled-back publish kept the failed trio's T1 hold (or dropped one the restored trio needs), and
+  the rollback's re-pick had no test — **fixed**: `repick_after_rollback(changed=…)` recomputes the hold under the
+  restored trio; tests for both directions and for a failure after the real re-pick.
+- LL-PUB-4 / B1-2 a rollback during a fallback cleared its /ops line and alert while the bad file was put back, and
+  named the unusable publication as live — **fixed**: `problem` is part of the restored state, `standing_alerts`
+  raises the warns again, every sentence names what really runs; a confirm in a fallback never says "replacing".
+- LL-PUB-5 the rollback and can't-be-shown warns were never resolved — **fixed**: `looks:publish` resolved by the next
+  full success; can't-be-shown has its own key `looks:show:<mode>`, resolved when the mode is shown again (§2.12).
+- UI-1 the dialog's "Show <scene>" box was ticked by default while the sentence and cost were built without it —
+  **fixed**: `show` is part of the confirm (§2.11), the box re-asks, and starts off for Undo/Revert (§3.1).
+- UI-4 "the slots keep the approved one" and "today" painted git's heads after a published painted design — **fixed**:
+  the try-on line is true in every state; "today" at T1/T2 compiles the live trio's heads (`heads: "approved" |
+  "published"`) and is never T1 while the scene is held.
+- UI-5 the Studio's chips, tiles and copy stayed on demo-model's copy after a publish, and an open Studio kept its
+  first designs — **fixed**: `GET /api/canopy/scenes` (the live looks + install generation), `studio-model.mjs`, a
+  re-read on focus / leaving #lab / every 15 s while visible; SCENES is only the fallback (the export notes say so).
+- B1-1 the preflight validated the file more strictly than the load — **fixed**: it is the show's own load
+  (`read_only=True`: no write, no log line); parity test over every fallback cause and the lenient cases.
+- B1-3, B1-4, B1-5 untested guards (the kiosk's sampled colours from the live recipes; validate_trio's blocking
+  scene rules; seq recovery, the no-data-folder row, Undo's checksum) — **tests added**, each failing on its mutant.

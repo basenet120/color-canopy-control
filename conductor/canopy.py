@@ -364,6 +364,8 @@ class CanopyEngine:
         # slot as stale, or the reconciler would never rewrite it and the hold would never lift); a slot record that
         # makes the mode's slots current lifts it (`_record_slot_value`), with one T1 re-pick.
         self._t1_hold: set[str] = set()
+        # modes a publish's re-pick couldn't show under the published looks (their warn stands until one shows)
+        self._unshowable: set[str] = set()
         self.stats["governor_trips"] = 0
         self._unsubscribe.append(self.telemetry.subscribe(self._on_event))
         self._restore_pause()
@@ -1636,13 +1638,14 @@ class CanopyEngine:
             self._restore_approved(cleared)  # compiles from the live trio now
             if self._plan is plan:  # still the old trio's (or the try-on's) plan: never left up
                 self._safe_look_now()
+            self._unshowable.add(mode_id)
             self.telemetry.record(
                 "alert",
                 level="warn",
                 message=f"Published looks: {plan.label} can't be shown under the published looks ({st.message}); "
                 "the safe look is on.",
                 mode_id=mode_id,
-                alert_key=f"looks:repaint:{mode_id}",
+                alert_key=f"looks:show:{mode_id}",
             )
         return st
 
@@ -1660,13 +1663,28 @@ class CanopyEngine:
         its designed brightness, on), one burst whatever the ripple setting."""
         return await self._request(mode_id, source="ops", ripple=False)
 
-    async def repick_after_rollback(self, why: str) -> CanopyState | None:
-        """A publish that failed after its install was rolled back: the current look again under the restored trio
-        (one burst), else the safe look."""
+    async def repick_after_rollback(
+        self, why: str, *, changed: Iterable[str] = (), installed: bool = True
+    ) -> CanopyState | None:
+        """A publish that failed after its install was rolled back: the T1 hold of the publish's changed scenes
+        recomputed under the restored trio (reload_looks set it for the failed one: a stale hold would keep a painted
+        scene below T1 for good, a dropped one would show T1 copy its slots don't hold), then the current look again
+        under the restored trio (one burst), else the safe look. `installed` False (the rollback's own install
+        failed, so the wiring may still compile the failed trio): the changed painted scenes are held, to be safe."""
+        changed = set(changed)
+        self.invalidate_t1_plans()
+        if installed:
+            self._t1_hold = (self._t1_hold - changed) | self.t1_hold_for(changed)
+        else:
+            for mode_id in changed:
+                try:
+                    if Tier.T1 in list(self.deps.ladder(mode_id)):
+                        self._t1_hold.add(mode_id)
+                except (KeyError, LookupError, PlanError, ValueError):
+                    continue
         plan = self._plan
         if plan is None or self._stopped:
             return None
-        self.invalidate_t1_plans()
         try:
             st = await self._request(plan.mode_id, source=LOOKS_SOURCE, ripple=False)
         except Exception:
@@ -1717,6 +1735,7 @@ class CanopyEngine:
         """Make `plan` the current look and (unless resting) send it to every module: one burst, or with `ripple`
         ring by ring when the plan has rings and a stagger is configured (D64)."""
         plan = self._install(plan, source)
+        self._shown_again(plan)
         if self._outage is None:
             rings = self._rings(plan) if ripple else None
             if rings is None:
@@ -1724,6 +1743,23 @@ class CanopyEngine:
             else:
                 self._start_ripple(plan, source, rings)
         self._publish_soon()
+
+    def _shown_again(self, plan: ModePlan) -> None:
+        """A mode a publish's re-pick couldn't show is on the canopy again under the live looks (never a try-on's
+        draft): its "can't be shown … the safe look is on" warn no longer stands."""
+        mode_id = plan.mode_id
+        if mode_id not in self._unshowable:
+            return
+        if self._trial is not None and self._trial.mode_id == mode_id:
+            return
+        self._unshowable.discard(mode_id)
+        self.telemetry.record(
+            "alert",
+            level="info",
+            message=f"Published looks: {plan.label} shows again under the published looks.",
+            mode_id=mode_id,
+            alert_key=f"looks:show:{mode_id}",
+        )
 
     def _rings(self, plan: ModePlan) -> list[list[str]] | None:
         """The plan's rings to send one after another, or None for one burst (no stagger, a motion plan, no rings,

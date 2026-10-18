@@ -12,9 +12,11 @@ and bumps its count.
 - "Canopy resting: …" → "outage"; "Hubspace is answering again …" clears it.
 - "Commissioning: …" and "7 am test mode change: …" → one key each; an info one (all good) clears it.
 - "Published looks: …" (D68) → its event's `alert_key`: "looks:load" (the overlay couldn't be used), "looks:git"
-  (a published look masks a deployed config/ change), "looks:repaint:<mode>" (one scene: a repaint, or a look that
-  can't be shown — keyed by the event's `mode_id`, so scene B's success never clears scene A's warn). An info event
-  clears its own key and every key in its `resolves` list (an install clears looks:load and looks:git).
+  (a published look masks a deployed config/ change), "looks:repaint:<mode>" (one scene's repaint — keyed by the
+  event's `mode_id`, so scene B's success never clears scene A's warn), "looks:show:<mode>" (a look a publish's
+  re-pick couldn't show; cleared when the engine shows that mode again), "looks:publish" (a publish rolled back;
+  cleared by the next publish that succeeds). An info event clears its own key and every key in its `resolves` list
+  (an install clears looks:load and looks:git).
 - anything else: its own sentence is the key.
 Nothing here writes anything anywhere except the in-memory list and the log. All times are the telemetry's clock.
 """

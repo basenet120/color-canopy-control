@@ -32,7 +32,7 @@ order. Not in PR B: the operator slot repaint (B2, `claude/live-lab-repaint`, af
   painted design change publishes** (held at module level, then the reconciler's stale rewrite), as D66's lock was
   off there — a deviation from the plan's §5.2 wording, recorded in D68 (one condition in `plan_publish` if Alon wants
   the sim locked too).
-- **The Lab page (U).** `lab.js` / `lab-model.mjs` / `lab.css` (`?v=lab-6`): the show bar (live / published,
+- **The Lab page (U).** `lab.js` / `lab-model.mjs` / `lab.css` (`?v=lab-6`; `lab-7` after review 4): the show bar (live / published,
   simulator vs hardware, the fallback line, held scenes, git-changed), the two badges per scene (Live: Approved /
   Published, and Live / Draft / In try-on against the **live** look), working drafts seeded from the live look,
   Publish to the show / Save & publish / Live now, the confirm dialog with the server's sentence verbatim and the
@@ -79,6 +79,30 @@ order. Not in PR B: the operator slot repaint (B2, `claude/live-lab-repaint`, af
 - **Needs the show box:** the deploy (§8.1 step 3: note the Lab's show bar before; after, the same name or "the
   approved looks" and no "Published looks: … couldn't be used" line), a publish of a non-painted scene on the two
   kits, then Revert.
+- **Review 4 fixes (Oct 17, on this branch after merging the fixed `claude/canopy-only`; PLAN §10 has the list).**
+  Each was reproduced first and fixed at its root, with a regression test that failed on the code before the fix
+  (17 of the 24 new route/engine tests fail there; the other 7 cover guards that already worked and each fails on its
+  mutant — 18 mutants, all killed). Behaviour changes: **Revert to approved clears a fallback** (it used to be refused
+  as "already what the show runs", so the red line and the /ops alert could never be cleared); a publish is
+  **refused while config/ on disk differs from the git the show loaded** (a deploy under way), and the Lab builds on
+  that git (no re-read when it is first opened); a **rollback** restores a fallback's problem and its warns,
+  recomputes the T1 hold under the restored trio and names what really runs; the rollback warn is resolved by the
+  next good publish, and can't-be-shown has its own key `looks:show:<mode>`, resolved when the mode is shown again;
+  the **"Show <scene>" box is part of the confirm** (sentence, notes and cost follow it; a toggle re-asks; off by
+  default for Undo and Revert); "today" at T1 paints the live painted design (`heads: "published"` when it is) and
+  is never T1 while the scene is held; the try-on line no longer claims the slots keep the approved design; the
+  **Studio reads the scenes as the show runs them** (`GET /api/canopy/scenes`, `web/ops/showcase/studio-model.mjs`,
+  re-read on focus, on leaving #lab and every 15 s while visible; demo-model's SCENES is the fallback, and the export
+  notes say so); the preflight is the show's own load (read only), so it never calls a usable file unusable. Pins:
+  `lab.js`/`lab.css`/`lab-model.mjs` `?v=lab-7`, `studio.js` `?v=screen-2`. `tests/test_lab_routes_preview.py`'s
+  "today in sim" test now waits for the show's start-up (the Lab used to take ~40 ms re-reading config/, which
+  covered a race in the test). Browser check on a dev server (`--port 8216`, throwaway data, killed): a bad-YAML
+  overlay → Revert dialog with the fallback sentence → 200, red line gone, `previous: null`; a Golden Hour publish
+  with the box ticked said "switches to Golden Hour now on 9 modules … sends 9 writes", unticking re-asked ("Nothing
+  on the canopy changes now … sends nothing"), the confirm sent `show: false` and the canopy stayed on Lowcountry
+  Calm; the Undo dialog opened unticked; the Studio's Golden Hour chips and tile showed the published `#FFD080`. Suite after the fixes: `nice -n 15 uv run --offline
+  pytest -q` → 2392 passed, 5 skipped, 44 subtests (10 m; `tests/test_deploy.py` passes now that PR A moved its
+  checks); `ruff check` + `ruff format --check` clean; `node --test tests/*.test.mjs` → 150/150.
 
 ## PR A — canopy only (D67), `claude/canopy-only` → `main` (Oct 17; plan `docs/live-lab/PLAN.md` §1, stream R)
 Alon on site, Oct 17: "remove all the stuff that isn't the canopy control". **Merge this before PR B** (the live

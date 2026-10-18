@@ -406,7 +406,11 @@ STUDIO = ROOT / "web" / "ops" / "showcase"
 def test_the_studio_sends_no_light_command():
     js = re.sub(r"(?m)(^|[^:'\"])//.*$", r"\1", (STUDIO / "studio.js").read_text())
     calls = re.findall(r"api\(\s*'([^']*)'", js)
-    assert calls == ["/api/canopy/design?mode="], calls  # its one request: a read of the show's design
+    # its two requests, both reads: the show's design and the scenes as the show runs them (D68's live looks)
+    assert calls == ["/api/canopy/design?mode=", "/api/canopy/scenes"], calls
+    assert len(re.findall(r"\bapi\(", js)) == 2
+    model = (STUDIO / "studio-model.mjs").read_text()
+    assert "api(" not in model and "fetch(" not in model  # the scene merge is pure
     for word in (
         "/api/module",
         "/api/studio",

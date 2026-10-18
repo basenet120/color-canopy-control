@@ -349,6 +349,8 @@ class LiveLooks:
     git_changed: bool = False  # current.base_config_sha != git's sha now (and the trio isn't git's)
     config_dir: Path | None = None
     git_sha: str = ""  # config_sha(config_dir) at load
+    # the canopy the trios were validated against (the Lab reuses it: one git per process)
+    canopy: dict | None = None
 
     @property
     def live_id(self) -> str:
@@ -362,7 +364,9 @@ class LiveLooks:
         return current.name if current is not None else APPROVED_NAME
 
 
-def _empty(config_dir: Path, data: Path | None, git: ConfigTrio, sha: str) -> LiveLooks:
+def _empty(
+    config_dir: Path, data: Path | None, git: ConfigTrio, sha: str, canopy: dict | None = None
+) -> LiveLooks:
     return LiveLooks(
         git=git,
         trio=git,
@@ -371,6 +375,7 @@ def _empty(config_dir: Path, data: Path | None, git: ConfigTrio, sha: str) -> Li
         path=(Path(data) / "overrides" / LOOKS_FILE) if data is not None else None,
         config_dir=Path(config_dir),
         git_sha=sha,
+        canopy=canopy,
     )
 
 
@@ -382,13 +387,15 @@ def load_live_looks(
     canopy: dict | None,
     now: float | None = None,
     telemetry: Any = None,
+    read_only: bool = False,
 ) -> LiveLooks:
     """The live looks at start (§2.3). Raises ConfigError only for a broken git config; never for the overlay. The
-    one write it may make: a published trio equal to git's is persisted as `current: {kind: approved}`."""
+    one write it may make: a published trio equal to git's is persisted as `current: {kind: approved}`.
+    `read_only` (the preflight): the same parse, but no write and no log line."""
     config_dir = Path(config_dir)
     git = git_trio(config_dir)
     sha = config_sha(config_dir)
-    looks = _empty(config_dir, data, git, sha)
+    looks = _empty(config_dir, data, git, sha, canopy)
     path = looks.path
     if path is None:
         return looks
@@ -427,7 +434,7 @@ def load_live_looks(
             raise _Unusable("its trio doesn't match its trio_sha (edited by hand or cut short)")
         trio = validate_trio(current.trio, git=git, settings=settings, canopy=canopy)
         if trio_sha(trio) == trio_sha(git):
-            _follow_git(looks, current, now=now)
+            _follow_git(looks, current, now=now, write=not read_only)
             return looks
         looks.trio = trio
         looks.source = "published"
@@ -440,14 +447,18 @@ def load_live_looks(
             looks.file = lenient_file(raw)
         except Exception:  # noqa: BLE001
             looks.file = ShowLooksFile()
-        log.warning(
-            "Published looks: %s couldn't be used (%s); the show runs the approved looks", path, looks.problem
-        )
+        if not read_only:
+            log.warning(
+                "Published looks: %s couldn't be used (%s); the show runs the approved looks",
+                path,
+                looks.problem,
+            )
         return looks
 
 
-def _follow_git(looks: LiveLooks, current: Publication, *, now: float | None) -> None:
-    """A published trio equal to git's: follow git (memory at once; the file with one small write, best effort)."""
+def _follow_git(looks: LiveLooks, current: Publication, *, now: float | None, write: bool = True) -> None:
+    """A published trio equal to git's: follow git (memory at once; the file with one small write, best effort;
+    `write=False`: memory only — the preflight never writes)."""
     looks.equals_approved = True
     looks.source = "approved"
     looks.trio = looks.git
@@ -475,6 +486,9 @@ def _follow_git(looks: LiveLooks, current: Publication, *, now: float | None) ->
     new_file = looks.file.model_copy(
         update={"seq": seq, "current": in_git, "previous": current, "history": history}
     )
+    if not write:
+        looks.file = new_file
+        return
     try:
         write_looks(looks, new_file, now=when)
     except OSError as exc:
@@ -583,14 +597,24 @@ def build_live_looks(services: Any) -> LiveLooks:
     return looks
 
 
-def _startup_alerts(services: Any, looks: LiveLooks) -> None:
+def standing_alerts(services: Any, looks: LiveLooks) -> None:
+    """(Re-)raise the looks warns that stand now: the fallback (`problem`) and a published look masking a changed
+    git. At start, and after a rollback (whose install_looks resolved them although the state they describe was put
+    back)."""
     telemetry = getattr(services, "telemetry", None)
     if telemetry is None:
         return
     if looks.problem:
         telemetry.record("alert", level="warn", message=load_problem_line(looks), alert_key=LOAD_KEY)
-    if looks.git_changed:
+    if looks.git_changed and looks.source == "published":
         telemetry.record("alert", level="warn", message=git_changed_line(looks), alert_key=GIT_KEY)
+
+
+def _startup_alerts(services: Any, looks: LiveLooks) -> None:
+    telemetry = getattr(services, "telemetry", None)
+    if telemetry is None:
+        return
+    standing_alerts(services, looks)
     if looks.equals_approved:
         telemetry.record(
             "alert",
@@ -666,24 +690,15 @@ def preflight_line(config_dir: Path, data: Path | None, settings: Any) -> str | 
     """For conductor.preflight (stream R's file; B1 adds this line): read-only — what the new code makes of the data
     folder's published looks. None when they load (or there are none); the fallback's reason otherwise. Never writes:
     the equals-git rewrite is left to the show's own start."""
-    path = (Path(data) / "overrides" / LOOKS_FILE) if data is not None else None
-    if path is None or not path.exists():
+    if data is None:
         return None
-    git = git_trio(config_dir)
-    try:
-        raw, _ = _read_overlay(path)
-        if _too_deep(raw) or not isinstance(raw, dict):
-            raise _Unusable("its top level isn't usable")
-        parsed = ShowLooksFile.model_validate(raw)
-        current = parsed.current
-        if current is None or current.kind == "approved":
-            return None
-        if current.trio is None or current.trio_sha != _sha(current.trio):
-            raise _Unusable("its trio is missing or doesn't match its trio_sha")
-        validate_trio(current.trio, git=git, settings=settings, canopy=_canopy_of(config_dir))
-    except Exception as exc:  # noqa: BLE001
-        return f"{LOOKS_PATH} couldn't be used ({_reason(exc)}); the show would run the approved looks"
-    return None
+    # the show's own load (read only: no equals-git rewrite, no log line), so the two can never disagree
+    looks = load_live_looks(
+        config_dir, data, settings=settings, canopy=_canopy_of(config_dir), read_only=True
+    )
+    if looks.problem is None:
+        return None
+    return f"{LOOKS_PATH} couldn't be used ({looks.problem}); the show would run the approved looks"
 
 
 # ---- the hot-apply checklist (§2.4) ----------------------------------------------------------------------------------
@@ -783,6 +798,7 @@ __all__ = [
     "live_trio",
     "load_live_looks",
     "preflight_line",
+    "standing_alerts",
     "trio_sha",
     "validate_trio",
     "write_looks",
