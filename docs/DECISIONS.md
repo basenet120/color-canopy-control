@@ -1112,7 +1112,10 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   rehearsing, trying on or while a guest's brightness or off is in force, and runs only through `tier_allowed` (never
   on live hardware until `live_enabled`). The show refuses `motion.idle` when the idle look has no stepped rung or
   `breathe_run_s` fits fewer than two paced steps. Alon turns it on only after a 30-minute live soak (live_enabled
-  on, then motion.idle on, watched on /ops, `null` to revert).
+  on, then motion.idle on, watched on /ops, `null` to revert). A breath sends nothing at its start (step 0 is the
+  hold), so a module already showing the hold counts as verified then, whether it reads ready or carries only a
+  flagged note with its look confirmed (D73, `tracker.flagged_only`: Modules 1–2's D54 note); the guest panel never
+  says "Changing the light…" while nothing is sent (review B-R4-C1).
 - **Any look can be rehearsed**, the idle look included: its own rung, or its module-level design at the D65 defaults.
 - **"This scene moves" is `Mode.moves`** (a stepped rung in the ladder). `Mode.motion` keeps its 07 §6 meaning (the
   on-device all-or-none burst flag): it stays false, and the schema now refuses `motion: true` beside a stepped rung
