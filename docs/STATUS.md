@@ -2,7 +2,7 @@
 
 _Last updated: 2026-10-18 night (preset-options PR B `claude/motion-every-scene`: motion on every scene — breathe and
 shimmer beside travel, a guest's choice runs first then settles on the best still tier, the idle breath off — D75;
-built and verified in sim, review round 1 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
+built and verified in sim, review rounds 1 and 2 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
 flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -61,10 +61,24 @@ exports made before D77 lands propose a reserved D-number; renumber by hand.
   - **B-R1-5:** the PLAN block, stack item 00 and Next step now carry PR B.
   - **TS-1 / TS-2 / TS-3:** tests for the floor at `guest_brightness_min`, the guest-applied `levels` the iPad draws,
     and two holds apart that don't end a run (a sent step resets the count).
+- **Review round 2 (Oct 19): every confirmed finding fixed**, each code fix and test with a mutation check (the line
+  reverted, its test failing, `git checkout --` and `git status` clean again):
+  - **B-R2-1:** a choice whose runner can't run when it is installed (a governor cool-off, a step too long) now
+    counts as run, and an idle breath's `run_s` is spent with it. Before, a guest's Coastal Tides (no canvas or slot,
+    so the plan stays stepped) chosen during a cool-off started stepping on the next re-pick once the cool-off
+    lifted, against D75's "re-picks never start a run". Tests: the kiosk case under four re-pick sources, and the
+    idle-return breath.
+  - **B-R2-2:** doc 04 gives the stepped soak's all-writes maximum as it now stands: 82 on seed 0 (80–89 over seeds
+    0–15) under the proposed 90.
+  - **B-R2-TS-1 / TS-2 / TS-5:** tests that a run ended by held steps settles one cap window (60 s) later, that the
+    idle return with `motion.idle` on is one `breathe_run_s` breath, that a guest choosing the idle look mid-breath
+    gets the full run, and that a folded, inverted, repeated breathe takes its lags from the plain design.
 - **Verified (sim, macOS), how** (final tree, after the review fixes):
-  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite): **2577 passed, 6 skipped, 44
-    subtests** (13 min, with the round-trips running beside it).
+  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 2): **2583 passed, 6
+    skipped, 44 subtests** (11.5 min; 2577 after round 1).
   - `node --test tests/*.test.mjs`: 156/156 pass. `ruff check .` and `ruff format --check .`: clean (251 files).
+  - After round 2, `python -m conductor.soak` (seed 0) to a scratch path gives the committed report line for line
+    (only the generated time and wall time differ), so `docs/reports/sim-acceptance.md` stands as committed.
   - `make scene-pins` / `regen_scene_pins.py --check`: up to date (only the two stepped `_pins` gained the new keys).
   - `LAB_ROUNDTRIP=1 pytest tests/test_lab_roundtrip.py`, **all six cases** (canonical, rename, add, remove, reorder,
     breathe: each export applied to a copy of the tree): the whole suite passes on every exported tree (~13 min

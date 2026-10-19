@@ -156,9 +156,10 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
   that changes, source `settle`), else the still design is sent to the modules that differ and holds. After a
   governor trip or two held steps the module-level hold goes out now and the settle waits (the cool-off, or one cap
   window); D72's fast back-off doesn't hold it. A choice runs once: a re-pick of the same look (tier change, new
-  capabilities, a publish) keeps a running run's phase and never starts a new one. Which choices run first: a
-  guest's (kiosk) runs the rung first; an /ops choice keeps the ladder order; start-up, the idle return, the safe look
-  and the checklist's change back show a still tier. The idle return never moves for a run.
+  capabilities, a publish) keeps a running run's phase and never starts a new one, and a choice that couldn't run
+  when it was installed (a cool-off) counts as run, so a re-pick after the cool-off lifts holds still. Which choices
+  run first: a guest's (kiosk) runs the rung first; an /ops choice keeps the ladder order; start-up, the idle return,
+  the safe look and the checklist's change back show a still tier. The idle return never moves for a run.
 - **Breathe and shimmer (D75).** Each module's colour moves up to `shift` (0–0.5) along the design's own t (clamped,
   never wrapped) and its brightness up to `brightness_swing` (0–20) points either side of the rung's, one breath of
   `steps_per_cycle` steps per module (up, back, down, back: `compile.breath_wave`). `lag_steps` lets the design's
@@ -189,8 +190,9 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
   every pinned row; the stepped scenario ran 124 steps over 12 runs at 7.5 s with at most 72 program PUTs and 89
   writes of any kind in any 60 s on the account. Each step's landing spread was p95 2.78 s against 05's 2 s: reported,
   not gating, until Alon signs off a per-step target. Since D75 the stepped scenario steps all six scenes with all
-  three kinds (153 steps, one PUT per changed module per step, at most 72 program PUTs a minute); its all-writes
-  maximum reads 91 against the proposed 90 on seed 0 (the numbers and the options are in D75).
+  three kinds (153 steps, one PUT per changed module per step, at most 72 program PUTs a minute). Since the review's
+  cap fix (B-R1-1: a step leaves room for a guest's burst) its all-writes maximum is 82 in any 60 s on seed 0 (80–89
+  over seeds 0–15), under the proposed 90 (D75).
 - **Needs real hardware:** Gate R (below), whether a strand cuts or fades between colours (bench item 6), and the
   start skew across kits (gate 12).
 

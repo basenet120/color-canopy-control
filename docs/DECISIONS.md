@@ -1083,6 +1083,9 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   and the checklist's change back (`ops-restore`) show a still tier. "Show after publish" is an /ops choice. A floor
   never steps. **A choice runs once:** once its run is over, a re-pick builds the runner over (DONE at once) and
   lifts it to the best still tier (the never-ran swap); a publish with a longer `run_s` never restarts a finished run.
+  A choice whose runner can't run when it is installed (a governor cool-off, a step too long) counts as run too, so
+  a re-pick after the cool-off lifts never starts its steps mid-way (review B-R2-1; an idle breath's `run_s` is
+  spent the same way).
 - **The settle.** At a run's end the look moves to the mode's canvas or slot when that can run (one write per module
   that changes, source `settle`; a motion plan re-triggers all nine), else the runner's module-level hold stays.
   After a governor trip or two held steps the hold goes out now and the settle waits (the cool-off, or one cap
