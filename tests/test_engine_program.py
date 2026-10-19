@@ -1723,11 +1723,38 @@ def test_the_idle_breath_waits_while_anything_else_holds_the_canopy():
         await w.close()
         return out
 
-    async def main():
-        return {case: await held(case) for case in ("paused", "try-on", "rehearsal", "guest", "outage")}
+    async def guest_run() -> tuple:
+        """A guest's run of the idle look itself (90 s) outlasting every_s (60 s), which no config rule rules out
+        (IdleMotionSettings checks only every_s > breathe_run_s): the period comes due mid-run (60 s after the
+        choice), and the breath waits for the run to end on its own (review B-R6-TS-4)."""
+        w = stepped_world(
+            kiosk={**IDLE_BREATH, "idle_reset_s": 3600}, motion={"idle": {"breathe_run_s": 30, "every_s": 60}}
+        )
+        await w.engine.start()
+        await w.run_for(5)
+        assert not (await w.engine.request_mode("breathe-level", source="kiosk")).refused
+        chosen, runner = w.clock.monotonic(), w.engine.runner
+        same, during = [], None
+        while runner.running and w.clock.monotonic() - chosen < 200:
+            same.append(w.engine.runner is runner)
+            during = [e for e in w.events("program") if e.get("action") == "idle_breath"]
+            await w.run_for(0.5)
+        lasted, ended = w.clock.monotonic() - chosen, runner.ended
+        await w.run_for(10)  # the period is long due: the breath comes once the run is over
+        after = (w.engine.breathing, w.engine.runner is not runner)
+        await w.close()
+        return runner.program.run_s, same, during, lasted, ended, after
 
-    out = run_virtual(main)
+    async def main():
+        cases = {case: await held(case) for case in ("paused", "try-on", "rehearsal", "guest", "outage")}
+        return cases, await guest_run()
+
+    out, (run_s, same, during, lasted, ended, after) = run_virtual(main)
     assert out == {case: [] for case in out}
+    assert run_s == 90.0 and len(same) > 120 and all(same)  # one runner, the guest's, from choice to end
+    assert during == []  # no idle breath while it ran, though every_s (60 s) was up 30 s before its end
+    assert 90.0 <= lasted <= 91.0 and ended == "the run is over"  # it ended on its own
+    assert after == (True, True)  # then the idle look breathes (its period was due all along)
 
 
 def test_motion_idle_with_the_live_gate_shut_never_breathes():
