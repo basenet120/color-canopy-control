@@ -6,7 +6,8 @@
 // server pushes a change on the live socket (topic "canopy", used only as that nudge), and every 2 s regardless, so a
 // dead socket costs speed, never correctness. Every request has a timeout: a hung read never stalls the panel.
 // Now showing draws the canopy's 270 lights from `state.lit` (canopy-preview.mjs; what each panel may truthfully
-// claim), and the 30-light serpentine only when there is no such picture (no look yet).
+// claim) with the 650 fins under them, each mixed from its nearest lights (D74), and the 30-light serpentine only
+// when there is no such picture (no look yet).
 // Honesty (CLAUDE.md, 07 §6): the feature sentence is always `state.feature` from the server and the subtitle prefers
 // `state.message`; this page only adds the spec's calm fallbacks (panel-model.mjs COPY). A refusal shows the server's
 // calm `detail`, never an HTTP code; anything else reads "Hang on, we're reconnecting."
@@ -16,7 +17,7 @@
 // Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
 // browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, connectLive, setSimBadge } from "/static/app.js?v=latency-1";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=fins-1";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -56,8 +57,17 @@ import {
   stripGradient,
   switchView,
   waitToastOver,
-} from "/kiosk/panel-model.mjs?v=latency-1";
-import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs?v=latency-1";
+} from "/kiosk/panel-model.mjs?v=fins-1";
+import {
+  ariaSummary,
+  finPaint,
+  geometryKey,
+  layout,
+  levelOpacity,
+  motionActive,
+  motionColors,
+  paintFor,
+} from "/kiosk/canopy-preview.mjs?v=fins-1";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -297,14 +307,17 @@ function paintSnake(frame) {
 
 /**
  * The canopy's 270 lights on its nine panels (canopy-preview.mjs), drawn in canopy inches and turned to the view a
- * guest at the stand sees overhead. Rebuilt only when the geometry or view changes; painted on every render, and
- * every animation frame while `lit.motion` still has a frame to come.
+ * guest at the stand sees overhead, with the 650 fins under them and the apron's outline when the payload has them
+ * (D74). Laid out only when the geometry or view changes (a new poll of the same canopy compares its key first);
+ * painted on every render, and every animation frame while `lit.motion` still has a frame to come. A fin's paint
+ * follows its four nearest dots, so the fins are repainted only on a frame where some dot's paint changed.
  */
 const canopyView = {
   key: "",
   canopy: null, // the geometry object last laid out: a ripple or stepped run repaints every frame from the same one
   dots: [],
   panels: [],
+  fins: [], // {fin, node, paint}
   motionKey: null,
   prevLit: null,
   shown: null,
@@ -312,13 +325,18 @@ const canopyView = {
   label: "",
 };
 function buildCanopy(canopy) {
-  if (canopy === canopyView.canopy) return; // same read: skip the 270-dot layout and its key on every frame
+  if (canopy === canopyView.canopy) return; // same read: skip the key and the layout on every frame
   canopyView.canopy = canopy;
+  const key = geometryKey(canopy);
+  if (key === canopyView.key) return; // a new poll of the same geometry: no layout, nothing rebuilt
   const drawing = layout(canopy);
-  if (drawing.key === canopyView.key) return;
   const root = $("canopy-preview");
   root.setAttribute("viewBox", `0 0 ${drawing.width} ${drawing.height}`);
   root.replaceChildren();
+  if (drawing.apron > 0) {
+    const o = drawing.outline;
+    root.append(svg("rect", { class: "outline", x: o.x, y: o.y, width: o.w, height: o.h, rx: 1.5 }));
+  }
   canopyView.panels = drawing.panels.map((p) => {
     const rect = svg("rect", { class: "panel", x: p.x, y: p.y, width: p.w, height: p.h, rx: 1.5 });
     root.append(rect);
@@ -329,7 +347,19 @@ function buildCanopy(canopy) {
     root.append(node);
     return { pos: d.pos, k: d.k, node, paint: "" };
   });
-  canopyView.key = drawing.key;
+  canopyView.fins = drawing.fins.map((f) => {
+    const node = svg("line", {
+      class: "fin",
+      x1: f.x1,
+      y1: f.y1,
+      x2: f.x2,
+      y2: f.y2,
+      "stroke-width": drawing.strokeWidth,
+    });
+    root.append(node);
+    return { fin: f, node, paint: "" };
+  });
+  canopyView.key = key;
 }
 
 function paintCanopy(canopy, lit) {
@@ -347,15 +377,31 @@ function paintCanopy(canopy, lit) {
   const byPos = new Map(modules.map((m) => [m.pos, m]));
   const reduced = reducedMotion();
   const opacity = levelOpacity(lit.level, canopy.view && canopy.view.dim_floor);
-  for (const dot of canopyView.dots) {
+  const paints = new Array(canopyView.dots.length); // every head's paint, for the fins
+  let dirty = false;
+  canopyView.dots.forEach((dot, i) => {
     const p = paintFor(byPos.get(dot.pos), dot.k, { reduced });
     const lightOn = p.kind === "lit" || p.kind === "changing";
     const paint = `${p.kind}|${p.fill}|${p.pulse}|${lightOn ? opacity : 1}`;
-    if (paint === dot.paint) continue; // untouched dots keep their transition and pulse running
+    paints[i] = p;
+    if (paint === dot.paint) return; // untouched dots keep their transition and pulse running
+    dirty = true;
     dot.paint = paint;
     dot.node.setAttribute("fill", p.fill || "none");
     dot.node.setAttribute("fill-opacity", String(lightOn ? opacity : 1));
     dot.node.setAttribute("class", `dot is-${p.kind}${p.pulse ? " changing" : ""}`);
+  });
+  // A fin's paint is a function of its near dots' paints: a frame where no dot changed changes no fin.
+  if (dirty) {
+    for (const f of canopyView.fins) {
+      const q = finPaint(f.fin, paints, { opacity, reduced });
+      const key = `${q.kind}|${q.stroke}|${q.opacity}|${q.pulse}`;
+      if (key === f.paint) continue;
+      f.paint = key;
+      f.node.setAttribute("stroke", q.stroke || "none");
+      f.node.setAttribute("stroke-opacity", String(q.opacity));
+      f.node.setAttribute("class", `fin is-${q.kind}${q.pulse ? " changing" : ""}`);
+    }
   }
   const label = ariaSummary({ modules });
   if (label !== canopyView.label) {

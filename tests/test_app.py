@@ -32,6 +32,18 @@ def test_layout_reports_heads_and_pitch_checks(monkeypatch):
     assert client.get("/api/canopy/layout?scheme=nope").status_code == 400
 
 
+def test_the_layout_names_vwbd_panels(monkeypatch):
+    """VWBD's panel number per position (D74), for labelling kits at install: per position, so any scheme."""
+    from conductor.geometry import load_canopy_config
+
+    monkeypatch.delenv("CONDUCTOR_BASIC_AUTH", raising=False)
+    want = load_canopy_config()["vwbd_panels"]
+    for url in ("/api/canopy/layout", "/api/canopy/layout?scheme=p18"):
+        modules = client.get(url).json()["modules"]
+        assert {m["id"]: m["vwbd_panel"] for m in modules} == want
+    assert want["r0c0"] == "P-03" and want["r2c0"] == "P-01"
+
+
 def test_visualizer_and_version_are_served(monkeypatch):
     monkeypatch.delenv("CONDUCTOR_BASIC_AUTH", raising=False)
     assert "The Color Canopy" in client.get("/visualizer/").text

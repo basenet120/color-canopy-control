@@ -1046,6 +1046,68 @@ soon as the kits confirm, and a readback that really differs still gets its 10 s
 retries. Reproduced first (`tests/test_flagged_not_changing.py`: 10.1 s of "changing", the second scene at 11.4 s on
 the two-kit setup), then fixed (under 3 s, and under 4 s through the panel).
 
+**D74 — The fins are data, a design field and part of the iPad picture (Oct 18, preset-options PR A).** VWBD drawing
+A-20-1 ('Fin diagram with lights', Oct 18) is now the source for the canopy's 650 Mylar fins, and it closes doc 02's
+orientation question: **p14** (all 270 drawn lights sit on the p14 lattice; 150 would under p18), with
+`serpentine_rows` routing drawn (head 0's end and the B flip still need calibration). Plan:
+`docs/plans/preset-options/README.md` §1 and §8.
+- **Data, validated wherever the canopy loads.** `config/fins.json` (a byte copy of the plan's extract) is named by
+  `canopy.yaml → canopy → fins` (`file`, `apron_in: 6`, `fin_width_in: 5`) and resolved strictly next to canopy.yaml
+  (a bare name; no fallback to the repo's `config/`). `conductor/fins.py` refuses unknown keys, non-finite numbers,
+  angles outside 0–180° and drops outside 0–60 in, then the drawing's rules: 650 fins; the count and the drop key
+  agree with the fins, drop by drop; at least two different drops; the apron and fin width agree with canopy.yaml;
+  the outline is the canopy plus its apron and every fin hangs inside it; no two fins share a centre; every light has
+  a fin within 12 in. `canopy.yaml → canopy → vwbd_panels` must give every position one of P-01…P-09, each once.
+  Problems are ConfigError sentences naming the file, the entry and the fix (ten listed at most).
+  `geometry.load_canopy_config` reads through `config._read_yaml`, so bad YAML or a missing `canopy:` is a ConfigError
+  naming the file too (it was a raw YAMLError or KeyError), and it attaches `fins`, `fin_map` (immutable, cached per
+  file mtime and size) and `vwbd_panels`. Every device path loads the canopy through it, so **a missing or bad
+  fins.json stops the start and the deploy preflight** (`live.preflight_line` loads the canopy outside
+  `load_live_looks`' tolerance on purpose). A canopy.yaml without the two sections loads as before. `load_modes`
+  checks modes.yaml against the loaded canopy, fin map included.
+- **The field `{kind: fins}`.** t = (24.5 − D) / 10.5, clamped to [0, 1] before any phase wraps, where D is the mean
+  drop of the fins within 12 in weighted by **w = exp(−(d/6)²)**. That is the form `lights.json` was made with
+  (0.0102 in at worst at the 270 heads); the textbook exp(−d²/72) misses by up to 0.192 in, so the plan README has an
+  erratum and a test pins the form. `invert` and `cycles` work as for every kind (scenes keep cycles 1, D63).
+  **`transform: mirror` is refused:** the fold would read the first colour on the rim as well, module level never
+  gets past t ≈ 0.675, so the T3 phrase "<first> at both ends" would be false copy on the kiosk. The layout words are
+  always "from the centre out". `F.bands` rounds a fins t to 2 decimals, so the drawing's three symmetric rings
+  (centre 0, edge-middles ≈ 0.39, corners ≈ 0.67) stay whole for the D64 ripple. A fins design over a canopy with no
+  fin map is a plain ConfigError in modes.yaml and one DraftError in the Lab, before any field is read: from
+  `apply_drafts`, `draft_changes` and `resolve_copy`, which the preview calls first, so `/api/lab/preview` answers it
+  as a 422 problem on `layout`, never a 500 (the shipped canopy.yaml has the fin map, so only a canopy without one
+  meets it).
+- **The Lab.** The layout picker offers **Fins** (`LAYOUT_KINDS` = `F.FIELD_KINDS`, pinned): no parameters, Mirror
+  disabled, and a note that is true for every palette size, plain or inverted (the rim's colour shows light by
+  light, never on a whole strand). The generated module-level sentence names only `reached_stops`. **From here a fins
+  design can be published to the live show** by D68's path (`validate_trio` → `install_looks` → the live compile,
+  plus the operator slot repaint for a painted scene); sim tests cover it. Lab tag `lab-9`.
+- **The iPad picture.** `canopy_view.canopy_geometry` adds `apron_in`, `outline`, `fin_width_in` and `fins`
+  [{x, y, angle_deg, drop_in}] (never the file's free text): `/api/kiosk/panel`'s canopy grows from 4,523 B to
+  44,251 B (38,421 B compact), pinned under 48,000; the geometry cache key leaves the fin map out. `lit_state` is
+  unchanged. The kiosk draws 237 × 132 in (the canopy plus the apron, its outline dashed), head dots at 1.6 in and the
+  650 fins as 5 in strokes along their plan axes. Each fin mixes its four nearest heads' `state.lit` colours with the
+  same w = exp(−(d/6)²) (`finNeighbours`, once per geometry; `finPaint` is pure). Its four states:
+  - **lit:** the lit heads' colours mixed at full strength, at the level's opacity × its drop's (14″ 0.45 … 24.5″ 1)
+    × √(the lit weight), at most 1;
+  - **changing:** the same mix with the dots' 1.2 s pulse, when at least half its lit weight is changing;
+  - **unlit:** `#D3D2D8` at half its drop's opacity when no head around it is lit (dark or off);
+  - **unknown:** once 10% or more of its weight is on unknown heads, a dashed `--slider-rest` line and no colour
+    claim.
+
+  With reduced motion the fins snap to the current frame and don't pulse. The picture is laid out only when the
+  geometry key changes, and the fins are repainted only when a dot's paint changed. **SVG strokes, not plan §8.4's
+  canvas 2D:** SVG keeps the dots' 600 ms fades and the shared pulse, the per-node paint dedup, D69's
+  no-layout-per-frame structure and the e2e selectors, at 650 + 270 nodes in the card. Frosted only (clear vs
+  frosted Mylar waits for Prototype 01's photos). Kiosk tag `fins-1`.
+- **Ops.** `/api/canopy/layout`'s modules carry `vwbd_panel` (per position, the same under `?scheme=p18`), and the
+  `/visualizer` labels read "r0c0 · A · P-03". VWBD numbers its panels row by row on its sheet, so P-0n is not
+  Module n: record each kit against its panel at install (today's Modules 1–2 belong on P-03 and P-06).
+- **Not changed:** no shipped scene uses the kind (D77 does). `lit_state` is left alone, so since D73 the show box's
+  flagged-only Modules 1–2 read unknown after every confirmed scene and draw as outline dots and dashed fins. fins.json
+  stays outside `live.config_sha` on purpose (widening it would flag every saved Lab version and publication at
+  deploy; published trios are re-validated against the loaded canopy at every start).
+
 **D78 — A module whose only problem is a flagged note shows its look on the iPad's picture (Oct 19; follows D73).**
 D73 makes such a module "stuck" at once, and `canopy_view.lit_state` drew every stuck module as `unknown` (an outline,
 no colour), so the live iPad drew Modules 1–2 as outlines right after every confirmed scene (before D73, 10 s later)

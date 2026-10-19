@@ -1,0 +1,2449 @@
+{
+ "frame": "as fins.json",
+ "fin_drop_in": "Gaussian-weighted (sigma 6 in, cut at 12 in) mean drop of the fins around the light",
+ "fin_flow_deg": "weighted mean fin axis around the light, same convention as fins.json",
+ "vwbd_panel_to_module": {
+  "P-01": "r2c0",
+  "P-02": "r1c0",
+  "P-03": "r0c0",
+  "P-04": "r2c1",
+  "P-05": "r1c1",
+  "P-06": "r0c1",
+  "P-07": "r2c2",
+  "P-08": "r1c2",
+  "P-09": "r0c2"
+ },
+ "count": 270,
+ "lights": [
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 2.5,
+   "y": 5,
+   "fin_drop_in": 14.04,
+   "fin_flow_deg": 33.7,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 12.5,
+   "y": 5,
+   "fin_drop_in": 14.34,
+   "fin_flow_deg": 40.2,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 22.5,
+   "y": 5,
+   "fin_drop_in": 14.38,
+   "fin_flow_deg": 40.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 32.5,
+   "y": 5,
+   "fin_drop_in": 14.43,
+   "fin_flow_deg": 28.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 42.5,
+   "y": 5,
+   "fin_drop_in": 14.91,
+   "fin_flow_deg": 14.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 52.5,
+   "y": 5,
+   "fin_drop_in": 15.38,
+   "fin_flow_deg": 176.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 62.5,
+   "y": 5,
+   "fin_drop_in": 15.33,
+   "fin_flow_deg": 151.5,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 72.5,
+   "y": 5,
+   "fin_drop_in": 15.38,
+   "fin_flow_deg": 138.9,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 7.5,
+   "y": 15,
+   "fin_drop_in": 14.71,
+   "fin_flow_deg": 36.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 17.5,
+   "y": 15,
+   "fin_drop_in": 15.22,
+   "fin_flow_deg": 20.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 27.5,
+   "y": 15,
+   "fin_drop_in": 16.04,
+   "fin_flow_deg": 171.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 37.5,
+   "y": 15,
+   "fin_drop_in": 16.57,
+   "fin_flow_deg": 137.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 47.5,
+   "y": 15,
+   "fin_drop_in": 17.39,
+   "fin_flow_deg": 106.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 57.5,
+   "y": 15,
+   "fin_drop_in": 17.55,
+   "fin_flow_deg": 81.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 67.5,
+   "y": 15,
+   "fin_drop_in": 18.22,
+   "fin_flow_deg": 66.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 2.5,
+   "y": 25,
+   "fin_drop_in": 14.23,
+   "fin_flow_deg": 19.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 12.5,
+   "y": 25,
+   "fin_drop_in": 15.6,
+   "fin_flow_deg": 168.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 22.5,
+   "y": 25,
+   "fin_drop_in": 16.6,
+   "fin_flow_deg": 130.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 32.5,
+   "y": 25,
+   "fin_drop_in": 17.53,
+   "fin_flow_deg": 92.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 42.5,
+   "y": 25,
+   "fin_drop_in": 18.47,
+   "fin_flow_deg": 66.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 52.5,
+   "y": 25,
+   "fin_drop_in": 19.3,
+   "fin_flow_deg": 52.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 62.5,
+   "y": 25,
+   "fin_drop_in": 19.8,
+   "fin_flow_deg": 50.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 72.5,
+   "y": 25,
+   "fin_drop_in": 20.47,
+   "fin_flow_deg": 56.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 7.5,
+   "y": 35,
+   "fin_drop_in": 14.92,
+   "fin_flow_deg": 147.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 17.5,
+   "y": 35,
+   "fin_drop_in": 16.73,
+   "fin_flow_deg": 105.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 27.5,
+   "y": 35,
+   "fin_drop_in": 18.05,
+   "fin_flow_deg": 69.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 37.5,
+   "y": 35,
+   "fin_drop_in": 19.0,
+   "fin_flow_deg": 51.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 47.5,
+   "y": 35,
+   "fin_drop_in": 19.94,
+   "fin_flow_deg": 49.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 57.5,
+   "y": 35,
+   "fin_drop_in": 20.88,
+   "fin_flow_deg": 65.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c0",
+   "vwbd_panel": "P-03",
+   "x": 67.5,
+   "y": 35,
+   "fin_drop_in": 21.81,
+   "fin_flow_deg": 93.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 82.5,
+   "y": 5,
+   "fin_drop_in": 15.39,
+   "fin_flow_deg": 121.2,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 92.5,
+   "y": 5,
+   "fin_drop_in": 15.48,
+   "fin_flow_deg": 111.1,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 102.5,
+   "y": 5,
+   "fin_drop_in": 15.68,
+   "fin_flow_deg": 107.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 112.5,
+   "y": 5,
+   "fin_drop_in": 15.69,
+   "fin_flow_deg": 104.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 122.5,
+   "y": 5,
+   "fin_drop_in": 15.68,
+   "fin_flow_deg": 105.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 132.5,
+   "y": 5,
+   "fin_drop_in": 15.68,
+   "fin_flow_deg": 107.5,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 142.5,
+   "y": 5,
+   "fin_drop_in": 15.41,
+   "fin_flow_deg": 117.9,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 77.5,
+   "y": 15,
+   "fin_drop_in": 18.42,
+   "fin_flow_deg": 56.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 87.5,
+   "y": 15,
+   "fin_drop_in": 18.46,
+   "fin_flow_deg": 52.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 97.5,
+   "y": 15,
+   "fin_drop_in": 18.59,
+   "fin_flow_deg": 51.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 107.5,
+   "y": 15,
+   "fin_drop_in": 18.95,
+   "fin_flow_deg": 53.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 117.5,
+   "y": 15,
+   "fin_drop_in": 18.99,
+   "fin_flow_deg": 54.0,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 127.5,
+   "y": 15,
+   "fin_drop_in": 18.71,
+   "fin_flow_deg": 52.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 137.5,
+   "y": 15,
+   "fin_drop_in": 18.51,
+   "fin_flow_deg": 54.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 147.5,
+   "y": 15,
+   "fin_drop_in": 18.37,
+   "fin_flow_deg": 57.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 82.5,
+   "y": 25,
+   "fin_drop_in": 20.65,
+   "fin_flow_deg": 66.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 92.5,
+   "y": 25,
+   "fin_drop_in": 21.35,
+   "fin_flow_deg": 77.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 102.5,
+   "y": 25,
+   "fin_drop_in": 21.42,
+   "fin_flow_deg": 86.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 112.5,
+   "y": 25,
+   "fin_drop_in": 21.5,
+   "fin_flow_deg": 88.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 122.5,
+   "y": 25,
+   "fin_drop_in": 21.49,
+   "fin_flow_deg": 86.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 132.5,
+   "y": 25,
+   "fin_drop_in": 21.32,
+   "fin_flow_deg": 80.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 142.5,
+   "y": 25,
+   "fin_drop_in": 20.69,
+   "fin_flow_deg": 68.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 77.5,
+   "y": 35,
+   "fin_drop_in": 22.41,
+   "fin_flow_deg": 130.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 87.5,
+   "y": 35,
+   "fin_drop_in": 22.72,
+   "fin_flow_deg": 151.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 97.5,
+   "y": 35,
+   "fin_drop_in": 23.04,
+   "fin_flow_deg": 168.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 107.5,
+   "y": 35,
+   "fin_drop_in": 23.05,
+   "fin_flow_deg": 178.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 117.5,
+   "y": 35,
+   "fin_drop_in": 23.05,
+   "fin_flow_deg": 178.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 127.5,
+   "y": 35,
+   "fin_drop_in": 23.02,
+   "fin_flow_deg": 167.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 137.5,
+   "y": 35,
+   "fin_drop_in": 22.57,
+   "fin_flow_deg": 147.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c1",
+   "vwbd_panel": "P-06",
+   "x": 147.5,
+   "y": 35,
+   "fin_drop_in": 22.16,
+   "fin_flow_deg": 119.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 152.5,
+   "y": 5,
+   "fin_drop_in": 15.39,
+   "fin_flow_deg": 133.6,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 162.5,
+   "y": 5,
+   "fin_drop_in": 15.34,
+   "fin_flow_deg": 150.8,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 172.5,
+   "y": 5,
+   "fin_drop_in": 15.34,
+   "fin_flow_deg": 174.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 182.5,
+   "y": 5,
+   "fin_drop_in": 15.05,
+   "fin_flow_deg": 13.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 192.5,
+   "y": 5,
+   "fin_drop_in": 14.48,
+   "fin_flow_deg": 27.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 202.5,
+   "y": 5,
+   "fin_drop_in": 14.41,
+   "fin_flow_deg": 38.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 212.5,
+   "y": 5,
+   "fin_drop_in": 14.17,
+   "fin_flow_deg": 38.7,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 222.5,
+   "y": 5,
+   "fin_drop_in": 14.0,
+   "fin_flow_deg": 34.4,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 157.5,
+   "y": 15,
+   "fin_drop_in": 17.81,
+   "fin_flow_deg": 66.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 167.5,
+   "y": 15,
+   "fin_drop_in": 17.48,
+   "fin_flow_deg": 83.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 177.5,
+   "y": 15,
+   "fin_drop_in": 17.31,
+   "fin_flow_deg": 107.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 187.5,
+   "y": 15,
+   "fin_drop_in": 16.65,
+   "fin_flow_deg": 138.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 197.5,
+   "y": 15,
+   "fin_drop_in": 16.38,
+   "fin_flow_deg": 170.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 207.5,
+   "y": 15,
+   "fin_drop_in": 15.58,
+   "fin_flow_deg": 17.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 217.5,
+   "y": 15,
+   "fin_drop_in": 14.62,
+   "fin_flow_deg": 36.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 152.5,
+   "y": 25,
+   "fin_drop_in": 20.46,
+   "fin_flow_deg": 58.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 162.5,
+   "y": 25,
+   "fin_drop_in": 19.79,
+   "fin_flow_deg": 51.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 172.5,
+   "y": 25,
+   "fin_drop_in": 19.37,
+   "fin_flow_deg": 52.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 182.5,
+   "y": 25,
+   "fin_drop_in": 18.55,
+   "fin_flow_deg": 65.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 192.5,
+   "y": 25,
+   "fin_drop_in": 18.0,
+   "fin_flow_deg": 91.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 202.5,
+   "y": 25,
+   "fin_drop_in": 16.67,
+   "fin_flow_deg": 129.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 212.5,
+   "y": 25,
+   "fin_drop_in": 15.26,
+   "fin_flow_deg": 171.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 222.5,
+   "y": 25,
+   "fin_drop_in": 14.21,
+   "fin_flow_deg": 22.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 157.5,
+   "y": 35,
+   "fin_drop_in": 21.55,
+   "fin_flow_deg": 90.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 167.5,
+   "y": 35,
+   "fin_drop_in": 21.26,
+   "fin_flow_deg": 64.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 177.5,
+   "y": 35,
+   "fin_drop_in": 20.44,
+   "fin_flow_deg": 51.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 187.5,
+   "y": 35,
+   "fin_drop_in": 19.35,
+   "fin_flow_deg": 50.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 197.5,
+   "y": 35,
+   "fin_drop_in": 17.75,
+   "fin_flow_deg": 68.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 207.5,
+   "y": 35,
+   "fin_drop_in": 16.54,
+   "fin_flow_deg": 106.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r0c2",
+   "vwbd_panel": "P-09",
+   "x": 217.5,
+   "y": 35,
+   "fin_drop_in": 14.92,
+   "fin_flow_deg": 146.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 2.5,
+   "y": 45,
+   "fin_drop_in": 14.23,
+   "fin_flow_deg": 127.2,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 12.5,
+   "y": 45,
+   "fin_drop_in": 15.84,
+   "fin_flow_deg": 94.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 22.5,
+   "y": 45,
+   "fin_drop_in": 17.69,
+   "fin_flow_deg": 55.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 32.5,
+   "y": 45,
+   "fin_drop_in": 19.38,
+   "fin_flow_deg": 48.0,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 42.5,
+   "y": 45,
+   "fin_drop_in": 20.38,
+   "fin_flow_deg": 57.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 52.5,
+   "y": 45,
+   "fin_drop_in": 21.4,
+   "fin_flow_deg": 78.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 62.5,
+   "y": 45,
+   "fin_drop_in": 22.32,
+   "fin_flow_deg": 132.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 72.5,
+   "y": 45,
+   "fin_drop_in": 22.94,
+   "fin_flow_deg": 167.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 7.5,
+   "y": 55,
+   "fin_drop_in": 15.03,
+   "fin_flow_deg": 100.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 17.5,
+   "y": 55,
+   "fin_drop_in": 16.76,
+   "fin_flow_deg": 63.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 27.5,
+   "y": 55,
+   "fin_drop_in": 18.63,
+   "fin_flow_deg": 46.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 37.5,
+   "y": 55,
+   "fin_drop_in": 20.08,
+   "fin_flow_deg": 56.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 47.5,
+   "y": 55,
+   "fin_drop_in": 21.34,
+   "fin_flow_deg": 89.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 57.5,
+   "y": 55,
+   "fin_drop_in": 22.36,
+   "fin_flow_deg": 134.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 67.5,
+   "y": 55,
+   "fin_drop_in": 23.1,
+   "fin_flow_deg": 2.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 2.5,
+   "y": 65,
+   "fin_drop_in": 14.39,
+   "fin_flow_deg": 116.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 12.5,
+   "y": 65,
+   "fin_drop_in": 16.08,
+   "fin_flow_deg": 81.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 22.5,
+   "y": 65,
+   "fin_drop_in": 17.69,
+   "fin_flow_deg": 52.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 32.5,
+   "y": 65,
+   "fin_drop_in": 19.54,
+   "fin_flow_deg": 49.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 42.5,
+   "y": 65,
+   "fin_drop_in": 20.87,
+   "fin_flow_deg": 71.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 52.5,
+   "y": 65,
+   "fin_drop_in": 21.83,
+   "fin_flow_deg": 112.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 62.5,
+   "y": 65,
+   "fin_drop_in": 22.86,
+   "fin_flow_deg": 157.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 72.5,
+   "y": 65,
+   "fin_drop_in": 24.0,
+   "fin_flow_deg": 17.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 7.5,
+   "y": 75,
+   "fin_drop_in": 14.92,
+   "fin_flow_deg": 117.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 17.5,
+   "y": 75,
+   "fin_drop_in": 16.76,
+   "fin_flow_deg": 72.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 27.5,
+   "y": 75,
+   "fin_drop_in": 18.44,
+   "fin_flow_deg": 51.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 37.5,
+   "y": 75,
+   "fin_drop_in": 19.65,
+   "fin_flow_deg": 50.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 47.5,
+   "y": 75,
+   "fin_drop_in": 20.95,
+   "fin_flow_deg": 71.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 57.5,
+   "y": 75,
+   "fin_drop_in": 22.14,
+   "fin_flow_deg": 103.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c0",
+   "vwbd_panel": "P-02",
+   "x": 67.5,
+   "y": 75,
+   "fin_drop_in": 22.9,
+   "fin_flow_deg": 142.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 82.5,
+   "y": 45,
+   "fin_drop_in": 23.4,
+   "fin_flow_deg": 17.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 92.5,
+   "y": 45,
+   "fin_drop_in": 24.31,
+   "fin_flow_deg": 32.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 102.5,
+   "y": 45,
+   "fin_drop_in": 24.36,
+   "fin_flow_deg": 37.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 112.5,
+   "y": 45,
+   "fin_drop_in": 24.35,
+   "fin_flow_deg": 36.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 122.5,
+   "y": 45,
+   "fin_drop_in": 24.35,
+   "fin_flow_deg": 39.0,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 132.5,
+   "y": 45,
+   "fin_drop_in": 24.35,
+   "fin_flow_deg": 35.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 142.5,
+   "y": 45,
+   "fin_drop_in": 24.0,
+   "fin_flow_deg": 18.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 77.5,
+   "y": 55,
+   "fin_drop_in": 24.03,
+   "fin_flow_deg": 34.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 87.5,
+   "y": 55,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 42.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 97.5,
+   "y": 55,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 30.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 107.5,
+   "y": 55,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 7.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 117.5,
+   "y": 55,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 10.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 127.5,
+   "y": 55,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 31.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 137.5,
+   "y": 55,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 42.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 147.5,
+   "y": 55,
+   "fin_drop_in": 24.4,
+   "fin_flow_deg": 33.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 82.5,
+   "y": 65,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 41.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 92.5,
+   "y": 65,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 39.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 102.5,
+   "y": 65,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 19.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 112.5,
+   "y": 65,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 3.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 122.5,
+   "y": 65,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 20.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 132.5,
+   "y": 65,
+   "fin_drop_in": 24.5,
+   "fin_flow_deg": 38.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 142.5,
+   "y": 65,
+   "fin_drop_in": 24.39,
+   "fin_flow_deg": 40.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 77.5,
+   "y": 75,
+   "fin_drop_in": 23.39,
+   "fin_flow_deg": 178.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 87.5,
+   "y": 75,
+   "fin_drop_in": 24.32,
+   "fin_flow_deg": 29.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 97.5,
+   "y": 75,
+   "fin_drop_in": 24.36,
+   "fin_flow_deg": 38.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 107.5,
+   "y": 75,
+   "fin_drop_in": 24.35,
+   "fin_flow_deg": 37.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 117.5,
+   "y": 75,
+   "fin_drop_in": 24.35,
+   "fin_flow_deg": 36.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 127.5,
+   "y": 75,
+   "fin_drop_in": 24.34,
+   "fin_flow_deg": 35.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 137.5,
+   "y": 75,
+   "fin_drop_in": 23.95,
+   "fin_flow_deg": 27.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c1",
+   "vwbd_panel": "P-05",
+   "x": 147.5,
+   "y": 75,
+   "fin_drop_in": 23.09,
+   "fin_flow_deg": 8.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 152.5,
+   "y": 45,
+   "fin_drop_in": 23.0,
+   "fin_flow_deg": 162.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 162.5,
+   "y": 45,
+   "fin_drop_in": 22.71,
+   "fin_flow_deg": 130.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 172.5,
+   "y": 45,
+   "fin_drop_in": 21.43,
+   "fin_flow_deg": 75.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 182.5,
+   "y": 45,
+   "fin_drop_in": 20.39,
+   "fin_flow_deg": 56.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 192.5,
+   "y": 45,
+   "fin_drop_in": 19.04,
+   "fin_flow_deg": 47.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 202.5,
+   "y": 45,
+   "fin_drop_in": 17.66,
+   "fin_flow_deg": 59.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 212.5,
+   "y": 45,
+   "fin_drop_in": 15.84,
+   "fin_flow_deg": 110.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 222.5,
+   "y": 45,
+   "fin_drop_in": 14.24,
+   "fin_flow_deg": 127.0,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 157.5,
+   "y": 55,
+   "fin_drop_in": 23.34,
+   "fin_flow_deg": 179.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 167.5,
+   "y": 55,
+   "fin_drop_in": 22.33,
+   "fin_flow_deg": 133.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 177.5,
+   "y": 55,
+   "fin_drop_in": 21.33,
+   "fin_flow_deg": 90.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 187.5,
+   "y": 55,
+   "fin_drop_in": 20.33,
+   "fin_flow_deg": 57.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 197.5,
+   "y": 55,
+   "fin_drop_in": 18.63,
+   "fin_flow_deg": 47.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 207.5,
+   "y": 55,
+   "fin_drop_in": 16.8,
+   "fin_flow_deg": 63.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 217.5,
+   "y": 55,
+   "fin_drop_in": 15.33,
+   "fin_flow_deg": 100.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 152.5,
+   "y": 65,
+   "fin_drop_in": 23.47,
+   "fin_flow_deg": 18.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 162.5,
+   "y": 65,
+   "fin_drop_in": 22.82,
+   "fin_flow_deg": 157.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 172.5,
+   "y": 65,
+   "fin_drop_in": 21.92,
+   "fin_flow_deg": 110.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 182.5,
+   "y": 65,
+   "fin_drop_in": 20.62,
+   "fin_flow_deg": 70.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 192.5,
+   "y": 65,
+   "fin_drop_in": 19.48,
+   "fin_flow_deg": 48.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 202.5,
+   "y": 65,
+   "fin_drop_in": 17.69,
+   "fin_flow_deg": 51.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 212.5,
+   "y": 65,
+   "fin_drop_in": 15.9,
+   "fin_flow_deg": 81.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 222.5,
+   "y": 65,
+   "fin_drop_in": 14.27,
+   "fin_flow_deg": 115.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 157.5,
+   "y": 75,
+   "fin_drop_in": 22.73,
+   "fin_flow_deg": 150.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 167.5,
+   "y": 75,
+   "fin_drop_in": 21.88,
+   "fin_flow_deg": 106.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 177.5,
+   "y": 75,
+   "fin_drop_in": 20.92,
+   "fin_flow_deg": 70.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 187.5,
+   "y": 75,
+   "fin_drop_in": 19.9,
+   "fin_flow_deg": 50.0,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 197.5,
+   "y": 75,
+   "fin_drop_in": 18.6,
+   "fin_flow_deg": 50.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 207.5,
+   "y": 75,
+   "fin_drop_in": 16.76,
+   "fin_flow_deg": 75.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r1c2",
+   "vwbd_panel": "P-08",
+   "x": 217.5,
+   "y": 75,
+   "fin_drop_in": 14.92,
+   "fin_flow_deg": 118.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 2.5,
+   "y": 85,
+   "fin_drop_in": 14.24,
+   "fin_flow_deg": 158.9,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 12.5,
+   "y": 85,
+   "fin_drop_in": 15.8,
+   "fin_flow_deg": 127.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 22.5,
+   "y": 85,
+   "fin_drop_in": 17.11,
+   "fin_flow_deg": 73.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 32.5,
+   "y": 85,
+   "fin_drop_in": 18.56,
+   "fin_flow_deg": 57.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 42.5,
+   "y": 85,
+   "fin_drop_in": 19.95,
+   "fin_flow_deg": 48.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 52.5,
+   "y": 85,
+   "fin_drop_in": 20.9,
+   "fin_flow_deg": 55.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 62.5,
+   "y": 85,
+   "fin_drop_in": 21.48,
+   "fin_flow_deg": 62.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 72.5,
+   "y": 85,
+   "fin_drop_in": 21.84,
+   "fin_flow_deg": 109.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 7.5,
+   "y": 95,
+   "fin_drop_in": 14.76,
+   "fin_flow_deg": 6.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 17.5,
+   "y": 95,
+   "fin_drop_in": 15.86,
+   "fin_flow_deg": 148.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 27.5,
+   "y": 95,
+   "fin_drop_in": 17.44,
+   "fin_flow_deg": 109.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 37.5,
+   "y": 95,
+   "fin_drop_in": 18.35,
+   "fin_flow_deg": 77.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 47.5,
+   "y": 95,
+   "fin_drop_in": 18.93,
+   "fin_flow_deg": 57.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 57.5,
+   "y": 95,
+   "fin_drop_in": 19.51,
+   "fin_flow_deg": 51.2,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 67.5,
+   "y": 95,
+   "fin_drop_in": 20.17,
+   "fin_flow_deg": 53.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 2.5,
+   "y": 105,
+   "fin_drop_in": 14.17,
+   "fin_flow_deg": 46.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 12.5,
+   "y": 105,
+   "fin_drop_in": 15.06,
+   "fin_flow_deg": 29.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 22.5,
+   "y": 105,
+   "fin_drop_in": 16.05,
+   "fin_flow_deg": 7.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 32.5,
+   "y": 105,
+   "fin_drop_in": 16.5,
+   "fin_flow_deg": 157.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 42.5,
+   "y": 105,
+   "fin_drop_in": 16.97,
+   "fin_flow_deg": 120.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 52.5,
+   "y": 105,
+   "fin_drop_in": 17.48,
+   "fin_flow_deg": 91.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 62.5,
+   "y": 105,
+   "fin_drop_in": 17.61,
+   "fin_flow_deg": 71.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 72.5,
+   "y": 105,
+   "fin_drop_in": 18.23,
+   "fin_flow_deg": 60.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 7.5,
+   "y": 115,
+   "fin_drop_in": 14.04,
+   "fin_flow_deg": 36.8,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 17.5,
+   "y": 115,
+   "fin_drop_in": 14.36,
+   "fin_flow_deg": 40.9,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 27.5,
+   "y": 115,
+   "fin_drop_in": 14.43,
+   "fin_flow_deg": 35.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 37.5,
+   "y": 115,
+   "fin_drop_in": 14.72,
+   "fin_flow_deg": 22.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 47.5,
+   "y": 115,
+   "fin_drop_in": 15.3,
+   "fin_flow_deg": 5.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 57.5,
+   "y": 115,
+   "fin_drop_in": 15.33,
+   "fin_flow_deg": 165.6,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c0",
+   "vwbd_panel": "P-01",
+   "x": 67.5,
+   "y": 115,
+   "fin_drop_in": 15.33,
+   "fin_flow_deg": 145.6,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 82.5,
+   "y": 85,
+   "fin_drop_in": 22.46,
+   "fin_flow_deg": 140.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 92.5,
+   "y": 85,
+   "fin_drop_in": 22.78,
+   "fin_flow_deg": 161.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 102.5,
+   "y": 85,
+   "fin_drop_in": 23.04,
+   "fin_flow_deg": 175.0,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 112.5,
+   "y": 85,
+   "fin_drop_in": 23.05,
+   "fin_flow_deg": 0.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 122.5,
+   "y": 85,
+   "fin_drop_in": 23.06,
+   "fin_flow_deg": 173.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 132.5,
+   "y": 85,
+   "fin_drop_in": 23.02,
+   "fin_flow_deg": 156.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 142.5,
+   "y": 85,
+   "fin_drop_in": 22.42,
+   "fin_flow_deg": 139.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 77.5,
+   "y": 95,
+   "fin_drop_in": 20.49,
+   "fin_flow_deg": 62.2,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 87.5,
+   "y": 95,
+   "fin_drop_in": 21.02,
+   "fin_flow_deg": 72.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 97.5,
+   "y": 95,
+   "fin_drop_in": 21.42,
+   "fin_flow_deg": 81.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 107.5,
+   "y": 95,
+   "fin_drop_in": 21.5,
+   "fin_flow_deg": 87.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 117.5,
+   "y": 95,
+   "fin_drop_in": 21.49,
+   "fin_flow_deg": 88.5,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 127.5,
+   "y": 95,
+   "fin_drop_in": 21.4,
+   "fin_flow_deg": 84.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 137.5,
+   "y": 95,
+   "fin_drop_in": 21.1,
+   "fin_flow_deg": 75.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 147.5,
+   "y": 95,
+   "fin_drop_in": 20.54,
+   "fin_flow_deg": 61.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 82.5,
+   "y": 105,
+   "fin_drop_in": 18.46,
+   "fin_flow_deg": 54.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 92.5,
+   "y": 105,
+   "fin_drop_in": 18.61,
+   "fin_flow_deg": 52.8,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 102.5,
+   "y": 105,
+   "fin_drop_in": 18.97,
+   "fin_flow_deg": 53.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 112.5,
+   "y": 105,
+   "fin_drop_in": 19.0,
+   "fin_flow_deg": 53.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 122.5,
+   "y": 105,
+   "fin_drop_in": 18.69,
+   "fin_flow_deg": 52.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 132.5,
+   "y": 105,
+   "fin_drop_in": 18.52,
+   "fin_flow_deg": 52.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 142.5,
+   "y": 105,
+   "fin_drop_in": 18.39,
+   "fin_flow_deg": 53.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 77.5,
+   "y": 115,
+   "fin_drop_in": 15.4,
+   "fin_flow_deg": 129.5,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 87.5,
+   "y": 115,
+   "fin_drop_in": 15.49,
+   "fin_flow_deg": 117.0,
+   "fins_within_7in": 5
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 97.5,
+   "y": 115,
+   "fin_drop_in": 15.66,
+   "fin_flow_deg": 111.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 107.5,
+   "y": 115,
+   "fin_drop_in": 15.68,
+   "fin_flow_deg": 103.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 117.5,
+   "y": 115,
+   "fin_drop_in": 15.69,
+   "fin_flow_deg": 93.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 127.5,
+   "y": 115,
+   "fin_drop_in": 15.67,
+   "fin_flow_deg": 111.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 137.5,
+   "y": 115,
+   "fin_drop_in": 15.41,
+   "fin_flow_deg": 113.5,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c1",
+   "vwbd_panel": "P-04",
+   "x": 147.5,
+   "y": 115,
+   "fin_drop_in": 15.4,
+   "fin_flow_deg": 125.1,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 152.5,
+   "y": 85,
+   "fin_drop_in": 22.19,
+   "fin_flow_deg": 111.5,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 162.5,
+   "y": 85,
+   "fin_drop_in": 21.32,
+   "fin_flow_deg": 77.3,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 172.5,
+   "y": 85,
+   "fin_drop_in": 20.4,
+   "fin_flow_deg": 52.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 182.5,
+   "y": 85,
+   "fin_drop_in": 19.47,
+   "fin_flow_deg": 50.0,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 192.5,
+   "y": 85,
+   "fin_drop_in": 18.53,
+   "fin_flow_deg": 57.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 202.5,
+   "y": 85,
+   "fin_drop_in": 17.49,
+   "fin_flow_deg": 80.1,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 212.5,
+   "y": 85,
+   "fin_drop_in": 15.85,
+   "fin_flow_deg": 132.6,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 222.5,
+   "y": 85,
+   "fin_drop_in": 14.23,
+   "fin_flow_deg": 159.6,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 157.5,
+   "y": 95,
+   "fin_drop_in": 20.31,
+   "fin_flow_deg": 53.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 167.5,
+   "y": 95,
+   "fin_drop_in": 19.52,
+   "fin_flow_deg": 50.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 177.5,
+   "y": 95,
+   "fin_drop_in": 18.93,
+   "fin_flow_deg": 56.8,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 187.5,
+   "y": 95,
+   "fin_drop_in": 18.0,
+   "fin_flow_deg": 76.3,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 197.5,
+   "y": 95,
+   "fin_drop_in": 17.06,
+   "fin_flow_deg": 110.6,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 207.5,
+   "y": 95,
+   "fin_drop_in": 16.12,
+   "fin_flow_deg": 153.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 217.5,
+   "y": 95,
+   "fin_drop_in": 14.87,
+   "fin_flow_deg": 7.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 152.5,
+   "y": 105,
+   "fin_drop_in": 18.37,
+   "fin_flow_deg": 61.9,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 162.5,
+   "y": 105,
+   "fin_drop_in": 17.73,
+   "fin_flow_deg": 76.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 172.5,
+   "y": 105,
+   "fin_drop_in": 17.49,
+   "fin_flow_deg": 95.4,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 182.5,
+   "y": 105,
+   "fin_drop_in": 16.96,
+   "fin_flow_deg": 121.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 192.5,
+   "y": 105,
+   "fin_drop_in": 16.36,
+   "fin_flow_deg": 153.9,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 202.5,
+   "y": 105,
+   "fin_drop_in": 15.61,
+   "fin_flow_deg": 4.7,
+   "fins_within_7in": 2
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 212.5,
+   "y": 105,
+   "fin_drop_in": 15.02,
+   "fin_flow_deg": 29.0,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 222.5,
+   "y": 105,
+   "fin_drop_in": 14.21,
+   "fin_flow_deg": 45.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 157.5,
+   "y": 115,
+   "fin_drop_in": 15.39,
+   "fin_flow_deg": 143.2,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 167.5,
+   "y": 115,
+   "fin_drop_in": 15.35,
+   "fin_flow_deg": 159.5,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 177.5,
+   "y": 115,
+   "fin_drop_in": 15.27,
+   "fin_flow_deg": 5.7,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 187.5,
+   "y": 115,
+   "fin_drop_in": 14.53,
+   "fin_flow_deg": 22.1,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 197.5,
+   "y": 115,
+   "fin_drop_in": 14.41,
+   "fin_flow_deg": 34.4,
+   "fins_within_7in": 3
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 207.5,
+   "y": 115,
+   "fin_drop_in": 14.35,
+   "fin_flow_deg": 40.5,
+   "fins_within_7in": 4
+  },
+  {
+   "module": "r2c2",
+   "vwbd_panel": "P-07",
+   "x": 217.5,
+   "y": 115,
+   "fin_drop_in": 14.18,
+   "fin_flow_deg": 35.3,
+   "fins_within_7in": 5
+  }
+ ]
+}

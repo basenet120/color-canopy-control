@@ -29,6 +29,7 @@ from live_lab import (
     client_of,
     edited,
     install_no_threads,
+    patched_trio,
     pinker_hour,
     publish,
     save,
@@ -1147,3 +1148,65 @@ def test_a_refused_repick_during_a_try_on_puts_the_safe_look_up_never_the_draft(
     assert refused and trial is None and not same
     assert mode == CALM  # the safe look
     assert f"looks:show:{GOLDEN}" in keys
+
+
+# ---- the fins' rings (D74): a fins design publishes to the simulated show -----------------------------------------
+def test_a_fins_design_publishes_to_the_simulated_show(no_threads):
+    """The Lab's Fins layout, published with Show: one burst of Coastal Tides on the fins' rings, nine look writes,
+    the copy from the centre out, and the installed trio carries the fins field (D68 validate → install → compile)."""
+    from conductor.looks import field as F
+
+    async def main():
+        w = await show()
+        writes = spy_writes(w)
+        async with client_of(w) as c:
+            draft = edited(
+                TIDES, layout={"kind": "fins"}, copy={"modules": "generated", "stepped": "generated"}
+            )
+            vid = await save(c, {TIDES: draft})
+            r = await publish(c, vid, show=True)
+            await w.engine.wait_idle()
+        plan = w.engine.current_plan()
+        field = w.looks.trio.modes.mode(TIDES).techniques.modules.sample.canvas.field
+        out = r.status_code, r.text, plan.mode_id, plan.feature, list(writes), field
+        await w.close()
+        return out
+
+    status, text, mode, feature, writes, field = run_virtual(main)
+    assert status == 200, text
+    assert mode == TIDES and "from the centre out" in feature
+    looks = look_writes(writes)
+    assert len(looks) == 9 and len({a for _t, a, _r in looks}) == 9  # one per module
+    assert isinstance(field, F.FinsField)
+
+
+def test_fins_drafts_pass_the_published_trio_checks():
+    """A trio with Coastal Tides (stepped) and Golden Hour (painted, T1) on the fins passes everything a published
+    trio is held to at every start (the blocking scene rules and the stepped run limit included), and compiles."""
+    from conductor.capabilities import detect
+    from conductor.config import load_registry, load_settings
+    from conductor.geometry import load_canopy_config
+    from conductor.looks import CompileContext
+    from conductor.looks import field as F
+    from conductor.sim.profiles import profile_parts
+
+    tides = edited(TIDES, layout={"kind": "fins"})
+    golden = edited(GOLDEN, layout={"kind": "fins"})
+    trio = patched_trio(tides, golden)
+    canopy = load_canopy_config(CONFIG_DIR / "canopy.yaml")
+    validated = L.validate_trio(trio.dump(), git=GIT, settings=load_settings(CONFIG_DIR), canopy=canopy)
+    assert validated.dump() == trio.dump()
+    registry = load_registry()
+    caps = detect(*profile_parts("sqhdk03-sim"))
+    ctx = CompileContext(
+        registry=registry,
+        capabilities={m.id: caps for m in registry.canopy_modules()},
+        modes=trio.modes,
+        recipes=trio.recipes,
+        canopy=canopy,
+    )
+    assert compile_mode(TIDES, Tier.STEPPED, ctx).program.field["kind"] == "fins"
+    assert compile_mode(GOLDEN, Tier.T3, ctx).tier is Tier.T3
+    # Golden Hour is painted: its T1 canvas is the fins design too, so the operator repaint applies (D68 B2)
+    assert isinstance(trio.modes.mode(GOLDEN).techniques.canvas.canvas.field, F.FinsField)
+    assert D.painted_change(D.seed_draft(GIT, GOLDEN), drafted(golden)) == "layout"

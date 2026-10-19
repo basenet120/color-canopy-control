@@ -5,6 +5,7 @@ the direction its copy names, and the moving copy is true of the strands actuall
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from conductor.engine_api import PlanError, Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, load_modes, parse_modes
 from conductor.looks.compile import STEPPED_STILL
+from conductor.looks.composer import evaluate
 from conductor.sim.profiles import profile_parts
 
 PATH = Path(__file__).with_name("fixtures_modes_stepped.yaml")
@@ -243,3 +245,38 @@ def test_ops_and_alerts_have_words_for_every_tier():
     for words in (ops.TIER_WORDS, alerts.TIER_WORDS):
         assert set(words) == {str(t) for t in Tier}
         assert "step" in words["stepped"]
+
+
+def _hex_at(canvas, x: float, y: float, phase: float) -> str:
+    """What a step sends a module sampled at (x, y): the canvas colour there, its colour level dimming the RGB."""
+    c = evaluate(canvas, x, y, canopy=CANOPY, recipes=RECIPES, phase=phase)
+    return "#" + "".join(f"{math.floor(v * c.colorBrightness / 100 + 0.5):02X}" for v in (c.r, c.g, c.b))
+
+
+def _rgb(hex_: str) -> tuple[int, int, int]:
+    return int(hex_[1:3], 16), int(hex_[3:5], 16), int(hex_[5:7], 16)
+
+
+def test_a_fins_design_steps_out_from_the_centre():
+    """D74: radial-outward's shared design on the fins' rings. Its copy already says "from the centre out" and
+    "every few seconds", so it loads; each step is the fins field shifted, the edge-middles as one ring."""
+    data = yaml.safe_load(PATH.read_text(encoding="utf-8"))
+    design = data["modes"]["radial-outward"]["techniques"]["stepped"]["canvas"]  # the &radial-design anchor
+    assert design is data["modes"]["radial-outward"]["techniques"]["modules"]["sample"]["canvas"]
+    design["field"] = {"kind": "fins"}
+    modes = parse_modes(data, recipes=RECIPES, canopy=CANOPY, path=PATH)
+    plan = compile_mode("radial-outward", Tier.STEPPED, _ctx(modes))
+    static = compile_mode("radial-outward", Tier.T3, _ctx(modes))
+    tech = modes.mode("radial-outward").techniques.stepped
+    steps = plan.program.steps
+    assert steps[0].rows == {d: t.rows for d, t in static.modules.items()}
+    for step in steps:
+        phase = -step.index / tech.steps_per_cycle  # forward: a colour moves on to higher t (outwards)
+        assert step.colours["r1c1"] == _hex_at(tech.canvas, 112.5, 60, phase)
+        # the edge-middles are one ring: r0c1 and r2c1 read the same t (0.3905) and send the same colour; r1c0 and
+        # r1c2 (0.3966, 0.3970) are near-tied, a unit or two of RGB away at some steps
+        assert step.colours["r0c1"] == step.colours["r2c1"]
+        edge = [_rgb(step.colours[p]) for p in ("r0c1", "r1c0", "r1c2", "r2c1")]
+        assert all(abs(a - b) <= 2 for c in edge for a, b in zip(c, edge[0])), edge
+    assert steps[0].colours["r1c1"] == "#FF9E96"  # pastel coral, the first stop, on the deep centre
+    assert plan.program.field == {"kind": "fins", "transform": "linear", "invert": False, "cycles": 1}

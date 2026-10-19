@@ -214,12 +214,12 @@ def test_the_studio_and_ops_link_to_the_lab(app_client):
     studio = app_client.get("/ops/showcase/")
     assert studio.status_code == 200
     html = studio.text
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-8">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-9">' in html
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert html.index('id="lab-link"') < html.index('id="guest-panel-link"')
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert html.index('id="lab" class="lab"') < html.index("</main>")
-    assert html.index('src="./studio.js?v=screen-2"') < html.index('src="./lab.js?v=lab-8"')
+    assert html.index('src="./studio.js?v=screen-2"') < html.index('src="./lab.js?v=lab-9"')
     for asset in ("lab.js", "lab.css", "lab-model.mjs"):
         assert app_client.get(f"/ops/showcase/{asset}").status_code == 200, asset
     ops = app_client.get("/ops/").text
@@ -233,6 +233,17 @@ def test_a_layout_error_names_the_draft_field_not_the_union_tag():
         {"loc": ("body", "draft", "layout", "linear", "angle_deg"), "msg": "Input should be a valid number"}
     ]
     assert _validation_problems(errors)[0]["field"] == "layout.angle_deg"
+    # every field kind's tag is dropped, the fins kind's too (D74)
+    errors = [{"loc": ("body", "draft", "layout", "fins", "cycles"), "msg": "x"}]
+    assert _validation_problems(errors)[0]["field"] == "layout.cycles"
+    from conductor.looks import field as F
+
+    errors = [
+        {"loc": ("body", "draft", "layout", "fins", "transform"), "msg": f"Value error, {F.FINS_NO_MIRROR}"}
+    ]
+    problem = _validation_problems(errors)[0]
+    assert problem["field"] == "layout.transform"
+    assert problem["message"] == F.FINS_NO_MIRROR and "Value error, " not in problem["message"]
 
 
 def test_a_long_note_never_makes_a_name_the_store_refuses():
