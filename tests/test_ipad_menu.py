@@ -984,7 +984,8 @@ def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_l
     ms = (time.perf_counter() - start) * 1000
     tiers = {b: by_id[b]["thumb"]["basis"] for b in PAINTED}
     print(f"thumb_basis on the sim engine, 18 visible review scenes: {ms:.1f} ms (painted bases: {tiers})")
-    assert ms < 100
+    # a budget, not a benchmark: 23 ms on the show box's Mac mini, 152 ms on GitHub's slower runner (Oct 19)
+    assert ms < 500
 
 
 def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_draws_the_whole_strand_colour(
