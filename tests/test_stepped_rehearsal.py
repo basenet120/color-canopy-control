@@ -173,7 +173,8 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert report["verification_s"]["count"] == 153 and 0 < report["verification_s"]["p50"] <= 3.0
     # what ops confirmed is what happened: paced at 72 a minute, never past the cap of 90 in any 60 s
     assert "paced at up to 72 writes a minute" in preview["confirm"]
-    assert "past 90 writes in a minute is held back" in preview["confirm"]
+    room = "less than one write per module of room under 90 writes in a minute is held back"  # D75
+    assert room in preview["confirm"]
     assert report["cap_writes_per_min"] == 90
     assert set(report["max_writes_60s"]) == {"canopy"} and 72 <= report["max_writes_60s"]["canopy"] <= 81
     assert report["governor_trips"] == 0 and report["outages"] == 0

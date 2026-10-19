@@ -146,7 +146,11 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
   (20%) = 72 a minute. So nine modules on one account step every 7.5 s, and the Mac box's two kits every 6 s. A step
   longer than `max_step_s` (12 s) isn't run: the still look holds and an alert says why.
 - **The cap.** A step that would take the account past 90 writes in any 60 s (every write on the account, by the
-  executor's own count) is held back: nothing is sent and the next step tries again.
+  executor's own count) is held back: nothing is sent and the next step tries again. Since D75 a step also keeps a
+  guest's burst of room (one write per module): it waits when the writes still in its window plus its own plus that
+  burst would pass 90, so a mood chosen mid-run (which now runs too) never starts at full pace on top of the old
+  run's steps. What the runner can't hold back (a guest's burst, 429 retries, re-asserts) lands in the rest of the
+  20% reserve.
 - **Bounded runs.** A run lasts `run_s` (90 s, at most `kiosk.idle_return_s`) from when the look was chosen; then
   the look settles on the mode's best still tier (D75): its canvas or slot where that can run (one write per module
   that changes, source `settle`), else the still design is sent to the modules that differ and holds. After a

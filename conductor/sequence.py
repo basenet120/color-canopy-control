@@ -15,11 +15,17 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   the ripple's span + `min_step_s`), the planned rate being `account_writes_per_min` (the account's cap on writes of
   any kind in any 60 s) less `budget_reserve` — the room 429 retries, silent-drop re-sends and a mood chosen mid-run
   need (`planned_writes_per_min`). Longer than `max_step_s`: the look holds still and an alert says why.
-- **The cap.** A step that would take an account past `account_writes_per_min` writes in the last 60 s (the
-  executor's own count, every write on the account) plus the step's own is held back: nothing is sent, the step
-  shown stays the last one sent — and is what the state draws (`to_state` repeats it: a held step is never drawn) —
-  and the next step tries again (`budget_holds`). `HELD_STEPS_END` holds in a row end the run (D75): the look then
-  holds still, with its still copy, rather than claim motion the account can't pay for.
+- **The cap.** A step must leave the account room for a guest's next burst (D75): it is held back when the writes
+  still in the 60 s window it shares (the executor's own count, every write on the account, retries included, less
+  those about to leave it: older than 60 s less the per-device write gap, one per device at most) plus the step's
+  own plus one write per module of the plan on that account (a guest's mood or brightness, the share of
+  `budget_reserve` a mood chosen mid-run needs) would pass `account_writes_per_min`. So the step itself never takes
+  the account past the cap, and a run that starts while another run's steps are still in the window (a guest chose
+  a mood mid-run, and since D75 that mood runs too) holds its first steps until the room is back. What the runner
+  can't hold back — a guest's burst, 429 retries, re-asserts — lands in the rest of the reserve. A held step sends
+  nothing, the step shown stays the last one sent — and is what the state draws (`to_state` repeats it: a held step
+  is never drawn) — and the next step tries again (`budget_holds`). `HELD_STEPS_END` holds in a row end the run
+  (D75): the look then holds still, with its still copy, rather than claim motion the account can't pay for.
 - **A step** clears the engine's early re-assert counts and sends each driven module whose rows changed (its colour,
   its level, or a guest brightness folded into the step), plus the modules the reconciler deferred to it: one
   full-state PUT per module, never a slot object, through `engine.send(…, source="program")`. A breathe or shimmer
@@ -62,6 +68,7 @@ from typing import TYPE_CHECKING, Any
 
 from conductor.drivers.base import Outcome
 from conductor.engine_api import ModePlan, Program, Tier
+from conductor.executor import WINDOW_S
 from conductor.executor_api import DeviceStatus
 
 if TYPE_CHECKING:
@@ -258,19 +265,17 @@ class ProgramRunner:
             return
         previous, self.shown = self.shown, n
         over = self._over_cap(self._wanted())
-        if over is not None:  # never past the account's cap: this step is held back, the next one tries again
+        # it would leave a guest no room under the cap: held back, the next one tries again
+        if over is not None:
             self.shown = previous
             self.budget_holds += 1
             self.held_steps += 1
-            account, recent, k = over
             self.engine.telemetry.record(
                 "program",
                 action="budget_hold",
                 mode=self.plan.mode_id,
                 step=n,
-                account=account,
-                writes_60s=recent,
-                step_writes=k,
+                **over,
                 cap=self.settings.account_writes_per_min,
             )
             self.engine._publish_soon()  # the panel draws the step last sent, frozen (to_state)
@@ -289,9 +294,18 @@ class ProgramRunner:
             if d in self.deferred or engine.desired_rows(d) != engine.sent_rows.get(d)
         ]
 
-    def _over_cap(self, wanted: list[str]) -> tuple[str, int, int] | None:
-        """(account, writes in its last 60 s, this step's writes there) when sending `wanted` now would take an
-        account past `account_writes_per_min` (the executor's count: every write on the account, retries included)."""
+    def _over_cap(self, wanted: list[str]) -> dict[str, Any] | None:
+        """The hold's numbers ({account, writes_60s, counted, step_writes, room}) when sending `wanted` now would
+        leave an account no room for a guest's next burst under `account_writes_per_min` (D75), else None.
+
+        - `counted`: the writes still in the 60 s window this step's own share — the executor's count (every write
+          on the account, retries included) less those older than 60 s less the per-device write gap
+          (`executor.min_write_interval_s`), which leave the window before this step's writes are all out. That gap
+          lets each device take one write at most, so what isn't counted is never more than one write per device.
+        - `room`: one write per module of this plan on the account — what a guest's mood or brightness sends, the
+          share of `budget_reserve` a mood chosen mid-run needs. The runner never spends it: a run that starts while
+          another run's steps are still in the window holds its first steps until that room is back.
+        - `writes_60s`: the account's whole 60 s count, as /ops shows it."""
         engine = self.engine
         per_account: dict[str, list[Any]] = {}
         for device_id in wanted:
@@ -299,10 +313,20 @@ class ProgramRunner:
             if target is not None:
                 per_account.setdefault(engine._account_of(target.address), []).append(target)
         cap = self.settings.account_writes_per_min
+        rooms = self._accounts()
         for account, targets in sorted(per_account.items()):
-            recent = int(targets[0].executor.budget(targets[0].address).get("account_writes_60s", 0))
-            if recent + len(targets) > cap + _EPS:
-                return account, recent, len(targets)
+            executor, address = targets[0].executor, targets[0].address
+            gap = float(executor.policy.min_write_interval_s)
+            counted = executor.account_writes(address, within_s=WINDOW_S - gap)
+            room = rooms.get(account, len(targets))
+            if counted + len(targets) + room > cap + _EPS:
+                return {
+                    "account": account,
+                    "writes_60s": executor.account_writes(address),
+                    "counted": counted,
+                    "step_writes": len(targets),
+                    "room": room,
+                }
         return None
 
     def _send(self, what: str) -> list[str]:

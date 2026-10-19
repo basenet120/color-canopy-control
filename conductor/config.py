@@ -177,8 +177,9 @@ class SteppedMotionSettings(_Strict):
     `account_writes_per_min` is the account's cap on writes of any kind in any 60 s. The runner plans its steps at
     the cap less `budget_reserve` (the room left for 429 retries, silent-drop re-sends and a mood chosen mid-run), so
     its step is never shorter than `min_step_s`, nor than the account's share of that planned rate (9 modules at
-    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would take the
-    account past the cap (`sequence.ProgramRunner._step`); above `max_step_s` the look holds still. The governor stops a run when, within
+    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would leave the account
+    less than a guest's burst of room under the cap (one write per module, D75; `sequence.ProgramRunner._over_cap`);
+    above `max_step_s` the look holds still. The governor stops a run when, within
     `governor_window_s`, at least `governor_min_throttled` of the run's write attempts on one account came back 429/403
     and they are at least `governor_throttled_share` of its attempts; stepped runs on that account then wait
     `governor_cooloff_s`. A guest brightness change within `fold_guest_within_s` of the next step goes out with it."""

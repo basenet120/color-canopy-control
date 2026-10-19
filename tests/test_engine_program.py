@@ -330,16 +330,13 @@ def test_a_step_that_would_take_the_account_past_the_cap_is_held_back():
         runner = w.engine.runner
         await w.run_for(runner.next_step_in() + 0.5)  # step 1 is out
         sent_before = len(w.writes)
-        budget = w.executor.budget
-        crowd = {"extra": 75}  # 75 writes by others on the account in the last 60 s: 9 + 9 + 75 > 90
+        account_writes = w.executor.account_writes
+        crowd = {"extra": 75}  # 75 writes by others on the account in the last 60 s: 9 + 9 + 75 + 9 > 90
 
-        def crowded(address=None):
-            out = budget(address)
-            if address is not None:
-                out = {**out, "account_writes_60s": out["account_writes_60s"] + crowd["extra"]}
-            return out
+        def crowded(address, **kw):
+            return account_writes(address, **kw) + crowd["extra"]
 
-        w.executor.budget = crowded
+        w.executor.account_writes = crowded
         shown = runner.shown
         await w.run_for(runner.next_step_in() + 0.5)  # step 2 comes due
         held = (len(w.writes) - sent_before, runner.index, runner.shown, runner.budget_holds)
@@ -359,7 +356,100 @@ def test_a_step_that_would_take_the_account_past_the_cap_is_held_back():
     assert after[:2] == (3, 1) and after[2] == 9  # step 3 went out to every module
     [hold] = holds
     assert hold["account"] == "canopy" and hold["step"] == 2 and hold["cap"] == 90
-    assert hold["writes_60s"] + hold["step_writes"] > 90
+    assert hold["room"] == 9 and hold["counted"] + hold["step_writes"] + hold["room"] > 90
+
+
+def test_a_run_chosen_mid_run_holds_its_first_step_until_a_guest_has_room_again():
+    """B-R1-1 (D75): a guest's mood chosen mid-run runs too, so the account's 60 s window holds the old run's steps,
+    the new mood's burst and a guest brightness when the new run's first step comes due. The old rule (the window
+    plus the step within the cap) sent it at exactly 90, leaving nothing for a 429 retry or a re-assert; a step now
+    keeps one guest burst of room (one write per module) and waits, and the run then goes on to its end."""
+
+    async def main():
+        w = stepped_world(shipped=True)  # cap 90 less 20 %: 7.5 s steps on nine
+        await quiet_start(w)
+        sends: list[tuple[float, str, int]] = []
+        original = w.engine.send
+
+        def spy(device_ids, *, source, label):
+            sent = original(device_ids, source=source, label=label)
+            if source == "program" and label.startswith("step") and label.endswith("linear-rows"):
+                sends.append((w.clock.monotonic(), label, len(sent)))
+            return sent
+
+        w.engine.send = spy
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("linear-columns", source="ops")  # run A
+        await w.run_for(61.5)  # A's step 8 went out at t0 + 60
+        t_choice = w.clock.monotonic()
+        # a guest's mood mid-run: it runs too (D75)
+        await w.engine.request_mode("linear-rows", source="kiosk")
+        runner = w.engine.runner
+        await w.run_for(3.0)
+        await w.engine.set_guest_brightness(50, source="kiosk")  # not folded: step 1 is 4.5 s away
+        await w.run_for(runner.next_step_in() + 0.5)  # step 1 comes due
+        after_1 = (runner.shown, runner.held_steps, runner.running)
+        await w.run_for(runner.next_step_in() + 0.5)  # step 2
+        after_2 = (runner.shown, runner.held_steps, runner.running)
+        await w.run_for(100)
+        holds = [e for e in w.events("program") if e.get("action") == "budget_hold"]
+        out = (t0, t_choice, after_1, after_2, runner.ended, holds, sends, list(w.writes))
+        await w.close()
+        return out
+
+    _t0, t_choice, after_1, after_2, ended, holds, sends, writes = run_virtual(main)
+    assert after_1 == (0, 1, True)  # step 1 held: the step shown is still step 0
+    assert after_2 == (2, 0, True)  # step 2 went out; a sent step resets the count
+    assert ended == "the run is over"
+    [hold] = holds
+    assert hold["mode"] == "linear-rows" and hold["step"] == 1 and hold["room"] == 9
+    # the old rule (the window plus the step within the cap) would have sent it, leaving no room
+    assert hold["writes_60s"] + hold["step_writes"] <= 90
+    assert hold["counted"] + hold["step_writes"] + hold["room"] > 90
+    # from the simulator's own log: every step of the new run left room for a guest's burst in the window it shares
+    # (writes that leave it within the 1 s per-device gap aren't shared)
+    assert sends and sends[0][1].startswith("step 2 ")
+    for t, label, n in sends:
+        shared = sum(1 for wt, _, _ in writes if t - 59.0 < wt < t)  # before the step's own
+        assert shared + n + 9 <= 90, (t - t_choice, label, shared, n)
+
+
+def test_two_held_steps_apart_never_end_a_run_a_sent_step_resets_the_count():
+    """B4 / TS-3: only HELD_STEPS_END (2) holds *in a row* end a run. A step held, the next sent, a later one held
+    again: the run goes on (with fast guest pacing holds come and go on a busy account; they mustn't add up)."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner = w.engine.runner
+        real = runner._over_cap
+
+        def over_cap(wanted):  # the account's cap holds steps 2 and 4 back, and only them
+            if runner.index in (2, 4):
+                return {"account": "canopy", "writes_60s": 90, "counted": 90, "step_writes": 9, "room": 9}
+            return real(wanted)
+
+        runner._over_cap = over_cap
+        seen = []
+        for _ in range(5):  # steps 1–5 (7.5 s apart; None once the run is over)
+            wait = runner.next_step_in()
+            await w.run_for((7.5 if wait is None else wait) + 0.5)
+            seen.append((runner.index, runner.shown, runner.held_steps, runner.running))
+        await w.run_for(100)
+        out = (seen, runner.budget_holds, runner.ended)
+        await w.close()
+        return out
+
+    seen, holds, ended = run_virtual(main)
+    assert seen == [
+        (1, 1, 0, True),
+        (2, 1, 1, True),  # held: step 1 is still shown
+        (3, 3, 0, True),  # sent: the count is back to 0
+        (4, 3, 1, True),  # held again, not twice in a row: still running
+        (5, 5, 0, True),
+    ]
+    assert holds == 2 and ended == "the run is over"
 
 
 def shows_rows_equal(plan) -> bool:
