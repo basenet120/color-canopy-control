@@ -165,7 +165,7 @@ palettes, at the scene's brightness, at every tier.
   | `rainbow-row-sunset-3` | Rainbow Row Sunset #3 | fin rings | travel, in toward the centre |
   | `garden-gathering` | Garden Gathering #1 (custom-2) | rings tilted along the current (inverted radial, 12.5″ off the middle) | travel, in toward one spot |
   | `garden-gathering-2` | Garden Gathering #2 | fin rings | travel, from the centre out |
-  | `garden-gathering-3` | Garden Gathering #3 | fin rings | shimmer: the level |
+  | `garden-gathering-3` | Garden Gathering #3 | along the current, folded (warm pools: Edison amber through the middle, fern green at the two far corners) | shimmer: the level |
   | `coastal-tides` | Coastal Tides #1 | fin rings | breathe: the ocean blue drifts and settles |
   | `coastal-tides-2` | Coastal Tides #2 | a channel along the current (linear 140°, mirrored, inverted: the gradient runs across it) | travel |
   | `coastal-tides-3` | Coastal Tides #3 | a sweep around a spot near the middle (107.5″, 55″), mirrored | travel, 8 steps |
@@ -173,12 +173,12 @@ palettes, at the scene's brightness, at every tier.
   | `golden-hour-2` | Golden Hour #2 | fin rings: warm white on the deep centre, Home Depot orange on the corners | travel, from the centre out |
   | `golden-hour-3` | Golden Hour #3 | the current (linear 18°) | travel |
   | `goodnight-glow` | The Goodnight Glow #1 | fin rings, inverted (moonlight blue on the deep centre) | breathe: the level |
-  | `goodnight-glow-2` | The Goodnight Glow #2 | fin rings | shimmer: the level |
+  | `goodnight-glow-2` | The Goodnight Glow #2 | fin rings | shimmer: colour and level, firefly hopping between the strands one or two at a time |
   | `goodnight-glow-3` | The Goodnight Glow #3 | fin rings | breathe: the level, the centre leading |
 
   The current is field angle 18° (31.4° in true inches: field angles are measured in the canopy's proportions).
-  **The nine fin-ring options show three rings at module level** (the centre, the edge-middles, the corners). Their
-  rim colour shows light by light on the apron, and on a whole strand only during a run. The other nine show 4–9
+  **The eight fin-ring options show three rings at module level** (the centre, the edge-middles, the corners). Their
+  rim colour shows light by light on the apron, and on a whole strand only during a run. The other ten show 4–9
   module colours. The #1s keep their palettes, moods, slots and the idle/safe role; only the placement changed (and
   Calm #1's description). This supersedes D59's "six scenes, names never change" for the review only, until PR E.
 

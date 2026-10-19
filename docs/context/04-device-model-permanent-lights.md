@@ -129,16 +129,16 @@ options, `<id>-2` and `<id>-3` (`option_of: <id>`). Every option has a stepped r
 | Rainbow Row Sunset #2 | linear along the current (18°), six facade colours | 85% | travel |
 | Rainbow Row Sunset #3 | fin rings | 85% | travel, in toward the centre |
 | Garden Gathering #2 | fin rings | 75% | travel, from the centre out |
-| Garden Gathering #3 | fin rings | 75% | shimmer: the level (lag 2, seed 31) |
+| Garden Gathering #3 | along the current, folded (warm pools) | 75% | shimmer: the level (lag 2, seed 31) |
 | Coastal Tides #2 | a channel along the current (linear 140°: the gradient runs across it), mirrored and inverted | 85% | travel |
 | Coastal Tides #3 | a sweep around (107.5, 55), mirrored | 85% | travel, 8 steps a cycle |
 | Golden Hour #2 | fin rings: warm white, honey, Home Depot orange on the corners (amber on the apron) | 95% | travel, from the centre out |
 | Golden Hour #3 | linear along the current (18°) | 95% | travel |
-| The Goodnight Glow #2 | fin rings | 25% | shimmer: the level (lag 2, seed 25) |
+| The Goodnight Glow #2 | fin rings | 25% | shimmer: colour and level, the firefly hop (3 steps a breath, lag 6, seed 107) |
 | The Goodnight Glow #3 | fin rings | 26% | breathe: the level, the centre leading |
 
 Every option's ladder is **stepped** → modules → strand, and on live hardware now it shows modules (stepped refused:
-live off). The nine fin-ring options read as three rings at module level (centre, edge-middles, corners; D77).
+live off). The eight fin-ring options read as three rings at module level (centre, edge-middles, corners; D77).
 
 "On live hardware now": every scene runs at module level (or strand below it), because no upper rung is open yet.
 On the Mac show box as D62 recorded it (two kits registered, at r0c0 and r0c1) every look drives those two and

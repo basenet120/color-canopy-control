@@ -3323,25 +3323,26 @@
 },
 "garden-gathering-3": {
 "layout": {
-"transform": "linear",
-"invert": false,
+"transform": "mirror",
+"invert": true,
 "cycles": 1,
-"kind": "fins"
+"kind": "linear",
+"angle_deg": 140.0
 },
-"layout_words": "from the centre out",
+"layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Lantern gold",
 "brightness": 75,
 "t3": {
 "r0c0": [
-159,
-201,
-157
+255,
+200,
+133
 ],
 "r0c1": [
-238,
-221,
-162
+255,
+222,
+160
 ],
 "r0c2": [
 157,
@@ -3349,9 +3350,9 @@
 155
 ],
 "r1c0": [
-236,
-220,
-161
+246,
+223,
+162
 ],
 "r1c1": [
 255,
@@ -3359,9 +3360,9 @@
 127
 ],
 "r1c2": [
-236,
-220,
-161
+246,
+223,
+162
 ],
 "r2c0": [
 157,
@@ -3369,14 +3370,14 @@
 155
 ],
 "r2c1": [
-238,
-221,
-162
+255,
+222,
+160
 ],
 "r2c2": [
-159,
-201,
-157
+255,
+200,
+133
 ]
 },
 "stepped": {
@@ -3962,15 +3963,15 @@
 ]
 },
 "stepped": {
-"direction": "forward",
+"direction": "reverse",
 "mode": "shimmer",
-"steps_per_cycle": 6,
+"steps_per_cycle": 3,
 "step_s": 8.0,
-"run_s": 128.0,
-"shift": 0.0,
+"run_s": 144.0,
+"shift": 0.35,
 "brightness_swing": 6,
-"lag_steps": 2,
-"seed": 25
+"lag_steps": 6,
+"seed": 107
 },
 "flow_words": "glow and soften"
 },

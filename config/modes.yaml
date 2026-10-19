@@ -20,12 +20,13 @@
 #   stepped — module level, a step at a time: the same design re-sent every few seconds (below).
 #   strand  — the scene's solid colour (its `default_solid`) on every strand.
 # The layouts (D77, re-fit to VWBD's fins, D74; drafts for the client session):
-#   - the fin rings (`kind: fins`): nine designs, Coastal Tides #1 and The Goodnight Glow #1 among them. Module level
+#   - the fin rings (`kind: fins`): eight designs, Coastal Tides #1 and The Goodnight Glow #1 among them. Module level
 #     reads them as three rings (the deep centre, the edge-middles, the corners), whatever the palette.
 #   - tilted rings: Lowcountry Calm #1 and Garden Gathering #1, a radial in the canopy's proportions from
 #     [122.5, 67.5], 12.5 in off the middle along the fins' current (Calm's radius_in 130 so that four colours read).
 #   - along the fins' current: Rainbow Row Sunset #1 and #2 and Golden Hour #3 at 18° (31.4° in true inches: a linear
-#     field measures angles in the canopy's proportions), Lowcountry Calm #3 at 22° folded, Coastal Tides #2 at 140°.
+#     field measures angles in the canopy's proportions), Lowcountry Calm #3 at 22° folded, Coastal Tides #2 and
+#     Garden Gathering #3 (its warm pools) at 140° folded, the bands along the current.
 #   - Golden Hour #1's sun at the middle of the left edge, stretched (radius_in 225) so the deep centre is sunset
 #     pink; Coastal Tides #3 a lighthouse sweep around a spot just off the middle.
 # Changing a design changes the T1 frames, so every recorded slot hash of a painted scene goes stale: freeze the
@@ -351,9 +352,10 @@ modes:
     techniques:
       modules:
         sample:
-          canvas: &garden-gathering-3-design   # the fin rings: Edison amber on the deep centre, fern green toward the rim
+          canvas: &garden-gathering-3-design   # along the fins' current, folded: warm pools of Edison amber through the middle from corner to corner, fern green at the two far corners
             kind: field
-            field: {kind: fins}
+            # 140 lays the bands along the fins (32.5° in true inches), as Coastal Tides #2's channel
+            field: {kind: linear, angle_deg: 140, transform: mirror, invert: true}
             stops:
               - {at: 0.0, color: edison-amber}
               - {at: 0.3333333333333333, color: lantern-gold}
@@ -362,7 +364,7 @@ modes:
             recipe: rgb_only
           at: centre
           brightness: 75
-        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from the centre out: Edison amber in the middle, lantern gold around it, fern green at the corners."
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally along the fins: Edison amber through the middle from corner to corner, lantern gold beside it, fern green at the far corners."
       stepped:   # D77: each strand glows and softens on its own seeded rhythm
         canvas: *garden-gathering-3-design
         mode: shimmer
@@ -637,18 +639,19 @@ modes:
           at: centre
           brightness: 25
         feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from the centre out: night blue in the middle, deep moss around it, a hint of firefly at the corners."
-      stepped:   # D77: each strand glows and softens on its own seeded rhythm
+      stepped:   # D77: firefly glows hop between the strands, one or two at a time (a three-step breath, starts up to six steps apart)
         canvas: *goodnight-glow-2-design
         mode: shimmer
-        direction: forward
+        direction: reverse   # up the design at the top of a breath: the corners reach firefly as they brighten
+        shift: 0.35
         brightness_swing: 6
-        lag_steps: 2
-        seed: 25
-        steps_per_cycle: 6
+        lag_steps: 6
+        seed: 107   # the four corners start apart (steps 0, 1, 5, 6), and so do the show box's two kits
+        steps_per_cycle: 3
         step_s: 8   # design pace; nine strands on one account step every 8 s (motion.stepped budget)
-        run_s: 128
+        run_s: 144
         brightness: 25
-        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the strands glow and soften on their own, like fireflies over the marsh."
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour and a brighter or softer level every few seconds, so the strands glow and soften on their own, one or two at a time, the corner strands lighting up firefly, like fireflies over the marsh."
       strand:
         look: {kind: rgb, rgb: [74, 93, 166], brightness: 25}   # night blue
         feature: "Colour and dimming: all nine Hubspace strands set to night blue."

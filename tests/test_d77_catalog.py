@@ -2,9 +2,10 @@
 
 The six scenes keep their ids, approved palettes, moods, slots and the idle role; each gets two options, `<id>-2` and
 `<id>-3`, with `option_of: <id>` and the names "<Scene name> #n". Every option has a stepped rung (eleven travel, five
-breathe, two shimmer), which live hardware refuses until Gate R. The designs sit on VWBD's fins (D74): nine on the fin
-rings, Calm #1 and Garden #1 on rings tilted along the current, five along the current, Golden Hour #1's sun
-stretched so the deep centre is sunset pink, and Coastal Tides #3's lighthouse sweep.
+breathe, two shimmer), which live hardware refuses until Gate R. The designs sit on VWBD's fins (D74): eight on the
+fin rings, Calm #1 and Garden #1 on rings tilted along the current, six along the current (Garden #3's warm pools
+among them), Golden Hour #1's sun stretched so the deep centre is sunset pink, and Coastal Tides #3's lighthouse
+sweep.
 
 Two kinds of test:
 - Invariants, always asserted: ids and order, option_of, slots, ladders, the idle role, the copy rules, the fins'
@@ -15,7 +16,8 @@ Two kinds of test:
   (tests/test_lab_roundtrip.py). This is the pattern of tests/test_modes_match_scenes.py's Golden Hour sun test.
 
 Every DRAFT value is what config/ holds as built, not spec_D's step-6 table: run_s is a whole number of program cycles
-(steps_per_cycle plus the largest lag), the shimmers lag 2 with seeds 31 and 25, the colour-only breaths drift and
+(steps_per_cycle plus the largest lag), Garden #3's shimmer lags 2 with seed 31, Goodnight #2's firefly shimmer is
+a three-step breath of colour and level with starts up to 6 steps apart (seed 107), the colour-only breaths drift and
 settle, and Golden Hour #2's stops follow decision D3 (warm white, honey, Home Depot orange, amber)."""
 
 from __future__ import annotations
@@ -89,9 +91,9 @@ IDLE = "lowcountry-calm"
 PANEL_MAX_BYTES = 80_000
 
 # The copy prefixes. T3: module level. A: every strand is sent its next colour (travel, and the colour-only breaths of
-# Calm #1 and Tides #1). B: every strand is sent a level (the level-only breaths and shimmers). The plan's prefix C
-# ("the strands around the middle") is dropped (integration C4): PR B's breath swings both ways, so Tides #1's centre
-# strand changes too.
+# Calm #1 and Tides #1). B: every strand is sent a level (the level-only breaths and Garden #3's shimmer). C: both
+# (Goodnight #2's firefly shimmer, review D-R2-3). The plan's own prefix C ("the strands around the middle") is dropped
+# (integration C4): PR B's breath swings both ways, so Tides #1's centre strand changes too.
 T3 = "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out "
 PREFIX = {
     "A": (
@@ -101,6 +103,10 @@ PREFIX = {
     "B": (
         "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a "
         "brighter or softer level every few seconds, so "
+    ),
+    "C": (
+        "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its "
+        "next colour and a brighter or softer level every few seconds, so "
     ),
 }
 LEVEL = "a brighter or softer level"
@@ -192,11 +198,20 @@ def _travel(steps_per_cycle: int, run_s: float, direction: str = "forward") -> d
 
 
 def _breath(
-    mode: str, spc: int, step_s: float, run_s: float, *, shift=0.0, swing=0, lag=0, seed=None
+    mode: str,
+    spc: int,
+    step_s: float,
+    run_s: float,
+    *,
+    shift=0.0,
+    swing=0,
+    lag=0,
+    seed=None,
+    direction: str = "forward",
 ) -> dict:
     return {
         "mode": mode,
-        "direction": "forward",
+        "direction": direction,
         "steps_per_cycle": spc,
         "step_s": step_s,
         "run_s": run_s,
@@ -210,6 +225,8 @@ def _breath(
 FINS = {"kind": "fins"}
 TILTED = {"kind": "radial", "centre_in": [122.5, 67.5], "metric": "canopy", "invert": True}
 CURRENT = {"kind": "linear", "angle_deg": 18.0}
+# the current folded, its bands along the fins (Coastal Tides #2 and Garden Gathering #3)
+CHANNEL = {"kind": "linear", "angle_deg": 140.0, "transform": "mirror", "invert": True}
 GOLDEN_SUN = {"kind": "radial", "centre_in": [0.0, 60.0], "metric": "canopy", "radius_in": 225.0}
 DRAFT: dict[str, Draft] = {
     "lowcountry-calm": Draft(
@@ -283,8 +300,8 @@ DRAFT: dict[str, Draft] = {
         "Garden Gathering #2",
         "A",
     ),
-    "garden-gathering-3": Draft(
-        FINS,
+    "garden-gathering-3": Draft(  # the plan's warm pools: the folded current, Coastal Tides #2's layout
+        CHANNEL,
         ["edison-amber", "lantern-gold", "fern-green", "garden-gathering-3-warm-white"],
         _breath("shimmer", 6, 6.0, 120.0, swing=10, lag=2, seed=31),
         75,
@@ -300,7 +317,7 @@ DRAFT: dict[str, Draft] = {
         "A",
     ),
     "coastal-tides-2": Draft(
-        {"kind": "linear", "angle_deg": 140.0, "transform": "mirror", "invert": True},
+        CHANNEL,
         ["deep-teal", "marsh-green", "tidewater-blue", "oyster-white"],
         _travel(6, 90.0),
         85,
@@ -350,10 +367,10 @@ DRAFT: dict[str, Draft] = {
     "goodnight-glow-2": Draft(
         FINS,
         ["night-blue", "deep-moss", "firefly"],
-        _breath("shimmer", 6, 8.0, 128.0, swing=6, lag=2, seed=25),
+        _breath("shimmer", 3, 8.0, 144.0, shift=0.35, swing=6, lag=6, seed=107, direction="reverse"),
         25,
         "The Goodnight Glow #2",
-        "B",
+        "C",
     ),
     "goodnight-glow-3": Draft(
         FINS,
@@ -365,21 +382,22 @@ DRAFT: dict[str, Draft] = {
     ),
 }
 FIELD = TypeAdapter(F.FieldSpec)
-# The nine fin-ring options (D77, question 1): module level reads each as three rings
+# The eight fin-ring options (D77, question 1): module level reads each as three rings
 FIN_RINGS = [x for x in CATALOG if DRAFT[x].field["kind"] == "fins"]
-# The perceptual count of the other nine (the largest set of module colours pairwise ΔE76 ≥ 2.3), computed once.
+# The perceptual count of the other ten (the largest set of module colours pairwise ΔE76 ≥ 2.3), computed once.
 SEEN = {
     "lowcountry-calm": 4,
     "lowcountry-calm-3": 5,
     "rainbow-row-sunset": 9,
     "rainbow-row-sunset-2": 9,
     "garden-gathering": 5,
+    "garden-gathering-3": 5,
     "coastal-tides-2": 5,
     "coastal-tides-3": 8,
     "golden-hour": 6,
     "golden-hour-3": 9,
 }
-# The level-only breaths and shimmers (shift 0, a swing): Calm #2, Garden #3 and the three Goodnight options
+# The level-only breaths and shimmers (shift 0, a swing): Calm #2, Garden #3, Goodnight #1 and #3
 STEPPED = {x: MODES.mode(x).techniques.stepped for x in CATALOG}
 BRIGHTNESS_ONLY = [x for x, tech in STEPPED.items() if tech.shift == 0 and tech.brightness_swing > 0]
 
@@ -538,7 +556,6 @@ def test_the_stepped_rungs_are_eleven_travel_five_breathe_two_shimmer():
         "lowcountry-calm-2",
         "rainbow-row-sunset-3",
         "garden-gathering-2",
-        "garden-gathering-3",
         "coastal-tides",
         "golden-hour-2",
         "goodnight-glow",
@@ -549,7 +566,6 @@ def test_the_stepped_rungs_are_eleven_travel_five_breathe_two_shimmer():
         "lowcountry-calm-2",
         "garden-gathering-3",
         "goodnight-glow",
-        "goodnight-glow-2",
         "goodnight-glow-3",
     ]
 
@@ -629,6 +645,99 @@ def test_golden_hour_first_puts_sunset_pink_on_the_deep_centre():
     assert len(set(colours.values())) == 6
 
 
+# ---- §4's placements and motions, as built (review D-R2-3) -------------------------------------------------------
+def _nearest(scene_id: str, rgb: tuple[int, int, int]) -> str:
+    """The palette colour (by name) nearest an RGB, ΔE76."""
+    return min(SCENES.get(scene_id).palette, key=lambda c: R.delta_e76(c.rgb, rgb)).name
+
+
+def _with_field(scene_id: str, field: dict):
+    """The shipped modes with `scene_id`'s one design (every rung that draws it) on another field."""
+    data = MODES.model_dump(mode="json")
+    t = data["modes"][scene_id]["techniques"]
+    rungs = [t[r]["canvas"] for r in ("canvas", "stepped") if t.get(r)]
+    for canvas in [*rungs, t["modules"]["sample"]["canvas"]]:
+        canvas["field"] = field
+    return type(MODES).model_validate(data)
+
+
+def test_garden_gathering_third_is_the_plans_warm_pools():
+    """§4: "warm pools: amber and gold on the deep centre and along the current, greens at the corners". The folded
+    current (Coastal Tides #2's layout) puts Edison amber on the centre and on the two corners the current runs
+    through, lantern gold beside them, and fern green on the two far corners. Not a ninth fin-ring option."""
+    skip_unless_drafted("garden-gathering-3")
+    colours = {p: _nearest("garden-gathering-3", rgb) for p, rgb in _colours("garden-gathering-3").items()}
+    assert [colours[p] for p in ("r0c0", "r1c1", "r2c2")] == ["Edison amber"] * 3  # along the current
+    assert {colours[p] for p in EDGE_MIDDLES} == {"Lantern gold"}
+    assert colours["r0c2"] == colours["r2c0"] == "Fern green"  # the far corners
+    assert "garden-gathering-3" not in FIN_RINGS
+
+
+def test_goodnight_glow_seconds_firefly_glows_hop_between_the_strands():
+    """§4: "firefly accents (module level: one or two modules at a time)" and "Shimmer: firefly glows hop between
+    modules". A three-step breath of colour and level (up the design as it brightens) with starts up to six steps
+    apart: after the still step, one or two strands are at the top of their breath at every step until the last
+    strands' starts, each corner strand turns firefly at its own step, and the centre never does."""
+    skip_unless_drafted("goodnight-glow-2")
+    mode = MODES.mode("goodnight-glow-2")
+    tech = mode.techniques.stepped
+    pictures = R.step_pictures(mode, RECIPES, CANOPY)
+    firefly = SCENES.get("goodnight-glow-2").palette[2]
+    assert firefly.name == "Firefly"
+    top = tech.brightness + tech.brightness_swing
+    glowing = [[p for p in GRID if pic[p][1] == top] for pic in pictures]
+    assert glowing[0] == []  # step 0 is the still design
+    assert [len(g) for g in glowing[1 : tech.lag_steps + 2]] == [1, 1, 2, 1, 1, 1, 2]
+    assert max(len(g) for g in glowing) <= 2
+    lit = {c: [n for n, pic in enumerate(pictures) if pic[c][0] == firefly.rgb] for c in CORNERS}
+    assert all(len(steps) == 1 for steps in lit.values()), lit
+    assert (
+        len({steps[0] for steps in lit.values()}) == 4
+    )  # the firefly hops: a different step for each corner
+    assert all(c in glowing[steps[0]] for c, steps in lit.items())  # it lights up as the strand brightens
+    assert all(_nearest("goodnight-glow-2", pic["r1c1"][0]) != "Firefly" for pic in pictures)
+    assert all(pictures[0][p][0] != firefly.rgb for p in GRID)  # at rest only a hint at the corners
+
+
+def test_rainbow_row_sunset_seconds_flatter_current_would_read_as_columns():
+    """§4 asks for a flatter current (about 15°) so each strand lands on a different facade. The plan's angles are in
+    true inches (its current is 32°, built as field angle 18°). 15° in true inches is 8.1° as a field angle, and every
+    field angle under 15° reads as columns at module level (the two-d warning), so #2 stays on the current at 18°,
+    where all nine strands already show a different facade colour."""
+    skip_unless_drafted("rainbow-row-sunset-2")
+    w, h = float(CANOPY["width_in"]), float(CANOPY["height_in"])
+    plan_15 = math.degrees(math.atan(math.tan(math.radians(15)) * h / w))
+    assert plan_15 == pytest.approx(8.13, abs=0.01)
+    for angle in (plan_15, 12.0, 14.0):
+        modes = _with_field("rainbow-row-sunset-2", {"kind": "linear", "angle_deg": angle})
+        problems = R.scene_mode_problems(SCENES, modes, RECIPES, CANOPY, rules={"two-d"})
+        assert [p.mode for p in problems] == ["rainbow-row-sunset-2"], angle
+    assert len(set(_colours("rainbow-row-sunset-2").values())) == 9
+
+
+def test_coastal_tides_thirds_beam_is_one_side_without_a_seam():
+    """§4: "a wedge of beam white and lamp gold around the centre". The stops are the four palette colours evenly
+    spaced (a blocking scene rule), so the bright colours always hold the top part of t: the wedge can't be narrowed.
+    Unfolded, the sweep puts beam white on a strand beside night sea (the seam where the turn starts again); the fold
+    (transform: mirror) makes one lobe, which on the outer strands is one side: the left column."""
+    skip_unless_drafted("coastal-tides-3")
+    t = _t("coastal-tides-3")
+    # the bright half of the lobe (lamp gold and beam white lead the mix): the left column
+    assert sorted(p for p, v in t.items() if v > 0.5) == ["r0c0", "r1c0", "r2c0"]
+    shipped = {p: _nearest("coastal-tides-3", rgb) for p, rgb in _colours("coastal-tides-3").items()}
+
+    def seams(names: dict[str, str]) -> list[tuple[str, str]]:
+        pairs = [(f"r{r}c{c}", f"r{r}c{c + 1}") for r in range(3) for c in range(2)]
+        pairs += [(f"r{r}c{c}", f"r{r + 1}c{c}") for r in range(2) for c in range(3)]
+        return [(a, b) for a, b in pairs if {names[a], names[b]} == {"Beam white", "Night sea"}]
+
+    assert seams(shipped) == []
+    field = MODES.mode("coastal-tides-3").techniques.modules.sample.canvas.field.model_dump(mode="json")
+    unfolded = _with_field("coastal-tides-3", {**field, "transform": "linear"})
+    colours = R.module_colours(unfolded.mode("coastal-tides-3"), RECIPES, CANOPY)
+    assert seams({p: _nearest("coastal-tides-3", rgb) for p, rgb in colours.items()}) != []
+
+
 # ---- module level as the eye sees it ---------------------------------------------------------------------------------
 @pytest.mark.parametrize("scene_id", CATALOG)
 def test_module_colours_as_the_eye_sees_them(scene_id):
@@ -637,7 +746,7 @@ def test_module_colours_as_the_eye_sees_them(scene_id):
     assert colours["r0c0"] != colours["r0c1"]  # the kits-differ warning: the show box's two kits differ
     skip_unless_drafted(scene_id)
     if scene_id in FIN_RINGS:
-        # D77, question 1: the nine fin-ring options pass two-d only on near-ties (ΔE76 0.33–1.23: r0c0/r2c2 at t
+        # D77, question 1: the eight fin-ring options pass two-d only on near-ties (ΔE76 0.33–1.23: r0c0/r2c2 at t
         # 0.6745 against r0c2/r2c0 at 0.6666). To the eye each is three rings: the centre, the edge-middles and the
         # corners. D77 and the PR body say so; Alon chooses whether to keep them on the fins.
         assert _seen(colours) == 3

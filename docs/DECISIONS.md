@@ -1323,11 +1323,15 @@ the client review only, until PR E.**
     evenly spaced, as the scene rules require; the plan asked to retune the stops.
 - **Every option steps:** 11 travel, 5 breathe, 2 shimmer. Calm #1 and Coastal Tides #1 breathe their colour
   ("drifts and settles", shift 0.4 and 0.35, the start leading by one step). Calm #2 and Goodnight #1 and #3 breathe
-  their level. Garden #3 and Goodnight #2 shimmer, with `lag_steps: 2` and seeds 31 and 25: the corners differ, and
-  the two kits (r0c0, r0c1) start apart, so the show box's two kits visibly shimmer (seeds 3 and 11 gave them the same
-  lag). Each `run_s` is a whole number of program cycles at the nine-strand pace (D75's cycle is a breath plus its
-  largest lag) and at most `kiosk.idle_return_s`: Calm #1, Calm #2 and Garden #3 run 120 s, Tides #1 105 s,
-  Goodnight #2 128 s and Goodnight #3 150 s. Ladders are `[stepped, modules, strand]`, and `[canvas, slot, stepped,
+  their level. Garden #3 shimmers its level, with `lag_steps: 2` and seed 31: the corners differ, and the two kits
+  (r0c0, r0c1) start apart, so the show box's two kits visibly shimmer (seeds 3 and 11 gave them the same lag).
+  Goodnight #2's shimmer is the plan's firefly hop (review D-R2-3): a three-step breath of colour and level
+  (`direction: reverse`, `shift: 0.35`, swing 6), its starts up to six steps apart (`lag_steps: 6`, seed 107), so
+  after the still step one or two strands are at the top of their breath at a time, and each corner strand turns
+  full firefly as it brightens, at its own step; the centre takes deep moss, never firefly. Each `run_s` is a whole
+  number of program cycles at the nine-strand pace (D75's cycle is a breath plus its largest lag) and at most
+  `kiosk.idle_return_s`: Calm #1, Calm #2 and Garden #3 run 120 s, Tides #1 105 s, Goodnight #2 144 s (two cycles of
+  nine 8 s steps) and Goodnight #3 150 s. Ladders are `[stepped, modules, strand]`, and `[canvas, slot, stepped,
   modules, strand]` for the painted three. There is no `motion:` key (D75: "this scene moves" is `Mode.moves`, and
   `Mode.motion` stays false, so there is no T2 burst). Keys left at their default are left out, except `direction`,
   which is written on every rung: the Lab export can add the other stepped lines but not that one, so a direction edit
@@ -1335,18 +1339,32 @@ the client review only, until PR E.**
   (show.py's `tier_allowed`), so on the show box every option shows its still module-level design.
 - **Moving copy uses D75's words.** Prefix A ("… each Hubspace strand set to a single colour and sent its next colour
   every few seconds, so …") is for travel and the colour breaths, which say "drifts and settles". Prefix B ("… set to a
-  single colour and sent a brighter or softer level every few seconds, so …") is for the level breaths and shimmers.
-  The plan's prefix C ("the strands around the middle") is dropped. D75's waveform swings both ways, so Coastal Tides
+  single colour and sent a brighter or softer level every few seconds, so …") is for the level breaths and Garden #3's
+  shimmer. Goodnight #2's firefly shimmer changes both, so its copy is sent "its next colour and a brighter or softer
+  level". The plan's own prefix C ("the strands around the middle") is dropped. D75's waveform swings both ways, so Coastal Tides
   #1's centre strand does change: at the bottom of the breath it takes some aqua. On a partial canopy the sentence
   says "a brighter or softer level" where only levels change.
-- **Module level, stated plainly.** The nine fin-ring options (Calm #2, Sunset #3, Garden #2 and #3, Tides #1,
-  Golden #2, Goodnight #1, #2 and #3) read as **three rings** on the real lights: the centre, the edge-middles and the
+- **Module level, stated plainly.** The eight fin-ring options (Calm #2, Sunset #3, Garden #2, Tides #1, Golden #2,
+  Goodnight #1, #2 and #3) read as **three rings** on the real lights: the centre, the edge-middles and the
   corners. They pass the two-d warning's "4–9 colours" only on near-ties of ΔE76 0.33–1.23 (r0c0 and r2c2 at t 0.6745
   against r0c2 and r2c0 at 0.6666), and a test pins them as three seen colours. Their rim colour (the last stop, or the
-  first when inverted) shows light by light on the apron, and at module level only during a run. The other nine show
+  first when inverted) shows light by light on the apron, and at module level only during a run. The other ten show
   4–9 module colours at least ΔE76 2.3 apart. A palette tweak at the session can collapse a near-tie; the two-d warning
   then stands and the Lab refuses the export. Switching that option to the tilted radial clears it. Alon chooses
   whether to keep the fin rings (STATUS question 1; the default keeps them, decision D1).
+- **Where the options differ from §4's prose** (review D-R2-3; each pinned by a test in tests/test_d77_catalog.py):
+  - Garden Gathering #3 is the plan's warm pools, not a ninth fin-ring option: the current folded at field angle 140°
+    (Coastal Tides #2's layout) puts Edison amber on the centre and on the two corners the current runs through,
+    lantern gold on the edge-middles and fern green on the two far corners.
+  - The Goodnight Glow #2 keeps its still look on the fin rings with a hint of firefly on the corners; the firefly hop
+    is its run (above). A still design can't light one or two strands alone without leaving the rings.
+  - Rainbow Row Sunset #2 stays on the current at 18°, not the plan's flatter 15°: the plan's angles are in true
+    inches (its current is 32°), and 15° there is 8.1° as a field angle, which reads as columns at module level (the
+    two-d warning fires at every field angle under 15°). At 18° all nine strands already show a different facade
+    colour, which is what "flatter" was for.
+  - Coastal Tides #3's beam is one side (the left column), not a narrow wedge: the stops are the palette evenly
+    spaced (a blocking rule), so lamp gold and beam white hold the top of t and the wedge can't be narrowed, and
+    without the fold (`transform: mirror`) the sweep's seam puts beam white on a strand beside night sea.
 - **Hand copy may hedge** on a colour at about a 35% mix ("a touch of haint blue", "a hint of firefly"; C28). The
   Lab's generated copy names only the stops module level reaches, so a Lab edit or a promote regenerates those
   sentences without the hedges.
