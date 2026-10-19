@@ -78,11 +78,13 @@ file stops the start and the deploy preflight with a sentence naming the file, t
   fins within 12″ weighted by **exp(−(d/6)²)**. This is not the textbook exp(−d²/2σ²) with σ 6: it is the form the
   plan's `lights.json` was made with (0.0102″ at worst over the 270 heads; the textbook form misses by up to 0.19″).
   `invert` swaps the ends. `transform: mirror` is refused: the fold would put the first colour on the rim too, and no
-  module reaches the rim. Its layout words are always "from the centre out" ("toward the centre" in reverse).
+  module reaches the rim. Its layout words are always "from the centre out", inverted too (a stepped run in
+  reverse reads "toward the centre").
 - **Module level reads three rings**: the centre module at t 0, the four edge-middles at ≈ 0.39, the four corners at
   ≈ 0.67. The rim's own colour never fills a strand, so the Lab's generated module-level sentence names only the
   stops module level reaches (`draft.reached_stops`).
-- No shipped scene uses the kind yet (D77 does).
+- The Design Lab's layout picker offers it ("Fins": no parameters, Mirror off, a note on the three rings), so a
+  fins design can be published to the show. No shipped scene uses the kind yet (D77 does).
 
 ### VWBD panel numbers (D74)
 VWBD numbers its panels row by row on its sheet, across our short axis, so P-0n is not Module n:
@@ -133,8 +135,9 @@ palettes, at the scene's brightness, at every tier.
 
 *Superseded again (D74):*
 - **D74: the fins are data and a design field.** VWBD's drawing A-20-1 gives the 650 fins (validated at load) and
-  closes the orientation question (p14). A design can be laid out on the fins' rings (`kind: fins`). No shipped
-  scene uses the kind until D77.
+  closes the orientation question (p14). A design can be laid out on the fins' rings (`kind: fins`), and the Design
+  Lab's layout picker offers "Fins", so a fins design can be published to the live show from now on (D68's path).
+  The iPad's Now-showing picture draws the fins. No shipped scene uses the kind until D77.
 
 See `04` "Canopy control model" for how each scene runs at each tier.
 
