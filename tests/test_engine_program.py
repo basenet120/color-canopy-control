@@ -1152,6 +1152,143 @@ def test_an_idle_breath_yields_at_once_to_a_guest():
     assert ends[-1]["reason"] == "a guest changed the canopy"
 
 
+def test_motion_idle_breathes_every_every_s_and_never_moves_the_idle_clocks():
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        breaths = []
+        original = w.engine.idle_breath
+
+        async def spy():
+            before = (w.engine.last_change_mono, w.engine.last_guest_input_mono, len(w.writes))
+            state = await original()
+            runner = w.engine.runner
+            breaths.append(
+                (w.clock.monotonic(), before, state, runner, runner is not None and runner.running)
+            )
+            return state
+
+        w.engine.idle_breath = spy
+        await w.engine.start()
+        await w.run_for(400)
+        clocks = (w.engine.last_change_mono, w.engine.last_guest_input_mono)
+        out = (breaths, clocks, list(w.writes), w.events("program"))
+        await w.close()
+        return out
+
+    breaths, clocks, writes, events = run_virtual(main)
+    started = [b for b in breaths if b[4]]
+    assert len(started) >= 3
+    first_t, (change, guest, n), state, runner, _ = started[0]
+    assert first_t >= 120.0  # every_s after the first look (start-up at 0)
+    assert runner.count == int(30 / runner.step_s + 1e-6) == 5 and runner.program.run_s == 30.0
+    assert (
+        clocks == (change, guest) == (0.0, 0.0)
+    )  # the idle hold and the idle reset count as they always did
+    assert not [t for t, _, _ in writes[n:] if first_t <= t < first_t + 1.0]  # step 0 is the look showing
+    assert state.look_phase is CanopyPhase.READY and state.feature == runner.program.moving_feature
+    assert all(b[0] - a[0] >= 120.0 for a, b in pairwise(started))
+    assert [e["run_s"] for e in events if e.get("action") == "idle_breath"] == [30.0] * len(started)
+
+
+def test_the_idle_breath_waits_while_anything_else_holds_the_canopy():
+    from conductor.canopy import Trial
+
+    async def held(case: str) -> list:
+        sections = {"kiosk": {**IDLE_BREATH, "idle_reset_s": 3600}, "motion": BREATH_30}
+        w = stepped_world(**sections)
+        await w.engine.start()
+        await w.run_for(5)
+        if case == "paused":
+            w.engine.pause_guest_input(True, source="ops")
+        elif case == "try-on":
+            now = w.clock.monotonic()
+            trial = Trial("breathe-level", "Breathe (draft)", None, None, now, now + 700, w.clock.now())
+            assert not (await w.engine.start_trial(trial)).refused
+        elif case == "rehearsal":
+            await w.engine.rehearse("breathe-level", 10, source="ops")
+        elif case == "guest":
+            await w.engine.set_guest_brightness(50, source="ops")
+        elif case == "outage":
+            w.sim.faults.set_outage(True)
+            w.engine.enter_outage("test outage")
+        await w.run_for(590)
+        out = [e for e in w.events("program") if e.get("action") == "idle_breath"]
+        await w.close()
+        return out
+
+    async def main():
+        return {case: await held(case) for case in ("paused", "try-on", "rehearsal", "guest", "outage")}
+
+    out = run_virtual(main)
+    assert out == {case: [] for case in out}
+
+
+def test_motion_idle_with_the_live_gate_shut_never_breathes():
+    async def main():
+        tier_allowed = _wiring(simulated=False).tier_allowed
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30, tier_allowed=tier_allowed)
+        await w.engine.start()
+        await w.run_for(600)
+        out = (
+            [c for c in w.events("command") if c["source"] == "program"],
+            w.engine.current_plan(),
+            w.engine.runner,
+            w.engine.last_breath_mono,
+        )
+        await w.close()
+        return out
+
+    program, plan, runner, last = run_virtual(main)
+    assert program == [] and plan.program is None and plan.tier is Tier.T3 and runner is None
+    assert last >= 480.0  # it kept asking, once a period, and the gate kept saying no
+
+
+def test_a_resting_module_is_still_read_and_healed_within_10_s():
+    """D75: a lagged breath leaves a module resting for steps at a time. Its rolling reads go on (the global
+    stand-down is gone), so a change made outside the Conductor heals within 10 s; a module the next step writes is
+    never read (the read would race that step's verified write)."""
+
+    async def main():
+        w = stepped_world()  # 6 s steps
+        await quiet_start(w)
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("breathe-rings", source="ops")
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        reads: list[tuple[float, str, bool]] = []
+        original = w.engine.reconciler._read_one
+
+        async def spy(device_id, target):
+            steps, n = runner.program.steps, runner.index
+            if runner.running:  # what the next step sends it, against what it has now
+                now_rows = steps[(runner.shown if runner.shown is not None else n) % 7].rows[device_id]
+                reads.append(
+                    (w.clock.monotonic() - t0, device_id, steps[(n + 1) % 7].rows[device_id] == now_rows)
+                )
+            return await original(device_id, target)
+
+        w.engine.reconciler._read_one = spy
+        await w.run_for(
+            30.5 - (w.clock.monotonic() - t0)
+        )  # step 5 is out; r1c1 rests through steps 5, 6 and 0
+        response = w.sim.faults.change_out_of_band(
+            w.address("canopy-r1c1"), [R.color_mode("white"), R.color_temperature(5000)]
+        )
+        changed = w.clock.monotonic()
+        wrong = await w.until(lambda: not w.correct("canopy-r1c1"), timeout=3)
+        healed = await w.until(lambda: w.correct("canopy-r1c1"), timeout=15)
+        healed_at = w.clock.monotonic() - changed
+        running = runner.running
+        await w.close()
+        return plan, response, wrong, healed, healed_at, running, reads
+
+    plan, response, wrong, healed, healed_at, running, reads = run_virtual(main)
+    lags = plan.program.steps
+    assert len(lags) == 7 and response.ok and running
+    assert wrong is not None and healed is not None and healed_at <= 10.0, healed_at
+    assert any(d == "canopy-r1c1" and 30.5 <= t <= 42.0 for t, d, _ in reads)  # read while it rests
+    assert reads and all(resting for _, _, resting in reads)  # never a module the next step writes
+
+
 def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
     from conductor.canopy import LOOKS_SOURCE
 
