@@ -414,6 +414,73 @@ def test_a_run_chosen_mid_run_holds_its_first_step_until_a_guest_has_room_again(
         assert shared + n + 9 <= 90, (t - t_choice, label, shared, n)
 
 
+def test_writes_about_to_leave_the_window_dont_hold_a_step_when_sends_land_after_the_boundary():
+    """Review B-R3-TS-5 (B-R1-1): the cap check leaves out the writes older than 60 s less the per-device gap, which
+    are gone before the step's own writes are out. In virtual time a step's sends are stamped exactly on its boundary,
+    so the step from 60 s before leaves the window just as the next is due and the rule can't be seen. On hardware
+    they land a few ms after it: here 5 ms. Then the whole 60 s window still holds eight steps (72), and one 429
+    retry in it makes 72 + 1 + 9 (the step) + 9 (a guest's room) = 91 > 90, so counting it held a step that the 60 s
+    cap never needed held. With the gap rule it counts 63 + 1, and every step goes out."""
+    from conductor.drivers.base import Outcome, WriteResult
+
+    late_s = 0.005
+
+    async def main():
+        w = stepped_world(shipped=True)  # nine modules, 7.5 s steps, the cap of 90
+        await quiet_start(w)
+        wait_rate = w.executor._wait_rate
+
+        async def late(slot):  # a send leaves a few ms after the step's boundary, as on hardware
+            await wait_rate(slot)
+            await w.clock.sleep(late_s)
+
+        w.executor._wait_rate = late
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner = w.engine.runner
+        write, throttle = w.sim.write, {"at": t0 + 6 * runner.step_s}
+
+        async def throttled_once(device_id, rows, *, purpose, **kw):  # step 6's write to r1c1 is answered 429
+            if (
+                "at" in throttle
+                and w.clock.monotonic() >= throttle["at"]
+                and device_id.endswith("canopy-r1c1")
+            ):
+                del throttle["at"]
+                return WriteResult(
+                    device_id,
+                    Outcome.THROTTLED,
+                    http_status=429,
+                    sent_at=w.clock.now(),
+                    error="HTTP 429 (test)",
+                )
+            return await write(device_id, rows, purpose=purpose, **kw)
+
+        w.sim.write = throttled_once
+        await w.run_for(100)
+        out = {
+            "runner": runner,
+            "holds": [e for e in w.events("program") if e.get("action") == "budget_hold"],
+            "throttled": [e for e in w.events("attempt") if e.get("http_status") == 429],
+            "sends": [t - t0 for t, _, _ in w.writes if t >= t0],
+        }
+        await w.close()
+        return out
+
+    out = run_virtual(main)
+    runner, sends = out["runner"], out["sends"]
+    assert len(out["throttled"]) == 1  # the one 429, retried once
+    assert runner.step_s == 7.5 and runner.count == 12
+    assert out["holds"] == []  # no step held back
+    for n in range(12):  # every step's sends landed 5 ms after its boundary, not on it
+        landed = [t - n * 7.5 for t in sends if n * 7.5 <= t < n * 7.5 + 0.5]
+        assert landed and all(abs(d - late_s) < 1e-6 for d in landed), (n, landed)
+    # by send time the whole 60 s before step 8 held steps 0–7 (the 429's retry among them; the 429 itself is the
+    # executor's 73rd): counted in full, 73 + 9 + 9 = 91
+    assert sum(1 for t in sends if 0.0 < t < 60.0) == 72
+    assert runner.ended == "the run is over" and runner.steps_sent == 12  # 11 steps and the hold
+
+
 def test_two_held_steps_apart_never_end_a_run_a_sent_step_resets_the_count():
     """B4 / TS-3: only HELD_STEPS_END (2) holds *in a row* end a run. A step held, the next sent, a later one held
     again: the run goes on (with fast guest pacing holds come and go on a busy account; they mustn't add up)."""
