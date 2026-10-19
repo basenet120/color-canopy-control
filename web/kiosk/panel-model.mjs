@@ -26,6 +26,9 @@ export const WRITE_TIMEOUT_MS = 10000; // a scene/brightness/power request that 
 export const LOST_AFTER_FAILURES = 3;
 export const SAME_CARD_DEBOUNCE_MS = 600;
 export const DRAG_CANCEL_PX = 10;
+// More visible scenes than this and the panel shows the review menu (D76): one row per scene group, options side by
+// side, only the scene list scrolls. conductor/ipad_menu.py and web/ops/ipad-model.mjs carry the same number.
+export const GRID_MAX = 6;
 
 const PHASES = new Set(["ready", "changing", "resting", "paused", "cooldown"]);
 
@@ -167,7 +170,9 @@ export function cardTap(sceneId, state, { pendingId = null, cooldownS = 0 } = {}
 /** The scene cards' build key: everything a card draws (id, name, mood, solid, the palette's names and hexes, the
  * strip's frame), so a catalog whose contents change under the same ids (a deploy, a new approved look) rebuilds the
  * cards instead of keeping the old names and colours. PLAN §6.5 named id, name, mood, solid and the hexes; the colour
- * names (the card's accessible name) and the frame (its strip) are drawn too, so they are in the key. */
+ * names (the card's accessible name) and the frame (its strip) are drawn too, so they are in the key. From D76 the
+ * review menu's grouping (option_of, group) and the card's thumbnail are too: the thumbnail by its `sig`, which
+ * stands for its colours (the arrays never go in the key). */
 export function cardsKey(scenes) {
   return JSON.stringify(
     (scenes || []).map((s) => [
@@ -177,8 +182,68 @@ export function cardsKey(scenes) {
       s.solid ?? null,
       (s.palette || []).map((p) => [p.name, p.hex]),
       Array.isArray(s.frame) ? s.frame : null,
+      s.option_of ?? null,
+      s.group ?? null,
+      s.thumb && s.thumb.sig ? s.thumb.sig : null,
     ]),
   );
+}
+
+// ---- the review menu (D76) ----------------------------------------------------------------------------------------
+const groupOf = (s) => s.group ?? s.option_of ?? s.id;
+
+/** The scenes grouped for the review menu: groups in the order of their first visible member, members in catalog
+ * order (a hidden base's options still form its row; an option listed before its base leads it). */
+function groups(scenes) {
+  const byGroup = new Map();
+  for (const s of scenes || []) {
+    const g = groupOf(s);
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(s);
+  }
+  return [...byGroup.values()];
+}
+
+/**
+ * How the cards are laid out: `{review, cards: [{scene, rowStart}]}`. Six or fewer: the 3 × 2 grid in catalog order,
+ * no row starts. More than six (the review menu): one row per scene group, its options side by side in catalog
+ * order, each group's first card starting a row at the left (a group of more than three wraps onto more rows).
+ */
+export function cardLayout(scenes) {
+  const list = scenes || [];
+  if (list.length <= GRID_MAX) return { review: false, cards: list.map((scene) => ({ scene, rowStart: false })) };
+  return {
+    review: true,
+    cards: groups(list).flatMap((members) => members.map((scene, i) => ({ scene, rowStart: i === 0 }))),
+  };
+}
+
+/** The scenes the attract screen cycles: in the review menu one per group (its first visible member), else all. */
+export function attractScenes(scenes) {
+  const list = scenes || [];
+  if (list.length <= GRID_MAX) return list;
+  return groups(list).map((members) => members[0]);
+}
+
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/**
+ * A review card's dots: canopy-preview `layout()` dots (`{pos, k, cx, cy, r}`) painted from the scene's thumbnail
+ * (`{basis, modules: [{pos, color, colors}]}`, conductor/ipad_menu.py): head k is `colors[k]`, else the module's one
+ * `color`. A head with no colour known (no module, a null or malformed colour) is left out, never guessed. `r`
+ * overrides the dots' radius (the card's thumbnail radius: no fins on a card).
+ */
+export function thumbDots(dots, thumb, { r = null } = {}) {
+  const byPos = new Map(((thumb && thumb.modules) || []).map((m) => [m.pos, m]));
+  const out = [];
+  for (const d of dots || []) {
+    const m = byPos.get(d.pos);
+    if (!m) continue;
+    const c = Array.isArray(m.colors) ? m.colors[d.k] : m.color;
+    if (typeof c !== "string" || !HEX.test(c)) continue;
+    out.push({ cx: d.cx, cy: d.cy, r: r ?? d.r, fill: c.toUpperCase() });
+  }
+  return out;
 }
 
 /** The card's accessible name. */
@@ -189,7 +254,8 @@ export function sceneLabel(scene) {
 
 export const rgb = (c) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 
-/** A CSS hard-stop gradient of the scene's 30 colours in order: the card's palette strip (not the canopy's picture). */
+/** A CSS hard-stop gradient of the scene's 30 colours in order: the card's palette strip (six or fewer scenes; the
+ * review menu draws the thumbnail), never the canopy's picture. */
 export function stripGradient(frame) {
   if (!Array.isArray(frame) || !frame.length) return "none";
   const n = frame.length;
@@ -223,10 +289,12 @@ export const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 
  * serpentine fallback `{name, description, frame, scene}` (no look yet, or an older server). The serpentine draws
  * what is lit: every light of the scene, or, when the server says the strands took the one-colour fallback
  * (`state.look === "solid"`), the scene's solid colour on every light. The kiosk copy must be true, and a picture is
- * copy too.
+ * copy too. `showing` (the panel's `showing`) names a scene that is showing although it is off the iPad's menu.
  */
-export function nowShowing(scenes, state) {
-  const scene = state && state.scene ? (scenes || []).find((s) => s.id === state.scene) : null;
+export function nowShowing(scenes, state, showing = null) {
+  // `showing`: the panel's own word for a scene that is showing but hidden on the iPad (D76), still named here
+  const pool = showing ? [...(scenes || []), showing] : scenes || [];
+  const scene = state && state.scene ? pool.find((s) => s.id === state.scene) : null;
   const off = state && state.power === false;
   const name = off ? COPY.lightsOff : scene ? scene.name : COPY.noScene;
   const description = !off && scene ? scene.description : COPY.noSceneHelp;

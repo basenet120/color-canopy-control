@@ -1243,6 +1243,14 @@ def test_the_overlay_download_says_why_it_cant_fold(app_client, tmp_path, monkey
     assert "--- a/config/conductor.yaml" not in text
 
 
+def test_grid_max_is_one_number_on_every_side():
+    """More than GRID_MAX visible is the review menu: the server, the kiosk and /ops all use one number."""
+    found = {}
+    for rel in ("web/kiosk/panel-model.mjs", "web/ops/ipad-model.mjs"):
+        found[rel] = re.findall(r"export const GRID_MAX = (\d+);", (ROOT / rel).read_text(encoding="utf-8"))
+    assert found == {rel: [str(IM.GRID_MAX)] for rel in found} and IM.GRID_MAX == 6
+
+
 # ---- the pure models under node (CI runs pytest only) ------------------------------------------------------------------------
 @pytest.mark.skipif(
     shutil.which("node") is None, reason="Node isn't installed; ops-ipad.test.mjs is UNVERIFIED here"

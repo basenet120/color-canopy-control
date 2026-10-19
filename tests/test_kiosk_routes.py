@@ -500,6 +500,42 @@ def test_kiosk_css_is_built_for_touch():
     assert all(css.rfind("@media (hover: hover)", 0, m.start()) != -1 for m in re.finditer(r":hover", css))
 
 
+def _block(flat: str, selector: str) -> str:
+    """The declarations of the first `selector{…}` in whitespace-free CSS."""
+    start = flat.index(selector + "{") + len(selector) + 1
+    return flat[start : flat.index("}", start)]
+
+
+def test_review_mode_css_scrolls_only_the_scene_list():
+    """The review menu (D76, more than six scenes): the sheet never scrolls, only #grid does, overscroll contained,
+    rows a fixed --review-row tall, each scene group starting at the left; canvases (the thumbnails) pass taps on."""
+    css = (KIOSK_DIR / "kiosk.css").read_text()
+    flat = re.sub(r"\s+", "", css)
+    sheet = _block(flat, '.app[data-review="true"].sheet-body')
+    assert "overflow:hidden" in sheet and "grid-template-rows:minmax(0,1fr)" in sheet
+    grid = _block(flat, '.app[data-review="true"].grid')
+    for needle in (
+        "overflow-y:auto",
+        "overflow-x:hidden",
+        "overscroll-behavior:contain",
+        "grid-auto-rows:minmax(var(--review-row),auto)",
+        "min-height:0",
+        "mask-image:",
+    ):
+        assert needle in grid, needle
+    assert '.app[data-review="true"].scene.row-start{grid-column-start:1;}' in flat
+    assert "img,svg,canvas{" in flat
+    assert "--review-row:232px" in flat and "--review-row:214px" in flat
+    thumb = _block(flat, ".thumb")
+    assert "height:var(--strip-h)" in thumb and "width:100%" in thumb
+    # portrait: the scene list takes the height above the pinned side
+    portrait = flat[flat.index("@media(orientation:portrait){") :]
+    assert (
+        '.app[data-review="true"].sheet-body{grid-template-rows:minmax(0,1fr)auto;align-content:stretch;}'
+        in portrait
+    )
+
+
 def test_an_engine_that_cant_report_state_is_resting(app_client, engine):
     def broken():
         raise RuntimeError("engine stopped")

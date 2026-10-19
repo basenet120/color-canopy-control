@@ -11,12 +11,17 @@
 // `state.message`; this page only adds the spec's calm fallbacks (panel-model.mjs COPY). A refusal shows the server's
 // calm `detail`, never an HTTP code; anything else reads "Hang on, we're reconnecting."
 // Resilience (07 §10): the page never navigates away; every fetch failure is caught.
+// The review menu (D76, more than six scenes visible): one row per scene group with its options side by side, each card
+// a still thumbnail of its scene at the tier the engine would use now (the server's `thumb`), drawn on a canvas only
+// when the cards are rebuilt or the window resizes, never on an animation frame (D69). Only the scene list scrolls;
+// its place survives a rebuild and goes back to the top when the attract screen shows. Six or fewer: the 3 × 2 grid
+// with palette strips, as before.
 // Ops: `?debug=1` (only when the server says the viewer is ops) adds a debug drawer; `?debug=1&frame=1` is the iPad
 // frame preview. A kiosk-role device gets the plain panel whatever the URL says.
 // Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
 // browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, connectLive, setSimBadge } from "/static/app.js?v=latency-1";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=review-1";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -30,7 +35,9 @@ import {
   SAME_CARD_DEBOUNCE_MS,
   WRITE_TIMEOUT_MS,
   attractDue,
+  attractScenes,
   brightnessToSend,
+  cardLayout,
   cardsKey,
   cardState,
   cardTap,
@@ -55,9 +62,19 @@ import {
   snakeLayout,
   stripGradient,
   switchView,
+  thumbDots,
   waitToastOver,
-} from "/kiosk/panel-model.mjs?v=latency-1";
-import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs?v=latency-1";
+} from "/kiosk/panel-model.mjs?v=review-1";
+import {
+  DOT_R_IN,
+  ariaSummary,
+  geometryKey,
+  layout,
+  levelOpacity,
+  motionActive,
+  motionColors,
+  paintFor,
+} from "/kiosk/canopy-preview.mjs?v=review-1";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -210,38 +227,126 @@ function hideToast() {
 
 // ---- building ----------------------------------------------------------------------------------------------------
 let builtFor = "";
-function buildCards(scenes) {
+let builtCanopy = false;
+let thumbsFor = ""; // what the review cards' thumbnails were last painted for (drawThumbs)
+function buildCards(scenes, canopy) {
   const key = cardsKey(scenes); // contents, not only ids: a changed catalog redraws its cards
-  if (key === builtFor) return;
-  builtFor = key;
-  const grid = $("grid");
-  grid.replaceChildren();
-  for (const scene of scenes) {
-    const check = svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" });
-    check.append(svg("path", { d: "M5 12.5l4.5 4.5L19 7.5" }));
-    const mark = el("span", { class: "mark", "aria-hidden": "true" }, check, el("span", { class: "spinner" }));
-    // the palette strip: the scene's colours in order (Now showing is the canopy's own picture)
-    const strip = el("span", { class: "strip", "aria-hidden": "true" });
-    strip.style.background = stripGradient(scene.frame);
-    const swatches = el("span", { class: "swatches", "aria-hidden": "true" });
-    for (const p of scene.palette || []) {
-      const dot = el("span", { class: "swatch" });
-      dot.style.background = p.hex;
-      swatches.append(dot);
-    }
-    const card = el(
-      "button",
-      { class: "card scene", type: "button", "data-scene": scene.id, "aria-label": sceneLabel(scene), "aria-pressed": "false" },
-      mark,
-      strip,
-      el("span", { class: "scene-name", text: scene.name }),
-      el("span", { class: "scene-mood", text: scene.mood }),
-      swatches,
+  if (key !== builtFor || Boolean(canopy) !== builtCanopy) {
+    builtFor = key;
+    builtCanopy = Boolean(canopy);
+    const grid = $("grid");
+    const keep = grid.scrollTop; // the review menu's scene list keeps the guest's place across a rebuild
+    const { review, cards } = cardLayout(scenes);
+    $("app").dataset.review = String(review);
+    grid.replaceChildren(
+      ...cards.map((c) =>
+        sceneCard(c.scene, { rowStart: c.rowStart, thumb: review && Boolean(canopy) && Boolean(c.scene.thumb) }),
+      ),
     );
-    pressable(card, () => chooseScene(scene.id));
-    grid.append(card);
+    grid.scrollTop = keep;
+    buildAttractStrips(attractScenes(scenes));
+    thumbsFor = "";
   }
-  buildAttractStrips(scenes);
+  drawThumbs(scenes, canopy);
+}
+
+/** One scene card: its picture (the review menu's thumbnail canvas, else the palette strip), name, mood, swatches. */
+function sceneCard(scene, { rowStart = false, thumb = false } = {}) {
+  const check = svg("svg", { viewBox: "0 0 24 24", "aria-hidden": "true" });
+  check.append(svg("path", { d: "M5 12.5l4.5 4.5L19 7.5" }));
+  const mark = el("span", { class: "mark", "aria-hidden": "true" }, check, el("span", { class: "spinner" }));
+  let picture;
+  if (thumb) {
+    // the scene as the engine would show it now (conductor/ipad_menu.py), painted by drawThumbs
+    picture = el("canvas", { class: "thumb", "aria-hidden": "true" });
+  } else {
+    // the palette strip: the scene's colours in order (Now showing is the canopy's own picture)
+    picture = el("span", { class: "strip", "aria-hidden": "true" });
+    picture.style.background = stripGradient(scene.frame);
+  }
+  const swatches = el("span", { class: "swatches", "aria-hidden": "true" });
+  for (const p of scene.palette || []) {
+    const dot = el("span", { class: "swatch" });
+    dot.style.background = p.hex;
+    swatches.append(dot);
+  }
+  const card = el(
+    "button",
+    {
+      class: rowStart ? "card scene row-start" : "card scene",
+      type: "button",
+      "data-scene": scene.id,
+      "aria-label": sceneLabel(scene),
+      "aria-pressed": "false",
+    },
+    mark,
+    picture,
+    el("span", { class: "scene-name", text: scene.name }),
+    el("span", { class: "scene-mood", text: scene.mood }),
+    swatches,
+  );
+  pressable(card, () => chooseScene(scene.id));
+  return card;
+}
+
+/** Paint every review card's thumbnail, unless nothing it depends on changed (the cards, the geometry, the canvas
+ * size, the pixel ratio); `force` repaints anyway. Called on a rebuild, a poll and a resize — never per frame. */
+function drawThumbs(scenes, canopy, { force = false } = {}) {
+  const canvases = [...document.querySelectorAll("#grid canvas.thumb")];
+  if (!canopy || !canvases.length) return;
+  const w = canvases[0].clientWidth;
+  const h = canvases[0].clientHeight;
+  if (!w || !h) return;
+  const key = `${builtFor}|${geometryKey(canopy)}|${w}x${h}|${window.devicePixelRatio}`;
+  if (!force && key === thumbsFor) return;
+  thumbsFor = key;
+  const byId = new Map((scenes || []).map((s) => [s.id, s]));
+  for (const canvas of canvases) {
+    const scene = byId.get(canvas.closest(".scene").dataset.scene);
+    if (scene && scene.thumb) paintThumb(canvas, scene, canopy);
+  }
+}
+
+/** One card's thumbnail: the canopy's nine panels in a hairline and each head in the thumbnail's colour, its
+ * brightness as opacity. Still: no motion, no pulse. No fins on a card (a thumbnail dot radius instead). */
+function paintThumb(canvas, scene, canopy) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const drawing = layout(canopy, { width: w, height: h }); // honours kiosk.preview (mirror, rotate)
+  const first = drawing.panels[0];
+  const area = Number(canopy.module_w_in) * Number(canopy.module_h_in);
+  const scale = first && area > 0 ? Math.sqrt((first.w * first.h) / area) : 0;
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 0.75;
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--hairline").trim() || "#DCDBE0";
+  for (const p of drawing.panels) ctx.strokeRect(p.x, p.y, p.w, p.h);
+  ctx.globalAlpha = levelOpacity(scene.brightness_draft, canopy.view && canopy.view.dim_floor);
+  for (const d of thumbDots(drawing.dots, scene.thumb, { r: scale > 0 ? DOT_R_IN * scale : null })) {
+    ctx.fillStyle = d.fill;
+    ctx.beginPath();
+    ctx.arc(d.cx, d.cy, d.r, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  canvas.dataset.thumb = scene.thumb.sig;
+}
+
+let resizeTimer = null;
+function wireResize() {
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const panel = ui.panel;
+      if (panel && !ui.stopped) drawThumbs(panel.scenes || [], panel.canopy, { force: true });
+    }, 150);
+  });
 }
 
 /** The 3 × 10 serpentine of the 30 lights, with half-round U-turns (the app's custom-pattern preview). */
@@ -431,7 +536,8 @@ function render() {
   $("resting").hidden = phase !== "resting";
   if (phase === "resting") {
     $("resting-text").textContent = state.message || COPY.resting;
-    const last = scenes.find((s) => s.id === state.scene) || scenes[0];
+    const known = [...scenes, panel.showing].filter(Boolean); // a hidden scene that is showing glows too
+    const last = known.find((s) => s.id === state.scene) || scenes[0];
     if (last) $("resting-glow").style.background = tintBackground(headerTint(last, true), 0.9);
   }
 
@@ -447,7 +553,7 @@ function render() {
   $("power-label").textContent = sw.label;
   const controlsOff = phase === "paused" || ui.lost || !panel.capabilities?.power;
   powerBtn.setAttribute("aria-disabled", String(controlsOff));
-  const showing = nowShowing(scenes, { ...state, power });
+  const showing = nowShowing(scenes, { ...state, power }, panel.showing);
   setTint(HEADER_LAYERS, headerTint(showing.scene, power));
 
   // cards
@@ -475,7 +581,7 @@ function render() {
   if (drawCanopy) paintCanopy(panel.canopy, showing.lit);
   else {
     stopCanopy();
-    paintSnake(showing.frame || nowShowing(scenes, { ...state, power, lit: null }).frame);
+    paintSnake(showing.frame || nowShowing(scenes, { ...state, power, lit: null }, panel.showing).frame);
   }
 
   // brightness
@@ -578,7 +684,7 @@ async function poll() {
     ui.panel = panel;
     if (!stale) ui.readAt = Date.now();
     settlePending(panel.state);
-    buildCards(panel.scenes || []);
+    buildCards(panel.scenes || [], panel.canopy);
     if (ui.failures >= LOST_AFTER_FAILURES || ui.lost) hideToast();
     if (!stale) dropWaitToast(panel.state, startedAt);
     ui.failures = 0;
@@ -783,7 +889,7 @@ function buildAttractStrips(scenes) {
 }
 
 function attractStep() {
-  const scenes = (ui.panel && ui.panel.scenes) || [];
+  const scenes = attractScenes((ui.panel && ui.panel.scenes) || []); // the review menu: one per scene group
   if (!scenes.length) return;
   attractIndex = (attractIndex + 1) % scenes.length;
   const scene = scenes[attractIndex];
@@ -799,6 +905,7 @@ function showAttract() {
   box.classList.remove("is-leaving");
   box.hidden = false;
   hideToast();
+  $("grid").scrollTop = 0; // the next guest starts at the top of the scene list
   attractIndex = -1;
   attractStep();
   attractTimer = setInterval(attractStep, reducedMotion() ? 8000 : 6000);
@@ -1083,6 +1190,7 @@ function start() {
   wireTouch();
   wireSlider();
   wireIdle();
+  wireResize();
   pressable($("power"), togglePower);
   poll().catch(() => {}); // the first good read opens the live socket (wireLive)
 }
