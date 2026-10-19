@@ -1359,6 +1359,40 @@ def test_motion_idle_breathes_every_every_s_and_never_moves_the_idle_clocks():
     assert [e["run_s"] for e in events if e.get("action") == "idle_breath"] == [30.0] * len(started)
 
 
+def test_an_idle_breath_that_couldnt_run_when_it_landed_never_starts_on_a_re_pick():
+    """D75 (review B-R2-1): with motion.idle on, an idle return that lands while the account cools off holds still
+    (breathe-level has no canvas or slot, so its plan stays stepped). The breath counts as spent: once the cool-off
+    lifts, inside the 30 s it would have taken, a re-pick neither starts it mid-way nor reads as breathing."""
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        chosen = w.clock.monotonic()
+        await w.run_for(170)  # the guest's run is long over
+        account = w.engine._account_of(w.engine.target_of("canopy-r0c0").address)
+        w.engine.stepped_cooloff[account] = w.clock.monotonic() + 20.0  # lifts 10 s after the idle return
+        await w.until(lambda: w.engine.current_plan().mode_id == "breathe-level", timeout=20, step=0.5)
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        back = (w.clock.monotonic() - chosen, plan.tier, runner.running, runner.ended, w.engine.breathing)
+        spent = w.engine._breath_run_s  # the breath's run_s is spent with it
+        await w.run_for(12)  # the cool-off is over
+        since = w.clock.now()
+        await w.engine.request_mode("breathe-level", source="reconciler")
+        repick = (w.engine.current_plan().tier, w.engine.runner.running, w.engine.breathing)
+        await w.run_for(25)
+        out = (back, spent, repick, program_since(w, since))
+        await w.close()
+        return out
+
+    back, spent, repick, program = run_virtual(main)
+    after, tier, running, ended, breathing = back
+    assert 180.0 <= after <= 182.0 and tier is Tier.STEPPED and not running and not breathing
+    assert "cool-off" in ended and spent is None
+    assert repick == (Tier.STEPPED, False, False)
+    assert program == []  # nothing of the breath went out
+
+
 def test_the_idle_breath_waits_while_anything_else_holds_the_canopy():
     from conductor.canopy import Trial
 

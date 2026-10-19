@@ -43,7 +43,8 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   (D75, `engine.settle_after_run`: its canvas or slot where that can run, one write per module that changes), else
   the hold is sent once (to the modules not already showing it), and the runner stops. The plan's `feature` (the
   still design's sentence) is the copy again. A choice runs once: a re-pick after its run builds the runner `over`
-  (DONE at once, nothing sent), whatever its run_s. A run stopped by a 403 sends nothing (`finish(send=False)`): the
+  (DONE at once, nothing sent), whatever its run_s; a choice whose runner couldn't run when it was installed (a
+  cool-off, a step too long) counts as run. A run stopped by a 403 sends nothing (`finish(send=False)`): the
   step last sent stays, as `held_plan()`. A guest's input during the idle breath ends it without a write of its own
   (`yield_to_guest`): the guest's burst carries the still look.
 - **Governor.** Every write attempt to the run's modules (from the executor's `attempt` events, superseded commands

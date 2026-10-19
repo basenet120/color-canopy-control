@@ -100,18 +100,19 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   showing (`RECOMPILE_SOURCES`) keeps a running run going and never starts one (`_repick_best`); start-up, the idle
   return, the safe look, a try-on, the checklist's change back (`RESTORE_SOURCE`) and any other source show a still
   tier (`STILL_ONLY` skipped) — unless `motion.idle` is on, when the idle return from another look is one breath. A
-  floored look never steps. **A choice runs once:** when its run ends (`note_run_over`), a re-pick builds the runner
-  `over` (DONE at once, whatever its run_s) and lifts it to the best still tier. **The settle:** at a run's end the
-  look moves to the mode's best still tier when that is a canvas or slot (`settle_after_run`: installed with source
-  `SETTLE_SOURCE`, one write per module that changes; a motion plan re-triggers all, 07 §6), else the runner sends
-  its hold. After a governor trip or held steps the hold goes out now and the settle waits (`_settle_later`: the
-  cool-off, or one cap window). D72's fast back-off doesn't hold it: that only puts guest pacing back on the budget
-  rule the run was already paced at, and the settle is one burst like the hold it replaces (waiting the back-off's
-  120 s after a 90 s run would land past the 180 s idle return, so it would never show). A run that ended inside an
-  outage settles at recovery (the recovery burst carries it). **The idle breath (`motion.idle`, off as shipped):**
-  while the idle look holds with nothing else in force, `idle_breath()` runs its rung once for `breathe_run_s` (the
-  reconciler asks every `every_s`), without touching the idle clocks or the guest settings; any guest input ends it
-  at once (`ProgramRunner.yield_to_guest`) and the guest's own burst carries the still look.
+  floored look never steps. **A choice runs once:** when its run ends (`note_run_over`), or when its runner can't run
+  as it is installed (a cool-off, a step too long: `_install`), a re-pick builds the runner `over` (DONE at once,
+  whatever its run_s) and lifts it to the best still tier. **The settle:** at a run's end the look moves to the
+  mode's best still tier when that is a canvas or slot (`settle_after_run`: installed with source `SETTLE_SOURCE`,
+  one write per module that changes; a motion plan re-triggers all, 07 §6), else the runner sends its hold. After a
+  governor trip or held steps the hold goes out now and the settle waits (`_settle_later`: the cool-off, or one cap
+  window). D72's fast back-off doesn't hold it: that only puts guest pacing back on the budget rule the run was
+  already paced at, and the settle is one burst like the hold it replaces (waiting the back-off's 120 s after a 90 s
+  run would land past the 180 s idle return, so it would never show). A run that ended inside an outage settles at
+  recovery (the recovery burst carries it). **The idle breath (`motion.idle`, off as shipped):** while the idle look
+  holds with nothing else in force, `idle_breath()` runs its rung once for `breathe_run_s` (the reconciler asks
+  every `every_s`), without touching the idle clocks or the guest settings; any guest input ends it at once
+  (`ProgramRunner.yield_to_guest`) and the guest's own burst carries the still look.
 - **The stepped rehearsal (Gate R, conductor/rehearsal.py).** `rehearse(mode, minutes, source)` — operator-started
   only, from the ops route behind `rehearsal_preview`'s confirm sentence; any look, the idle look included (D75) —
   runs one stepped look of `mode` whose run lasts `minutes` (1–10; `_install` gives the program that run_s), from
@@ -1657,7 +1658,8 @@ class CanopyEngine:
     # ---- a run's end (D75) ----------------------------------------------------------------------------------------
     def note_run_over(self, runner: ProgramRunner) -> None:
         """The runner's run is over (it ended, or yielded to a guest): this choice has run, so a re-pick only holds
-        (the next runner of it is built `over`), and any idle breath's run_s is spent."""
+        (the next runner of it is built `over`), and any idle breath's run_s is spent. A runner that can't run when
+        it is installed marks its choice the same way (`_install`)."""
         if runner is not self._runner:
             return
         self._ran_for = runner.t0
@@ -1734,13 +1736,13 @@ class CanopyEngine:
         breath, _ = self.compile_best(idle_mode, prefer=Tier.STEPPED)
         if breath is None or breath.tier is not Tier.STEPPED or breath.program is None:
             return self.state()  # the live gate is shut, a floor is set, or the rung can't run here
-        self._breath_run_s = float(idle.breathe_run_s)
+        run_s = self._breath_run_s = float(idle.breathe_run_s)
         self._chosen_mono = self.last_breath_mono = now
         installed = self._install(breath, "idle")
         changed = [d for d in installed.modules if self.desired_rows(d) != self.sent_rows.get(d)]
         if changed:
             self.send(changed, source="idle", label=f"idle breath: {idle_mode}")
-        self.telemetry.record("program", action="idle_breath", mode=idle_mode, run_s=self._breath_run_s)
+        self.telemetry.record("program", action="idle_breath", mode=idle_mode, run_s=run_s)
         self._publish_soon()
         return self.state()
 
@@ -2684,8 +2686,8 @@ class CanopyEngine:
     def _install(self, plan: ModePlan, source: str) -> ModePlan:
         """Make `plan` the current look (the plan installed is returned: a rehearsal's run is its minutes long, an
         idle breath's its breathe_run_s; a stepped plan that won't run — its choice already ran, a cool-off, a step
-        too long — is swapped for the mode's best still tier when that is a canvas or slot, D75). Nothing is sent
-        here: the caller sends the plan returned."""
+        too long — counts as that choice's run and is swapped for the mode's best still tier when that is a canvas
+        or slot, D75). Nothing is sent here: the caller sends the plan returned."""
         rehearsal = self._rehearsal
         ending = None
         if rehearsal is not None:
@@ -2715,10 +2717,15 @@ class CanopyEngine:
                 runner = ProgramRunner(
                     self, plan, t0=self._chosen_mono, over=self._ran_for == self._chosen_mono
                 )
-                if not runner.running and (still := self._best_still(plan.mode_id)) is not None:
-                    plan, runner = still, None
-                    for device_id in plan.modules:
-                        self._resolve(device_id)
+                if not runner.running:
+                    # it can't run now (its choice already ran, a cool-off, a step too long, its run over): that
+                    # counts as this choice's run, so no later re-pick of it starts the steps, and an idle breath's
+                    # run_s is spent (review B-R2-1)
+                    self._ran_for, self._breath_run_s = self._chosen_mono, None
+                    if (still := self._best_still(plan.mode_id)) is not None:
+                        plan, runner = still, None
+                        for device_id in plan.modules:
+                            self._resolve(device_id)
         self._end_ripple()  # the old look's rings not sent yet are dropped
         self._generation += 1
         self._plan = plan

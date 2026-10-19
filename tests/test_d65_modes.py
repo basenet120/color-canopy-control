@@ -438,6 +438,38 @@ def test_a_re_pick_mid_run_keeps_stepping_and_after_it_lifts_to_the_per_head_sun
     assert settled == (Tier.T1, None) and repick == (Tier.T1, None)
 
 
+def test_a_choice_that_couldnt_run_when_it_was_installed_never_starts_on_a_re_pick():
+    """D75 (review B-R2-1): a re-pick never starts a run. A guest's Coastal Tides (no canvas or slot, so the plan
+    stays stepped and only holds) chosen while the account cools off counts as run: once the cool-off lifts, still
+    inside the 90 s its run would have taken, no re-pick of it (the reconciler's, recovery's, start-up's, a publish's)
+    starts its steps."""
+    from conductor.canopy import LOOKS_SOURCE
+
+    async def main():
+        w = await _golden_world()
+        account = w.engine._account_of(w.engine.target_of(MODULES[0].id).address)
+        w.engine.stepped_cooloff[account] = w.clock.monotonic() + 10.0  # its cool-off: 10 s left
+        await w.engine.request_mode("coastal-tides", source="kiosk")
+        runner = w.engine.runner
+        first = (w.engine.current_plan().tier, runner.running, runner.ended)
+        await w.run_for(20)  # the cool-off is over
+        since = w.clock.monotonic()
+        seen = []
+        for source in ("reconciler", "recovery", "startup", LOOKS_SOURCE):
+            await w.engine.request_mode("coastal-tides", source=source)
+            seen.append((source, w.engine.current_plan().tier, w.engine.runner.running))
+        await w.run_for(30)
+        out = (first, seen, _queued_since(w, since, "program"), w.engine.runner.running)
+        await w.close()
+        return out
+
+    first, seen, program, running = run_virtual(main)
+    tier, ran, ended = first
+    assert tier is Tier.STEPPED and not ran and "cool-off" in ended  # it held still, as it should
+    assert seen == [(s, Tier.STEPPED, False) for s in ("reconciler", "recovery", "startup", "looks")]
+    assert program == [] and not running  # nothing stepped after the cool-off
+
+
 def test_a_governor_trip_holds_module_level_and_lifts_after_the_cool_off():
     async def main():
         w = await _golden_world(motion={"stepped": {"governor_cooloff_s": 120}})
