@@ -851,9 +851,8 @@ def test_the_thumb_basis_follows_the_tier_the_engine_would_use():
     )
     assert all(basis[b] == "modules" for b in MODULES_FIRST)
     assert all(basis[o] == "modules" for o in OPTION_IDS)
-    assert (
-        set(engine.compiled) <= set(PAINTED) and engine.compiled
-    )  # options and modules-first: never compiled
+    # every scene asks the engine, whatever its first rung (the rule /api/kiosk/modes uses for every listed mode)
+    assert engine.compiled == REVIEW_IDS
     engine.tiers[GOLDEN] = Tier.STRAND
     assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: None}  # one whole-strand look: no picture
     engine.tiers[GOLDEN] = RuntimeError("no plan")
@@ -863,7 +862,39 @@ def test_the_thumb_basis_follows_the_tier_the_engine_would_use():
     assert GP.thumb_basis(None, trio.modes, REVIEW_IDS) == dict.fromkeys(REVIEW_IDS, "modules")
     assert len(engine.compiled) == compiled
     strand = SimpleNamespace(ladder=["strand"], techniques=SimpleNamespace(modules=None))
+    assert GP.thumb_basis(None, SimpleNamespace(modes={"x": strand}), ["x"]) == {"x": None}
+    # the engine has no plan for it (compile_best raises): its first rung's picture, none for strand-first
     assert GP.thumb_basis(engine, SimpleNamespace(modes={"x": strand}), ["x"]) == {"x": None}
+
+
+def test_a_scene_eased_down_to_its_strand_rung_draws_no_module_picture():
+    """C1, a picture is copy too: the reconciler can drop a modules- or stepped-first scene to its strand rung (a
+    hysteresis floor, canopy.py downgrade). Its card then draws no module colours, because the ceiling shows one
+    whole-strand look. Whether the scene is showing now (the current plan wins, no compile) or would be picked now
+    (compile_best honours the floor), the basis is what /api/kiosk/modes' `_likely_plan` says."""
+    trio = review_trio(git_trio(CONFIG_DIR))
+    engine = TierEngine(
+        SimpleNamespace(now=lambda: 0.0), trio, {CALM: Tier.STRAND, "coastal-tides": Tier.STRAND}
+    )
+    showing = ModePlan(CALM, "Lowcountry Calm", Tier.STRAND, "", False, {})  # the idle scene, eased down
+    engine.current_plan = lambda: showing
+    assert [str(trio.modes.modes[s].ladder[0]) for s in (CALM, "coastal-tides")] == ["modules", "stepped"]
+    basis = GP.thumb_basis(engine, trio.modes, REVIEW_IDS)
+    assert basis[CALM] is None and basis["coastal-tides"] is None
+    assert CALM not in engine.compiled  # the plan showing now answers for its own scene
+    assert "coastal-tides" in engine.compiled
+    for sid in REVIEW_IDS:  # every card follows the kiosk's own rule
+        plan = K._likely_plan(engine, sid, showing)
+        tier = str(plan.tier) if plan is not None else None
+        want = "heads" if tier in GP.PER_LIGHT_TIERS else None if tier == str(Tier.STRAND) else "modules"
+        assert basis[sid] == want, (sid, tier)
+    # the floor lifted (canopy.py upgrade): module level again, so the nine module colours again
+    engine.tiers.pop("coastal-tides")
+    showing = ModePlan(CALM, "Lowcountry Calm", Tier.T3, "", False, {})
+    assert GP.thumb_basis(engine, trio.modes, [CALM, "coastal-tides"]) == {
+        CALM: "modules",
+        "coastal-tides": "modules",
+    }
 
 
 def test_the_thumb_basis_follows_the_plan_showing_now():
@@ -898,6 +929,37 @@ def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_l
     tiers = {b: by_id[b]["thumb"]["basis"] for b in PAINTED}
     print(f"thumb_basis on the sim engine, 18 visible review scenes: {ms:.1f} ms (painted bases: {tiers})")
     assert ms < 100
+
+
+def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_takes_the_cards_picture_away(
+    app_client_show, monkeypatch
+):
+    """The real engine's compile_best honours a reconciler floor (canopy.py downgrade sets `floors`): a stepped-first
+    base and a modules-first option eased down to strand show one whole-strand look, so their cards carry no module
+    picture, and /api/kiosk/modes says strand for the same scenes. Lifting the floor brings the picture back."""
+    services = _svc(app_client_show)
+    engine = services.extras.get("canopy")
+    assert engine is not None, "the sim engine didn't start"
+    monkeypatch.setattr(engine, "upgrade", lambda _reason: [])  # no reconciler tick lifts the floor mid-test
+    install_review(services)
+    eased = ("coastal-tides", "goodnight-glow-2")
+    current = K._current_plan(engine)
+    assert current is None or current.mode_id not in eased
+    for sid in eased:
+        ladder = list(engine.deps.ladder(sid))
+        assert ladder[0] in (Tier.STEPPED, Tier.T3), (sid, ladder)
+        engine.floors[sid] = ladder.index(Tier.STRAND)
+    try:
+        by_id = {s["id"]: s for s in _panel(app_client_show)["scenes"]}
+        listed = {m["id"]: m for m in app_client_show.get("/api/kiosk/modes").json()}
+        for sid in eased:
+            assert listed[sid]["tier"] == "strand", sid
+            assert by_id[sid]["thumb"] is None, sid
+    finally:
+        for sid in eased:
+            engine.floors.pop(sid, None)
+    by_id = {s["id"]: s for s in _panel(app_client_show)["scenes"]}
+    assert all(by_id[sid]["thumb"]["basis"] == "modules" for sid in eased)
 
 
 # ---- the guest panel ------------------------------------------------------------------------------------------------------

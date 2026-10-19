@@ -21,11 +21,12 @@ shows (`conductor/canopy_view.py`: off, dark, unknown, lit or changing, with ful
 
 **The menu and the review cards (D76).** `GuestPanel.menu()` is `conductor/ipad_menu.live_menu`: the live catalog
 less `kiosk.hidden_scenes`. While more than six scenes are visible (the review menu) each card carries a still
-thumbnail of its scene at the tier the engine would show it at now (`thumb_basis`): per light only when the likely
-plan is canvas or slot (T1/T2: a hand-painted slot copies the canvas picture), else its nine module colours (module
-level and the stepped hold), and none for a whole-strand look — a picture is copy too. Thumbnails are cached per scene,
-per live-looks generation and basis, and computed synchronously: a thread under the virtual clock would let virtual
-time jump while it ran.
+thumbnail of its scene at the tier the engine would show it at now (`thumb_basis`, every visible scene's likely plan
+as /api/kiosk/modes reads it): per light only when that plan is canvas or slot (T1/T2: a hand-painted slot copies
+the canvas picture), else its nine module colours (module level and the stepped hold), and none for a whole-strand
+look, including a scene the reconciler has eased down to its strand rung — a picture is copy too. Thumbnails are
+cached per scene, per live-looks generation and basis, and computed synchronously: a thread under the virtual clock
+would let virtual time jump while it ran.
 """
 
 from __future__ import annotations
@@ -252,13 +253,20 @@ Basis = Literal["heads", "modules"]
 def thumb_basis(engine: Any, modes: ModesFile | None, scene_ids: Iterable[str]) -> dict[str, Basis | None]:
     """How each scene's review card draws it: the tier the engine would show it at now (a picture is copy too).
 
-    - no mode → None;
-    - a ladder whose first rung isn't canvas or slot is never compiled (it has no per-light rung): strand-first →
-      None (one whole-strand look), else "modules" when it has a modules rung (module level, and the stepped hold);
-    - canvas- or slot-first: the engine's likely plan (`routes.kiosk._likely_plan`, the rule /api/kiosk/modes uses):
-      canvas or slot → "heads"; strand → None; anything else, no plan or no engine → "modules" (when it has a modules
-      rung). On the show box that is module level until per-light is commissioned (07 §6, D73), and a Lab try-on's
-      scene runs module level while it stands (TRIAL_SKIP)."""
+    Every scene with a mode asks the engine for its likely plan (`routes.kiosk._likely_plan`, the rule
+    /api/kiosk/modes uses for every listed mode): the plan showing now when it is that scene's, else `compile_best`,
+    which honours the reconciler's hysteresis floor. So a modules- or stepped-first scene the reconciler has eased
+    down to its strand rung draws as the one whole-strand look the ceiling shows, never as nine module colours. Then:
+
+    - canvas or slot (T1/T2) → "heads";
+    - strand → None (one whole-strand look: no picture);
+    - module level, or stepped (its hold) → "modules" when it has a modules rung, else None;
+    - no mode → None; no engine, or no plan from it → its first rung's picture: strand-first → None, else "modules"
+      when it has a modules rung.
+
+    On the show box that is module level until per-light is commissioned (07 §6, D73), and a Lab try-on's scene runs
+    module level while it stands (TRIAL_SKIP). One compile per visible scene per poll is what /api/kiosk/modes already
+    pays (tests/test_ipad_menu.py times it on the sim engine)."""
     out: dict[str, Basis | None] = {}
     current: Any = None
     current_read = False
@@ -268,16 +276,15 @@ def thumb_basis(engine: Any, modes: ModesFile | None, scene_ids: Iterable[str]) 
             out[sid] = None
             continue
         fallback: Basis | None = "modules" if mode.techniques.modules is not None else None
-        first = str(mode.ladder[0])
-        if first not in PER_LIGHT_TIERS:
-            out[sid] = None if first == str(Tier.STRAND) else fallback
-            continue
         plan = None
         if engine is not None:
             if not current_read:
                 current, current_read = K._current_plan(engine), True
             plan = K._likely_plan(engine, sid, current)
-        tier = str(plan.tier) if plan is not None else None
+        if plan is None:
+            out[sid] = None if str(mode.ladder[0]) == str(Tier.STRAND) else fallback
+            continue
+        tier = str(plan.tier)
         if tier in PER_LIGHT_TIERS:
             out[sid] = "heads"
         elif tier == str(Tier.STRAND):
