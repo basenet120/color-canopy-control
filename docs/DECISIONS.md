@@ -1045,3 +1045,13 @@ makes the module "stuck" at once: /ops shows the note immediately (true), the gu
 soon as the kits confirm, and a readback that really differs still gets its 10 s of "changing" while the reconciler
 retries. Reproduced first (`tests/test_flagged_not_changing.py`: 10.1 s of "changing", the second scene at 11.4 s on
 the two-kit setup), then fixed (under 3 s, and under 4 s through the panel).
+
+**D78 — A module whose only problem is a flagged note shows its look on the iPad's picture (Oct 19; follows D73).**
+D73 makes such a module "stuck" at once, and `canopy_view.lit_state` drew every stuck module as `unknown` (an outline,
+no colour), so the live iPad drew Modules 1–2 as outlines right after every confirmed scene (before D73, 10 s later)
+while their lights showed it. Now the engine's module record carries `flagged_only` (`tracker.flagged_only`: the look
+sent, read back and matching), and the picture reads that module as confirmed: `lit` with its colours, or `off` once a
+guest's power-off reads back off. A module stuck for any other reason (a readback that still differs, a failed write,
+an offline controller), a locked one and a resting canopy still make no colour claim; /ops is unchanged (the note
+shows, the phase needs attention). The server payload changes, not the kiosk JS: no kiosk or Lab tag bump. Reproduced
+first (`tests/test_flagged_reads_lit.py`).

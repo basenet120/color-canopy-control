@@ -38,7 +38,8 @@ and the panel then draws its 30-light serpentine instead). A fixed contract:
 
 Colours are full strength (the level is drawn separately); `color` is set when every head is the same, else `colors`;
 `off`, `dark` and `unknown` carry no colour. `off` is claimed only once a panel reads back off; a locked or stuck panel,
-or one whose power-off hasn't read back yet, is `unknown` even while the guest has the canopy off. Neither part carries
+or one whose power-off hasn't read back yet, is `unknown` even while the guest has the canopy off. A panel stuck only
+for a flagged note on a confirmed look (D78) reads as its readback (`lit` or `off`). Neither part carries
 a device id, label, reason or the vendor's name.
 - `POST /api/kiosk/scene`       `{"scene": "<scene id>"}` → `{ok, state, server_now}`
 - `POST /api/kiosk/brightness`  `{"level": 1–100}` (raised to the guest floor, 10; coalesced — the last level wins)

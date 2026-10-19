@@ -1044,9 +1044,11 @@ class CanopyEngine:
                 "module": entry.module if entry else None,
                 "locked": False,
                 "simulated": simulated,
-                # presentation only (the kiosk preview): left out of the look; driven but wrong past the window
+                # presentation only (the kiosk preview): left out of the look; driven but wrong past the window;
+                # needing attention only for a flagged note with its look confirmed (D78: its lights show the look)
                 "left_out": device_id in skipped,
                 "stuck": False,
+                "flagged_only": False,
             }
             target = self._targets.get(device_id)
             if device_id in skipped:  # left out of the look (e.g. its profile hasn't been read yet)
@@ -1091,7 +1093,13 @@ class CanopyEngine:
                     if status is DeviceStatus.READY
                     else self.tracker.snapshot(target.address)["reason"]
                 )
-                record.update(status=str(status), reason=reason, stuck=self._stuck(device_id, status))
+                flagged = status is DeviceStatus.NEEDS_ATTENTION and self.tracker.flagged_only(target.address)
+                record.update(
+                    status=str(status),
+                    reason=reason,
+                    stuck=self._stuck(device_id, status),
+                    flagged_only=flagged,
+                )
                 active_statuses.append((device_id, status))
             modules[device_id] = record
 

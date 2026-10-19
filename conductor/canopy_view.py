@@ -10,16 +10,19 @@ Pure: no network, no engine calls, nothing written. Two parts, both served with 
 - **Lit state** (`lit_state`): per canopy position, from the current plan and the engine's own state, the first rule
   that matches:
 
-  | a planned position locked by a test page, stuck past the window, | `unknown`  | no colour claim      |
-  |   or the canopy resting (outage, stopped, starting, being set    |            |                      |
-  |   up), whether the guest turned the canopy off or not            |            |                      |
+  | a planned position locked by a test page, stuck past the window  | `unknown`  | no colour claim      |
+  |   (not one stuck only for a flagged note on a confirmed look:    |            |                      |
+  |   that one reads as confirmed, D78), or the canopy resting       |            |                      |
+  |   (outage, stopped, starting, being set up), whether the guest   |            |                      |
+  |   turned the canopy off or not                                   |            |                      |
   | the guest turned the canopy off: read back off, or not planned   | `off`      | no colour            |
   |   (a power-off still on its way reads `unknown` until then)      |            |                      |
   | the position isn't in the plan (left out, nothing registered)    | `dark`     | no colour            |
   | no known colours (a T2 slot whose content isn't known), or a     | `unknown`  | no colour claim      |
   |   look the strand runs on its own (a preset or program: its      |            |                      |
   |   preview is a guess)                                            |            |                      |
-  | readback matches the look                                        | `lit`      | the target colours   |
+  | readback matches the look (with or without a flagged note: the   | `lit`      | the target colours   |
+  |   record's `flagged_only`)                                       |            |                      |
   | anything else (a change in flight, a retry)                      | `changing` | the target colours   |
 
   Colours are the plan's full-strength `ModuleTarget.colors` (the level is `level`, drawn separately), moved from wire
@@ -220,20 +223,25 @@ def lit_state(
         target = plan.modules.get(entry.id) if entry is not None else None
         record = (records.get(entry.id) or {}) if entry is not None else {}
         item: dict[str, Any] = {"pos": pos, "state": OFF, "color": None, "colors": None}
-        if target is not None and (record.get("locked") or record.get("stuck") or resting):
+        # D78: needing attention only for a flagged note (D54's "no proven map yet") with the look sent, read back and
+        # matching is stuck for /ops (D73), but the lights show the look: it reads as confirmed
+        flagged_only = record.get("flagged_only") is True
+        confirmed = record.get("status") == "ready" or flagged_only
+        stuck = bool(record.get("stuck")) and not flagged_only
+        if target is not None and (record.get("locked") or stuck or resting):
             # the engine skips a locked module, a stuck one didn't take the last write, and a resting canopy sends
             # nothing: whatever the guest asked for, on or off, isn't known to be there
             item["state"] = UNKNOWN
         elif not on:
             # off only once the readback says so; until then the power-off is on its way and makes no claim
-            if target is not None and record.get("status") != "ready":
+            if target is not None and not confirmed:
                 item["state"] = UNKNOWN
         elif target is None:
             item["state"] = DARK
         elif not target.colors or _runs_its_own(target):
             item["state"] = UNKNOWN
         else:
-            item["state"] = LIT if record.get("status") == "ready" else CHANGING
+            item["state"] = LIT if confirmed else CHANGING
             colours = module_colours(cfg, entry, target.colors)
             if len(set(colours)) == 1:
                 item["color"] = colours[0]
