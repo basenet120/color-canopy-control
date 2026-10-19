@@ -233,6 +233,17 @@ def test_a_layout_error_names_the_draft_field_not_the_union_tag():
         {"loc": ("body", "draft", "layout", "linear", "angle_deg"), "msg": "Input should be a valid number"}
     ]
     assert _validation_problems(errors)[0]["field"] == "layout.angle_deg"
+    # every field kind's tag is dropped, the fins kind's too (D74)
+    errors = [{"loc": ("body", "draft", "layout", "fins", "cycles"), "msg": "x"}]
+    assert _validation_problems(errors)[0]["field"] == "layout.cycles"
+    from conductor.looks import field as F
+
+    errors = [
+        {"loc": ("body", "draft", "layout", "fins", "transform"), "msg": f"Value error, {F.FINS_NO_MIRROR}"}
+    ]
+    problem = _validation_problems(errors)[0]
+    assert problem["field"] == "layout.transform"
+    assert problem["message"] == F.FINS_NO_MIRROR and "Value error, " not in problem["message"]
 
 
 def test_a_long_note_never_makes_a_name_the_store_refuses():

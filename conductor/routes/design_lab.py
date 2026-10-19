@@ -72,6 +72,7 @@ from conductor.design_lab import store as S
 from conductor.design_lab import trial as T
 from conductor.design_lab.service import KEY, LabService, lab_of
 from conductor.looks import CompileContext
+from conductor.looks import field as F
 from conductor.looks import scene_rules as R
 from conductor.looks.live import live_looks, scene_source
 from conductor.routes.deps import require_ops, services_of
@@ -111,7 +112,7 @@ def _validation_problems(errors: list[dict]) -> list[dict]:
             rest = rest[1:]
         elif rest[:1] == ["drafts"] and len(rest) >= 2:
             rest = rest[2:]
-        if rest[:1] == ["layout"] and len(rest) >= 2 and rest[1] in ("linear", "radial", "sweep"):
+        if rest[:1] == ["layout"] and len(rest) >= 2 and rest[1] in F.FIELD_KINDS:
             rest = [rest[0], *rest[2:]]  # the union's `kind` tag isn't a SceneDraft field
         field = ".".join(rest) or "draft"
         message = str(e.get("msg", "invalid")).removeprefix("Value error, ")

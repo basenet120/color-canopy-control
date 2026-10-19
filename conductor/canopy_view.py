@@ -6,7 +6,11 @@ Pure: no network, no engine calls, nothing written. Two parts, both served with 
 - **Geometry** (`canopy_geometry`): the canopy in inches, every head of every module from `geometry.build_layout`,
   per module sorted top to bottom then left to right — the module's *lattice order*. It never depends on how a strand
   is wired, so the picture is the ceiling, not the cable. `view` is how the iPad turns that picture to match what a
-  guest at the stand sees overhead (`kiosk.preview` in config/conductor.yaml, set at install).
+  guest at the stand sees overhead (`kiosk.preview` in config/conductor.yaml, set at install). With the canopy's fin
+  map (D74, config/fins.json through canopy.yaml → canopy → fins) it also lists the 650 fins (centre, plan axis,
+  drop) and the outline the canopy plus its 6 in apron makes; never the file's free-text fields. Without one the
+  apron is 0, the outline is the canopy and the fins are []. `lit_state` is unchanged by the fins: the kiosk mixes
+  each fin's colour from the heads around it.
 - **Lit state** (`lit_state`): per canopy position, from the current plan and the engine's own state, the first rule
   that matches:
 
@@ -82,7 +86,9 @@ def load_canopy(config_dir: str) -> dict:
 
 
 def _key(cfg: Mapping[str, Any]) -> str:
-    return json.dumps(cfg, sort_keys=True, default=str)
+    """The canopy mapping as a cache key, without its fin map (the heads never depend on it, and its str is short
+    but its contents aren't JSON)."""
+    return json.dumps({k: v for k, v in cfg.items() if k != "fin_map"}, sort_keys=True, default=str)
 
 
 def _point(x: float, y: float) -> tuple[int, int]:
@@ -104,10 +110,25 @@ def _modules(cfg_key: str) -> tuple[tuple[str, int, int, tuple[tuple[float, floa
     return tuple(sorted(modules, key=lambda m: (m[1], m[2])))
 
 
+def _fins_part(cfg: Mapping[str, Any]) -> dict:
+    """The fins and the outline (D74): `{apron_in, outline: {x: [lo, hi], y: [lo, hi]}, fin_width_in, fins: [{x, y,
+    angle_deg, drop_in}]}`; apron 0, the canopy's own outline, width 0 and no fins without a fin map."""
+    fm = cfg.get("fin_map")
+    w, h = float(cfg["width_in"]), float(cfg["height_in"])
+    a = float(fm.apron_in) if fm is not None else 0.0
+    return {
+        "apron_in": a,
+        "outline": {"x": [-a, w + a], "y": [-a, h + a]},
+        "fin_width_in": float(fm.fin_width_in) if fm is not None else 0.0,
+        "fins": fm.payload() if fm is not None else [],
+    }
+
+
 def canopy_geometry(cfg: Mapping[str, Any], view: Any = None) -> dict:
     """`{width_in, height_in, module_w_in, module_h_in, view: {mirror_x, rotate_deg, dim_floor}, modules: [{pos, row,
-    col, heads: [[x, y] × 30]} × 9]}`, heads in canopy inches in lattice order. `view` is `kiosk.preview` (a
-    `PreviewSettings`; None = the defaults: unmirrored, unrotated, floor 0.35)."""
+    col, heads: [[x, y] × 30]} × 9], apron_in, outline: {x: [lo, hi], y: [lo, hi]}, fin_width_in, fins: [{x, y,
+    angle_deg, drop_in}] (650; [] without a fin map)}`, heads in canopy inches in lattice order. `view` is
+    `kiosk.preview` (a `PreviewSettings`; None = the defaults: unmirrored, unrotated, floor 0.35)."""
     modules = _modules(_key(cfg))
     return {
         "width_in": cfg["width_in"],
@@ -123,6 +144,7 @@ def canopy_geometry(cfg: Mapping[str, Any], view: Any = None) -> dict:
             {"pos": pos, "row": row, "col": col, "heads": [[x, y] for x, y in heads]}
             for pos, row, col, heads in modules
         ],
+        **_fins_part(cfg),
     }
 
 

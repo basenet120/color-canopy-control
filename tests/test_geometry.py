@@ -5,6 +5,7 @@ import pytest
 
 from conductor.geometry import (
     build_layout,
+    lattice_heads,
     load_canopy_config,
     longest_hop,
     panel_positions,
@@ -74,3 +75,11 @@ def test_calibrated_wire_order_must_cover_every_head_exactly_once():
 def test_unknown_scheme_is_rejected():
     with pytest.raises(ValueError):
         build_layout(CFG, "p99")
+
+
+@pytest.mark.parametrize("scheme", ["p14", "p18"])
+def test_lattice_heads_are_the_layouts_heads_for_every_scheme(scheme):
+    """The fin map's head table (D74) uses lattice_heads, which doesn't depend on the wiring: the same points."""
+    heads = lattice_heads({**CFG, "orientation_scheme": scheme})
+    assert len(heads) == 270
+    assert set(heads) == {(h.x, h.y) for h in build_layout(CFG, scheme)}

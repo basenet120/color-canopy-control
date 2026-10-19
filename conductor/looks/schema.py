@@ -11,7 +11,9 @@ Rules implemented:
   one edge", "from two points", …) and no other layout's words, compared without regard to case, so a radial design
   can't say "column by column" and an off-centre one can't say "from the centre out". A design whose module
   centres all sample to one colour (`at: centre`) on the full canopy is refused (it has no layout to describe). A sweep centred
-  exactly on a module's centre has no colour there and is refused when sampled at the centre.
+  exactly on a module's centre has no colour there and is refused when sampled at the centre. A fins design (the
+  fins' rings, D74) is always "from the centre out" and needs the canopy's fin map: over a canopy without one, each
+  canvas that uses it is a plain problem and the checks that would evaluate it are skipped.
 - **Copy honesty (05 #12, 07 §6):** a technique's `feature` sentence is shown while that technique runs, so it may
   never promise movement. Only `motion_feature` — used when a bench-enabled motion code is actually running — may
   say "moving" or "animated", and a stepped look's `moving_feature` — shown only while a run is going — may say
@@ -38,6 +40,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from conductor.config import CONFIG_DIR, ConfigError, RecipesFile, _read_yaml, load_recipes
+from conductor.geometry import load_canopy_config
 from conductor.looks import field as F
 from conductor.rows import SLOTS
 
@@ -146,7 +149,8 @@ class GradientCanvas(_Strict):
 
 
 class FieldCanvas(_Strict):
-    """Colour stops over a 2-D design field (`conductor/looks/field.py`): linear at any angle, radial, or a sweep."""
+    """Colour stops over a 2-D design field (`conductor/looks/field.py`): linear at any angle, radial, a sweep, or the
+    fins' rings."""
 
     kind: Literal["field"]
     field: F.FieldSpec
@@ -564,10 +568,11 @@ def _colour_refs(mode: Mode) -> list[tuple[str, str]]:
 
 def layout_words(canvas: FieldCanvas | GradientCanvas, canopy: dict | None) -> str | None:
     """How copy must describe a sampled canvas's layout (`field.layout_words`; a gradient is linear at 0 or 90°).
-    None when that depends on the canopy (a radial or sweep design's centre) and there is none to check against."""
+    None when that depends on the canopy (a radial or sweep design's centre) and there is none to check against; a
+    fins design's words ("from the centre out") never do."""
     if isinstance(canvas, GradientCanvas):
         return "column by column" if canvas.axis == "x" else "row by row"
-    if isinstance(canvas.field, F.LinearField) or canopy is not None:
+    if isinstance(canvas.field, F.LinearField | F.FinsField) or canopy is not None:
         return F.layout_words(canvas.field, canopy or {})
     return None
 
@@ -733,6 +738,28 @@ def _sample_problems(
     return out
 
 
+def _fin_map_problems(mode_id: str, mode: Mode, canopy: dict | None) -> list[str]:
+    """A fins design over a canopy that has no fin map can't be evaluated anywhere: one sentence per canvas that
+    uses one (none when there is no canopy to check against, or it has fins)."""
+    if canopy is None or F.has_fins(canopy):
+        return []
+    tech = mode.techniques
+    mods = tech.modules
+    canvases = [
+        ("techniques → canvas → canvas", tech.canvas.canvas if tech.canvas is not None else None),
+        (
+            "techniques → modules → sample → canvas",
+            mods.sample.canvas if mods is not None and mods.sample is not None else None,
+        ),
+        ("techniques → stepped → canvas", tech.stepped.canvas if tech.stepped is not None else None),
+    ]
+    return [
+        f"mode {mode_id!r} → {where} → field: {F.NO_FIN_MAP}"
+        for where, canvas in canvases
+        if isinstance(canvas, FieldCanvas) and isinstance(canvas.field, F.FinsField)
+    ]
+
+
 def cross_check(modes: ModesFile, recipes: RecipesFile, canopy: dict | None = None) -> list[str]:
     """Problems between modes.yaml and recipes.yaml / canopy.yaml, as plain sentences (empty = fine)."""
     problems: list[str] = []
@@ -759,9 +786,12 @@ def cross_check(modes: ModesFile, recipes: RecipesFile, canopy: dict | None = No
             else:
                 slots[mode.slot] = mode_id
         mods = mode.techniques.modules
-        if mods is not None:
+        # a fins design without a fin map: said once, and the checks that would evaluate the field are skipped
+        no_fins = _fin_map_problems(mode_id, mode, canopy)
+        problems += no_fins
+        if mods is not None and not no_fins:
             problems += _sample_problems(mode_id, mods, recipes, canopy)
-        if mode.techniques.stepped is not None:
+        if mode.techniques.stepped is not None and not no_fins:
             problems += _stepped_problems(mode_id, mode.techniques.stepped, canopy)
         if mods is not None and grid is not None:
             if mods.rows is not None and len(mods.rows) != len(grid):
@@ -794,7 +824,8 @@ def parse_modes(
 
 
 def load_modes(config_dir: Path = CONFIG_DIR) -> ModesFile:
-    """Load and check `config/modes.yaml` against `recipes.yaml` (and `canopy.yaml` when present)."""
+    """Load and check `config/modes.yaml` against `recipes.yaml` (and `canopy.yaml` when present, through the
+    canopy loader, so with its fin map; a broken canopy.yaml or fins.json is a ConfigError naming the file)."""
     config_dir = Path(config_dir)
     path = config_dir / "modes.yaml"
     if not path.exists():
@@ -803,5 +834,5 @@ def load_modes(config_dir: Path = CONFIG_DIR) -> ModesFile:
     canopy = None
     canopy_path = config_dir / "canopy.yaml"
     if canopy_path.exists():
-        canopy = (_read_yaml(canopy_path) or {}).get("canopy")
+        canopy = load_canopy_config(canopy_path)
     return parse_modes(_read_yaml(path), recipes=recipes, canopy=canopy, path=path)
