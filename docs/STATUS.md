@@ -1,7 +1,9 @@
 # Status
 
-_Last updated: 2026-10-18 evening (PR G `claude/flagged-not-changing`: a flagged note no longer holds the panel at
-"changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
+_Last updated: 2026-10-18 night (preset-options PR B `claude/motion-every-scene`: motion on every scene — breathe and
+shimmer beside travel, a guest's choice runs first then settles on the best still tier, the idle breath off — D75;
+built and verified in sim, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
+flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
@@ -19,6 +21,73 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## preset-options PR B — motion on every scene (D75), `claude/motion-every-scene` → `main` (Oct 18)
+Cut from `origin/claude/flagged-not-changing` (= `main` + #37). **Merge #37 first.** Not pushed, no PR yet. Any scene
+may carry one stepped rung (just before `[modules, strand]`) of three kinds: travel (D65), **breathe** (each strand's
+colour and/or level swells and softens in place, the design's start leading) and **shimmer** (each strand on its own
+seeded rhythm). A breath's brightness rides in the step's own PUT. A guest's (kiosk) choice runs the rung first and
+then **settles** onto the best still tier (Golden Hour's per-head sun where commissioned); /ops keeps the ladder
+order; re-picks, start-up, the idle return, the safe look and the checklist's change back never start a run; a choice
+runs once. Held steps are drawn as held, two in a row end the run. The idle look may carry a rung; `motion.idle`
+(its breath) ships `null`. Any look can be rehearsed. "This scene moves" is `Mode.moves`; `motion: true` is refused
+beside a rung. **No scene changes** (`config/scenes.yaml`, `modes.yaml`, `recipes.yaml` untouched: PR D adds the
+options), and **nothing changes on real lights**: `motion.stepped.live_enabled` stays false.
+
+**The preset-options stack, in merge order** (each targets `main`, merge commits, not squash): #37
+`claude/flagged-not-changing` → preset-options PR A `claude/fin-visualizer` (D74) → **PR B `claude/motion-every-scene`
+(D75)** → PR C `claude/ipad-review-menu` (D76) → PR D (the 18-option catalog, D77: "merge #A, #B, #C first"). Lab
+exports made before D77 lands propose a reserved D-number; renumber by hand.
+
+- **Verified (sim, macOS), how:**
+  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, final tree): **2571 passed, 6 skipped, 44 subtests** (11.5 min).
+  - `node --test tests/*.test.mjs`: 155/155 pass. `ruff check .` and `ruff format --check .`: clean (251 files formatted).
+  - `make scene-pins` / `regen_scene_pins.py --check`: up to date (only the two stepped `_pins` gained the new keys).
+  - `LAB_ROUNDTRIP=1 pytest tests/test_lab_roundtrip.py -k breathe` (Coastal Tides → breathe, swing 6, lag 2, its
+    export applied to a copy of the tree): **FAIL, 1 of 2571** in the exported tree: `test_short_soak` (2 steps superseded: the one traced was a module answered 429 three times in a row in the SIMULATED shimmer's run, the pinned 5% throttling on the soak's random path, which moves with any config change). The first run found four tests and a scene rule that assumed every stepped scene travels; fixed (`84f804a`). The `canonical` case passes the whole suite on its exported tree (`-k canonical`); the rename,
+    add, remove and reorder cases were not re-run.
+  - `make soak` (seed 0, `docs/reports/sim-acceptance.md` committed; `config/sim/acceptance.yaml` untouched): the
+    stepped scenario steps all six scenes with all three kinds — 153 steps, 0 superseded/failed/skipped, one PUT per
+    changed module per step, at most 72 program PUTs a minute, 9 finished runs settled canvas 5 / stepped 4, the idle
+    return still at 180.3 s, no governor trip or downgrade. **Two gating rows FAIL:** the main run's settle p95
+    5.19 s (unchanged since D72) and, new, the stepped scenario's **all-writes 60 s maximum: 91 against the
+    proposed 90** (seeds 0–7: 86–92, above 90 on seeds 0 and 7; 83–89 before; seed 4 had one superseded step). A
+    mood that cuts a run short now runs at full pace itself, so the 20% reserve carries its 9 writes plus re-asserts
+    and 429 retries after the runner's cap check. Main-run and ripple deltas: in D75.
+  - Browser, on the simulator only (`scripts/dev_design_lab.py --port 8302`, stopped afterwards; port 8000 never
+    touched): (a) Lab → Golden Hour → Breathe: swing 5 (95 + 5), "Steps per breath", the sentence "… swells and
+    softens from one edge: peach, then sunset pink and rose" with lag 2 (only the T3 sentence's colours); the motion
+    preview's bulbs take per-module opacities each step. (b) brightness 97 re-clamps the swing to 3; Shimmer shows the
+    seed (1); Travel zeroes the breath fields and brings the approved sentence back. (e) Golden Hour chosen on
+    `/kiosk/`: stepped with per-frame `levels` in the panel's motion, then after the run the per-head sun (canvas,
+    "Every one of the 270 lights set individually …"). (f) an /ops choice of Golden Hour: canvas at once; the
+    rehearsal list includes Lowcountry Calm. No console errors. **Not done in the browser:** (c) Save + Export (the
+    export's inserted lines are proven by `tests/test_lab_export.py` instead) and (d) publishing a breathe draft and
+    watching it on `/kiosk/` (no publish was made).
+  - **UNVERIFIED:** `tests_e2e/test_kiosk.py::test_a_breathing_run_draws_each_frames_level_as_opacity` (no
+    Playwright browser on this Mac; 07 §9).
+- **Build deviations from the spec** (all recorded in D75 or the commits): D72's fast back-off no longer defers a
+  run's settle (its 120 s after a 90 s run landed past the 180 s idle return, so under 5% throttling Golden Hour never
+  reached its sun); the soak's next choice waits for the interrupting mood's own run; Lab tag lab-10 (not lab-9, per
+  the build decisions); `stepped.idle_note(settings, scene_id, mode)` takes the scene id (a Mode has none).
+- **For Alon's review:** the three 07 edits (§1's writer paths gain the stepped runner, its settle and the idle
+  breath; §6's re-trigger line is for on-device motion looks only, `Mode.motion` stays false; §6's kiosk constants:
+  an idle return never starts a run unless `motion.idle` is on). `motion.idle` writes on a timer once on (07 §9's
+  "no routines that write to real devices"): it is off, yields to any guest, waits for every other holder and goes
+  through `tier_allowed`. The stepped soak's all-writes target (above): a cap check with room for a step's retries,
+  a larger `budget_reserve`, or report it without gating.
+- **Follow-up (B7, D66 kept):** a moving option's Lab try-on stays still at module level; plan §7 wanted it to run
+  its steps. Decide in PR E or later.
+- **For PR D:** kiosk.js `paintCanopy` now computes each dot's opacity (`moduleOpacity`) and the canopy-preview import
+  drops `levelOpacity`: merge with PR A's fin loop per integration C10/C11. Drop the soak's `simulated:` block once
+  every scene has its own rung (C9). Rewrite `test_the_idle_look_can_be_rehearsed_with_the_d65_default_rung` when
+  Calm has its own rung (C8). `MUTATIONS['breath-repeats-a-step']` sets lag 0 and shift 0 explicitly.
+- **Needs real hardware:** bench item 6 (snap or fade, and whether a level step reads as a breath or a blink); the
+  account rate probe (`docs/runbooks/account-rate-probe.md`); Gate R on nine with a breathe look; the `motion.idle`
+  soak (live_enabled on, then `motion.idle` on, watched on /ops for 30 min, `null` to revert); Alon's PRs for
+  `live_enabled` and `motion.idle`.
+- **Blocked:** nothing in software.
+- **Next step:** review, then open the PR (Alon merges). After it and A and C: PR D's 18 options on this base.
 
 ## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
 **Deployed first, Oct 18 16:23 (Alon asked): `7b21918`** (main after #35: D70 + D71 + D72) on the Mac show box —
