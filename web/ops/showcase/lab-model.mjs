@@ -342,6 +342,7 @@ export function normaliseDraft(d) {
     delete layout.centres_in;
   }
   if (layout.kind !== "sweep") delete layout.start_deg;
+  if (layout.kind !== "radial" && layout.kind !== "sweep") delete layout.centre_in;
   out.layout = layout;
   out.sample_at = out.sample_at || "centre";
   for (const k of ["brightness", "solid"]) if (numeric(out[k]) !== null) out[k] = numeric(out[k]);
@@ -459,8 +460,16 @@ export function setField(draft, key, value) {
 
 // ---- layout controls ---------------------------------------------------------------------------------------------------
 
+/** The layout picker's kinds, in button order: the server's F.FIELD_KINDS (tests/test_lab_static.py pins the two). */
+export const LAYOUT_KINDS = Object.freeze(["linear", "radial", "sweep", "fins"]);
+/** Under the Fins layout (D74). True for every palette size, plain or inverted: module t never passes 0.675 (plain)
+ * or drops below 0.325 (inverted), and the module-level sentence names only reached_stops. */
+export const FINS_NOTE =
+  "Follows the fins’ drops: one end of the palette on the deep centre (24.5 in), the other on the 14 in rim; Invert swaps them. Mirror is off for fins: it would put the first colour on the rim as well. Module level reads each module’s centre, which gives three rings (the centre panel, the four edge-middles, the four corners) reaching only about two-thirds of the way out, so the rim’s own colour shows light by light, never on a whole strand. The module-level sentence names the colours the strands actually show.";
+
 /** Which layout controls show for this layout. linear → angle; radial → centre (step 2.5), metric; sweep → centre,
- * start angle; every kind → transform (Mirror) and Invert; cycles and sample_at are locked (D63). */
+ * start angle; fins → no parameters, no Mirror (the server refuses it, D74) and FINS_NOTE as `note`; every other kind
+ * → transform (Mirror); every kind → Invert; `note` is null except for fins; cycles and sample_at are locked (D63). */
 export function controlsFor(layout) {
   const kind = layout && layout.kind;
   const centre = {
@@ -476,8 +485,9 @@ export function controlsFor(layout) {
     metric: kind === "radial",
     radius: kind === "radial" ? "auto" : null,
     start: kind === "sweep" ? { min: 0, max: 359, step: 1 } : null,
-    transform: true,
+    transform: kind !== "fins",
     invert: true,
+    note: kind === "fins" ? FINS_NOTE : null,
     locked: { cycles: D63_LOCKS.cycles, sample_at: D63_LOCKS.sample_at },
   };
 }
@@ -490,7 +500,8 @@ export function onModuleCentre(point) {
 }
 
 /** Switch the layout's kind, keeping invert, transform and cycles. Linear opens at 45° (0° stripes, D63); radial keeps
- * a centre it had (or the canopy's middle); sweep opens at SWEEP_DEFAULT_CENTRE (inside, never a module centre). */
+ * a centre it had (or the canopy's middle); sweep opens at SWEEP_DEFAULT_CENTRE (inside, never a module centre); fins
+ * takes no parameters and always transform linear (a fins design can't be mirrored, D74). */
 export function withLayoutKind(layout, kind) {
   const base = layout || {};
   if (base.kind === kind) return { ...base };
@@ -505,6 +516,7 @@ export function withLayoutKind(layout, kind) {
     return { kind, ...keep, centre_in: had ? [...had] : [112.5, 60], radius_in: "auto", metric: "inches" };
   }
   if (kind === "sweep") return { kind, ...keep, centre_in: [...SWEEP_DEFAULT_CENTRE], start_deg: 0 };
+  if (kind === "fins") return { kind, ...keep, transform: "linear" };
   return { ...base };
 }
 

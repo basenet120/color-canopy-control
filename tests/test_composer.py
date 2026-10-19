@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import itertools
+import json
+from pathlib import Path
 
 import pytest
 from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test fixture
@@ -19,6 +21,7 @@ from conductor.looks import (
     load_modes,
     placement_for,
 )
+from conductor.looks.composer import mix, recipe_entry
 from conductor.looks.schema import BandCanvas, FieldCanvas, GradientCanvas, PathwayCanvas
 from conductor.rows import FrameEntry
 
@@ -261,3 +264,35 @@ def test_a_radial_field_canvas_is_2d_and_evaluates_its_stops():
     assert evaluate(canvas, 112.5, 20, canopy=CANOPY, recipes=RECIPES) == evaluate(
         canvas, 152.5, 60, canopy=CANOPY, recipes=RECIPES
     )
+
+
+LIGHTS = json.loads((Path(__file__).with_name("fixtures_fins_lights.json")).read_text())
+
+
+def test_a_fins_canvas_paints_every_head_by_its_fin_drop():
+    """D74: the fins' rings head by head, and the heads are where VWBD drew the lights (the B modules included)."""
+    canvas = FieldCanvas.model_validate(
+        {
+            "kind": "field",
+            "field": {"kind": "fins"},
+            "stops": [{"at": 0, "color": "hd-orange"}, {"at": 1, "color": "peach"}],
+            "recipe": "rgb_only",
+        }
+    )
+    placements = _placements()
+    frames = compose_canvas(canvas, canopy=CANOPY, recipes=RECIPES, placements=placements)
+    placed = set()
+    for p in placements:
+        heads = head_positions(CANOPY, p)
+        for (x, y), entry in zip(heads, frames[p.device_id], strict=True):
+            assert entry == evaluate(canvas, x, y, canopy=CANOPY, recipes=RECIPES)
+            placed.add((p.module, x, y))
+    assert placed == {(lt["module"], float(lt["x"]), float(lt["y"])) for lt in LIGHTS["lights"]}
+    # r0c1 (a B panel) head 0 against the drawing's own drop there
+    (r0c1,) = [p for p in placements if p.module == "r0c1"]
+    x, y = head_positions(CANOPY, r0c1)[0]
+    (light,) = [lt for lt in LIGHTS["lights"] if (lt["module"], lt["x"], lt["y"]) == ("r0c1", x, y)]
+    t = min(1.0, max(0.0, (24.5 - light["fin_drop_in"]) / 10.5))
+    want = mix(recipe_entry(RECIPES, "hd-orange", "rgb_only"), recipe_entry(RECIPES, "peach", "rgb_only"), t)
+    got = frames[r0c1.device_id][0]
+    assert all(abs(a - b) <= 1 for a, b in zip((got.r, got.g, got.b), (want.r, want.g, want.b), strict=True))

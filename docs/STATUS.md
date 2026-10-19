@@ -1,6 +1,7 @@
 # Status
 
-_Last updated: 2026-10-18 evening (PR G `claude/flagged-not-changing`: a flagged note no longer holds the panel at
+_Last updated: 2026-10-18 night (preset-options PR A `claude/fin-visualizer` (D74): fins data, the `fins` field, the
+fin-lit iPad picture; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a flagged note no longer holds the panel at
 "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -20,6 +21,106 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## preset-options PR A — fins data, the `fins` field, the fin-lit iPad picture (D74), `claude/fin-visualizer` → `main` (Oct 18)
+Cut from `origin/claude/flagged-not-changing` (= `main` + #37): **merge #37 first**, then this (merge commit). Sim
+only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/preset-options/README.md` §8; D74.
+**What changed:**
+- **The data:** `config/fins.json` (a byte copy of the plan's `fins.json`, VWBD drawing A-20-1's 650 fins) and two
+  new `canopy.yaml` sections: `fins` (file, 6″ apron, 5″ fin width) and `vwbd_panels` (P-01…P-09 per position).
+  The canopy.yaml comments now say p14 is what is built (270 drawn lights on the p14 lattice, 150 under p18) and the
+  routing drawn is `serpentine_rows`.
+- **The loader:** `conductor/fins.py` (strict models, the immutable `FinMap`, a cached loader, plain ConfigError
+  sentences) and `geometry.load_canopy_config`, which now reads through `config._read_yaml` and attaches `fins`,
+  `fin_map` and `vwbd_panels`. **Every device path loads the canopy through it, so a missing or broken fins.json
+  stops the start and the deploy preflight** (`FAILED in looks`; pinned in `tests/test_fins.py`; the reason is now
+  said in `live.preflight_line` and the preflight docstring). A canopy.yaml without the sections loads as before
+  (the frozen Lab baseline does).
+- **The field:** `{kind: fins}`, t = (24.5 − D)/10.5 with D the exp(−(d/6)²)-weighted drop within 12″ (the form
+  `lights.json` was made with: 0.0102″ at worst; the plan README has an erratum). Module centres read 0 / ≈ 0.39 /
+  ≈ 0.67; `bands` rounds to 2 decimals so the three rings stay whole; mirror is refused; the words are "from the
+  centre out". `load_modes` checks modes.yaml against the loaded canopy (with its fin map); a fins design over a
+  canopy without one is a plain sentence per canvas.
+- **The Lab:** the layout picker offers **Fins** (`LAYOUT_KINDS`, pinned to `F.FIELD_KINDS`): no parameters, Mirror
+  disabled, and a note true for every palette size, plain or inverted. Server side, a fins draft over a canopy
+  without a fin map is one plain problem from `apply_drafts`, `draft_changes` and `resolve_copy` (which the preview
+  calls first, so `/api/lab/preview` answers it as a 422 on `layout`, not a 500; review A-R1-2),
+  `export.describe_field` names "fin rings", and the router drops every kind's union tag. **A fins design can be published to the live show from this
+  PR** (D68's path); sim tests publish a fins Coastal Tides to the simulated show and pass a fins Tides + Golden Hour
+  trio through `validate_trio` and the STEPPED/T3 compiles. The Lab's stage paints the rings per head (no fin
+  strokes there). Lab tag `lab-8` → **`lab-9`**.
+- **The kiosk payload:** `/api/kiosk/panel`'s `canopy` adds `apron_in`, `outline`, `fin_width_in` and the 650 `fins`
+  ({x, y, angle_deg, drop_in}; none of fins.json's text): 4,523 → 44,251 B (38,421 B compact), pinned under 48,000.
+  `state.lit` is unchanged.
+- **Ops:** `/api/canopy/layout` modules carry `vwbd_panel` (the same under `?scheme=p18`); `/visualizer` labels read
+  "r0c0 · A · P-03", falling back to "r0c0 · P-03" when narrow.
+- **The iPad picture:** `canopy-preview.mjs` grows the drawing by the 6″ apron (237 × 132), draws 1.6″ head dots and
+  each fin as a stroke along its axis; `finNeighbours` (4 nearest heads, w = exp(−(d/6)²), memoised per geometry: 8 ms
+  once in node) and a pure `finPaint` (lit/changing mixed at full strength; a fin is changing, and pulses, when half
+  its lit weight is; unlit grey at half its drop's opacity; no colour claim once 10% of its weight is unknown, drawn
+  as a dashed `--slider-rest` line). `kiosk.js` compares the geometry key before `layout()` (no layout per poll any
+  more) and repaints fins only when a dot's paint changed. SVG, not the plan's canvas 2D (guest-panel.md §12 item 10).
+  Kiosk tag **`fins-1`**. `tests/test_kiosk_node.py` puts the canopy-preview + guest-panel node tests in CI's pytest.
+- **Docs:** doc 02 (the orientation question closed, the apron, the fins, the panel table, the D74 bullet), doc 06
+  #14/#15, the plan README erratum on the weight form, guest-panel.md §2.6 (the fins, a Fins column in the state
+  table, reduced motion), §6 and §12 item 10, D74 in DECISIONS.md.
+- Lab exports made before D77 lands propose a reserved D-number; renumber by hand.
+
+**Verified (sim, macOS, this branch):**
+- `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` on the final code (`310454f`, the review fix; the docs
+  commit after it changes no code): ****2560 passed, 5 skipped, 44 subtests in 687 s****. (Before this PR, at #37:
+  2473 passed.)
+- Review A-R1-2 (the preview's fin-map refusal): `resolve_copy` over the frozen baseline canopy raises the plain
+  DraftError, and `POST /api/lab/preview` with that canopy answers 422 with exactly that problem
+  (`tests/test_lab_draft.py`, `tests/test_lab_routes_preview.py`). Mutation check: with the new guard removed both
+  fail (the field's bare ValueError); restored, both pass.
+- The spec's targeted list (22 files) plus `tests/test_static.py`: 757 passed in 132 s.
+- `ruff check .` and `ruff format --check .`: clean.
+- Node: canopy-preview + guest-panel **38/38** (33 before), lab-model **86/86** (85 before); both now also run under
+  CI's pytest (`tests/test_kiosk_node.py`, `tests/test_lab_static.py`).
+- `scripts/regen_scene_pins.py --check`: up to date (no scene changed).
+- `make lab-roundtrip` (`LAB_ROUNDTRIP=1`, niced): **5 passed in 57 min** (the canonical edits, rename, add, remove,
+  reorder: each export applied to a scratch copy of this tree passes the whole suite there).
+- `load_canopy_config()` → `FinMap(650 fins, sha256 7a1754886f97)`, the fins section and all nine panels;
+  `preflight.run` over an empty sim data dir → 0; with fins.json deleted or one fin's `angle_deg` 181 → 1 (tests).
+- gitleaks over the branch's 17 commits (`--log-opts=origin/claude/flagged-not-changing..HEAD`) and over a bare clone
+  of the branch (no `.gitleaksignore`, what CI sees for new commits): no leaks found.
+- **Browser walk on the simulator** (`scripts/dev_design_lab.py --port 8301`, auth off, a throwaway data dir;
+  Chromium in the Claude browser pane; stopped afterwards):
+  - `/kiosk/` (at step 10): 650 `line.fin`, 270 dots, one outline, viewBox `0 0 237 132`; after a Golden Hour tap
+    the fins pulsed with their dots ring by ring (650 → 370 → 80 → 0 changing) and settled lit; a Coastal Tides
+    stepped run changed the fins' strokes step by step; no console errors; no DOM mutation in the picture over 6 s
+    steady; no sheet scroll at 1180 × 820, 1024 × 768 and 820 × 1180.
+  - Frame times over the 20 s after a Coastal Tides tap at 1180 × 820 (the scene change, its pulse and the run):
+    p50 16.7 ms, p95 18.6 ms, p99 33.4 ms, two long tasks (66 ms and 100 ms, at the change). **Not throttled** (the
+    pane has no CPU throttling), on the Mac mini with the full suite running niced alongside.
+  - The Lab (`/ops/showcase/#lab`, final tree): Rainbow Row Sunset shows Linear / Radial / Sweep / Fins. Fins shows
+    the note, disables and unticks Mirror (also after Mirror was ticked on Radial), paints three rings at module level
+    (coral on the centre strand, a pink on the four edge-middles, a lilac-leaning pink on the four corners), reads
+    "from the centre out", and the
+    module-level sentence names only "pastel coral, then blush pink" (lilac, the rim's colour, isn't reached); with
+    Invert, "lilac, then blush pink". Radial and back to Fins kept Invert. Reset to approved restored linear. No
+    console errors; the four buttons fit at 820 wide. Nothing was published or tried on.
+  - `/api/canopy/layout` gave r0c0 P-03 … r2c2 P-07; `/ops/showcase/` serves `lab.css?v=lab-9` and `lab.js?v=lab-9`.
+
+**Not run / UNVERIFIED:**
+- `make e2e`: Playwright's Chromium isn't installed on this Mac. `tests_e2e/test_kiosk.py` is extended (650 fins, the
+  outline, both viewBoxes, fin colours against a Python mix, the changing pulse, unlit and dashed unknown fins via a
+  StubPanel `unknown` option, no mutation over 2.5 polls) and collects (21 tests); its Python mix was checked against
+  `finPaint` in node for all 650 fins of three stubs. So the three tracked visualizer screenshots
+  (`docs/screenshots/visualizer-*.png`, which would gain the P-0n labels) are **not regenerated**; the kiosk canopy
+  screenshots stay untracked, as before.
+- Frame times under 4× CPU throttling (the spec's DevTools check): not measured.
+
+**Needs real hardware / UNVERIFIED:**
+- The 9th-gen iPad's WebKit drawing 650 fins + 270 dots through a stepped run and a changing pulse.
+- What the live picture shows for Modules 1–2: flagged-only since D73, they read unknown after every confirmed scene
+  (outline dots, dashed fins) while the seven panels with no kit are unlit grey (pinned by
+  `test_flagged_kits_read_unknown_in_the_picture_after_a_confirmed_scene`). `lit_state` is left as it is (A3).
+- Clear vs frosted Mylar (the picture draws frosted only); recording each kit against its P-0n at install (plan §9).
+- A slot repaint of a fins frame on a real kit (a painted fins scene published live): no kit has a proven map (D54).
+
+**Blocked:** nothing.
+
 ## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
 **Deployed first, Oct 18 16:23 (Alon asked): `7b21918`** (main after #35: D70 + D71 + D72) on the Mac show box —
 backup `canopy-data-20261018-162349-manual.tar.gz`, previous `0f8f38c` in `~/canopy-prev-sha.txt`, preflight ok,
@@ -37,7 +138,7 @@ worth a decision (Lax would keep top-level navigations signed in; the writes sta
 - **Verified (sim, macOS):** `pytest -q`: 2473 passed, 5 skipped, 44 subtests (full suite, final tree); ruff clean.
 - **Deploy:** the usual paste block, on its own; no iPad reload. Then a scene and another ~2 s later should both land.
 
-## PLAN (not started) — three options per scene, motion on every option, fin visualizer, `claude/preset-options-plan` (Oct 18)
+## PLAN (PR A built) — three options per scene, motion on every option, fin visualizer, `claude/preset-options-plan` (Oct 18)
 Docs only: `docs/plans/preset-options/README.md`, plus the data extracted from VWBD's drawing A-20-1 (`fins.json`,
 `lights.json`, `fin-map.png`, `extract/`). Alon's decisions:
 - **18 iPad cards ("Scene #1/#2/#3"):** #1 keeps the approved palette, re-placed at module level on the fin rings;
@@ -56,7 +157,8 @@ What the drawing says:
 
 Next: PRs A (fins and visualizer), B (motion for every scene, with Gate R and `live_enabled` on the critical path) and
 C (iPad review menu, hide, promote), in parallel. Then D (the 18-option catalog), then E (cleanup after the client
-session). Briefs are in plan §10. Nothing is built; nothing is verified on hardware.
+session). Briefs are in plan §10. **preset-options PR A is built** (`claude/fin-visualizer`, D74, Oct 18; its block
+above; no PR opened yet). B, C, D and E are not; nothing is verified on hardware.
 
 ## PR F — fast guest pacing: 2 s whatever the size, backing off on real throttling (D72), `claude/guest-throttle-pacing` → `main` (Oct 18)
 Cut from `main` at `209e52b` (#31–#34 all merged; checked each branch tip is in `main`). Alon: D70's 7.5 s on nine
@@ -547,7 +649,7 @@ Lab); both target `main`; merge commits, not squash.
 ## PR stack (merge order — merge commits, not squash)
 00. **Oct 18:** #28–#35 (PR A, B, B2, C, the C deploy notes, D, E, F) are merged into `main`; the show box runs
     `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **Open: PR G `claude/flagged-not-changing`** (D73; no
-    other PR first).
+    other PR first). **Open: preset-options PR A `claude/fin-visualizer` → `main`** (D74; merge #37 first).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -1064,6 +1166,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+00000. **Alon (preset-options PR A, D74):** after #37, review and merge `claude/fin-visualizer` (merge commit); it is
+    sim-verified only, changes no scene and sends nothing new to a device. Deploy only when you ask for it: a missing
+    or broken `config/fins.json` now fails the preflight before the restart. Then preset-options PRs B and C (in
+    parallel, merged after A), then D (the 18-option catalog).
 0000. **Alon (PR G, D73):** review and merge `claude/flagged-not-changing`; deploy it (the box runs `7b21918`); then a
     second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
     some iPad reloads). Run the account probe once (`docs/runbooks/account-rate-probe.md`), not during a demo.
@@ -1133,6 +1239,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - The show box itself (now the Mac mini, D61): a real reboot and power cut with automatic login, wired to the show
   router with a fixed address, install from a tag, UPS, the cold spare, and an iPad on the show network.
 - iOS Safari: enrollment cookies, beacon on page close, Guided Access.
+- **The fin-lit iPad picture (D74):** the 9th-gen iPad's WebKit drawing 650 fins + 270 dots through a stepped run
+  and a changing pulse; clear vs frosted Mylar; each kit recorded against its VWBD panel (P-0n) at install.
 
 ## Decisions Alon owes
 - **Which three scenes get the painted slots** (D59). Today Rainbow Row Sunset, Garden Gathering and Golden Hour keep

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 
 import pytest
 from lab_edits import done_means, rgb
@@ -15,6 +16,8 @@ from conductor.config import CONFIG_DIR
 from conductor.design_lab import draft as D
 from conductor.design_lab import preview as P
 from conductor.design_lab import service as SVC
+from conductor.geometry import load_canopy_config
+from conductor.looks import field as F
 
 TRIO = D.load_trio(CONFIG_DIR)  # live: the app's Lab reads config/, so the edits below are made against it
 IDS = [s.id for s in TRIO.scenes.scenes]
@@ -98,6 +101,21 @@ def test_a_draft_that_doesnt_apply_is_a_problems_422_by_field(app_client, change
     assert body["detail"].endswith("problem(s).")
     assert [p["field"] for p in body["problems"]] == [field]
     assert all(set(p) == {"path", "field", "message"} for p in body["problems"])
+
+
+def test_a_fins_draft_over_a_canopy_without_fins_previews_as_a_422_not_a_500(app_client, monkeypatch):
+    """D74: the preview reads the copy (resolve_copy → reached_stops → the field) before apply_draft, so over a
+    canopy with no fin map it must be the Lab's one plain problem, not the field's bare ValueError (a 500)."""
+    assert post(app_client, "golden-hour", draft_json("golden-hour")).status_code == 200  # builds the Lab
+    lab = app_client.app.state.services.extras[SVC.KEY]
+    bare = load_canopy_config(Path(__file__).resolve().parent / "fixtures_lab_baseline" / "canopy.yaml")
+    assert not F.has_fins(bare)
+    monkeypatch.setattr(lab, "canopy", bare)
+    r = post(app_client, "golden-hour", draft_json("golden-hour", layout={"kind": "fins"}))
+    assert r.status_code == 422, r.text[:400]
+    assert r.json()["problems"] == [
+        {"path": "the draft of golden-hour → layout", "field": "layout", "message": F.NO_FIN_MAP}
+    ]
 
 
 def test_the_t1_lock_is_a_409_naming_the_field(app_client, monkeypatch):

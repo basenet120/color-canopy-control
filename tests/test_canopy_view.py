@@ -34,6 +34,7 @@ from conductor.capabilities import detect
 from conductor.clock import run_virtual
 from conductor.config import CONFIG_DIR, ConductorSettings, ConfigError, PreviewSettings, load_settings
 from conductor.engine_api import CanopyPhase, CanopyState, ModePlan, ModuleTarget, Tier
+from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, module_look
 from conductor.looks.composer import evaluate
 from conductor.scenes import load_scenes
@@ -41,6 +42,7 @@ from conductor.sequence import GRID as RUNNER_GRID
 from conductor.sim.profiles import profile_parts
 
 CFG = load_canopy(str(CONFIG_DIR))
+BASELINE_CANOPY = Path(__file__).with_name("fixtures_lab_baseline") / "canopy.yaml"  # no fins section
 CAPS = detect(*profile_parts("sqhdk03-sim"))
 
 
@@ -132,6 +134,35 @@ def test_the_geometry_is_270_heads_in_nine_modules_of_30_in_lattice_order():
         assert m["heads"] == sorted(m["heads"], key=lambda p: (p[1], p[0]))  # top to bottom, left to right
     view = PreviewSettings(mirror_x=True, rotate_deg=180, dim_floor=0.5)
     assert canopy_geometry(CFG, view)["view"] == {"mirror_x": True, "rotate_deg": 180, "dim_floor": 0.5}
+    # the fins and the apron (D74) sit beside the modules
+    assert (g["apron_in"], g["fin_width_in"], len(g["fins"])) == (6.0, 5.0, 650)
+    assert g["outline"] == {"x": [-6.0, 231.0], "y": [-6.0, 126.0]}
+
+
+def test_the_geometry_carries_the_fins_and_the_apron():
+    g = canopy_geometry(CFG)
+    assert g["apron_in"] == 6.0 and g["fin_width_in"] == 5.0
+    assert g["outline"] == {"x": [-6.0, 231.0], "y": [-6.0, 126.0]}
+    assert len(g["fins"]) == 650
+    assert all(set(f) == {"x", "y", "angle_deg", "drop_in"} for f in g["fins"])
+    assert all(isinstance(v, float) for f in g["fins"] for v in f.values())
+    assert g["fins"] == CFG["fin_map"].payload()  # file order
+    text = json.dumps(g)
+    for word in ("VWBD", "A-20-1", "drawing", "source", "frame"):  # fins.json's free text never goes out
+        assert word not in text, word
+    bare = canopy_geometry(load_canopy_config(BASELINE_CANOPY))  # a canopy.yaml without the fins section
+    assert bare["fins"] == [] and bare["apron_in"] == 0.0 and bare["fin_width_in"] == 0.0
+    assert bare["outline"] == {"x": [0.0, 225.0], "y": [0.0, 120.0]}
+    assert bare["modules"] == g["modules"]
+
+
+def test_the_cache_key_leaves_the_fin_map_out_and_the_payload_stays_small():
+    from conductor.canopy_view import _key
+
+    key = _key(CFG)
+    assert "fin_map" not in json.loads(key) and "FinMap" not in key
+    assert len(key) < 3000
+    assert len(json.dumps(canopy_geometry(CFG))) < 48_000  # 44,251 B measured (Oct 18)
 
 
 def test_a_b_modules_wire_0_lands_in_its_rotated_corner():
@@ -308,7 +339,19 @@ def test_the_picture_names_no_device_label_reason_or_vendor():
     plan = compile_mode("golden-hour", Tier.T1, CTX)
     states = [_state(plan), _with(_state(plan), "canopy-r1c1", locked=True), _state(plan, guest_power=False)]
     text = json.dumps([canopy_geometry(CFG), *(lit_state(CFG, REGISTRY, plan, s) for s in states)])
-    for word in ("canopy-r", "sim-", "Module ", "reason", "Hubspace", "label", "device"):
+    for word in (
+        "canopy-r",
+        "sim-",
+        "Module ",
+        "reason",
+        "Hubspace",
+        "label",
+        "device",
+        "VWBD",
+        "A-20-1",
+        "drawing",
+        "source",
+    ):
         assert word not in text, word
 
 

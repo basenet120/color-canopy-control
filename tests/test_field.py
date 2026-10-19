@@ -1,4 +1,4 @@
-"""The 2-D design field (conductor/looks/field.py): t over canopy inches for linear, radial and sweep designs."""
+"""The 2-D design field (conductor/looks/field.py): t over canopy inches for linear, radial, sweep and fins designs."""
 
 from __future__ import annotations
 
@@ -186,6 +186,9 @@ def test_layout_words():
     assert words(kind="sweep", centre_in=[112.5, 60]) == "around the centre"
     assert words(kind="sweep", centre_in=[0, 0]) == "around one corner"
     assert words(kind="sweep", centre_in=[30, 50]) == "around one spot"
+    # the fins' rings are deep at the centre whatever the canopy (D74)
+    assert words(kind="fins") == words(kind="fins", invert=True) == "from the centre out"
+    assert words(kind="fins") in F.LAYOUT_PHRASES
     for spec in (
         _spec(kind="radial", centre_in=[5, 5]),
         _spec(kind="radial", centres_in=[[1, 2], [3, 4], [5, 6]]),
@@ -240,6 +243,7 @@ def test_the_field_is_deterministic():
         _spec(kind="linear", angle_deg=33, cycles=3, transform="mirror"),
         _spec(kind="radial", centres_in=[[10, 10], [200, 90]], invert=True),
         _spec(kind="sweep", centre_in=[100, 50], start_deg=12.5),
+        _spec(kind="fins", invert=True),
     ]
     first = [[F.value(s, h.x, h.y, CANOPY, 0.3) for h in HEADS] for s in specs]
     again = [[F.value(s, h.x, h.y, CANOPY, 0.3) for h in HEADS] for s in specs]
@@ -250,7 +254,7 @@ def test_the_field_is_deterministic():
 @pytest.mark.parametrize(
     ("data", "message"),
     [
-        ({"kind": "spiral"}, "does not match any of the expected tags: 'linear', 'radial', 'sweep'"),
+        ({"kind": "spiral"}, "does not match any of the expected tags: 'linear', 'radial', 'sweep', 'fins'"),
         ({"kind": "linear", "cycles": 0}, "cycles must be a whole number from 1 to 6"),
         ({"kind": "linear", "cycles": 7}, "cycles must be a whole number from 1 to 6"),
         ({"kind": "linear", "angle_deg": 360}, "angle_deg must be at least 0 and less than 360"),
@@ -277,3 +281,56 @@ def test_the_field_is_deterministic():
 def test_bad_specs_are_refused_with_plain_messages(data, message):
     with pytest.raises(ValidationError, match=message):
         _spec(**data)
+
+
+# ---- the fins' rings (D74) ---------------------------------------------------------------------------------------
+FINS = _spec(kind="fins")
+
+
+def test_the_fins_field_is_the_fin_drop_at_any_point():
+    assert _at(FINS, "r1c1") == 0.0
+    expected = {
+        "r0c0": 0.6745,
+        "r0c1": 0.3905,
+        "r0c2": 0.6666,
+        "r1c0": 0.3966,
+        "r1c2": 0.3970,
+        "r2c0": 0.6667,
+        "r2c1": 0.3905,
+        "r2c2": 0.6744,
+    }
+    for pos, t in expected.items():
+        assert _at(FINS, pos) == pytest.approx(t, abs=1e-3), pos
+    for pos in NINE:  # the drawing is symmetric under a half turn
+        r, c = F._row_col(pos)
+        assert abs(_at(FINS, pos) - _at(FINS, f"r{2 - r}c{2 - c}")) < 1e-3
+    grid = [F.value(FINS, x, y, CANOPY) for x in range(-6, 232, 3) for y in range(-6, 127, 3)]
+    assert all(0 <= t <= 1 and not math.isnan(t) for t in grid)
+    assert F.value(FINS, 400, 400, CANOPY) == 1.0  # beyond every fin's reach: the rim
+
+
+def test_the_fins_field_clamps_before_a_phase_wraps():
+    # the weighted drop at the centre sums to just over 24.5 in, so unclamped it would be a hair below 0 and a stepped
+    # phase would wrap the deep centre round to the rim
+    assert F._raw(FINS, 112.5, 60, CANOPY) == 0.0
+    assert F.value(FINS, 112.5, 60, CANOPY, phase=0.25) == 0.25
+    assert F.value(_spec(kind="fins", invert=True), 112.5, 60, CANOPY) == 1.0
+
+
+def test_fins_rings_band_as_the_drawings_three_rings():
+    # r0c2 reads 0.66663 and r2c0 0.66667: unrounded, the 2/3 bin edge would split the four corners
+    assert F.bands(FINS, CANOPY, NINE) == [["r1c1"], EDGE_MIDDLES, CORNERS]
+    assert F.bands(FINS, CANOPY, ["r0c0", "r0c1"]) == [["r0c1"], ["r0c0"]]
+
+
+def test_a_fins_design_needs_a_fin_map_takes_no_parameters_and_cant_be_mirrored():
+    with pytest.raises(ValueError, match="needs the canopy's fin map"):
+        F.value(FINS, 0, 0, {"width_in": 225, "height_in": 120})
+    assert not F.has_fins({"width_in": 225}) and F.has_fins(CANOPY)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        _spec(kind="fins", angle_deg=32)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        _spec(kind="fins", centre_in=[0, 0])
+    with pytest.raises(ValidationError, match="a fins design can't be mirrored"):
+        _spec(kind="fins", transform="mirror")
+    assert _spec(kind="fins", transform="linear", invert=True).invert is True
