@@ -944,11 +944,17 @@ export function alertFor(err | state)            // the #lab-alert sentence for 
                                                  //   the T1 lock, status 0 ("Can't reach the Conductor — showing the
                                                  //   last valid draft") and 5xx
 export const PROMOTE = 'Make this the scene';    // D76: the editor's button on an option (scene.option_of set)
-export const PROMOTE_COPY                        // {title, question, done, noRung, keptMotion, same}(option, base names)
+export const PROMOTE_COPY                        // {title, question, done, tookMotion, noRung, keptMotion, same}
+                                                 //   (option, base names); title and question take {motion}: then
+                                                 //   they list the motion (stepped direction, steps, timing) too
+export function promoteTakesMotion(option, {baseStepped})  // the base has a stepped rung and the option has timing
+export function promoteNotes(notes, option, base)          // the done notice's line for each note, in order
 export function promoteDraft(base, option, {baseStepped})  // → {draft, notes}: the base's draft with the option's
                                                  //   palette, layout, sample_at, brightness, solid, description; id,
-                                                 //   name, mood the base's; stepped the option's only when the base
-                                                 //   has a stepped rung ("no-rung" / "kept-motion" notes); copy auto.
+                                                 //   name, mood the base's; stepped (direction, steps per cycle,
+                                                 //   step_s, run_s) the option's only when the base has a stepped
+                                                 //   rung ("took-motion" when copied, else "no-rung" /
+                                                 //   "kept-motion"); copy auto.
                                                  //   lab.js promoteToBase swaps the base's WORKING draft after a
                                                  //   confirm (Undo brings it back); no request: Publish publishes it
 export function ipadCards(live, catalog)         // "On the iPad now": LiveJSON's scenes less on_ipad === false

@@ -1058,8 +1058,11 @@ fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the
   is that scene's, else `compile_best`, which honours the reconciler's hysteresis floor). Per light only when that
   plan is canvas or slot (T1/T2); otherwise its nine module colours (module level and the stepped hold); none for a
   whole-strand look, including a modules- or stepped-first scene the reconciler has eased down to its strand rung
-  (the idle Lowcountry Calm among them). That is one compile per visible scene per poll, as /api/kiosk/modes pays
-  (22–28 ms for 18 scenes on the sim engine). Plan §5.4 said the iPad picture shows the per-light design, but
+  (the idle Lowcountry Calm among them). A card lights only the positions that plan drives, as Now Showing does
+  (`guest_panel.driven_positions`; with no plan, the positions with a device registered): a position with no device
+  is left out of every look (D62), so on the two-kit show box every card shows two lit panels and seven dark ones,
+  never nine. That is one compile per visible scene per poll, as /api/kiosk/modes pays (22–28 ms for 18 scenes on
+  the sim engine). Plan §5.4 said the iPad picture shows the per-light design, but
   CLAUDE.md's copy rule and the panel's own rule ("a picture is copy too") say the card must be what the lights can
   show; on the show box that is module level until per-light is commissioned. Alon's question 1 in the PR: keep the
   tier-true cards, or add a labelled per-light design view (new client copy). Thumbnails appear only in the review
@@ -1084,9 +1087,11 @@ fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the
 - **"Make this the scene"** is client-side in the Lab, with no new route: `promoteDraft` copies the option's palette,
   layout, sample, brightness, solid colour and description into the base's working draft (the description is the
   option's, so the base's Now-showing line stays true of the design it now has), keeps the base's id, name and mood,
-  never adds or drops a stepped rung, and resets the copy choices to auto. Undo brings the base's draft back; the
-  base's Publish saves and publishes it. The base's name keeps any "#1" until PR E or a Lab rename at the session
-  (C27).
+  never adds or drops a stepped rung, and resets the copy choices to auto. When the base has a stepped rung and the
+  option has stepped timing, the option's motion is copied too (direction, steps per cycle, step time and run
+  length), and the button's title, the confirm question and the done notice say so (`promoteTakesMotion`, the
+  "took-motion" note). Undo brings the base's draft back; the base's Publish saves and publishes it. The base's
+  name keeps any "#1" until PR E or a Lab rename at the session (C27).
 - **The export prompts for the sign-off instead of claiming it.** A base whose palette and module-level field equal
   one of its options' (and differ from its own design in git) gets a "Made the scene on site" line directly after
   the D59 line, asking whoever exports to add who chose it and when: that choice is the D59 sign-off for its colours.

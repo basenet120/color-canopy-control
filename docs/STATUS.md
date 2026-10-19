@@ -1,7 +1,7 @@
 # Status
 
 _Last updated: 2026-10-18 night (preset-options PR C `claude/ipad-review-menu`: the iPad review menu, hide and
-promote, D76; built on PR G's tip, sim only; see its block). Before that 2026-10-18 evening (PR G
+promote, D76; review round 2 fixed; built on PR G's tip, sim only; see its block). Before that 2026-10-18 evening (PR G
 `claude/flagged-not-changing`: a flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -48,13 +48,29 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
   as before. (c) /ops "On the iPad": a failed load writes its own `#ipad-error` line, which the next fresh answer
   clears; a switch's own answer in `#ipad-result` stays until the next switch. Each fix has a test that fails with
   the fix reverted (checked by hand, then restored).
-- **Verified (sim, macOS, Oct 18, after review round 1):**
-  `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` → 2560 passed, 5 skipped, 44 subtests (11 min)
-  (baseline at #37: 2473 passed, 5 skipped); `ruff check` / `ruff format --check` clean; `node --test` on each of the
-  ten `tests/*.test.mjs` → fail 0 (guest-panel 31, ops-ipad 4, lab-model 88); `scripts/regen_scene_pins.py --check`
-  exit 0 (no scene, mode or recipe changed); `pytest tests_e2e --collect-only` → 54 collected (review_fixture imports
-  conductor only). **Browser (local only; CI runs no browser; run before review round 1 and not re-run since, so
-  round 1's kiosk key and /ops error line are proven by node tests only):** the new e2e tests pass — 14 kiosk review
+- **Review fixes (round 2, Oct 18):** (a) **on a partial canopy the cards light only what the engine drives**
+  (C-R2-1, D62): every card used to light all nine panels while Now Showing lit two. `thumb_plans` keeps each scene's
+  likely plan beside its basis, and `GuestPanel.thumbs` masks the cached nine-position thumbnail to the positions
+  that plan drives (`driven_positions`; with no plan, the registered ones), so the seven unregistered panels are
+  dark hairlines with `color`/`colors` null and the sig moves with the mask; a mask change never redraws a design.
+  Tested on the real engine over the two-kit partial show (`tests/partial_canopy.py`): all 18 cards light r0c0 and
+  r0c1, as Now Showing does. (b) **"Make this the scene" says when it copies the option's motion** (C-R2-4): with a
+  stepped rung on the base and stepped timing on the option, the button's title, the confirm and the done notice
+  now name the stepped direction, steps per cycle, step time and run length (`promoteTakesMotion`, the "took-motion"
+  note, `promoteNotes`); D76 and design-lab PLAN §5.2 say so. (c) **the attract screen's six-or-fewer rule has a
+  test that can fail** (C-TS-1): six scenes where two share a group, and one group of three, cycle every scene.
+  Mutation-checked by hand, then restored: the panel without the mask, `driven_positions` ignoring the plan,
+  `mask_thumb` as a no-op, promoteDraft without its note, the title without `{motion}`, lab.js's confirm without
+  `{motion}`, and attractScenes without its `<= GRID_MAX` branch each fail at least one new test.
+- **Verified (sim, macOS, Oct 18, after review round 2):**
+  `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` → 2564 passed, 5 skipped, 44 subtests (11 min)
+  (2560 after round 1; baseline at #37: 2473 passed, 5 skipped); `ruff check` / `ruff format --check` clean;
+  `node --test` on each of the ten `tests/*.test.mjs` → fail 0 (guest-panel 32, ops-ipad 4, lab-model 89);
+  `scripts/regen_scene_pins.py --check` exit 0 (no scene, mode or recipe changed);
+  `pytest tests_e2e --collect-only` → 54 collected (review_fixture imports conductor only). **Browser (local only;
+  CI runs no browser; run before review round 1 and not re-run since, so rounds 1 and 2 — the kiosk key, the /ops
+  error line, the partial-canopy mask and the promote motion copy — are proven by pytest, node and static tests
+  only):** the new e2e tests pass — 14 kiosk review
   tests against the stubbed panel at 1180×820, 1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a
   tap after scrolling, scroll kept across a rebuild, painted pixels and alpha at dpr 2, a quarter-turned view, six
   options keep the 3 × 2, a hidden scene named in Now Showing, one attract strip per group), and the whole of
@@ -87,7 +103,8 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
   tier-true thumbnails instead of palette strips?
 - **Next:** PR D on a merge of A + B + C. Its verification should include a hand walk-through of promote on
   `make lab-dev` with the 18 options (golden-hour-2 → golden-hour: the button, the swap, the notice, the recipe keys,
-  Publish, the export's promotion line) and `catalog_thumbs` / `thumb_basis` timings with fins. D also adapts
+  Publish, the export's promotion line, and the motion line on a stepped base) and `catalog_thumbs` /
+  `thumb_basis` timings with fins. D also adapts
   `tests/review_fixture.py` and C's six-count tests to the real 18-scene catalog (integration notes).
 
 ## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
