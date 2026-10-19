@@ -67,14 +67,14 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-8">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-9">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert '<script type="module" src="./studio.js?v=screen-2"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-8"')
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-9"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
-    assert 'from "./lab-model.mjs?v=lab-8"' in _text("lab.js")
+    assert 'from "./lab-model.mjs?v=lab-9"' in _text("lab.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -196,6 +196,23 @@ def test_the_lab_calls_only_its_own_routes_and_never_sends_a_live_setting():
         "lab-fast",
         "lab-publish-show",
     ]
+
+
+def test_the_lab_offers_every_field_kind():
+    """The layout picker's kinds are the server's field kinds (D74 adds fins), lab.js builds its buttons from the page
+    model's list, and Mirror is disabled wherever the page model says the kind has no transform (fins)."""
+    from conductor.looks import field as F
+
+    model = _code(_text("lab-model.mjs"))
+    m = re.search(r"LAYOUT_KINDS = Object\.freeze\(\[([^\]]*)\]\)", model)
+    assert m, "lab-model.mjs has no frozen LAYOUT_KINDS"
+    assert re.findall(r'"(\w+)"', m.group(1)) == list(F.FIELD_KINDS)
+    js = _code(_text("lab.js"))
+    assert "M.LAYOUT_KINDS.map(" in js
+    assert not re.search(r'\[\s*"linear",\s*"radial",\s*"sweep"\s*\]', js), "a literal kind list in lab.js"
+    controls = _function(js, "renderLayoutControls")
+    assert '$("#lab-mirror").disabled = locked || !c.transform;' in controls
+    assert 'if (c.note) parts.push(h("p", { class: "lab-muted", text: c.note }));' in controls
 
 
 def test_the_motion_lines_come_from_the_page_model():
