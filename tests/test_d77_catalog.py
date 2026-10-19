@@ -752,15 +752,17 @@ def test_named_colours_are_on_the_strands(scene_id):
 @pytest.mark.parametrize("scene_id", CATALOG)
 def test_the_labs_generated_copy_names_only_colours_on_the_strands(scene_id):
     """The same truth on the copy a Lab export regenerates (both sentences "generated"), so the invariant above holds
-    for any scene the session redesigns: `make lab-roundtrip` stays green."""
+    for any scene the session redesigns: `make lab-roundtrip` stays green. (After such an export git's copy may be
+    the generated sentence already, so the check is that the trio carries `generated_copy`'s, not that it changed.)"""
     git = D.load_trio(CONFIG_DIR)
     data = D.seed_draft(git, scene_id).model_dump(mode="json")
     data["copy"] = {"modules": "generated", "stepped": "generated"}
-    trio = D.apply_drafts(
-        git, {scene_id: D.SceneDraft.model_validate(data)}, canopy=CANOPY, settings=SETTINGS
-    )
+    draft = D.SceneDraft.model_validate(data)
+    trio = D.apply_drafts(git, {scene_id: draft}, canopy=CANOPY, settings=SETTINGS)
     mode = trio.modes.mode(scene_id)
-    assert mode.techniques.modules.feature != MODES.mode(scene_id).techniques.modules.feature  # regenerated
+    generated = D.generated_copy(git.modes.mode(scene_id), draft, CANOPY)
+    assert mode.techniques.modules.feature == generated["modules"]
+    assert mode.techniques.stepped.moving_feature == generated["stepped"]
     ctx = CompileContext(
         registry=REGISTRY,
         capabilities={m.id: CAPS for m in MODULES},
