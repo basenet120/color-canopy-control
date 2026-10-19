@@ -19,7 +19,8 @@ scenes/modes/recipes trio, or a trio the Design Lab published — and the one fu
   One that differs from a git that changed since it was published raises an /ops warn (`git_changed`).
 - **`validate_trio`** holds a published trio to everything git's is held to: the schemas, `parse_modes` (schema +
   cross_check: every kiosk sentence's honesty rules), the show's idle/stepped load checks, the blocking scene ↔ mode
-  rules, and git's own ids, order, ladders, slots and motion flags (the Lab never changes them).
+  rules, and git's own ids, order, groups (`option_of`, D76), ladders, slots and motion flags (the Lab never changes
+  them).
 - **`install_looks`** is THE hot-apply checklist (§2.4): synchronous (no await, so no request sees half of it), deep
   copies, every process-lifetime copy refreshed.
 - **The operator repaint's bookkeeping (B2)** lives in the same file, parsed leniently on its own: `repaints` (scene →
@@ -314,6 +315,14 @@ def validate_trio(
     problems: list[str] = []
     if [s.id for s in scenes.scenes] != [s.id for s in git.scenes.scenes]:
         problems.append("its scene ids (or their order) differ from config/scenes.yaml's")
+    # The iPad's scene groups (D76) are git's too: a published scene never moves to another base.
+    git_opt = {s.id: s.option_of for s in git.scenes.scenes}
+    for s in scenes.scenes:
+        if s.id in git_opt and s.option_of != git_opt[s.id]:
+            problems.append(
+                f"scene {s.id!r} → option_of: {s.option_of!r} isn't config/scenes.yaml's {git_opt[s.id]!r} (the Lab "
+                "never changes it; a deploy that moved it makes this file unusable)"
+            )
     if list(modes.modes) != list(git.modes.modes):
         problems.append("its mode ids (or their order) differ from config/modes.yaml's")
     for mode_id, mode in git.modes.modes.items():

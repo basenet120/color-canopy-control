@@ -234,7 +234,9 @@ def test_a_renamed_colour_still_compiles_at_every_tier():
 
 # ---- ids, ladders and slots never move --------------------------------------------------------------------------------
 def test_ladder_slot_and_ids_never_move():
-    assert not {"id", "ladder", "slot", "slots", "motion", "techniques"} & set(D.SceneDraft.model_fields)
+    assert not {"id", "ladder", "slot", "slots", "motion", "techniques", "option_of"} & set(
+        D.SceneDraft.model_fields
+    )
     with pytest.raises(ValidationError):
         D.SceneDraft.model_validate({**D.seed_draft(TRIO, "golden-hour").model_dump(), "ladder": ["modules"]})
     drafts = [
@@ -249,6 +251,21 @@ def test_ladder_slot_and_ids_never_move():
         assert patched.modes.mode(sid).ladder == TRIO.modes.mode(sid).ladder
         assert patched.modes.mode(sid).slot == TRIO.modes.mode(sid).slot
         assert patched.modes.mode(sid).motion is False
+
+
+def test_a_draft_can_never_regroup_a_scene():
+    """option_of (D76) is git's: the Lab's belt-and-braces shape check refuses a patched catalog that moved a scene
+    under another base, and passes git's own."""
+    assert D._shape_problems(TRIO, TRIO.scenes, TRIO.modes) == []
+    scenes = TRIO.scenes.model_copy(deep=True)
+    scenes.scenes[1] = scenes.scenes[1].model_copy(update={"option_of": "lowcountry-calm"})
+    problems = D._shape_problems(TRIO, scenes, TRIO.modes)
+    assert len(problems) == 1
+    assert problems[0].field == "scene_id" and "option_of" in problems[0].message
+    # a patched dump keeps git's option_of: _patch_scene updates only the scene's own fields
+    dump = {"scenes": [{**s.model_dump(mode="json"), "option_of": "x"} for s in TRIO.scenes.scenes]}
+    D._patch_scene(dump, D.seed_draft(TRIO, "golden-hour"))
+    assert all(s["option_of"] == "x" for s in dump["scenes"])
 
 
 def test_an_unknown_scene_or_a_mismatched_key_is_a_scene_id_problem():
