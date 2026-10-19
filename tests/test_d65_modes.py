@@ -161,8 +161,9 @@ def _show_wiring(registry, *, simulated: bool, live_enabled: bool = False) -> Sh
     return wiring
 
 
-def _shown(*, simulated: bool, live_enabled: bool = False) -> dict[str, tuple]:
-    """Each D65 mode chosen through the real engine (compile, ladder and tier_allowed from the show's wiring)."""
+def _shown(*, simulated: bool, live_enabled: bool = False, source: str = "ops") -> dict[str, tuple]:
+    """Each D65 mode chosen through the real engine (compile, ladder and tier_allowed from the show's wiring), by
+    ops (ladder order) or a guest (the stepped rung first, D75)."""
 
     async def main():
         w = make_world(settings=settings_with(motion={"stepped": {"live_enabled": live_enabled}}))
@@ -173,7 +174,10 @@ def _shown(*, simulated: bool, live_enabled: bool = False) -> dict[str, tuple]:
         w.engine.deps.tier_allowed = wiring.tier_allowed
         out = {}
         for mode_id in STEPPING:
-            await w.engine.request_mode(mode_id, source="ops")
+            if source == "kiosk":  # past the guest gap the last choice bought
+                await w.run_for(w.engine.guest_gap_s(w.engine.current_plan()) + 0.1)
+            state = await w.engine.request_mode(mode_id, source=source)
+            assert not state.refused, state.message
             plan, runner = w.engine.current_plan(), w.engine.runner
             out[mode_id] = (plan.tier, plan.program is not None, runner is not None and runner.running)
             out[mode_id] += (wiring.tier_allowed(mode_id, Tier.STEPPED),)
@@ -183,24 +187,58 @@ def _shown(*, simulated: bool, live_enabled: bool = False) -> dict[str, tuple]:
     return run_virtual(main)
 
 
-def test_live_hardware_refuses_the_stepped_rung_and_the_ladder_lands_on_the_still_module_level_look():
-    shown = _shown(simulated=False)
+@pytest.mark.parametrize("source", ["ops", "kiosk"])
+def test_live_hardware_refuses_the_stepped_rung_whichever_path_asks(source):
+    shown = _shown(simulated=False, source=source)
     # Coastal Tides: [stepped, modules, strand] → modules. Golden Hour: canvas (no commissioned slot, no Gate C),
     # slot (nothing hand-painted, no Gate B), stepped (Gate R) → modules. Nothing steps, nothing is sent a program.
     for mode_id in STEPPING:
         assert shown[mode_id] == (Tier.T3, False, False, (False, STEPPED_LIVE_OFF)), mode_id
 
 
-def test_after_gate_r_live_enabled_opens_the_stepped_rung_on_live_hardware():
-    shown = _shown(simulated=False, live_enabled=True)  # Alon flips it once the stepped rehearsal passes
+@pytest.mark.parametrize("source", ["ops", "kiosk"])
+def test_after_gate_r_live_enabled_opens_the_stepped_rung_on_live_hardware(source):
+    shown = _shown(simulated=False, live_enabled=True, source=source)  # Alon flips it after the rehearsal
     for mode_id in STEPPING:
         assert shown[mode_id] == (Tier.STEPPED, True, True, (True, "")), mode_id
 
 
-def test_the_simulator_steps_both_where_their_better_rungs_arent_available():
-    shown = _shown(simulated=True)  # uncommissioned: Golden Hour's canvas isn't available, so its rays move
+@pytest.mark.parametrize("source", ["ops", "kiosk"])
+def test_the_simulator_steps_both_where_their_better_rungs_arent_available(source):
+    shown = _shown(simulated=True, source=source)  # uncommissioned: Golden Hour's canvas isn't available
     for mode_id in STEPPING:
         assert shown[mode_id] == (Tier.STEPPED, True, True, (True, "")), mode_id
+
+
+def test_an_idle_return_with_motion_idle_on_never_breathes_on_live_hardware():
+    """motion.idle on (an idle look with a rung: Coastal Tides here), on live hardware before Gate R: the idle return
+    is still (the show's tier rule refuses the rung), and no program command goes out."""
+
+    async def main():
+        sections = {
+            "kiosk": {"idle_mode": "coastal-tides"},
+            "motion": {"idle": {"breathe_run_s": 60, "every_s": 300}},
+        }
+        w = make_world(settings=settings_with(**sections))
+        wiring = _show_wiring(w.registry, simulated=False)
+        wiring.services.settings = w.engine.deps.settings  # its load checks see motion.idle too
+        w.engine.deps.compile = wiring.compile
+        w.engine.deps.ladder = wiring.ladder
+        w.engine.deps.modes = wiring.mode_ids
+        w.engine.deps.tier_allowed = wiring.tier_allowed
+        await w.engine.start()
+        await w.run_for(5)
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        await w.run_for(w.engine.deps.settings.kiosk.idle_return_s + 400)
+        plan = w.engine.current_plan()
+        out = (plan.mode_id, plan.tier, plan.program, w.engine.runner)
+        out += ([c for c in w.events("command") if c["source"] == "program"], w.events("program"))
+        await w.close()
+        return out
+
+    mode, tier, program, runner, commands, events = run_virtual(main)
+    assert mode == "coastal-tides" and tier is Tier.T3 and program is None and runner is None
+    assert commands == [] and events == []
 
 
 def test_a_throttle_downgrade_from_golden_hours_sun_eases_off_to_a_still_rung_never_the_stepped_one():
@@ -235,6 +273,188 @@ def test_a_throttle_downgrade_from_golden_hours_sun_eases_off_to_a_still_rung_ne
     assert again is Tier.T3
     # one clean interval lifts past the stepped rung (and the uncommissioned slot) straight back to the sun
     assert lifted == ["golden-hour"] and after_up == (Tier.T1, False, {})
+
+
+# ---- D75: a guest's choice runs the rung, then the run holds on the best still tier ----------------------------------
+async def _golden_world(**sections):
+    """The shipped modes through the real engine at the simulator's profile (Golden Hour's sun compiles), started and
+    commissioned (its slots recorded), with the sim's writes logged as (monotonic time, device id, rows)."""
+    w = make_world(settings=settings_with(**sections) if sections else None)
+    looks = EngineCompiler(w.registry)
+    w.engine.deps.compile, w.engine.deps.ladder, w.engine.deps.modes = (
+        looks.compile,
+        looks.ladder,
+        looks.modes,
+    )
+    writes: list[tuple[float, str, list]] = []
+    original = w.sim.write
+
+    async def logged(device_id, rows, *, purpose):
+        writes.append((w.clock.monotonic(), device_id.removeprefix("sim-"), list(rows)))
+        return await original(device_id, rows, purpose=purpose)
+
+    w.sim.write = logged
+    w.writes = writes
+    await w.engine.start()
+    await w.engine.commission(source="ops")
+    await w.run_for(70)  # start-up's burst and the slot writes are out of the 60 s rate window
+    return w
+
+
+def _run_end(w) -> float:
+    runner = w.engine.runner
+    return runner.t0 + runner.count * runner.step_s
+
+
+def _queued_since(w, since: float, source: str) -> list[dict]:
+    return [
+        c
+        for c in w.events("command")
+        if c["source"] == source and c["timings"]["queued_at"] >= w.clock.epoch + since
+    ]
+
+
+def test_a_guest_choice_of_golden_hour_runs_its_steps_then_holds_on_its_per_head_sun():
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        first = (w.engine.current_plan().tier, w.engine.runner.running)
+        end = _run_end(w)
+        await w.run_for(end - w.clock.monotonic() + 10)
+        plan, runner, state = w.engine.current_plan(), w.engine.runner, w.engine.state()
+        after = [d for t, d, _ in w.writes if t >= end - 1e-6]
+        settles = _queued_since(w, end - 1e-6, "settle")
+        correct = w.all_correct()
+        n = len(w.writes)
+        await w.run_for(10)
+        again = w.writes[n:]
+        t1 = w.engine.deps.compile("golden-hour", Tier.T1)
+        await w.close()
+        return first, plan, runner, state, after, settles, correct, again, t1
+
+    first, plan, runner, state, after, settles, correct, again, t1 = run_virtual(main)
+    assert first == (Tier.STEPPED, True)  # a guest's choice runs the rung first (D75)
+    assert plan.tier is Tier.T1 and runner is None and state.feature == t1.feature and state.program is None
+    assert sorted(after) == sorted(m.id for m in MODULES)  # exactly one write per module after the run
+    assert {c["label"] for c in settles} == {"after the run: golden-hour"} and len(settles) == 9
+    assert correct and again == []  # the per-head sun holds, nothing re-sent
+
+
+def test_an_ops_choice_keeps_the_ladder_order():
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="ops")
+        golden = (w.engine.current_plan().tier, w.engine.runner)
+        await w.engine.request_mode("coastal-tides", source="ops")
+        tides = (w.engine.current_plan().tier, w.engine.runner.running)
+        await w.close()
+        return golden, tides
+
+    golden, tides = run_virtual(main)
+    assert golden == (Tier.T1, None)  # its canvas first, at once (D65's ladder order)
+    assert tides == (Tier.STEPPED, True)  # stepped is Coastal Tides' first rung
+
+
+def test_a_kiosk_choice_under_a_floor_never_steps():
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="ops")
+        assert w.engine.downgrade("3 commands ended throttled on account canopy")
+        floors = dict(w.engine.floors)
+        since = w.clock.monotonic()
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        out = (floors, w.engine.current_plan().tier, w.engine.runner)
+        await w.run_for(20)
+        out += (_queued_since(w, since, "program"),)
+        await w.close()
+        return out
+
+    floors, tier, runner, program = run_virtual(main)
+    assert floors == {"golden-hour": 3} and tier is Tier.T3 and runner is None and program == []
+
+
+def test_a_re_pick_mid_run_keeps_stepping_and_after_it_lifts_to_the_per_head_sun():
+    from conductor.canopy import LOOKS_SOURCE
+
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        t0 = w.engine.runner.t0
+        await w.run_for(20)
+        seen = []
+        for source in ("reconciler", LOOKS_SOURCE):
+            await w.engine.request_mode("golden-hour", source=source)
+            seen.append((w.engine.current_plan().tier, w.engine.runner.running, w.engine.runner.t0))
+        w.engine._replan_soon()
+        await w.run_for(2)
+        seen.append((w.engine.current_plan().tier, w.engine.runner.running, w.engine.runner.t0))
+        await w.run_for(_run_end(w) - w.clock.monotonic() + 5)
+        settled = (w.engine.current_plan().tier, w.engine.runner)
+        await w.engine.request_mode("golden-hour", source="reconciler")
+        repick = (w.engine.current_plan().tier, w.engine.runner)
+        await w.close()
+        return t0, seen, settled, repick
+
+    t0, seen, settled, repick = run_virtual(main)
+    assert seen == [(Tier.STEPPED, True, t0)] * 3  # the run keeps its phase; nothing cuts it short
+    assert settled == (Tier.T1, None) and repick == (Tier.T1, None)
+
+
+def test_a_governor_trip_holds_module_level_and_lifts_after_the_cool_off():
+    async def main():
+        w = await _golden_world(motion={"stepped": {"governor_cooloff_s": 120}})
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        hold = w.engine.current_plan()
+        await w.run_for(10)
+        for _ in range(12):  # throttled attempts on the run's modules (the governor counts every attempt)
+            w.telemetry.record("attempt", device_id="sim-canopy-r0c0", outcome="throttled", http_status=429)
+        await w.run_for(0.5)
+        tripped = (w.engine.runner.running, w.engine.runner.ended, w.engine.current_plan().tier)
+        trip = w.clock.monotonic()
+        await w.run_for(110)
+        hold_sent = _queued_since(w, trip - 1, "program")
+        before = (w.engine.current_plan().tier, _queued_since(w, trip, "settle"))
+        await w.run_for(15)
+        settles = _queued_since(w, trip, "settle")
+        out = (hold, tripped, hold_sent, before, settles, w.engine.current_plan().tier, w.engine.state())
+        await w.close()
+        return out
+
+    hold, tripped, hold_sent, before, settles, tier, state = run_virtual(main)
+    running, ended, at = tripped
+    assert not running and "governor" in ended and at is Tier.STEPPED  # the T3 hold, not the sun yet
+    assert hold_sent and {c["label"].split(":")[0] for c in hold_sent} == {"hold"}
+    assert before == (Tier.STEPPED, [])  # nothing selects a slot before the cool-off
+    assert tier is Tier.T1 and len(settles) == 9
+    assert {c["label"] for c in settles} == {"after the run: golden-hour"}
+    assert state.program is None and hold.modules  # (the hold was the module-level design)
+
+
+def test_a_run_that_ends_inside_an_outage_settles_at_recovery():
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        end = _run_end(w)
+        await w.run_for(end - w.clock.monotonic() - 10)
+        w.sim.faults.set_outage(True)
+        w.engine.enter_outage("test outage")
+        await w.run_for(20)  # the run ends while resting: nothing goes out
+        ended = (w.engine.runner.running, w.engine.current_plan().tier)
+        n = len(w.writes)
+        w.sim.faults.set_outage(False)
+        await w.until(lambda: w.engine.outage is None, timeout=30, step=0.05)
+        await w.run_for(3)
+        burst = w.writes[n:]
+        plan = w.engine.current_plan()
+        out = (ended, plan, burst, {d: list(mt.rows) for d, mt in plan.modules.items()})
+        await w.close()
+        return out
+
+    ended, plan, burst, rows = run_virtual(main)
+    assert ended == (False, Tier.STEPPED)
+    assert plan.tier is Tier.T1
+    assert sorted(d for _, d, _ in burst) == sorted(m.id for m in MODULES)  # one write per module: the burst
+    assert all(sent == rows[d] for _, d, sent in burst)  # carrying the sun's rows
 
 
 # ---- surfaces ------------------------------------------------------------------------------------------------------

@@ -390,6 +390,12 @@ def test_a_failed_module_is_left_to_the_reconciler_600_s_after_the_attempt(no_th
             if w.clock.monotonic() - w.engine.last_change_mono > 150:
                 await w.engine.request_mode(GOLDEN, source="ops")
             tiers.append((w.clock.monotonic(), w.engine.current_plan().mode_id, w.engine.current_plan().tier))
+        # D75: the hold's lift re-picks the look, and a re-pick never cuts a run short: a stepped run going then
+        # settles onto T1 when it ends
+        runner = w.engine.runner
+        if runner is not None and runner.running:
+            await w.run_for(runner.t0 + runner.count * runner.step_s - w.clock.monotonic() + 1)
+        tiers.append((w.clock.monotonic(), w.engine.current_plan().mode_id, w.engine.current_plan().tier))
         rewrites = [t for t, a, _r in slot_writes(writes) if a == address and t > done]
         out = (attempts, done, pending, stamped, status, alerts, rewrites, tiers, w.engine.t1_hold)
         await w.close()

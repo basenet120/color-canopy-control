@@ -17,11 +17,15 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   need (`planned_writes_per_min`). Longer than `max_step_s`: the look holds still and an alert says why.
 - **The cap.** A step that would take an account past `account_writes_per_min` writes in the last 60 s (the
   executor's own count, every write on the account) plus the step's own is held back: nothing is sent, the step
-  shown stays the last one sent, and the next step tries again (`budget_holds`).
+  shown stays the last one sent — and is what the state draws (`to_state` repeats it: a held step is never drawn) —
+  and the next step tries again (`budget_holds`). `HELD_STEPS_END` holds in a row end the run (D75): the look then
+  holds still, with its still copy, rather than claim motion the account can't pay for.
 - **A step** clears the engine's early re-assert counts and sends each driven module whose rows changed (its colour,
-  or a guest brightness folded into the step), plus the modules the reconciler deferred to it: one full-state PUT per
-  module, never a slot object, through `engine.send(…, source="program")`. Nothing else: the runner never touches
-  `last_change_mono` or `last_guest_input_mono`, so the idle hold and the idle reset count as they always do.
+  its level, or a guest brightness folded into the step), plus the modules the reconciler deferred to it: one
+  full-state PUT per module, never a slot object, through `engine.send(…, source="program")`. A breathe or shimmer
+  step (D75) is the same: one PUT per changed module carrying its colour and its brightness together, and a module
+  resting between breaths isn't sent anything. Nothing else: the runner never touches `last_change_mono` or
+  `last_guest_input_mono`, so the idle hold and the idle reset count as they always do.
 - **Held.** During an outage, commissioning, a stop or a guest-input pause the step index keeps advancing but
   nothing is sent; a guest who turned the canopy off gets no step writes either (the desired state is "off", so no
   step's rows differ from those sent, while the step itself stays current). On recovery, and when a guest turns the
@@ -29,9 +33,13 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
 - **Folding.** A guest brightness change within `fold_guest_within_s` of the next step isn't sent on its own: the
   desired rows of every module now differ from those sent (the brightness row), so that step sends each one with
   the new level (one PUT each, no extra burst).
-- **The end.** At the last step boundary within the design's run_s the hold is sent once (to the modules not
-  already showing it) and the runner stops. The plan's `feature` (the still design's sentence) is the copy again.
-  A run stopped by a 403 sends nothing (`finish(send=False)`): the step last sent stays, as `held_plan()`.
+- **The end.** At the last step boundary within the design's run_s the run ends on the mode's best still tier
+  (D75, `engine.settle_after_run`: its canvas or slot where that can run, one write per module that changes), else
+  the hold is sent once (to the modules not already showing it), and the runner stops. The plan's `feature` (the
+  still design's sentence) is the copy again. A choice runs once: a re-pick after its run builds the runner `over`
+  (DONE at once, nothing sent), whatever its run_s. A run stopped by a 403 sends nothing (`finish(send=False)`): the
+  step last sent stays, as `held_plan()`. A guest's input during the idle breath ends it without a write of its own
+  (`yield_to_guest`): the guest's burst carries the still look.
 - **Governor.** Every write attempt to the run's modules (from the executor's `attempt` events, superseded commands
   included — latest-wins would otherwise hide them) is counted per account over `governor_window_s`. At
   ≥ `governor_min_throttled` attempts answered 429/403 that are ≥ `governor_throttled_share` of the attempts, the run
@@ -64,6 +72,7 @@ log = logging.getLogger(__name__)
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]  # the order of CanopyState.program frames
 THROTTLE_STATUSES = frozenset({429, 403})
 NEEDS_ATTENTION_MIN_S = 10.0  # a write unverified this long (or 2 steps, if longer) needs attention
+HELD_STEPS_END = 2  # D75: this many budget-held steps in a row end the run (the look holds still, still copy)
 _EPS = 1e-6
 
 RUNNING, DONE = "running", "done"
@@ -77,7 +86,7 @@ def planned_writes_per_min(settings: Any) -> float:
 class ProgramRunner:
     """Steps one installed stepped plan (see the module docstring). Built and cancelled by the CanopyEngine."""
 
-    def __init__(self, engine: CanopyEngine, plan: ModePlan, *, t0: float) -> None:
+    def __init__(self, engine: CanopyEngine, plan: ModePlan, *, t0: float, over: bool = False) -> None:
         assert plan.program is not None
         self.engine = engine
         self.plan = plan
@@ -95,6 +104,7 @@ class ProgramRunner:
         self.steps_sent = 0
         self.skipped = 0
         self.budget_holds = 0  # steps held back because they would have taken an account past the cap
+        self.held_steps = 0  # budget holds in a row (a sent step resets it); HELD_STEPS_END end the run
         # the governor's window: (when, account, throttled) per write attempt to the run's modules
         self.attempts: deque[tuple[float, str, bool]] = deque()
         self._pending: dict[str, float] = {}  # device id → when the oldest write not yet verified was sent
@@ -105,6 +115,9 @@ class ProgramRunner:
         self._sleep = self.clock.sleep  # tests make a step late by wrapping it
         self.step_s, why = self._effective_step()
         self.count = self.count_for(self.step_s)  # the step number the hold goes out at
+        if over:  # this choice already ran (D75): a re-pick only holds, whatever its run_s; no alert
+            self.state, self.shown, self.ended = DONE, None, "this choice already ran (a re-pick only holds)"
+            return
         if why is not None:
             self._never(why)
             return
@@ -219,6 +232,8 @@ class ProgramRunner:
                         break
                 self.index = n
                 self._step(n)
+                if self.state is not RUNNING:  # the step ended the run (held steps) or something else did
+                    return
             await self._sleep_until(self.t0 + self.count * self.step_s)
             self.index = self.count
             self.finish("the run is over")
@@ -246,6 +261,7 @@ class ProgramRunner:
         if over is not None:  # never past the account's cap: this step is held back, the next one tries again
             self.shown = previous
             self.budget_holds += 1
+            self.held_steps += 1
             account, recent, k = over
             self.engine.telemetry.record(
                 "program",
@@ -257,8 +273,12 @@ class ProgramRunner:
                 step_writes=k,
                 cap=self.settings.account_writes_per_min,
             )
+            self.engine._publish_soon()  # the panel draws the step last sent, frozen (to_state)
+            if self.held_steps >= HELD_STEPS_END:
+                self.finish(f"the account's write budget held back {HELD_STEPS_END} steps in a row")
             return
         self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})")
+        self.held_steps = 0
 
     def _wanted(self) -> list[str]:
         """The modules a send now writes: those whose desired rows differ from the rows sent, plus the deferred."""
@@ -297,7 +317,8 @@ class ProgramRunner:
         return sent
 
     def finish(self, why: str, *, alert: str | None = None, send: bool = True) -> None:
-        """End the run: the still look is the desired state again, sent once to the modules not showing it.
+        """End the run: the mode's best still tier when the engine can settle onto it now (`settle_after_run`, D75),
+        else the still look (the hold) is the desired state again, sent once to the modules not showing it.
 
         `send=False` (a 403: the venue IP may be blocked) sends nothing: the step last sent — a still, one colour per
         module look — stays the desired state, so nothing re-asserts either, until the next look replaces it."""
@@ -306,12 +327,14 @@ class ProgramRunner:
         self.state, self.ended = DONE, why
         self._stop_listening()
         engine = self.engine
+        engine.note_run_over(self)  # this choice has run: a re-pick only holds (D75)
         if not send:
             self.deferred.clear()
         else:
             self.shown = None
             if engine.outage is None and not engine.commissioning and not engine.stopped:
-                self._send("hold")
+                if not engine.settle_after_run(self):
+                    self._send("hold")
             else:
                 engine.reconciler.schedule_reassert()  # it goes out once the engine can send again
         engine.telemetry.record(
@@ -362,10 +385,51 @@ class ProgramRunner:
             notes=[*self.plan.notes, f"Held at step {self.shown} of a stepped run stopped by a 403"],
         )
 
+    def yield_to_guest(self) -> None:
+        """A guest's input during the idle breath (D75): the breath ends now and nothing is sent for it — the guest's
+        own burst carries the still look with the guest's settings. The 'program end' event says why."""
+        if self.state is not RUNNING:
+            return
+        self.state, self.ended, self.shown = DONE, "a guest changed the canopy", None
+        self.deferred.clear()
+        self._stop_listening()
+        self.engine.note_run_over(self)
+        self.engine.telemetry.record(
+            "program",
+            action="end",
+            mode=self.plan.mode_id,
+            reason=self.ended,
+            steps_sent=self.steps_sent,
+            skipped=self.skipped,
+            budget_holds=self.budget_holds,
+        )
+
     # ---- what the engine asks ---------------------------------------------------------------------------------
     @property
     def running(self) -> bool:
         return self.state is RUNNING
+
+    @property
+    def tripped(self) -> bool:
+        """Did the throttle governor stop this run?"""
+        return self._tripped
+
+    def resting(self, device_id: str) -> bool:
+        """Is this module resting (D75: a breath's module between breaths)? The run is going, no write sent to it is
+        unverified, the reconciler hasn't deferred it, and the next step (or the hold at the end) sends it the rows
+        it has now — so a true-up read of it races nothing."""
+        if not self.running or device_id in self._pending or device_id in self.deferred:
+            return False
+        now = self.rows_for(device_id)
+        if now is None:
+            now = self.plan.modules[device_id].rows if device_id in self.plan.modules else None
+        n = self.index + 1
+        upcoming = (
+            self.plan.modules[device_id].rows
+            if n >= self.count and device_id in self.plan.modules
+            else self.program.steps[n % self.cycle].rows.get(device_id)
+        )
+        return now is not None and upcoming is not None and list(now) == list(upcoming)
 
     @property
     def moving(self) -> bool:
@@ -427,27 +491,36 @@ class ProgramRunner:
         return f"Stepping: a write sent {age:.0f} s ago hasn't been verified."
 
     def to_state(self) -> dict:
-        """CanopyState.program: {t0, step_s, step, ends_at, frames} (see engine_api.CanopyState)."""
+        """CanopyState.program: {t0, step_s, step, ends_at, frames, levels} (see engine_api.CanopyState). Frames
+        after the step last sent, up to the schedule's step, repeat the step last sent: a held step is never drawn."""
         positions = self._positions()
-        frames = []
+        frames, levels = [], []
         for n in range(self.count + 1):
-            colours = self.program.steps[0 if n == self.count else n % self.cycle].colours
-            frames.append([colours.get(pos) if pos in positions else None for pos in GRID])
+            k = self.shown if self.shown is not None and self.shown < n <= self.index else n
+            step = self.program.steps[0 if k == self.count else k % self.cycle]
+            frames.append([step.colours.get(pos) if pos in positions else None for pos in GRID])
+            row: list[int | None] = []
+            for pos in GRID:
+                device_id = positions.get(pos)
+                rows = step.rows.get(device_id) if device_id is not None else None
+                row.append(self.engine.level_sent(device_id, rows) if rows is not None else None)
+            levels.append(row)
         return {
             "t0": self.t0_wall,
             "step_s": self.step_s,
             "step": self.index,
             "ends_at": self.t0_wall + self.count * self.step_s,
             "frames": frames,
+            "levels": levels,
         }
 
-    def _positions(self) -> set[str]:
-        """The canopy positions this plan drives."""
-        out = set()
+    def _positions(self) -> dict[str, str]:
+        """The canopy positions this plan drives → their device ids."""
+        out: dict[str, str] = {}
         for device_id in self.plan.modules:
             entry = self.engine._entry(device_id)
             if entry is not None and entry.module:
-                out.add(str(entry.module))
+                out[str(entry.module)] = device_id
         return out
 
     # ---- the governor -----------------------------------------------------------------------------------------
