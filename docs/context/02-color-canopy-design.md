@@ -82,6 +82,12 @@ palettes, at the scene's brightness, at every tier.
   moves" for these two scenes only. Lowcountry Calm (the idle look) and The Goodnight Glow stay still. It runs in the
   simulator only. On real lights it stays **off until the stepped rehearsal (Gate R)** passes and Alon sets
   `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still.
+- **D75 (Oct 18): any scene may move.** A scene may carry one stepped rung of three kinds: travel (D65's: the design
+  moves), breathe (the design stays put and each strand's colour and/or level swells and softens in place, the
+  design's start leading) and shimmer (each strand breathes on its own rhythm). A guest's choice runs it first and
+  then holds the scene's best still tier (Golden Hour's per-head sun where it is commissioned); /ops keeps the ladder
+  order. The idle look may carry a rung too, and may breathe now and then (`motion.idle`, off). No scene changes with
+  D75 itself (PR D adds the options), and nothing changes on real lights until Gate R.
 
 See `04` "Canopy control model" for how each scene runs at each tier.
 

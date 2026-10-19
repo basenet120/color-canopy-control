@@ -1045,3 +1045,85 @@ makes the module "stuck" at once: /ops shows the note immediately (true), the gu
 soon as the kits confirm, and a readback that really differs still gets its 10 s of "changing" while the reconciler
 retries. Reproduced first (`tests/test_flagged_not_changing.py`: 10.1 s of "changing", the second scene at 11.4 s on
 the two-kit setup), then fixed (under 3 s, and under 4 s through the panel).
+
+## 2026-10-18 — motion on every scene
+
+**D75 — Any scene may move: breathe and shimmer beside travel, a guest's choice runs first and then settles on the
+best still tier, and the idle look may breathe (off); live stays off until Gate R (supersedes D65's "the idle look
+never steps" and, for a guest's choice, "Golden Hour steps only where its canvas and slot can't run").** The
+preset-options plan (`docs/plans/preset-options/README.md` §5.2, PR B) asked for motion on every scene without
+changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are untouched (PR D adds the options), so
+`config_sha` and a Lab publication already on the show box stay valid. What is decided:
+- **What moves.** Any scene may carry one stepped rung, placed just before `[modules, strand]`. `SteppedTechnique`
+  gains `mode: travel | breathe | shimmer` (travel is D65's, unchanged, and the default). A breath keeps the design
+  in place: each module's colour moves up to `shift` (0–0.5) along the design's own t (before mirror and invert,
+  clamped, never wrapped, so a rim module never jumps to the centre's colour) and its brightness up to
+  `brightness_swing` (0–20) points either side of the rung's brightness. The waveform is one breath of
+  `steps_per_cycle` steps per module: up to a peak on a whole step, back, down, back (`compile.breath_wave`; no two
+  consecutive steps equal). `lag_steps` (0–6) makes the design's start lead the breath; a shimmer picks each
+  module's start from `seed` (sha256, the same on every run). Lags are counted over the modules the plan drives, so
+  the two live kits never rest together under copy that says they move, and a breath whose driven strands would get
+  nothing for a whole step refuses to compile there (the still look holds). Step 0 is the still design in every
+  mode; the program's cycle is a breath plus its largest lag. Travel takes none of the breath's parameters ("set"
+  means not the default, so `shift: 0` on a travel rung loads).
+- **Copy says what changes.** A swing's copy says `swells and softens` / `glow and soften`; a colour-only breath
+  says `drifts and settles`; "next colour" is refused when `shift` is 0, "brighter"/"softer" when the swing is 0; a
+  breath names no flow except a lagged breathe's own start ("from the centre out"). The partial canopy's sentence
+  says "a brighter or softer level" where only levels change. The Lab's generated breath sentence names only the
+  colours the breath reaches.
+- **Brightness rides in the step's own PUT.** One full-state PUT per changed module per step, never split (07 §6).
+  A guest's brightness during a breath is **relative**: the breath swings around the guest's level, never below
+  `kiosk.guest_brightness_min` (amends D60's "absolute" for breaths only; 0 offset for every other plan).
+- **Which plan a source shows.** A guest's (kiosk) choice runs the rung first; an /ops choice keeps the ladder order
+  (D65: Golden Hour's canvas at once, Coastal Tides' rung); a re-pick (`reconciler`, `recovery`, `startup`, a
+  publish) never starts a run and keeps a running one's phase; start-up, the idle return, the safe look, a try-on
+  and the checklist's change back (`ops-restore`) show a still tier. "Show after publish" is an /ops choice. A floor
+  never steps. **A choice runs once:** once its run is over, a re-pick builds the runner over (DONE at once) and
+  lifts it to the best still tier (the never-ran swap); a publish with a longer `run_s` never restarts a finished run.
+- **The settle.** At a run's end the look moves to the mode's canvas or slot when that can run (one write per module
+  that changes, source `settle`; a motion plan re-triggers all nine), else the runner's module-level hold stays.
+  After a governor trip or two held steps the hold goes out now and the settle waits (the cool-off, or one cap
+  window). D72's fast back-off does **not** hold it (a build deviation from the spec): the back-off only puts guest
+  pacing back on the budget rule the run already kept, and its 120 s after a 90 s run landed past the 180 s idle
+  return, so under the soak's pinned 5% throttling Golden Hour never reached its per-head sun.
+- **Held steps.** A budget-held step is drawn as the step last sent (frames and levels frozen), and two held steps in
+  a row (`HELD_STEPS_END`) end the run on the still look and the still copy.
+- **The idle breath (`motion.idle`, off: `null`).** `{breathe_run_s, every_s}`: while the idle look holds with nothing
+  else in force, it breathes once for `breathe_run_s` every `every_s`, and an idle return lands as one breath. It
+  never moves the idle clocks or the guest settings, yields at once to any guest input, waits while paused, resting,
+  rehearsing, trying on or while a guest's brightness or off is in force, and runs only through `tier_allowed` (never
+  on live hardware until `live_enabled`). The show refuses `motion.idle` when the idle look has no stepped rung or
+  `breathe_run_s` fits fewer than two paced steps. Alon turns it on only after a 30-minute live soak (live_enabled
+  on, then motion.idle on, watched on /ops, `null` to revert).
+- **Any look can be rehearsed**, the idle look included: its own rung, or its module-level design at the D65 defaults.
+- **"This scene moves" is `Mode.moves`** (a stepped rung in the ladder). `Mode.motion` keeps its 07 §6 meaning (the
+  on-device all-or-none burst flag): it stays false, and the schema now refuses `motion: true` beside a stepped rung
+  (`scene_rules` "static" and `live.validate_trio` would refuse it anyway). PR D's brief must write no `motion:` key
+  and assert `mode.moves and not mode.motion`.
+- **Resting modules keep their rolling reads** during a run (a lagged breath leaves modules unwritten for several
+  steps), so the true-up still heals an out-of-band change on a resting module within 10 s.
+- **The Lab and the panels.** The Lab edits the kind of motion and the breath's parameters (lab-10), previews each
+  step's per-module levels, exports added `mode` / `brightness_swing` / `lag_steps` lines under `techniques →
+  stepped`, and says when a rung under higher rungs runs ("When a guest chooses …"). The try-on stays still at module
+  level (D66, unchanged). The guest panel's `steps` motion carries per-panel `levels`, drawn as opacity
+  (breathe-1).
+- **Live off.** `motion.stepped.live_enabled` stays false and `motion.idle` null: nothing changes on real lights
+  until Gate R (recommended on nine with a breathe look) and Alon's PRs.
+- **Superseded:** D65's "the idle look never steps (the show refuses to load otherwise)" and "Golden Hour steps only
+  where its canvas and slot can't run" for a guest's choice; the plan §5.2 names `lag_per_ring` / `steps_per_breath`
+  are built as `lag_steps` / `steps_per_cycle` (steps per breath).
+- **Soak deltas** (`make soak`, seed 0, `docs/reports/sim-acceptance.md`; `config/sim/acceptance.yaml` untouched).
+  Main run: a guest's Golden Hour now steps first, so accepted changes by tier went canvas 73 → 51, stepped 19 → 40
+  (modules 78 → 77), 16 runs then settled onto their canvas or slot, and the simulator took 5136 writes (3133); the
+  settle row's p95 stays 5.19 s (FAIL since D72; max 6.50 → 9.20 s); every other pinned row passes. **Ripple delta:**
+  60 of 60 changes landed ring by ring (48 + 12 one-burst before), because a guest's Golden Hour lands at module
+  level and steps instead of as T1's SIMULATED motion burst; settled p95 6.50 s (≤ 7.4), per-ring spread p95 2.32 s
+  (reported). Stepped scenario: six scenes and all three kinds (Garden a SIMULATED breathe, Sunset a shimmer,
+  Goodnight a level-only breathe, Calm travel), 153 steps landed, 0 superseded, failed or skipped, one PUT per
+  changed module per step, at most 72 program PUTs in any 60 s, 9 finished runs settled canvas 5 / stepped 4, the idle
+  return still at 180.3 s, no governor trip or downgrade — but **the most writes of any kind in 60 s is 91 against
+  the proposed 90 (FAIL)**. A mood that cuts a run short now runs at full pace itself, so the 20% reserve has to
+  carry the mood's 9 writes, the reconciler's re-asserts and 429 retries after the runner's cap check. Over seeds
+  0–7 of that scenario the maximum was 86–92 (above 90 on seeds 0 and 7; 83–89 before), and seed 4 had one
+  superseded step. Options for Alon: a cap check that leaves room for a step's own retries, a larger
+  `budget_reserve`, or accepting the proposed target as 05's "reported" kind.

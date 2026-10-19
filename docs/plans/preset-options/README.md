@@ -287,6 +287,20 @@ Checks to run while building:
 6. **The preview** (iPad picture, Lab, Studio): animate breathe and shimmer the way steps are animated today
    (`canopy_view` 252–288, `canopy-preview.mjs` `motionColors`).
 
+**As built (PR B, D75)** — where the build differs from the list above:
+- Names: `lag_per_ring` is `lag_steps` (a lag in steps over the driven strands, from the design's own t, not per
+  ring) and `steps_per_breath` is `steps_per_cycle` (for a breath, the steps in one module's breath). `shift` is a
+  clamped offset along the design's t, not a ring offset.
+- Item 1: "this scene moves" is `Mode.moves` (a stepped rung in the ladder); `motion: true` is refused beside a
+  stepped rung (it stays the 07 §6 on-device flag). The rung sits just before `[modules, strand]`.
+- Item 3: the settle seam is in `conductor/canopy.py` (`settle_after_run`, called from the runner's finish), not in
+  `show.py`. A guest's (kiosk) choice runs the rung first; an /ops choice keeps the ladder order (Golden Hour's
+  canvas at once); a re-pick never starts a run, and a choice runs once.
+- Item 4: the idle mode may carry a rung (the refusal is gone); start-up and an idle return show it still unless
+  `motion.idle` is on. The idle soak is `motion.stepped.live_enabled` on, then `motion.idle` on, watched on /ops for
+  30 minutes, `null` to revert.
+- Item 5: the Lab try-on stays still at module level (D66).
+
 ### 5.3 Gates, in this order
 1. **Snap or fade, 5 minutes, Module 1 (Kingston) from the show box at the venue.** Send coral → blush → coral at
    brightness 85, then 85 → 70 → 85. Film it.

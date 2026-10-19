@@ -31,10 +31,13 @@ presses **Rehearse** in the confirm dialog on `/ops`.
 ## Run it
 
 1. `/ops` → **Controls** → **Stepped rehearsal (Gate R)**.
-2. Choose the look: **Golden Hour** or **Coastal Tides** (the two scenes that step, D65): each rehearses its own
-   stepped rung in `config/modes.yaml`, with the copy guests would see. Any look except Lowcountry Calm (the idle look
-   never steps) can be rehearsed. If a look has no stepped design of its own in `config/modes.yaml`, its module-level
-   design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward. On the nine show
+2. Choose the look: **Golden Hour** or **Coastal Tides** (the two scenes that step today, D65): each rehearses its own
+   stepped rung in `config/modes.yaml`, with the copy guests would see. Any look can be rehearsed, the idle look
+   (Lowcountry Calm) included (D75): the rehearsal checks that look's own rung for up to 10 minutes. It is not
+   `motion.idle`'s 30-minute soak, which Alon runs separately with `live_enabled` on. If a look has no stepped design
+   of its own in `config/modes.yaml`, its module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s
+   steps, forward. For Gate R on the nine show kits, prefer a **breathe** look once one is in `config/modes.yaml` (PR
+   D): every module changes level every step, so it is the heaviest steady write rate a scene asks for. On the nine show
    kits the runner stretches the step to 7.5 s: it paces all nine modules on one account at 72 writes a minute,
    the account's cap of 90 less a 20% reserve for 429 retries and re-sends (`motion.stepped.budget_reserve`).
 3. Minutes: **10** for Gate R (1–10 are allowed; use 2 to try the page out).
@@ -65,7 +68,8 @@ A rehearsal that stopped early always fails. Its report still says what it measu
 Write these down in the session log (`docs/current-live-test-session.md` or the install-day log) and attach the video:
 
 - **Cut or fade (bench item 6):** at each step, does a strand jump straight to its new colour or fade into it? Does a
-  fade blur the step into the next?
+  fade blur the step into the next? For a breathe look (D75), does a level change read as a breath or as a blink?
+  Note which: the moving copy never says "fade" until the bench says so.
 - **Does the flow read?** Does the colour visibly move the way the design says ("from one edge", "diagonally")?
   Does it read as the ripple order from where guests stand, or as nine strands changing at random?
 - **Start skew:** in one step, how far apart do the first and last strands change (in seconds, from the video)?
@@ -109,5 +113,6 @@ A report with `"simulated": true` (made on a laptop or staging) **never counts f
   `config/modes.yaml`; that setting is all that keeps them off the real lights). Nobody else flips it, whatever the report says.
 - **Fail:** stepped motion stays off. Nothing else changes for the show. Send Alon the report. If the failure was a 403,
   check `/ops/accounts` before anything else. Don't run it again the same day without Alon.
-- In both cases the canopy is back on the look's still design at its usual tier (T3 on hardware before Gate C).
-  It returns to Lowcountry Calm after the usual idle time.
+- In both cases the canopy is back on the look's best still tier: its canvas or slot where that can run, else its
+  still module-level design (D75; T3 on hardware before Gate C). It returns to Lowcountry Calm after the usual idle
+  time, shown still (an idle return never starts a run unless `motion.idle` is on).
