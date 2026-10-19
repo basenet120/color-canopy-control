@@ -38,25 +38,38 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
   can't regroup a scene; the Lab's `option_of`/`group`/`on_ipad`, "Make this the scene" (client-side working-draft
   swap, Undo, no new route) and the export's "Made the scene on site" line, which prompts for the client's sign-off
   and never claims it. Lab cache tag `lab-11`, kiosk tag `review-1`.
-- **Verified (sim, macOS, Oct 18):** `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` → 2558 passed, 5 skipped, 44 subtests (11 min) (baseline
-  at #37: 2473 passed, 5 skipped); `ruff check` / `ruff format --check` clean; `node --test` on each of the ten
-  `tests/*.test.mjs` → fail 0 (guest-panel 30, ops-ipad 3, lab-model 88); `scripts/regen_scene_pins.py --check` exit
-  0 (no scene, mode or recipe changed); `pytest tests_e2e --collect-only` → 54 collected (review_fixture imports
-  conductor only). **Browser (local only; CI runs no browser):** the new e2e tests pass — 14 kiosk review tests
-  against the stubbed panel at 1180×820, 1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a tap
-  after scrolling, scroll kept across a rebuild, painted pixels and alpha at dpr 2, a quarter-turned view, six
+- **Review fixes (round 1, Oct 18):** (a) the review cards are tier-true for every scene: `thumb_basis` asks the
+  engine for each visible scene's likely plan (`_likely_plan`, as /api/kiosk/modes does), so a modules- or
+  stepped-first scene the reconciler has eased down to its strand rung (the idle Lowcountry Calm among them) draws
+  no module picture while the ceiling shows one whole-strand look. The test that pinned "options and modules-first
+  are never compiled" now pins the opposite, beside a stub test (Calm showing at strand) and a sim-engine test (a
+  hysteresis floor at strand). (b) `cardsKey` carries the scene's `brightness_draft` beside the thumbnail's `sig`,
+  so a brightness-only publish repaints the card's opacity; a card with no thumbnail (the six-card strip) is keyed
+  as before. (c) /ops "On the iPad": a failed load writes its own `#ipad-error` line, which the next fresh answer
+  clears; a switch's own answer in `#ipad-result` stays until the next switch. Each fix has a test that fails with
+  the fix reverted (checked by hand, then restored).
+- **Verified (sim, macOS, Oct 18, after review round 1):**
+  `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` → 2560 passed, 5 skipped, 44 subtests (11 min)
+  (baseline at #37: 2473 passed, 5 skipped); `ruff check` / `ruff format --check` clean; `node --test` on each of the
+  ten `tests/*.test.mjs` → fail 0 (guest-panel 31, ops-ipad 4, lab-model 88); `scripts/regen_scene_pins.py --check`
+  exit 0 (no scene, mode or recipe changed); `pytest tests_e2e --collect-only` → 54 collected (review_fixture imports
+  conductor only). **Browser (local only; CI runs no browser; run before review round 1 and not re-run since, so
+  round 1's kiosk key and /ops error line are proven by node tests only):** the new e2e tests pass — 14 kiosk review
+  tests against the stubbed panel at 1180×820, 1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a
+  tap after scrolling, scroll kept across a rebuild, painted pixels and alpha at dpr 2, a quarter-turned view, six
   options keep the 3 × 2, a hidden scene named in Now Showing, one attract strip per group), and the whole of
   `tests_e2e/test_ops_visualizer.py` (11, with the new On the iPad switch test). Run with the system Chrome
   (`channel="chrome"`, a scratch plugin: Playwright's own Chromium isn't downloaded on this Mac) on port 8303 only.
   **Pre-existing, not PR C's:** `test_panel_ready_changing_cooldown` (`#hdr-spinner` not visible) and
-  `test_debug_drawer_is_for_ops_only` fail the same way on the untouched #37 tree with that browser.
-  **Soak:** `python -m conductor.soak` → the same numbers as the committed report (19 PASS; the gating settle row
-  FAIL at p95 5.19 s, as since D72; the two reported spreads FAIL as before); the report was restored, not
-  committed.
+  `test_debug_drawer_is_for_ops_only` fail the same way on the untouched #37 tree with that browser. **Soak** (before
+  review round 1, which changes no engine code): `python -m conductor.soak` → the same numbers as the committed
+  report (19 PASS; the gating settle row FAIL at p95 5.19 s, as since D72; the two reported spreads FAIL as before);
+  the report was restored, not committed.
 - **Measured (for PR D):** `catalog_thumbs` over the 18 review scenes, warm: every card per head 72.2 ms / 55,837 B
   of JSON (the worst case); module level 3.4 ms / 8,569 B. `thumb_basis` on the sim engine over 18 visible scenes:
-  11.0 ms (the three painted bases come out per head at T1 there). The spec's read-only baseline on git's six:
-  `mode_design` 22.8 ms, of which 1.0 ms is the modules.
+  22–28 ms (niced) since review round 1 compiles every visible scene, as /api/kiosk/modes does (11.0 ms when only
+  the three painted bases were compiled; they come out per head at T1 there). It runs on every review-menu panel
+  poll (2 s). The spec's read-only baseline on git's six: `mode_design` 22.8 ms, of which 1.0 ms is the modules.
 - **UNVERIFIED:** scrolling on the 9th-gen iPad in Guided Access (Chromium's synthesized touch scroll is the closest
   proof); the promote UI in a real Lab (git has no options before PR D: covered by node, static and route tests,
   and a promoted draft passes `apply_drafts` and `POST /api/lab/versions`); the 18-option and fins thumbnail costs;
@@ -68,8 +81,8 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
 - **Decisions recorded in D76:** card thumbnails draw no fins and use a thumbnail dot radius (C12); the base keeps
   its "#1" until PR E or a Lab rename (C27).
 - **Questions for Alon:** (1) the review cards draw each scene at the tier the engine would use (per light only for a
-  painted scene shown as canvas or slot; module colours otherwise, which on the show box is every scene until
-  per-light is commissioned), against plan §5.4's per-light design on the iPad: keep tier-true cards, or add a
+  painted scene shown as canvas or slot; none for one shown as a whole-strand look; module colours otherwise, which
+  on the show box is every other scene until per-light is commissioned), against plan §5.4's per-light design on the iPad: keep tier-true cards, or add a
   labelled design view (new client copy)? (2) Once PR E brings the iPad back to six, should those six cards also get
   tier-true thumbnails instead of palette strips?
 - **Next:** PR D on a merge of A + B + C. Its verification should include a hand walk-through of promote on

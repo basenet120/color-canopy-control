@@ -1053,17 +1053,23 @@ more than six scenes are visible (`GRID_MAX`, one number in conductor/ipad_menu.
 web/ops/ipad-model.mjs), the iPad shows the review menu: one row per scene group with its options side by side, each
 group starting at the left, and only the scene list scrolls under a pinned Now Showing and brightness. At six or
 fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the live iPad until PR D adds options.
-- **The cards draw each scene at the tier the engine would show it at now.** Per light only when the likely plan is
-  canvas or slot (T1/T2, the rule /api/kiosk/modes already uses); otherwise its nine module colours (module level
-  and the stepped hold); none for a whole-strand look. Plan §5.4 said the iPad picture shows the per-light design,
-  but CLAUDE.md's copy rule and the panel's own rule ("a picture is copy too") say the card must be what the lights
-  can show; on the show box that is module level until per-light is commissioned. Alon's question 1 in the PR: keep
-  the tier-true cards, or add a labelled per-light design view (new client copy). Thumbnails appear only in the
-  review menu; the six-card grid keeps its palette strips (the question for PR E is in STATUS).
+- **The cards draw each scene at the tier the engine would show it at now.** Every visible scene's likely plan, the
+  rule /api/kiosk/modes already uses for every listed mode (`routes.kiosk._likely_plan`: the plan showing now when it
+  is that scene's, else `compile_best`, which honours the reconciler's hysteresis floor). Per light only when that
+  plan is canvas or slot (T1/T2); otherwise its nine module colours (module level and the stepped hold); none for a
+  whole-strand look, including a modules- or stepped-first scene the reconciler has eased down to its strand rung
+  (the idle Lowcountry Calm among them). That is one compile per visible scene per poll, as /api/kiosk/modes pays
+  (22–28 ms for 18 scenes on the sim engine). Plan §5.4 said the iPad picture shows the per-light design, but
+  CLAUDE.md's copy rule and the panel's own rule ("a picture is copy too") say the card must be what the lights can
+  show; on the show box that is module level until per-light is commissioned. Alon's question 1 in the PR: keep the
+  tier-true cards, or add a labelled per-light design view (new client copy). Thumbnails appear only in the review
+  menu; the six-card grid keeps its palette strips (the question for PR E is in STATUS).
 - **Card thumbnails draw no fins** and use a thumbnail dot radius (`DOT_R_IN` × the card's scale; integration
   conflict C12, option b): the nine panels as hairlines and the heads as dots, still, brightness as opacity. They are
   computed on the server (`ipad_menu.catalog_thumbs`, from `routes.design.mode_design`), cached per scene, per
-  live-looks generation and basis, and drawn on a rebuild or resize only (D69).
+  live-looks generation and basis, and drawn on a rebuild or resize only (D69). The card key carries the thumbnail's
+  `sig` (its full-strength colours) and the scene's `brightness_draft` (its opacity), so a brightness-only publish
+  repaints the card too.
 - **`kiosk.hidden_scenes`** (git default `[]`, one foldable line in config/conductor.yaml) has an ops overlay,
   `<data>/overrides/settings.yaml` (`{kiosk: {hidden_scenes: [ids]}}`), written by the /ops "On the iPad" switches
   atomically at 0600 with a history copy. The overlay replaces git's list; it never fails a start (a file that can't
