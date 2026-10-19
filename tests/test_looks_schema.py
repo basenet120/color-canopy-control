@@ -752,6 +752,54 @@ def test_a_breathe_and_a_shimmer_rung_load_with_their_parameters():
     )
 
 
+def test_a_lagged_breath_whose_modules_all_start_together_is_refused():
+    """Review B-R6-1: a shimmer with lag_steps 0 is refused because every module would breathe together, but a seed
+    or a layout can collapse the lags too (`compile.module_lags` over the nine modules all equal). The canopy would
+    then breathe as one under copy that says otherwise: a shimmer's "on their own", a breathe's lead words. Checked
+    wherever there is a canopy (parse_modes here, the scene rules and the Lab's apply too)."""
+    from conductor.looks.compile import module_lags
+
+    grid = [f"r{r}c{c}" for r in range(3) for c in range(3)]
+    # seed 183 at lag_steps 1: all nine hashes land on the same start (seed 7, the control, doesn't)
+    control = _stepped_ok(_stepped(**{**SHIMMER, "lag_steps": 1}))
+    assert set(module_lags(control, grid, CANOPY).values()) == {0, 1}
+    msg = _bad(_stepped(**{**SHIMMER, "lag_steps": 1, "seed": 183}))
+    assert (
+        "mode 'coastal-tides' → techniques → stepped → seed: lag_steps 1 with seed 183 starts every module "
+        "together, so the canopy breathes as one" in msg
+    )
+    assert "pick another seed or a larger lag_steps" in msg
+    spread = _stepped_ok(_stepped(**{**SHIMMER, "lag_steps": 2, "seed": 183}))  # a larger lag spreads it
+    assert len(set(module_lags(spread, grid, CANOPY).values())) > 1
+    # without a canopy the starts aren't checked (a breathe's need the module centres), as the layout words aren't
+    data = copy.deepcopy(RAW)
+    _stepped(**{**SHIMMER, "lag_steps": 1, "seed": 183})(data)
+    assert parse_modes(data, recipes=RECIPES).mode("coastal-tides").techniques.stepped.seed == 183
+
+    def sun(lag: int):
+        """A sun at the middle of the left edge, 600 in across: t < ½ at every module centre, so at lag_steps 1
+        every module's start rounds to 0 and nothing leads, though the copy says the breath starts from one edge."""
+
+        def mutate(d):
+            _sampled(
+                {"kind": "radial", "centre_in": [0, 60], "radius_in": 600},
+                feature="Each strand set to one colour, so the palette steps from one edge.",
+            )(d)
+            lead = f"{LEVEL_COPY[:-1]} from one edge."
+            _stepped(**{**BREATHE, "lag_steps": lag, "moving_feature": lead})(d)
+
+        return mutate
+
+    msg = _bad(sun(1))
+    assert (
+        "mode 'coastal-tides' → techniques → stepped → lag_steps: lag_steps 1 starts every module together on "
+        "this design" in msg
+    )
+    assert "so the breath doesn't start 'from one edge'; raise lag_steps, or set it to 0" in msg
+    led = _stepped_ok(sun(2))  # lag_steps 2: the far modules start a step later
+    assert (led.lag_steps, sorted(set(module_lags(led, grid, CANOPY).values()))) == (2, [0, 1])
+
+
 def test_breathe_copy_says_what_changes():
     def breathe(**over):
         return _stepped(**{**BREATHE, **over})

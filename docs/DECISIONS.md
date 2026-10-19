@@ -1061,7 +1061,11 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   `brightness_swing` (0–20) points either side of the rung's brightness. The waveform is one breath of
   `steps_per_cycle` steps per module: up to a peak on a whole step, back, down, back (`compile.breath_wave`; no two
   consecutive steps equal). `lag_steps` (0–6) makes the design's start lead the breath; a shimmer picks each
-  module's start from `seed` (sha256, the same on every run). Lags are counted over the modules the plan drives, so
+  module's start from `seed` (sha256, the same on every run). A lagged breath (a shimmer, or a breathe with
+  `lag_steps` > 0) whose nine starts all come out equal (a seed such as 183 at lag 1, or a design whose t rounds to
+  one step at every module centre) is refused wherever a canopy is checked (the load, the scene rules, the Lab's
+  apply), on its `seed` or `lag_steps`: it would breathe as one under "on their own" or its lead words (review
+  B-R6-1). Lags are counted over the modules the plan drives, so
   the two live kits never rest together under copy that says they move, and a breath whose driven strands would get
   nothing for a whole step refuses to compile there (the still look holds). Step 0 is the still design in every
   mode; the program's cycle is a breath plus its largest lag. Travel takes none of the breath's parameters ("set"

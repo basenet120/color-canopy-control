@@ -967,6 +967,25 @@ def test_breathe_problems_land_on_the_stepped_fields(app_client):
     assert D.field_for("mode 'golden-hour' → techniques → stepped → brightness") == "brightness"
 
 
+def test_a_lagged_breath_that_starts_every_module_together_is_refused_on_its_field():
+    """Review B-R6-1: the Lab's seed input takes any whole number and its layout any radius, and some collapse a
+    lagged breath's starts (`compile.module_lags` over the nine modules all equal). Applied, the canopy would breathe
+    as one under the generated "the strands glow and soften on their own" (shimmer) or "… from one edge" (a lagged
+    breathe). The apply refuses it on the field that collapses it; seed 7 and a 2-step lag are the controls."""
+    shimmer = {**BREATHE_GOLDEN, "stepped.mode": "shimmer", "stepped.lag_steps": 1}
+    (together,) = problems(edit("golden-hour", **{**shimmer, "stepped.seed": 183}))
+    assert together.field == "stepped.seed"
+    assert together.message.startswith("lag_steps 1 with seed 183 starts every module together")
+    moving = apply(edit("golden-hour", **{**shimmer, "stepped.seed": 7})).modes.mode("golden-hour")
+    assert "on their own" in moving.techniques.stepped.moving_feature
+    # the sun at the middle of the left edge, 600 in across: every module's start rounds to 0 at lag_steps 1
+    sun = {**BREATHE_GOLDEN, "layout": {"kind": "radial", "centre_in": [0.0, 60.0], "radius_in": 600}}
+    (flat,) = problems(edit("golden-hour", **{**sun, "stepped.lag_steps": 1}))
+    assert flat.field == "stepped.lag_steps" and "the breath doesn't start 'from one edge'" in flat.message
+    led = apply(edit("golden-hour", **{**sun, "stepped.lag_steps": 2})).modes.mode("golden-hour")
+    assert "swells and softens from one edge" in led.techniques.stepped.moving_feature
+
+
 def test_a_flat_stepped_frame_is_blamed_on_the_layout_not_the_read_only_run():
     """S3's real stepped rule: an axis-aligned mirror leaves a stepped scene's frames with two colours. The run's
     timing is read-only in Slice A, so the problem names the layout the client just changed."""

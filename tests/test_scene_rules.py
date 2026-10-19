@@ -132,6 +132,22 @@ def _breathe_tides(**params) -> Mutation:
     return mutate
 
 
+SHIMMER_COPY = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter "
+    "or softer level every few seconds, so the strands glow and soften on their own."
+)
+
+
+def _shimmer_tides(**params) -> Mutation:
+    """Coastal Tides' rung as a level shimmer (D75): each module on its own seeded start."""
+
+    def mutate(scenes: dict, modes: dict, recipes: dict) -> None:
+        stepped = _technique(modes, "coastal-tides")["stepped"]
+        stepped.update(mode="shimmer", shift=0.0, moving_feature=SHIMMER_COPY, **params)
+
+    return mutate
+
+
 MUTATIONS: dict[
     str, tuple[str, Mutation, bool]
 ] = {  # id → (rule, mutation, check against the approved modes)
@@ -148,6 +164,8 @@ MUTATIONS: dict[
     "stepped-above-the-canvas": ("ladder-end", _stepped_above_the_canvas, False),
     # levels 85, 86, 86, 85, 84, 85: steps 1 and 2 send nothing new
     "breath-repeats-a-step": ("stepped", _breathe_tides(brightness_swing=1, steps_per_cycle=6), False),
+    # seed 183 at lag_steps 1 starts all nine modules together: one breath, under "on their own" (review B-R6-1)
+    "shimmer-starts-together": ("stepped", _shimmer_tides(brightness_swing=6, lag_steps=1, seed=183), False),
     "linear-0": ("two-d", _layout("rainbow-row-sunset", {"kind": "linear", "angle_deg": 0}), False),
     "kits-equal": (
         "kits-differ",
@@ -184,6 +202,24 @@ def test_the_new_d75_mutations_say_why():
     assert stepped.mode == "coastal-tides" and "steps 1 and 2 show the same picture" in stepped.message
     levels = [p["r1c1"][1] for p in R.step_pictures(modes.mode("coastal-tides"), recipes, CANOPY)]
     assert levels == [85, 86, 86, 85, 84, 85]
+
+
+def test_a_shimmer_whose_modules_all_start_together_is_blamed_on_its_seed():
+    """Review B-R6-1: the blocking rules refuse a lagged breath whose nine starts are equal (parse_modes' check, run
+    here over a trio built without it), on the field that collapses them; another seed is the control."""
+    scenes, modes, recipes = _mutated(MUTATIONS["shimmer-starts-together"][1])
+    (together,) = R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules=R.BLOCKING)
+    assert (together.rule, together.mode, together.path) == (
+        "stepped",
+        "coastal-tides",
+        "techniques → stepped → seed",
+    )
+    assert together.message.startswith("lag_steps 1 with seed 183 starts every module together")
+    # every step shows all nine at one level: the canopy breathes as one
+    pictures = R.step_pictures(modes.mode("coastal-tides"), recipes, CANOPY)
+    assert all(len({level for _, level in step.values()}) == 1 for step in pictures)
+    spread = _mutated(_shimmer_tides(brightness_swing=6, lag_steps=1, seed=7))
+    assert R.scene_mode_problems(*spread, CANOPY, rules=R.BLOCKING) == []
 
 
 def test_a_breathe_variant_steps_its_brightness_and_keeps_its_colours():

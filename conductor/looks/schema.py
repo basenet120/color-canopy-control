@@ -593,36 +593,72 @@ def motion_words(canvas: FieldCanvas, canopy: dict | None, direction: str) -> st
     return _toward(words)
 
 
+def _lag_problems(mode_id: str, stepped: SteppedTechnique, canopy: dict | None) -> list[str]:
+    """A lagged breath (a shimmer, or a breathe with lag_steps > 0) whose starts (`compile.module_lags` over the
+    canopy's nine modules) all come out equal breathes in unison, so its copy would be false: a shimmer's "on their
+    own", a breathe's lead words (review B-R6-1). The lag_steps-0 refusals' twin: a seed or a layout can collapse the
+    lags too. Unchecked without a canopy (a breathe's starts are the design's t at the module centres)."""
+    if canopy is None or stepped.mode == "travel" or stepped.lag_steps == 0:
+        return []
+    from conductor.looks.compile import module_lags  # compile imports this module
+
+    grid = canopy["orientations"][canopy["orientation_scheme"]]
+    names = [f"r{r}c{c}" for r, row in enumerate(grid) for c in range(len(row))]
+    if len(set(module_lags(stepped, names, canopy).values())) > 1:
+        return []
+    at = f"mode {mode_id!r} → techniques → stepped"
+    lag = stepped.lag_steps
+    if stepped.mode == "shimmer":
+        return [
+            (
+                f"{at} → seed: lag_steps {lag} with seed {stepped.seed} starts every module together, so the canopy "
+                "breathes as one, not on each module's own rhythm (that is mode: breathe with lag_steps 0); pick "
+                "another seed or a larger lag_steps"
+            )
+        ]
+    start = motion_words(stepped.canvas, canopy, "forward")
+    return [
+        (
+            f"{at} → lag_steps: lag_steps {lag} starts every module together on this design (its t rounds to the "
+            f"same step at every module centre), so the breath doesn't start {start!r}; raise lag_steps, or set it "
+            "to 0 and leave the lead words out of the copy"
+        )
+    ]
+
+
 def _stepped_problems(mode_id: str, stepped: SteppedTechnique, canopy: dict | None) -> list[str]:
     """A travel look's moving copy names its flow (`motion_words`) and no other. A breathe/shimmer look doesn't
     travel, so its copy names no flow, except a lagged breathe's own start (its forward layout words: the design's
-    start leads the breath)."""
+    start leads the breath); and a lagged breath's modules don't all start together (`_lag_problems`)."""
     at = f"mode {mode_id!r} → techniques → stepped → moving_feature"
     if stepped.mode != "travel":
+        lagged = _lag_problems(mode_id, stepped, canopy)
         text = stepped.moving_feature.lower()
         allowed: set[str] = set()
         if stepped.mode == "breathe" and stepped.lag_steps > 0:
             start = motion_words(stepped.canvas, canopy, "forward")
             # a radial or sweep design's start depends on a canopy there isn't: unchecked, as travel's flow is
             if start is None:
-                return []
+                return lagged
             allowed = {start}
         others = [p for p in MOTION_PHRASES if p not in allowed and p in text]
         if others and allowed:
             return [
+                *lagged,
                 (
                     f"{at}: the breath starts {next(iter(allowed))!r} (lag_steps {stepped.lag_steps}), so the "
                     f"copy may say that but not {', '.join(map(repr, others))}"
-                )
+                ),
             ]
         if others:
             return [
+                *lagged,
                 (
                     f"{at}: a {stepped.mode} look doesn't travel, so the copy may not say "
                     f"{', '.join(map(repr, others))} (it reads {stepped.moving_feature!r})"
-                )
+                ),
             ]
-        return []
+        return lagged
     words = motion_words(stepped.canvas, canopy, stepped.direction)
     if words is None:
         return []
