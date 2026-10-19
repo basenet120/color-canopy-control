@@ -891,8 +891,9 @@ async def _show_world(*, simulated: bool = True, live_enabled: bool = False):
 @pytest.mark.parametrize("scene_id", ["coastal-tides", "lowcountry-calm-2"])
 def test_a_breath_sends_one_full_state_put_per_module_per_step_and_reads_back_ready(scene_id):
     """A whole run in sim (Coastal Tides #1, a colour breath, and Calm #2, the first level-only one): every send is one
-    full-state PUT holding the colour and the level together (07 §6), at most one per module per step and never
-    closer than the 4 s write budget on one device; after the run every module reads back READY."""
+    full-state PUT holding the colour and the level together (07 §6), at most one per module in each step of the run
+    (the step window it lands in: t0 + n × the runner's step) and at most one in the settle after it, never closer
+    than the 4 s write budget on one device; after the run every module reads back READY."""
     tech = MODES.mode(scene_id).techniques.stepped
 
     async def main():
@@ -900,18 +901,17 @@ def test_a_breath_sends_one_full_state_put_per_module_per_step_and_reads_back_re
         since = w.clock.monotonic()
         await w.engine.request_mode(scene_id, source="kiosk")
         plan, runner = w.engine.current_plan(), w.engine.runner
-        running = runner is not None and runner.running
-        paced = (
-            runner.step_s if runner is not None else tech.step_s
-        )  # the account's pace (7.5 s on nine strands)
-        await w.run_for(tech.run_s + 2 * paced + 10)
-        out = (plan.tier, running, paced)
+        assert runner is not None
+        # the account's pace (7.5 s on nine strands); the step the settle goes out at
+        schedule = runner.running, runner.t0, runner.step_s, runner.count
+        await w.run_for(tech.run_s + 2 * runner.step_s + 10)
+        out = (plan.tier, schedule)
         out += ([x for x in w.writes if x[0] >= since], w.engine.stepping, w.engine.state(), w.all_correct())
         await w.close()
         return out
 
-    tier, running, paced, writes, stepping, state, correct = run_virtual(main)
-    assert tier is Tier.STEPPED and running
+    tier, (running, t0, paced, count), writes, stepping, state, correct = run_virtual(main)
+    assert tier is Tier.STEPPED and running and count == int(tech.run_s / paced + 1e-9)
     times: dict[str, list[float]] = {}
     for at, device, rows in writes:
         classes = {r.function_class for r in rows}
@@ -919,11 +919,13 @@ def test_a_breath_sends_one_full_state_put_per_module_per_step_and_reads_back_re
         assert {"color-rgb", "brightness"} <= classes, classes
         times.setdefault(device, []).append(at)
     assert sorted(times) == sorted(m.id for m in MODULES)
-    steps = math.ceil(tech.run_s / paced)
     for device, sent in times.items():
         assert all(b - a >= 4.0 - 1e-6 for a, b in itertools.pairwise(sent)), device
-        # one per step of the run, plus the settle after it
-        assert len(sent) <= steps + 1, (device, len(sent))
+        # the step each send lands in: 0 is the choice's own burst (the hold), count the settle after the run
+        windows = [math.floor((at - t0) / paced + 1e-6) for at in sent]
+        run, settle = [n for n in windows if n < count], [n for n in windows if n == count]
+        assert len(run) == len(set(run)), (device, Counter(run).most_common(1))  # one per step of the run
+        assert len(settle) <= 1 and len(run) + len(settle) == len(windows), (device, windows)
     assert not stepping and correct  # the run is over: its hold (the still design) is on every module
     assert {m["status"] for m in state.modules.values()} == {"ready"}
 
@@ -1009,7 +1011,8 @@ def _panel(client: TestClient) -> dict:
 
 
 def test_the_review_menu_sees_the_real_catalog(app_client):
-    """CI runs only pytest (guest-panel.test.mjs isn't run from it), so the 18-card menu is proven here too."""
+    """The server half of the 18-card menu. CI runs the kiosk's node files (guest-panel.test.mjs among them) through
+    tests/test_kiosk_node.py (integration C24); this pins what /api/kiosk/panel hands them on the shipped catalog."""
     r = app_client.get("/api/kiosk/panel")
     body = r.json()
     assert [s["id"] for s in body["scenes"]] == CATALOG
