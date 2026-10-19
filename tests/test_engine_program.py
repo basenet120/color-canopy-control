@@ -1855,44 +1855,155 @@ def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
         assert eased == (True, Tier.T3, {}), case  # back up to the still rung, never the stepped one
 
 
-def test_a_settle_onto_a_motion_plan_re_triggers_every_module():
-    from dataclasses import replace
+def test_a_run_that_ends_on_its_own_marks_its_choice_run_before_any_re_pick():
+    """D75 (spec summary point 3, review B-R5-TS-2): a guest's run that runs out marks its choice as run when it ends
+    (`finish` → `note_run_over`), so the first re-pick after it — here a Lab publish whose run is longer (150 s) than
+    the one that ran — only holds. Without the mark, that re-pick's runner would count its 150 s from the choice and
+    start the steps again 95 s in. (The test above always re-picks through the reconciler first, and `_install` marks
+    a choice whose runner can't run itself, so it can't see this.)"""
+    from conductor.canopy import LOOKS_SOURCE
 
     async def main():
         w = stepped_world()
-        compile = w.engine.deps.compile
-
-        def with_t1(mode_id, tier):
-            if mode_id == "radial-outward" and tier is Tier.T1:  # a painted, animating "canvas" stand-in
-                hold = compile(mode_id, Tier.T3)
-                modules = {}
-                for i, (d, mt) in enumerate(hold.modules.items()):
-                    if i >= 2:  # two modules keep the rows they were sent; the other seven change
-                        rows = [R.brightness(55) if r.key == ("brightness", None) else r for r in mt.rows]
-                        mt = replace(mt, rows=rows, expect=rows)
-                    modules[d] = mt
-                return replace(
-                    hold, tier=Tier.T1, motion=True, modules=modules, waves=None, feature="T1 (test)"
-                )
-            return compile(mode_id, tier)
-
-        w.engine.deps.compile = with_t1
-        w.engine.deps.ladder = lambda m: (
-            [Tier.T1, Tier.STEPPED, Tier.T3] if m == "radial-outward" else ladder(m, MODES)
-        )
         await quiet_start(w)
         await w.engine.request_mode("radial-outward", source="kiosk")
-        first = w.engine.current_plan().tier
-        await w.run_for(92)
-        settles = [c for c in w.events("command") if c["source"] == "settle"]
-        out = (first, w.engine.current_plan(), w.engine.runner, settles)
+        runner = w.engine.runner
+        first = (runner.running, runner.count * runner.step_s)
+        await w.run_for(95)  # its 90 s run ends on its own
+        ended = (runner.running, runner.ended, w.engine.runner is runner)
+        compile = w.engine.deps.compile
+
+        def longer(m, tier):  # a publish whose run is longer than the one that ran
+            plan = compile(m, tier)
+            if plan.program is not None:
+                plan.program.run_s = 150.0
+            return plan
+
+        w.engine.deps.compile = longer
+        since = w.clock.now()
+        await w.engine.request_mode("radial-outward", source=LOOKS_SOURCE)  # the first re-pick after the end
+        plan, after = w.engine.current_plan(), w.engine.runner
+        repick = (plan.tier, plan.program.run_s, after.running, after.ended)
+        await w.run_for(20)
+        out = (first, ended, repick, program_since(w, since), w.engine.runner.running)
+        w.engine.deps.compile = compile
         await w.close()
         return out
 
-    first, plan, runner, settles = run_virtual(main)
-    assert first is Tier.STEPPED  # a guest's choice runs the rung first
-    assert plan.tier is Tier.T1 and runner is None
+    first, ended, repick, program, running = run_virtual(main)
+    assert first == (True, 90.0)
+    assert ended == (False, "the run is over", True)  # it ran out: no guest, no re-pick ended it
+    assert repick == (Tier.STEPPED, 150.0, False, "this choice already ran (a re-pick only holds)")
+    assert program == [] and not running  # nothing steps again after the publish
+
+
+def _motion_t1_world(keep: dict[str, list]):
+    """radial-outward on the ladder [T1, STEPPED, T3], its T1 a painted, animating "canvas" stand-in (motion True):
+    the modules in `keep` (filled in by the test once it knows what they were last sent) get exactly those rows, so
+    nothing but 07 §6 sends them anything; the others a level (55) no step or hold of it sends."""
+    from dataclasses import replace
+
+    w = stepped_world()
+    compile = w.engine.deps.compile
+
+    def with_t1(mode_id, tier):
+        if mode_id == "radial-outward" and tier is Tier.T1:
+            hold = compile(mode_id, Tier.T3)
+            modules = {}
+            for d, mt in hold.modules.items():
+                rows = keep.get(d) or [
+                    R.brightness(55) if r.key == ("brightness", None) else r for r in mt.rows
+                ]
+                modules[d] = replace(mt, rows=list(rows), expect=list(rows))
+            return replace(hold, tier=Tier.T1, motion=True, modules=modules, waves=None, feature="T1 (test)")
+        return compile(mode_id, tier)
+
+    w.engine.deps.compile = with_t1
+    w.engine.deps.ladder = lambda m: (
+        [Tier.T1, Tier.STEPPED, Tier.T3] if m == "radial-outward" else ladder(m, MODES)
+    )
+    return w
+
+
+def test_a_settle_onto_a_motion_plan_re_triggers_every_module():
+    """07 §6 (D75, review B-R5-TS-3): a run that ends on its own settles onto a motion plan by re-triggering all nine
+    modules, the two whose T1 rows are exactly what the run's last step sent them included. (A run ends on its last
+    step, not on the hold: 90 s of 6 s steps is 15 steps, and step 14 is cycle step 2, so the two modules' T1 rows are
+    built from that step; built from the hold, they'd differ from what was sent and count as changed anyway.)"""
+
+    async def main():
+        keep: dict[str, list] = {}
+        w = _motion_t1_world(keep)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        first = (w.engine.current_plan().tier, runner.running)
+        kept = list(runner.plan.modules)[:2]
+        last = step_rows(runner.plan, runner.count - 1)  # the step the run ends on
+        keep.update({d: list(last[d]) for d in kept})
+        before: dict[str, list | None] = {}
+        settle = w.engine.settle_after_run
+
+        def spy(r):  # what the two modules were last sent, as the run hands over to the settle
+            before.update({d: w.engine.sent_rows.get(d) for d in kept})
+            return settle(r)
+
+        w.engine.settle_after_run = spy
+        await w.run_for(92)
+        settles = [c for c in w.events("command") if c["source"] == "settle"]
+        out = (first, runner.ended, w.engine.current_plan(), w.engine.runner, kept, keep, before, settles)
+        await w.close()
+        return out
+
+    first, ended, plan, runner, kept, keep, before, settles = run_virtual(main)
+    assert first == (Tier.STEPPED, True)  # a guest's choice runs the rung first
+    assert ended == "the run is over" and plan.tier is Tier.T1 and runner is None
+    assert all(plan.modules[d].rows == keep[d] for d in kept)
+    assert before == {d: keep[d] for d in kept}  # those two already show their T1 rows: only 07 §6 sends them
     assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: radial-outward"}
+    assert {c["device_id"].removeprefix("sim-") for c in settles} == set(plan.modules)
+
+
+def test_a_deferred_settle_onto_a_motion_plan_re_triggers_every_module():
+    """07 §6 through `_settle_later` (D75, review B-R5-TS-3): a run the write budget ended (HELD_STEPS_END holds in a
+    row) sends its hold at once, and one cap window later `_settle` moves it to a motion plan by re-triggering all nine
+    modules, the two whose T1 rows are exactly the hold they were just sent included."""
+
+    async def main():
+        keep: dict[str, list] = {}
+        w = _motion_t1_world(keep)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        kept = list(runner.plan.modules)[:2]
+        keep.update({d: list(runner.plan.modules[d].rows) for d in kept})  # the hold: the plan's own rows
+        await w.run_for(20)  # a few steps are out
+        real = w.executor.account_writes
+        w.executor.account_writes = lambda address, **kw: real(address, **kw) + 120  # the 60 s window is full
+        while runner.running:
+            await w.run_for(0.5)
+        end = w.clock.monotonic()
+        w.executor.account_writes = real
+        ended = (runner.ended, w.engine.current_plan().tier)
+        await w.run_for(30)  # the hold is out; the settle waits one cap window
+        before = (
+            {d: w.engine.sent_rows.get(d) for d in kept},
+            [c for c in w.events("command") if c["source"] == "settle"],
+        )
+        await w.run_for(end + 65 - w.clock.monotonic())
+        settles = [c for c in w.events("command") if c["source"] == "settle"]
+        out = (ended, before, w.engine.current_plan(), w.engine.runner, kept, keep, settles)
+        await w.close()
+        return out
+
+    ended, (sent, early), plan, runner, kept, keep, settles = run_virtual(main)
+    assert ended == ("the account's write budget held back 2 steps in a row", Tier.STEPPED)
+    assert early == []  # nothing settles inside the cap window
+    # those two already show their T1 rows (the hold they were just sent): only 07 §6 sends them
+    assert sent == {d: keep[d] for d in kept}
+    assert plan.tier is Tier.T1 and runner is None and all(plan.modules[d].rows == keep[d] for d in kept)
+    assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: radial-outward"}
+    assert {c["device_id"].removeprefix("sim-") for c in settles} == set(plan.modules)
 
 
 # ---- gates and config ---------------------------------------------------------------------------------------------
