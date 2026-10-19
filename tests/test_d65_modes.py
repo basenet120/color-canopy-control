@@ -23,9 +23,10 @@ from conductor.engine_api import Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, load_modes
 from conductor.looks import field as F
-from conductor.looks.compile import EngineCompiler
+from conductor.looks import scene_rules as R
+from conductor.looks.compile import EngineCompiler, module_lags, program_cycle
 from conductor.looks.scene_rules import scene_mode_problems
-from conductor.looks.schema import MOTION_WORDS, STEPPED_PACE
+from conductor.looks.schema import MOTION_WORDS, STEPPED_PACE, breathe_words
 from conductor.routes import kiosk
 from conductor.scenes import load_scenes
 from conductor.show import STEPPED_LIVE_OFF, ShowWiring
@@ -84,7 +85,8 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
     plan = compile_mode(mode_id, Tier.STEPPED, _ctx())
     hold = compile_mode(mode_id, Tier.T3, _ctx())
     steps = plan.program.steps
-    per_cycle = MODES.mode(mode_id).techniques.stepped.steps_per_cycle  # D65's 6
+    tech = MODES.mode(mode_id).techniques.stepped
+    per_cycle = program_cycle(tech, module_lags(tech, GRID, load_canopy_config()))  # D65's 6 for travel (D75)
     assert plan.tier is Tier.STEPPED and plan.motion is False and len(steps) == per_cycle
     # the hold is the still module-level look, exactly; every step is a different picture of the design
     assert (
@@ -93,12 +95,21 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
         == {d: t.rows for d, t in plan.modules.items()}
     )
     frames = [tuple(s.colours[p] for p in GRID) for s in steps]
-    assert len(set(frames)) == per_cycle and all(len(set(f)) > 2 for f in frames)
+    assert all(len(set(f)) > 2 for f in frames)
+    if tech.mode == "travel":
+        assert len(set(frames)) == per_cycle
+    else:  # D75: a breath may come back to a picture, but every step changes something
+        pictures = R.step_pictures(MODES.mode(mode_id), load_recipes(), load_canopy_config())
+        assert all(pictures[n] != pictures[(n + 1) % len(pictures)] for n in range(len(pictures)))
     # still copy while it holds; the moving copy only while a run moves: the mode's own, naming its flow and pace
     assert plan.feature == hold.feature and not MOTION_WORDS.search(plan.feature)
     moving = plan.program.moving_feature
-    assert moving == MODES.mode(mode_id).techniques.stepped.moving_feature
-    assert STEPPING[mode_id] in moving and STEPPED_PACE in moving and "through the Hubspace cloud" in moving
+    assert moving == tech.moving_feature
+    assert STEPPED_PACE in moving and "through the Hubspace cloud" in moving
+    if tech.mode == "travel":
+        assert STEPPING[mode_id] in moving
+    else:
+        assert breathe_words(tech) in moving.lower()
     assert not any(
         w in moving.lower() for w in ("light by light", "each light", "270", "smooth", "animation")
     )
