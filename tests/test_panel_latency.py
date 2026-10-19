@@ -167,7 +167,8 @@ def test_dimming_right_after_a_scene_lands_when_the_cooldown_ends_not_never(app_
         assert engine.state().guest_brightness is None  # nothing sent early
     wait_until("the guest's level to reach the engine", lambda: engine.state().guest_brightness == 40, 10)
     landed = time.monotonic() - chosen
-    assert COOLDOWN_S - 0.3 <= landed < COOLDOWN_S + 1.5, landed
+    # it lands when the cooldown ends, not never; the upper slack covers GitHub's slower runner (3.86 s seen there)
+    assert COOLDOWN_S - 0.3 <= landed < COOLDOWN_S + 2.5, landed
     wait_until("the panel to settle", lambda: _panel_state(c)["phase"] in ("ready", "cooldown"), 10)
     state = _panel_state(c)
     assert state["next"] is None and state["brightness"] == 40

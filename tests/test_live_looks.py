@@ -218,7 +218,8 @@ def test_every_unusable_file_falls_back_to_approved_and_is_left_byte_for_byte(tm
     before = path.read_bytes()
     started = time.perf_counter()
     looks = load(tmp_path)
-    assert time.perf_counter() - started < 1.0  # an alias bomb or a deep file can't hang the lifespan
+    # an alias bomb or a deep file can't hang the lifespan (0.45 s here with 18 scenes, 1.12 s on GitHub's runner)
+    assert time.perf_counter() - started < 3.0
     assert looks.source == "approved" and looks.problem, cause
     assert len(looks.problem) <= L.REASON_MAX and "\n" not in looks.problem
     if cause in WHO_SAYS:  # the guard meant for it says so (the scene rules would catch some of these too)
