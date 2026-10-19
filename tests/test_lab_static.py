@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SHOWCASE = ROOT / "web" / "ops" / "showcase"
 LAB_FILES = ("lab.js", "lab.css", "lab-model.mjs")
 DEMO_MODEL_URL = (
-    "./demo-model.mjs?v=show-design-3"  # the URL studio.js imports: one module instance on the page
+    "./demo-model.mjs?v=show-design-4"  # the URL studio.js imports: one module instance on the page
 )
 # demo-model's handoff palette and the painters that fall back to it (demo-model.mjs scenePainters): under a Draft
 # label they would show Paris's handoff colours, not the draft's
@@ -67,14 +67,16 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-9">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-10">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
-    assert '<script type="module" src="./studio.js?v=screen-2"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-9"')
+    assert '<script type="module" src="./studio.js?v=screen-3"></script>' in html
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-10"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
-    assert 'from "./lab-model.mjs?v=lab-9"' in _text("lab.js")
+    assert 'from "./lab-model.mjs?v=lab-10"' in _text("lab.js")
+    # ... and of demo-model: the Studio and the Lab import it at one tag (D75 bumped it with paintCanopy's levels)
+    assert f"from '{DEMO_MODEL_URL}'" in _text("studio.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -230,6 +232,22 @@ def test_the_motion_lines_come_from_the_page_model():
     assert "M.rippleLine(schedule, liveStagger)" in render and "M.sentence(st.stepsWhen)" in render
     assert "M.steppedSectionClause(x, L.catalog.live)" in js and "live off until Gate R" not in js
     assert "M.sentence(shownSt.stepsWhen)" in _function(js, "renderPresent")
+
+
+def test_the_motion_hints_follow_the_kind_of_motion():
+    """Review B-R3-2: the Motion section's layout and lag hints come from the page model's controls for the draft's
+    kind of motion (travel moves the layout; a breath keeps it in place; a shimmer's lag is its seed's spread), drawn
+    when the section is built and swapped by syncMotionEditor whenever the kind changes."""
+    js = _code(_text("lab.js"))
+    section = _function(js, "motionSection")
+    assert 'h("span", { id: "lab-design-how", text: c.designHow })' in section
+    assert 'h("p", { id: "lab-lag-how", class: "lab-muted lab-tight", text: c.lagHow })' in section
+    assert "MOTION_COPY.design" not in section and "MOTION_COPY.lag" not in section
+    sync = _function(js, "syncMotionEditor")
+    assert 'const designHow = $("#lab-design-how");' in sync
+    assert "if (designHow) designHow.textContent = c.designHow;" in sync
+    assert 'const lagHow = $("#lab-lag-how");' in sync
+    assert "if (lagHow) lagHow.textContent = c.lagHow;" in sync
 
 
 def test_the_tier_lists_moving_lines_show_only_while_the_steps_play():

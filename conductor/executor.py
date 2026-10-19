@@ -225,6 +225,17 @@ class CommandExecutor:
             "devices": {addr: self._device_budget(s, now) for addr, s in sorted(self._slots.items())},
         }
 
+    def account_writes(self, address: str, *, within_s: float = WINDOW_S) -> int:
+        """The writes on `address`'s account sent in the last `within_s` seconds (at most the gauge's `WINDOW_S`):
+        every attempt that left the process, retries included — `budget(address)["account_writes_60s"]` at the
+        default. The stepped runner's cap check reads it (conductor/sequence.py)."""
+        now = self.clock.monotonic()
+        dq = self._account_sent.get(self._account_of(address))
+        if dq is None:
+            return 0
+        _prune(dq, now)
+        return sum(1 for t in dq if now - t < within_s)
+
     def add_listener(self, fn: ResultListener) -> Callable[[], None]:
         """Call `fn(result)` for every finished command (tracker, WebSocket push). Returns an unsubscribe."""
         self._listeners.append(fn)

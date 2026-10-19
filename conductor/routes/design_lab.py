@@ -336,6 +336,8 @@ def catalog_json(lab: LabService) -> dict:
                 "live_look": live_seed.model_dump(mode="json"),
                 "live_source": live_source,
                 "repaint": P.repaint_info(lab, scene.id),
+                # D75: when the idle look runs (the idle look with a stepped rung only; else null)
+                "idle_note": ST.idle_note(settings, scene.id, mode),
             }
         )
     driver = lab.services.engine_driver
@@ -356,6 +358,12 @@ def catalog_json(lab: LabService) -> dict:
                 "run_s_min": "step_s",  # a run is at least one step (SteppedTechnique)
                 "run_s_max": ST.run_s_max(settings),
                 "directions": ["forward", "reverse"],
+                # D75: the kind of motion and a breath's ranges (= SteppedTechnique's bounds)
+                "modes": ["travel", "breathe", "shimmer"],
+                "shift": [0.0, 0.5],
+                "shift_increment": 0.05,
+                "brightness_swing": [0, 20],
+                "lag_steps": [0, 6],
             },
             "ripple": {"stagger_s": [0.0, ST.RIPPLE_STAGGER_MAX_S], "max_rings": RIPPLE_MAX_WAVES},
             "canopy": {"width_in": lab.canopy["width_in"], "height_in": lab.canopy["height_in"]},
@@ -372,6 +380,10 @@ def catalog_json(lab: LabService) -> dict:
             ),
             "ripple_note": ST.ripple_note(settings),
             "effects_note": ST.EFFECTS_OFF,
+            # D75: the idle look's breath (motion.idle; null = off, the shipped value), shown, never a control
+            "idle_breath": (
+                settings.motion.idle.model_dump(mode="json") if settings.motion.idle is not None else None
+            ),
         },
         "scenes": scenes,
         "show_looks": PUB.show_looks_brief(lab),

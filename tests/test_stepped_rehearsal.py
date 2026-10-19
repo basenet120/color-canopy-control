@@ -173,7 +173,8 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert report["verification_s"]["count"] == 153 and 0 < report["verification_s"]["p50"] <= 3.0
     # what ops confirmed is what happened: paced at 72 a minute, never past the cap of 90 in any 60 s
     assert "paced at up to 72 writes a minute" in preview["confirm"]
-    assert "past 90 writes in a minute is held back" in preview["confirm"]
+    room = "less than one write per module of room under 90 writes in a minute is held back"  # D75
+    assert room in preview["confirm"]
     assert report["cap_writes_per_min"] == 90
     assert set(report["max_writes_60s"]) == {"canopy"} and 72 <= report["max_writes_60s"]["canopy"] <= 81
     assert report["governor_trips"] == 0 and report["outages"] == 0
@@ -459,6 +460,36 @@ def test_stopping_the_engine_ends_it_and_still_writes_the_report():
     assert report["ended"] == "the canopy engine stopped" and not report["completed"] and mode is None
 
 
+def test_the_idle_look_can_be_rehearsed_with_the_d65_default_rung(monkeypatch):
+    """D75: the idle look may be rehearsed (its refusal is gone). Lowcountry Calm has no stepped rung of its own, so
+    it rehearses its module-level design stepped at the D65 defaults, with the staff copy; the live gate opens for
+    that mode only, while it runs."""
+
+    async def main():
+        w = await show(live=True, monkeypatch=monkeypatch)
+        preview = w.engine.rehearsal_preview("lowcountry-calm", 2)
+        plan = w.wiring.rehearsal_plan("lowcountry-calm")
+        result = await w.engine.rehearse("lowcountry-calm", 2, source="ops")
+        gate = w.wiring.tier_allowed
+        during = (
+            gate("lowcountry-calm", Tier.STEPPED),
+            gate("golden-hour", Tier.STEPPED),
+            w.engine.current_plan().tier,
+            w.engine.rehearsal_mode,
+        )
+        w.engine.stop_rehearsal(source="ops")
+        await w.ended()
+        after = gate("lowcountry-calm", Tier.STEPPED)
+        await w.close()
+        return preview, plan, result, during, after
+
+    preview, plan, result, during, after = run_virtual(main)
+    assert preview["mode"] == "lowcountry-calm" and result["ok"], result
+    assert plan.program.moving_feature.startswith(REHEARSAL_FEATURE.split("{")[0])
+    assert during == ((True, ""), (False, STEPPED_LIVE_OFF), Tier.STEPPED, "lowcountry-calm")
+    assert after == (False, STEPPED_LIVE_OFF)
+
+
 # ---- refusals ------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mode", "minutes", "setup", "says"),
@@ -466,7 +497,6 @@ def test_stopping_the_engine_ends_it_and_still_writes_the_report():
         ("golden-hour", 0, None, "1 to 10 whole minutes"),
         ("golden-hour", MAX_MINUTES + 1, None, "1 to 10 whole minutes"),
         ("golden-hour", True, None, "1 to 10 whole minutes"),
-        ("lowcountry-calm", 2, None, "idle mode, which never steps"),
         ("golden-hour", 2, "paused", "Resume guest input first"),
         ("golden-hour", 2, "running", "already running"),
         ("golden-hour", 2, "outage", "Hubspace isn't answering"),

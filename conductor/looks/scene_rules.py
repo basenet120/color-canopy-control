@@ -13,12 +13,15 @@ and gain one line calling this validator alongside.
 | catalog     | mode ids == scene ids in order; label == name; blurb == mood; preview (upper) == palette hexes;     |
 |             | the client copy (name, mood, description) never claims motion or a count of lights (`copy_problem`) |
 | brightness  | canvas / slot / modules / stepped / strand brightness == the scene's `brightness_draft`              |
-| static      | no motion_effect / motion_feature, slot speed 0, `motion: false`, the design's `cycles == 1`         |
-| ladder-end  | the ladder ends [modules, strand]; the strand is the scene's solid in RGB, no fallback, copy ends on it |
+| static      | no motion_effect / motion_feature, slot speed 0, `motion: false`, the design's `cycles == 1`;       |
+|             | a module-level stepped rung through the cloud is allowed on every scene (D75)                        |
+| ladder-end  | the ladder ends [modules, strand]; the strand is the scene's solid in RGB, no fallback, copy ends on |
+|             | it; a stepped rung sits just before [modules, strand] (D75)                                          |
 | slots       | a canvas technique ⇔ a slot, each slot once; with `approved`: same ids, ladders and slots           |
 | one-design  | one `field` canvas (rgb_only, at: centre), stops at i/(n−1) naming the palette, shared by every rung |
 | recipes     | each design colour's recipe is its hex at 100 with no white, blend == rgb_only, one key per colour   |
-| stepped     | the hold is module level; steps_per_cycle distinct frames of > 2 colours; copy names its flow + pace |
+| stepped     | the hold is module level; travel: steps_per_cycle distinct frames; breathe/shimmer: every step       |
+|             | changes something (colours or brightness); > 2 colours a step; copy names its flow or breath + pace |
 | two-d       | (warning) 4–9 module colours, no uniform rows or columns, columns change ≥ a third of rows           |
 | kits-differ | (warning) the Mac box's two kits (r0c0, r0c1) show different colours                                 |
 
@@ -42,6 +45,8 @@ from conductor.looks.schema import (
     Mode,
     ModesFile,
     ModuleSample,
+    _stepped_problems,
+    breathe_words,
     motion_words,
 )
 from conductor.scenes import Scene, SceneCatalog
@@ -149,13 +154,17 @@ def module_colours(
 
 
 def step_frames(mode: Mode, recipes: RecipesFile, canopy: Mapping[str, Any]) -> list[dict[str, RGB]]:
-    """Each step of the mode's stepped rung as position → RGB, sampled as the compiler's stepped tier does (the
-    stepped canvas at each module centre, shifted by the step's phase). [] for a mode that doesn't step."""
+    """Each step of the mode's stepped rung as position → RGB, sampled as the compiler's stepped tier does. Travel
+    keeps its own phase formula (the stepped canvas at each module centre, shifted by the step's phase: an
+    independent cross-check of the compiler); breathe/shimmer (D75) are `compile.step_looks`' colours over all nine.
+    [] for a mode that doesn't step."""
     from conductor.looks.compile import _sampled_rgb
 
     tech = mode.techniques.stepped
     if tech is None:
         return []
+    if tech.mode != "travel":
+        return [{pos: rgb for pos, (rgb, _) in step.items()} for step in step_pictures(mode, recipes, canopy)]
     entries, ctx = _context(recipes, canopy)
     sample = ModuleSample(canvas=tech.canvas, at="centre", brightness=tech.brightness)
     sign = -1.0 if tech.direction == "forward" else 1.0  # = compile._stepped
@@ -163,6 +172,28 @@ def step_frames(mode: Mode, recipes: RecipesFile, canopy: Mapping[str, Any]) -> 
         {str(e.module): _sampled_rgb(sample, e, ctx, phase=sign * n / tech.steps_per_cycle) for e in entries}
         for n in range(tech.steps_per_cycle)
     ]
+
+
+def step_pictures(
+    mode: Mode, recipes: RecipesFile, canopy: Mapping[str, Any]
+) -> list[dict[str, tuple[RGB, int]]]:
+    """Each step of the mode's stepped rung as position → (RGB, brightness), from `compile.step_looks` over all nine
+    positions (lags counted over the nine), for every kind of motion: what a step changes is its colours, its
+    levels, or both (D75). [] for a mode that doesn't step."""
+    from conductor.looks.compile import step_looks
+
+    tech = mode.techniques.stepped
+    if tech is None:
+        return []
+    entries, ctx = _context(recipes, canopy)
+    out: list[dict[str, tuple[RGB, int]]] = []
+    for step in step_looks(tech, entries, ctx):
+        picture: dict[str, tuple[RGB, int]] = {}
+        for pos, look in step.items():
+            assert look.rgb is not None and look.brightness is not None
+            picture[pos] = (tuple(look.rgb), int(look.brightness))  # type: ignore[assignment]
+        out.append(picture)
+    return out
 
 
 def _lab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
@@ -291,6 +322,14 @@ def _static(scene: Scene, mode: Mode, out: _Found) -> None:
 def _ladder_end(scene: Scene, mode: Mode, out: _Found) -> None:
     if mode.ladder[-2:] != ["modules", "strand"]:
         out.add("ladder-end", scene.id, "ladder", f"the ladder {mode.ladder} must end [modules, strand]")
+    if "stepped" in mode.ladder and mode.ladder.index("stepped") != len(mode.ladder) - 3:
+        out.add(
+            "ladder-end",
+            scene.id,
+            "ladder",
+            f"the stepped rung in {mode.ladder} must sit just before [modules, strand] (D75: a run holds on the "
+            "best still rung above it, or on modules)",
+        )
     strand = mode.techniques.strand
     if strand is None:
         out.add(
@@ -479,13 +518,27 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
             "the first step must be the module-level look it holds",
         )
     pictures = [tuple(f[p] for p in positions) for f in frames]
-    if len(set(pictures)) != tech.steps_per_cycle:
-        out.add(
-            "stepped",
-            scene.id,
-            "techniques → stepped → steps_per_cycle",
-            f"{tech.steps_per_cycle} steps give only {len(set(pictures))} different pictures of the design",
-        )
+    if tech.mode == "travel":
+        if len(set(pictures)) != tech.steps_per_cycle:
+            out.add(
+                "stepped",
+                scene.id,
+                "techniques → stepped → steps_per_cycle",
+                f"{tech.steps_per_cycle} steps give only {len(set(pictures))} different pictures of the design",
+            )
+    else:  # D75: a breath may come back to a picture, but no step may send nothing new
+        full = step_pictures(mode, recipes, canopy)
+        for n in range(len(full)):
+            m = (n + 1) % len(full)
+            if full[n] == full[m]:
+                out.add(
+                    "stepped",
+                    scene.id,
+                    "techniques → stepped → steps_per_cycle",
+                    f"steps {n} and {m} show the same picture (colours and brightness); every step of a {tech.mode} "
+                    "changes something — use more steps, a larger shift or a larger brightness_swing",
+                )
+                break
     flat = [n for n, p in enumerate(pictures) if len(set(p)) <= 2]
     if flat:
         out.add(
@@ -494,7 +547,8 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
             f"{_DESIGN} → field",  # a flat step is the design's doing (its layout), not the run's timing
             f"step {flat[0]} shows {len(set(pictures[flat[0]]))} colour(s) across the canopy; each step shows more than two",
         )
-    words = motion_words(tech.canvas, dict(canopy), tech.direction)
+    words = motion_words(tech.canvas, dict(canopy), tech.direction) if tech.mode == "travel" else None
+    # a breath's words for what changes are the schema's (SteppedTechnique) to check
     moving = tech.moving_feature
     if words is not None and words not in moving:
         out.add(
@@ -503,6 +557,11 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
             "techniques → stepped → moving_feature",
             f"the moving copy must name the flow {words!r}",
         )
+    if tech.mode != "travel":
+        # a breath names no flow but its own start (parse_modes' cross-check, here too: the rules stand on their own
+        # over a trio built without it, as the Lab's and the tests' are)
+        for problem in _stepped_problems(scene.id, tech, dict(canopy)):
+            out.add("stepped", scene.id, "techniques → stepped → moving_feature", problem.split(": ", 1)[1])
     if STEPPED_PACE not in moving:
         out.add(
             "stepped",
@@ -628,10 +687,19 @@ def scene_pins(
         if stepped is not None:
             pin["stepped"] = {
                 "direction": stepped.direction,
+                "mode": stepped.mode,
                 "steps_per_cycle": stepped.steps_per_cycle,
                 "step_s": stepped.step_s,
                 "run_s": stepped.run_s,
+                "shift": stepped.shift,
+                "brightness_swing": stepped.brightness_swing,
+                "lag_steps": stepped.lag_steps,
+                "seed": stepped.seed,
             }
-            pin["flow_words"] = motion_words(stepped.canvas, dict(canopy), stepped.direction)
+            pin["flow_words"] = (
+                motion_words(stepped.canvas, dict(canopy), stepped.direction)
+                if stepped.mode == "travel"
+                else breathe_words(stepped)
+            )
         pins[scene.id] = pin
     return pins

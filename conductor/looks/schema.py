@@ -18,10 +18,16 @@ Rules implemented:
   never promise movement. Only `motion_feature` — used when a bench-enabled motion code is actually running — may
   say "moving" or "animated", and a stepped look's `moving_feature` — shown only while a run is going — may say
   "moves" (never "effect", "animation", "controller", "each/every light" or "270": it is one colour per strand).
-- **A stepped look (D65)** re-sends the mode's sampled design a step at a time. It holds on the static design
+- **A stepped look (D65, D75)** re-sends the mode's sampled design a step at a time. It holds on the static design
   between runs, so the ladder needs a later `modules` rung whose sample is the same canvas at the module centres at
-  the same brightness (its first step is that look exactly). Its `moving_feature` names the flow
-  (`motion_words`: the layout words forward, "toward …" in reverse) and no other layout's or flow's words.
+  the same brightness (its first step is that look exactly). `mode: travel` (D65) moves the design: its
+  `moving_feature` names the flow (`motion_words`: the layout words forward, "toward …" in reverse) and no other
+  layout's or flow's words. `mode: breathe` / `shimmer` (D75) keep the design in place and breathe each module's
+  colour (`shift`) and/or level (`brightness_swing`): the copy says what changes (`BREATHE_LEVEL_PHRASES` with a
+  swing, `BREATHE_COLOUR_PHRASES` without one; never "next colour" when `shift` is 0, never "brighter"/"softer"
+  when the swing is 0) and no flow, except a lagged breathe's own start ("from the centre out"). "This scene moves"
+  is `Mode.moves` (a stepped rung in the ladder); `Mode.motion` keeps its on-device meaning (07 §6) and is refused
+  beside a stepped rung.
 - Errors are `ConfigError`s that name the file, the mode and the field, in words a technician can act on.
 """
 
@@ -56,6 +62,12 @@ STEPPED_FALSE_CLAIMS = re.compile(
 )
 # ... and what it must say: the pace, as the generated partial and one-colour copy and the rehearsal copy say it.
 STEPPED_PACE = "every few seconds"
+# How a breathe/shimmer look's moving copy says what changes (D75): a brightness_swing changes each strand's level,
+# a colour-only breath (brightness_swing 0) drifts its colour. None of these matches STEPPED_FALSE_CLAIMS.
+BREATHE_LEVEL_PHRASES = ("swells and softens", "swell and soften", "glows and softens", "glow and soften")
+BREATHE_COLOUR_PHRASES = ("drifts and settles", "drift and settle")
+BREATHE_PHRASES = BREATHE_LEVEL_PHRASES + BREATHE_COLOUR_PHRASES
+StepMode = Literal["travel", "breathe", "shimmer"]
 _MODE_ID = r"^[a-z0-9][a-z0-9-]{1,40}$"
 
 
@@ -267,22 +279,38 @@ class ModulesTechnique(_Strict):
 
 
 class SteppedTechnique(_Strict):
-    """Module level, stepped (D65): the mode's sampled design (`canvas`, the same canvas as its `modules`
-    sample) shifted a step at a time, `steps_per_cycle` steps per repeat, each step one colour per module sent
-    through the cloud, `step_s` apart, for `run_s` seconds; then the static design (the `modules` rung) holds.
-    `forward` flows the way the design's layout words read ("from the centre out" moves outwards); `reverse` flows
-    back ("toward the centre"). `moving_feature` is shown only while a run is going, so it alone may say "moves";
-    it must name the flow (`motion_words`) and may never claim an on-device effect or light-by-light animation.
+    """Module level, stepped: the mode's sampled design (`canvas`, the same canvas as its `modules` sample) re-sent
+    a step at a time, each step one colour (and one brightness) per module sent through the cloud, `step_s` apart,
+    for `run_s` seconds; then the static design (the `modules` rung) holds. Step 0 is the still design in every
+    mode. `moving_feature` is shown only while a run is going, so it alone may say "moves"; it may never claim an
+    on-device effect or light-by-light animation.
 
-    There is no separate wavelength: the canvas field's own `cycles` is the repeat a cycle of steps moves by, so step
-    0 stays exactly the static design (the hold)."""
+    - `mode: travel` (D65, the default): the design shifted `steps_per_cycle` steps per repeat. `forward` flows the
+      way the design's layout words read ("from the centre out" moves outwards); `reverse` flows back ("toward the
+      centre"). The copy must name the flow (`motion_words`). There is no separate wavelength: the canvas field's
+      own `cycles` is the repeat a cycle of steps moves by, so step 0 stays exactly the static design (the hold).
+    - `mode: breathe` (D75): the design stays in place. Each module's colour moves up to `shift` along the design's
+      t (the geometry before mirror and invert, clamped, never wrapped; `direction` is the sign: `forward` moves the
+      way travel's phase does) and its brightness up to `brightness_swing` points either side of `brightness`: one
+      breath of `steps_per_cycle` steps per module (up, back, down, back), the design's start (t = 0) leading by up
+      to `lag_steps` steps. The copy says what changes (`breathe_words`).
+    - `mode: shimmer` (D75): breathe with each module's start picked by `seed` (the same on every run), up to
+      `lag_steps` apart.
+
+    travel never takes the breathe parameters; a value counts as given only when it isn't its default (`shift: 0`
+    on a travel rung loads)."""
 
     canvas: FieldCanvas
-    direction: Literal["forward", "reverse"] = "forward"
-    steps_per_cycle: int = Field(6, ge=3, le=12)
+    mode: StepMode = "travel"
+    direction: Literal["forward", "reverse"] = "forward"  # breathe/shimmer: the sign of the colour offset
+    steps_per_cycle: int = Field(6, ge=3, le=12)  # breathe/shimmer: the steps in ONE module's breath
     step_s: float = Field(6.0, ge=4.0, le=12.0)  # 4 s: a step's verification takes about 2.6 s (D65)
     run_s: float = Field(90.0, gt=0, le=180.0)
     brightness: int = Field(100, ge=1, le=100)
+    shift: float = Field(0.0, ge=0.0, le=0.5)
+    brightness_swing: int = Field(0, ge=0, le=20)
+    lag_steps: int = Field(0, ge=0, le=6)
+    seed: int | None = Field(None, ge=0, le=2_147_483_647)
     moving_feature: str = Field(min_length=10)
 
     @model_validator(mode="after")
@@ -305,6 +333,84 @@ class SteppedTechnique(_Strict):
             )
         return self
 
+    @model_validator(mode="after")
+    def _mode_fields(self) -> SteppedTechnique:
+        """Each mode takes only its own parameters, and a breath's copy says what changes (D75)."""
+        mode, shift, swing, lag, b = (
+            self.mode,
+            self.shift,
+            self.brightness_swing,
+            self.lag_steps,
+            self.brightness,
+        )
+        if mode == "travel":
+            # "set" = not the default, so an explicit `shift: 0` on a travel rung loads (the export adds lines)
+            if shift != 0 or swing != 0 or lag != 0 or self.seed is not None:
+                raise ValueError(
+                    "mode: travel moves the design itself, so shift, brightness_swing, lag_steps and seed don't "
+                    "apply; leave them out, or use mode: breathe or shimmer"
+                )
+            return self
+        if shift == 0 and swing == 0:
+            raise ValueError(
+                f"mode: {mode} needs a shift (up to 0.5) or a brightness_swing (up to 20 points), or nothing "
+                "would breathe"
+            )
+        if self.seed is not None and mode != "shimmer":
+            raise ValueError(
+                "seed is for mode: shimmer only (it picks each module's own rhythm); leave it out"
+            )
+        if mode == "shimmer" and self.seed is None:
+            raise ValueError(
+                "mode: shimmer needs a seed (any whole number: it picks each module's own rhythm, the same on "
+                "every run)"
+            )
+        if mode == "shimmer" and lag == 0:
+            raise ValueError(
+                "mode: shimmer needs lag_steps of at least 1 (how far apart the modules' rhythms start); with 0 "
+                "every module breathes together, which is mode: breathe"
+            )
+        if b - swing < 1 or b + swing > 100:
+            raise ValueError(
+                f"brightness {b} ± brightness_swing {swing} would run {b - swing}–{b + swing}, outside 1–100; "
+                "lower the swing or the brightness"
+            )
+        copy = self.moving_feature.lower()
+        if swing > 0 and not any(p in copy for p in BREATHE_LEVEL_PHRASES):
+            raise ValueError(
+                "moving_feature must say how the canopy breathes: with a brightness_swing, "
+                f"{' or '.join(map(repr, BREATHE_LEVEL_PHRASES))} (mode: {mode}; nothing travels)"
+            )
+        if swing == 0:
+            # a level claim first: it is the more specific mistake when the copy also lacks the colour words
+            word = next((w for w in (*BREATHE_LEVEL_PHRASES, "brighter", "softer") if w in copy), None)
+            if word is not None:
+                raise ValueError(
+                    f"moving_feature says {word!r}, but brightness_swing is 0, so no strand gets brighter or softer"
+                )
+            if not any(p in copy for p in BREATHE_COLOUR_PHRASES):
+                raise ValueError(
+                    "moving_feature must say how the canopy breathes: a colour-only breath (brightness_swing 0) "
+                    f"says {' or '.join(map(repr, BREATHE_COLOUR_PHRASES))} (mode: {mode}; nothing travels)"
+                )
+        if shift == 0 and "next colour" in copy:
+            raise ValueError(
+                "moving_feature says 'next colour', but shift is 0, so every strand keeps its colour and only its "
+                "level changes; say 'a brighter or softer level'"
+            )
+        return self
+
+
+def breathe_words(tech: SteppedTechnique) -> str | None:
+    """The phrase a breathe/shimmer look's moving copy uses for what changes (D75): the first of
+    `BREATHE_LEVEL_PHRASES` it contains when it has a brightness_swing, else of `BREATHE_COLOUR_PHRASES`. None for
+    travel (its copy names a flow instead, `motion_words`) or when the copy has none."""
+    if tech.mode == "travel":
+        return None
+    family = BREATHE_LEVEL_PHRASES if tech.brightness_swing > 0 else BREATHE_COLOUR_PHRASES
+    copy = tech.moving_feature.lower()
+    return next((p for p in family if p in copy), None)
+
 
 class Techniques(_Strict):
     stepped: SteppedTechnique | None = None
@@ -321,8 +427,15 @@ class Mode(_Strict):
     preview: list[Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]] = Field(min_length=1, max_length=6)
     ladder: list[TechniqueName] = Field(min_length=1)
     slot: Literal["custom-1", "custom-2", "custom-3"] | None = None
-    motion: bool = False  # the look re-triggers all modules as one burst or none (07 §6)
+    # the look re-triggers all modules as one burst or none (07 §6): on-device motion only. A stepped look is never
+    # one (the Conductor holds its phase), so this stays false beside a stepped rung; "this scene moves" is `moves`.
+    motion: bool = False
     techniques: Techniques
+
+    @property
+    def moves(self) -> bool:
+        """Whether this scene moves (D75): it has a stepped rung in its ladder. Not `motion` (07 §6's burst flag)."""
+        return "stepped" in self.ladder
 
     @model_validator(mode="after")
     def _ladder(self) -> Mode:
@@ -335,6 +448,11 @@ class Mode(_Strict):
             raise ValueError("a canvas or slot tier needs slot: custom-1, custom-2 or custom-3")
         if "stepped" in self.ladder:
             self._stepped_holds()
+            if self.motion:
+                raise ValueError(
+                    "motion: true is the on-device burst flag (07 §6), which a stepped look never uses; a scene "
+                    "moves through its stepped rung (D75), so leave motion out"
+                )
         if m := MOTION_WORDS.search(self.blurb):
             raise ValueError(
                 f"blurb mentions movement ({m.group(0)!r}); the blurb shows at every tier, so it may not"
@@ -481,8 +599,35 @@ def motion_words(canvas: FieldCanvas, canopy: dict | None, direction: str) -> st
 
 
 def _stepped_problems(mode_id: str, stepped: SteppedTechnique, canopy: dict | None) -> list[str]:
-    """A stepped look's moving copy names its flow (`motion_words`) and no other."""
+    """A travel look's moving copy names its flow (`motion_words`) and no other. A breathe/shimmer look doesn't
+    travel, so its copy names no flow, except a lagged breathe's own start (its forward layout words: the design's
+    start leads the breath)."""
     at = f"mode {mode_id!r} → techniques → stepped → moving_feature"
+    if stepped.mode != "travel":
+        text = stepped.moving_feature.lower()
+        allowed: set[str] = set()
+        if stepped.mode == "breathe" and stepped.lag_steps > 0:
+            start = motion_words(stepped.canvas, canopy, "forward")
+            # a radial or sweep design's start depends on a canopy there isn't: unchecked, as travel's flow is
+            if start is None:
+                return []
+            allowed = {start}
+        others = [p for p in MOTION_PHRASES if p not in allowed and p in text]
+        if others and allowed:
+            return [
+                (
+                    f"{at}: the breath starts {next(iter(allowed))!r} (lag_steps {stepped.lag_steps}), so the "
+                    f"copy may say that but not {', '.join(map(repr, others))}"
+                )
+            ]
+        if others:
+            return [
+                (
+                    f"{at}: a {stepped.mode} look doesn't travel, so the copy may not say "
+                    f"{', '.join(map(repr, others))} (it reads {stepped.moving_feature!r})"
+                )
+            ]
+        return []
     words = motion_words(stepped.canvas, canopy, stepped.direction)
     if words is None:
         return []

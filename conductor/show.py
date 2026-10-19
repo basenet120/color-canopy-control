@@ -23,8 +23,10 @@
 - **Stepped looks (D65)** are sim-first: on a non-simulated driver the stepped tier is refused unless
   `motion.stepped.live_enabled` is set (Alon flips it after the stepped rehearsal, Gate R) or that rehearsal is
   running for that very mode (`engine.rehearsal_mode`), so the ladder lands on the mode's still module-level rung.
-  Loading checks that no stepped run outlasts `kiosk.idle_return_s` and that the idle mode never steps
-  (`_check_stepped`).
+  Loading checks that no stepped run outlasts `kiosk.idle_return_s` and, when `motion.idle` is on (D75: off as
+  shipped), that the idle mode has a stepped rung with room for two paced steps in `breathe_run_s`
+  (`_check_stepped`). The idle look may carry a rung (D75): start-up and an idle return never start a run unless
+  `motion.idle` is on.
 - **The stepped rehearsal's design** (`rehearsal_modes`, conductor/rehearsal.py): the mode's own stepped technique
   when modes.yaml has one, else its module-level design (the `modules` sample: same canvas, `at: centre`, same
   brightness) stepped at the D65 defaults, with moving copy that says staff are testing and names the flow
@@ -56,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,18 +96,12 @@ REHEARSAL_FEATURE = (
 
 
 def _check_stepped(settings: Any, modes_file: Any) -> None:
-    """Stepped looks against the kiosk settings: a run must end before the idle hold returns to the idle mode, and the
-    idle mode (the canopy's resting look) never steps."""
+    """Stepped looks against the kiosk settings: a run ends before the idle hold returns, and motion.idle needs an
+    idle look with a stepped rung and room for two paced steps. The idle look may carry a rung (D75); the engine
+    never starts a run on start-up or an idle return unless motion.idle is on."""
     from conductor.config import ConfigError
 
     kiosk = settings.kiosk
-    idle = modes_file.modes.get(kiosk.idle_mode)
-    if idle is not None and "stepped" in idle.ladder:
-        raise ConfigError(
-            f"config/modes.yaml → {kiosk.idle_mode} → ladder: the idle mode (config/conductor.yaml → kiosk → "
-            "idle_mode) can't have a stepped rung; the canopy's resting look stays still. Remove `stepped` from its "
-            "ladder or pick another idle mode."
-        )
     for mode_id, mode in modes_file.modes.items():
         stepped = mode.techniques.stepped
         if stepped is not None and "stepped" in mode.ladder and stepped.run_s > kiosk.idle_return_s:
@@ -113,6 +110,29 @@ def _check_stepped(settings: Any, modes_file: Any) -> None:
                 f"kiosk.idle_return_s ({kiosk.idle_return_s:g} s), so the idle hold would cut every run short. Make "
                 "the run shorter."
             )
+    idle_motion = settings.motion.idle
+    if idle_motion is None:
+        return
+    idle = modes_file.modes.get(kiosk.idle_mode)
+    if idle is None or "stepped" not in idle.ladder:
+        raise ConfigError(
+            f"config/conductor.yaml → motion → idle: the idle mode {kiosk.idle_mode!r} (kiosk → idle_mode) has no "
+            "stepped rung to breathe with; give it one in config/modes.yaml or set motion.idle to null"
+        )
+    # the runner's paced step on nine (ProgramRunner._effective_step, without a ripple; design_lab.stepped can't be
+    # imported here: it imports this module)
+    from conductor.sequence import GRID, planned_writes_per_min
+
+    paced = settings.motion.stepped
+    rung = idle.techniques.stepped
+    step = max(rung.step_s, len(GRID) * 60.0 / planned_writes_per_min(paced), paced.min_step_s)
+    step = math.ceil(step * 1000 - 1e-6) / 1000  # whole milliseconds, as the runner rounds it
+    if int(idle_motion.breathe_run_s / step + 1e-6) < 2:
+        raise ConfigError(
+            f"config/conductor.yaml → motion → idle → breathe_run_s: {idle_motion.breathe_run_s:g} s fits fewer "
+            f"than two {step:g} s steps of {kiosk.idle_mode}'s stepped rung on nine strands (the first step is the "
+            f"still look), so the breath would never move; make it at least {2 * step:g} s"
+        )
 
 
 def _is_registered(services: Any, entry: Any) -> bool:

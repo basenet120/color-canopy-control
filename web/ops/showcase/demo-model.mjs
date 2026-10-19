@@ -122,7 +122,16 @@ export function buildCanopy(container,{angle='perspective'}={}){
   container.replaceChildren(svg);
   return {layout,svg,nodes,spills};
 }
+// `level` is the canopy's one level (a number, as the Studio passes it) or, for the Lab's breathing preview (D75), a
+// function head → that head's module level; each floor glow then takes the mean level of the heads above it.
 export function paintCanopy(view,colorForHead,colorForSpill,level=100){
-  for(const n of view.nodes){const c=colorForHead(n.head);const rgb=`rgb(${c.r},${c.g},${c.b})`;n.bulb.setAttribute('fill',rgb);n.halo.setAttribute('fill',rgb);n.bulb.setAttribute('opacity',.3+.7*level/100);n.halo.setAttribute('opacity',.1+.6*level/100);}
-  for(const n of view.spills){const c=colorForSpill(n.position);n.element.setAttribute('fill',`rgb(${c.r},${c.g},${c.b})`);n.element.setAttribute('opacity',.04+.15*level/100);}
+  const levelOf=typeof level==='function'?h=>Number(level(h)):()=>level,levels=[];
+  for(const n of view.nodes){const c=colorForHead(n.head),l=levelOf(n.head);levels.push(l);const rgb=`rgb(${c.r},${c.g},${c.b})`;n.bulb.setAttribute('fill',rgb);n.halo.setAttribute('fill',rgb);n.bulb.setAttribute('opacity',.3+.7*l/100);n.halo.setAttribute('opacity',.1+.6*l/100);}
+  const width=(view.layout&&view.layout.width)||CANOPY.width;
+  const spillLevel=p=>{
+    if(typeof level!=='function')return level;
+    const near=levels.filter((_,i)=>Math.abs(view.nodes[i].head.x/width-p)<=1/6),pool=near.length?near:levels;
+    return pool.length?pool.reduce((s,l)=>s+l,0)/pool.length:100;
+  };
+  for(const n of view.spills){const c=colorForSpill(n.position),l=spillLevel(n.position);n.element.setAttribute('fill',`rgb(${c.r},${c.g},${c.b})`);n.element.setAttribute('opacity',.04+.15*l/100);}
 }

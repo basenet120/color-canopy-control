@@ -30,17 +30,25 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
 - **Locks.** A module whose lock was released gets the current look again (all nine for a motion plan).
 - **The ripple (D64).** A module still waiting for its ring (`engine.wave_pending`) is left alone: never re-asserted,
   never re-sent after a true-up read, never sent on a lock release — its ring sends it.
-- **Stepped looks (D65, conductor/sequence.py).** While a stepped run moves (`engine.stepping`), every step is
-  a verified write, so the rolling true-up reads stand down (each would race the next step's write); the slot
-  patterns are checked from the steps' verification readbacks instead, at most once per `SLOT_CHECK_INTERVAL_S` per
-  module (`note_verification`). A module that differs is left to the next step (`runner.defer`) — unless its last
-  command FAILED or MISMATCHed and the next step is more than `STEP_DEFER_S` away, then it is re-sent now. Each step
-  resets the hysteresis timers of the modules it sends (a new desired state); the stepped phase judges a module that
-  stops verifying (`ProgramRunner.status`). Commands that still ended throttled downgrade a stepped look to its still
+- **Stepped looks (D65, D75, conductor/sequence.py).** While a stepped run moves (`engine.stepping`), a module the
+  next step writes isn't read (the read would race that step's verified write): it leaves the rolling reads and
+  re-staggers once it rests or the run ends. A resting module — a breath's module between breaths, sent nothing new
+  by the next step (`runner.resting`) — keeps its staggered turn, so a change made to it outside the Conductor is
+  still healed within the interval (its desired rows are the current step's). For a travel look every module
+  changes every step, so nothing is read while it moves. The slot patterns of the modules being written are checked
+  from the steps' verification readbacks, at most once per `SLOT_CHECK_INTERVAL_S` per module
+  (`note_verification`). A module that differs is left to the next step (`runner.defer`) — unless its last command
+  FAILED or MISMATCHed and the next step is more than `STEP_DEFER_S` away, then it is re-sent now. Each step resets
+  the hysteresis timers of the modules it sends (a new desired state); the stepped phase judges a module that stops
+  verifying (`ProgramRunner.status`). Commands that still ended throttled downgrade a stepped look to its still
   module-level rung like any other. A run that ended while nothing could be sent (commissioning) gets its still look
   from the next re-assert (`engine.program_unsent`).
 - **Idle hold.** After `kiosk.idle_return_s` with no accepted change (and guest input not paused, no stepped
-  rehearsal running), request `kiosk.idle_mode` with source "idle".
+  rehearsal running), request `kiosk.idle_mode` with source "idle". **The idle breath (D75, `motion.idle`; off,
+  null, as shipped):** while the idle look shows with nothing else in force (not paused, resting, commissioning,
+  stopped, rehearsing or trying on, no guest setting, no run), `motion.idle.every_s` after the last change or breath
+  the engine breathes once (`engine.idle_breath`, one attempt per period). Its steps go through `engine.send` like
+  any run (07 §1) and through the show's tier rule, so never on live hardware before `live_enabled`.
 - **Guest settings (D60).** "Differs" means readback differs from `engine.desired_rows` — the look with the guest's
   brightness / power applied — so a re-assert restores the guest's choice and never undoes it. **Idle reset:** while
   a guest setting is in force, after `kiosk.idle_reset_s` with no guest input (and guest input not paused, no outage,
@@ -251,6 +259,7 @@ class Reconciler:
         # The idle hold first: its mood clears the guest settings, so the reset then has nothing left to do.
         await self._idle_hold(now)
         await self._idle_reset(now)
+        await self._idle_breath(now)
 
     # ---- re-assert --------------------------------------------------------------------------------------------
     async def reassert(self, *, source: str = "reconciler") -> list[str]:
@@ -312,26 +321,28 @@ class Reconciler:
 
     # ---- true-up ----------------------------------------------------------------------------------------------
     def _rolling_reads(self, now: float) -> None:
-        """Start the true-up reads that are due: each module once per `true_up_interval_s`, staggered."""
-        if self.engine.stepping:
-            # each step's write is verified: a read now would only race the next step. After the run the reads
-            # start over, staggered.
-            self._read_due.clear()
-            return
+        """Start the true-up reads that are due: each module once per `true_up_interval_s`, staggered. While a
+        stepped run moves, only its resting modules are read (see Stepped looks above)."""
+        engine = self.engine
+        runner = engine.runner if engine.stepping else None
         interval = self.settings.true_up_interval_s
-        active = self.engine.active_modules()
+        active = engine.active_modules()
         ids = [device_id for device_id, _ in active]
         for gone in [d for d in self._read_due if d not in ids]:
             del self._read_due[gone]
             self._read_failures.pop(gone, None)
         for index, device_id in enumerate(ids):
+            if runner is not None and not runner.resting(device_id):
+                # the next step writes it (and verifies it): no read races that write; it re-staggers once it rests
+                self._read_due.pop(device_id, None)
+                continue
             if device_id not in self._read_due:  # new (start, a new plan's module, a released lock): stagger
                 self._read_due[device_id] = now + interval * (index + 1) / len(ids)
         for device_id, target in active:
             if len(self._reading) >= TRUE_UP_CONCURRENCY:
                 return
-            due = self._read_due[device_id]
-            if due > now or device_id in self._reading:
+            due = self._read_due.get(device_id)
+            if due is None or due > now or device_id in self._reading:
                 continue
             following = due + interval
             self._read_due[device_id] = following if following > now else now + interval
@@ -561,6 +572,34 @@ class Reconciler:
         state = await engine.request_mode(kiosk.idle_mode, source="idle")
         if state.refused:
             engine.telemetry.record("alert", level="warn", message=f"Idle return refused: {state.message}")
+
+    async def _idle_breath(self, now: float) -> None:
+        """D75 `motion.idle`: the idle look breathes once every `every_s` after the last change or breath, while
+        nothing else holds the canopy (see Idle hold above). One attempt per period, even if nothing can step."""
+        engine = self.engine
+        idle = engine.deps.settings.motion.idle
+        if idle is None:
+            return
+        if (
+            engine.paused
+            or engine.outage is not None
+            or engine.commissioning
+            or engine.stopped
+            or engine.rehearsal_active
+            or engine.trial_active
+            or engine.guest_overrides_active
+        ):
+            return
+        plan = engine.current_plan()
+        if plan is None or plan.mode_id != engine.deps.settings.kiosk.idle_mode:
+            return
+        runner = engine.runner
+        if runner is not None and runner.running:
+            return
+        if now - max(engine.last_change_mono, engine.last_breath_mono) < idle.every_s:
+            return
+        engine.last_breath_mono = now  # one attempt per period
+        await engine.idle_breath()
 
     async def _idle_reset(self, now: float, *, recovering: bool = False) -> None:
         """No guest input for `kiosk.idle_reset_s` while a guest setting is in force: clear the guest's

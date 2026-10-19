@@ -68,6 +68,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from conductor.canopy import RESTORE_SOURCE
 from conductor.config import NOT_FOR_GIT, overlay_diff, overlay_text
 from conductor.drivers.base import StateRow
 from conductor.engine_api import PlanError
@@ -540,9 +541,9 @@ def _rehearsal_status(engine: Any) -> dict | None:
 
 
 def _rehearsal_modes(services: Any) -> list[dict]:
-    """The looks a rehearsal can run: every mode but the idle one (D65: the resting look never steps)."""
-    idle = services.settings.kiosk.idle_mode
-    return [{"id": m["id"], "label": m["label"]} for m in mode_list(services) if m["id"] != idle]
+    """The looks a rehearsal can run: every mode (D75: the idle look may be rehearsed with its own rung, or its
+    module-level design stepped at the D65 defaults)."""
+    return [{"id": m["id"], "label": m["label"]} for m in mode_list(services)]
 
 
 def _rehearsal_engine(services: Any) -> Any:
@@ -1641,7 +1642,9 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
     restored_to = None
     if body.restore and before.mode and before.mode != target and target != services.settings.kiosk.idle_mode:
         try:
-            back = await engine.request_mode(before.mode, source="ops")
+            # D75: the change back puts the previous look back still; it never starts a run (RESTORE_SOURCE is ops
+            # in every other respect)
+            back = await engine.request_mode(before.mode, source=RESTORE_SOURCE)
             if getattr(back, "refused", False):
                 message += f" (Couldn't change back to {before.label or before.mode}: {back.message})"
             else:

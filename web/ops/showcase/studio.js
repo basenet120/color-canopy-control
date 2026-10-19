@@ -4,7 +4,7 @@
 // tiles and copy are the scenes as the show runs them (GET /api/canopy/scenes, a read: the live looks, D68), re-read
 // while the page is visible so a publish never leaves the page mixing two looks. demo-model's SCENES is the fallback.
 import {api} from '/static/app.js';
-import {SCENES,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-3';
+import {SCENES,buildCanopy,paintCanopy,designLevels,sceneDesignView,nextDesignLevel,scenePainters} from './demo-model.mjs?v=show-design-4';
 import {liveScenes,scenesChanged,palettePainters,LIVE_CAPTION,FALLBACK_CAPTION,REFRESH_MS} from './studio-model.mjs?v=screen-2';
 
 const $=id=>document.getElementById(id);

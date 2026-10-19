@@ -503,6 +503,9 @@ def rewrite_modes_yaml(
         direction_changed = (
             a_mode.techniques.stepped is not None and p_mode.techniques.stepped is not None
         ) and (a_mode.techniques.stepped.direction != p_mode.techniques.stepped.direction)
+        motion_changed = (  # D75: travel ↔ breathe ↔ shimmer
+            a_mode.techniques.stepped is not None and p_mode.techniques.stepped is not None
+        ) and (a_mode.techniques.stepped.mode != p_mode.techniques.stepped.mode)
         solid_changed = a_scene.solid.model_dump() != p_scene.solid.model_dump()
         # the step_s comment's pace clause, when the timing or the nine-strand pace moved (the D65 line's own
         # `canopy_pace`, at these settings)
@@ -575,7 +578,7 @@ def rewrite_modes_yaml(
                 # "nine strands on one account step every 7.5 s" was the runner's pace for the OLD timing
                 comment = _STEP_COMMENT.sub(lambda _m, clause=pace_moved: clause, comment, count=1)
             stepped_comment = path in (("techniques", "stepped"), ("techniques", "stepped", "direction"))
-            if stepped_comment and (field_changed or direction_changed):
+            if stepped_comment and (field_changed or direction_changed or motion_changed):
                 comment = ""  # "rays move out from the left edge" no longer describes the run
             if path == ("techniques", "strand", "look"):
                 if old != new or solid_changed:
@@ -604,7 +607,7 @@ def rewrite_modes_yaml(
             elif isinstance(new, Mapping | list):
                 value = _flow(new) if path[-1] != "preview" else _flow(new, plain=False)
             else:
-                plain = path[-1] in ("at", "direction", "kind", "recipe", "slot")
+                plain = path[-1] in ("at", "direction", "kind", "mode", "recipe", "slot")
                 value = _scalar(new, plain=plain)
             edits[ln.index] = [f"{' ' * ln.indent}{ln.key}: {value}{comment}"]
         # the design's anchor line and the comments inside it
@@ -622,8 +625,46 @@ def rewrite_modes_yaml(
                             edits[i] = []
         if not anchors and design_paths:
             raise LocateError(f"couldn't find mode {scene_id!r}'s design in {MODES_FILE}")
+        if a_st is not None and p_st is not None:
+            _add_stepped_keys(lines, walked, edits, before, after, scene_id)
         lines = _apply_edits(lines, edits)
     return _join(lines, newline), notes
+
+
+# D75: a stepped rung's keys a block written before them may have no line for (travel never needs them)
+STEPPED_ADDED_KEYS = ("mode", "shift", "brightness_swing", "lag_steps", "seed")
+
+
+def _add_stepped_keys(
+    lines: Sequence[str],
+    walked: Sequence[_Line],
+    edits: dict[int, list[str]],
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    scene_id: str,
+) -> None:
+    """Each of STEPPED_ADDED_KEYS whose value the edit changes and that has no line under techniques → stepped gets
+    one, after the block's last child line at the children's indent (composed with an edit already on that line).
+    LocateError when the stepped rung isn't a block mapping."""
+    at = ("techniques", "stepped")
+    have = {ln.path[-1] for ln in walked if len(ln.path) == 3 and ln.path[:2] == at}
+    missing = [
+        k for k in STEPPED_ADDED_KEYS if k not in have and _get(before, (*at, k)) != _get(after, (*at, k))
+    ]
+    if not missing:
+        return
+    header = next((ln for ln in walked if ln.path == at), None)
+    children = [ln for ln in walked if len(ln.path) == 3 and ln.path[:2] == at]
+    if header is None or header.rest or not children:
+        raise LocateError(
+            f"{MODES_FILE}: mode {scene_id!r}'s techniques → stepped isn't a block mapping, so "
+            f"{', '.join(missing)} can't be added to it"
+        )
+    indent = children[0].indent
+    last = _block_end(lines, header.index, header.indent) - 1
+    new = [f"{' ' * indent}{k}: {_scalar(_get(after, (*at, k)), plain=k == 'mode')}" for k in missing]
+    # an edit already on that line (the regenerated moving copy, or a dropped comment) keeps its own lines first
+    edits[last] = (edits[last] if last in edits else [lines[last]]) + new
 
 
 # ---- config/recipes.yaml -------------------------------------------------------------------------------------------
@@ -936,7 +977,17 @@ def _changes(
                 ch.copy.append(f'{name}: {rung} copy now reads "{after}"')
         a_st, p_st = am.techniques.stepped, pm.techniques.stepped
         if a_st is not None and p_st is not None:
-            fields = ("direction", "steps_per_cycle", "step_s", "run_s")
+            fields = (
+                "mode",
+                "direction",
+                "steps_per_cycle",
+                "step_s",
+                "run_s",
+                "shift",
+                "brightness_swing",
+                "lag_steps",
+                "seed",
+            )
             moved = [
                 f"{f} {getattr(a_st, f)} → {getattr(p_st, f)}"
                 for f in fields
@@ -944,7 +995,8 @@ def _changes(
             ]
             if moved:
                 line = f"{name}: stepped run {', '.join(moved)}"
-                timing = fields[1:]  # the pace changes with these, never with the direction
+                # the pace changes with these, never with the direction or the kind of motion
+                timing = ("steps_per_cycle", "step_s", "run_s")
                 if any(getattr(a_st, f) != getattr(p_st, f) for f in timing):
                     pace = _stepped_pace(patched, scene_id, canopy, settings or ConductorSettings())
                     line += f" ({pace})"

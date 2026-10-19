@@ -1165,9 +1165,14 @@
 },
 "stepped": {
 "direction": "forward",
+"mode": "travel",
 "steps_per_cycle": 6,
 "step_s": 6.0,
-"run_s": 90.0
+"run_s": 90.0,
+"shift": 0.0,
+"brightness_swing": 0,
+"lag_steps": 0,
+"seed": null
 },
 "flow_words": "diagonally"
 },
@@ -1238,9 +1243,14 @@
 },
 "stepped": {
 "direction": "forward",
+"mode": "travel",
 "steps_per_cycle": 6,
 "step_s": 6.0,
-"run_s": 90.0
+"run_s": 90.0,
+"shift": 0.0,
+"brightness_swing": 0,
+"lag_steps": 0,
+"seed": null
 },
 "flow_words": "from one edge"
 },
