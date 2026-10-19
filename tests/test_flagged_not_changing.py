@@ -93,10 +93,11 @@ def test_the_guest_panel_takes_the_next_scene_after_the_cooldown_on_flagged_kits
     assert accepted is not None and accepted < 4.0, accepted
 
 
-def test_flagged_kits_read_unknown_in_the_picture_after_a_confirmed_scene(monkeypatch, tmp_path):
-    """What the live iPad picture shows for Modules 1–2 since D73: once a scene is confirmed on the two flagged kits
-    they read stuck, so lit_state calls them unknown (outline dots and, from D74, dashed fins), while the seven
-    positions with no device are dark. The fins add nothing to state.lit; the kiosk mixes them from these states."""
+def test_flagged_kits_read_lit_in_the_picture_after_a_confirmed_scene(monkeypatch, tmp_path):
+    """What the live iPad picture shows for Modules 1–2: once a scene is confirmed on the two flagged kits they read
+    stuck (D73), and since D78 lit_state reads a confirmed flagged-only module as lit (before D78: unknown, outline dots
+    and dashed fins), while the seven positions with no device are dark. The fins add nothing to state.lit; the kiosk
+    mixes them from these states."""
     with partial_show(monkeypatch, tmp_path, LIVE) as c:
         engine = showing(c)
         services = c.app.state.services
@@ -113,14 +114,14 @@ def test_flagged_kits_read_unknown_in_the_picture_after_a_confirmed_scene(monkey
             lit = body["state"]["lit"]
             if body["state"]["phase"] != "changing" and body["state"]["scene"] == scene and lit is not None:
                 states = {m["pos"]: m["state"] for m in lit["modules"]}
-                if states["r0c0"] == states["r0c1"] == "unknown":
+                if states["r0c0"] == states["r0c1"] == "lit":
                     break
             time.sleep(0.1)
         assert engine is not None
         assert len(body["canopy"]["fins"]) == 650
     assert states is not None
     assert {pos: st for pos, st in states.items() if pos in ("r0c0", "r0c1")} == {
-        "r0c0": "unknown",
-        "r0c1": "unknown",
+        "r0c0": "lit",
+        "r0c1": "lit",
     }
     assert {st for pos, st in states.items() if pos not in ("r0c0", "r0c1")} == {"dark"}, states

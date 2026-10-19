@@ -1104,7 +1104,7 @@ orientation question: **p14** (all 270 drawn lights sit on the p14 lattice; 150 
   `/visualizer` labels read "r0c0 · A · P-03". VWBD numbers its panels row by row on its sheet, so P-0n is not
   Module n: record each kit against its panel at install (today's Modules 1–2 belong on P-03 and P-06).
 - **Not changed:** no shipped scene uses the kind (D77 does). `lit_state` is left alone, so since D73 the show box's
-  flagged-only Modules 1–2 read unknown after every confirmed scene and draw as outline dots and dashed fins. fins.json
+  flagged-only Modules 1–2 read unknown after every confirmed scene and draw as outline dots and dashed fins (D78 reads them lit). fins.json
   stays outside `live.config_sha` on purpose (widening it would flag every saved Lab version and publication at
   deploy; published trios are re-validated against the loaded canopy at every start).
 

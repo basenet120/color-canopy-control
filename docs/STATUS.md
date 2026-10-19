@@ -158,7 +158,7 @@ only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/pr
 
 **Needs real hardware / UNVERIFIED:**
 - The 9th-gen iPad's WebKit drawing 650 fins + 270 dots through a stepped run and a changing pulse.
-- What the live picture shows for Modules 1–2: flagged-only since D73, they read unknown after every confirmed scene
+- What the live picture shows for Modules 1–2: flagged-only since D73, they read unknown after every confirmed scene (PR F, D78, reads them lit)
   (outline dots, dashed fins) while the seven panels with no kit are unlit grey (pinned by
   `test_flagged_kits_read_unknown_in_the_picture_after_a_confirmed_scene`). `lit_state` is left as it is (A3).
 - Clear vs frosted Mylar (the picture draws frosted only); recording each kit against its P-0n at install (plan §9).
