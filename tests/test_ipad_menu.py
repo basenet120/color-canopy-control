@@ -47,11 +47,12 @@ from conductor.config import (
     KioskSettings,
     SettingsOverlayState,
     apply_settings_overlay,
+    load_registry,
     load_settings,
     load_settings_overlay,
     save_settings_overlay,
 )
-from conductor.engine_api import ModePlan, Tier
+from conductor.engine_api import ModePlan, ModuleTarget, Tier
 from conductor.looks import CompileContext
 from conductor.looks.live import git_trio, install_looks
 from conductor.routes import kiosk as K
@@ -121,13 +122,22 @@ class ReviewEngine(FakeEngine):
         pass
 
 
-class TierEngine(ReviewEngine):
-    """A ReviewEngine whose `compile_best` answers the tier in `tiers` (T3 by default; an Exception raises), and
-    records every id it was asked to compile."""
+CANOPY_IDS = [m.id for m in load_registry().canopy_modules()]  # canopy-r0c0 … canopy-r2c2
 
-    def __init__(self, clock, trio, tiers=None, **kw) -> None:
+
+def _targets(device_ids) -> dict[str, ModuleTarget]:
+    return {d: ModuleTarget(d, [], []) for d in device_ids}
+
+
+class TierEngine(ReviewEngine):
+    """A ReviewEngine whose `compile_best` answers the tier in `tiers` (T3 by default; an Exception raises) over the
+    modules in `driven` (device ids; all nine by default, as on the full sim canopy), and records every id it was
+    asked to compile."""
+
+    def __init__(self, clock, trio, tiers=None, driven=CANOPY_IDS, **kw) -> None:
         super().__init__(clock, trio, **kw)
         self.tiers: dict = dict(tiers or {})
+        self.driven = list(driven)
         self.compiled: list[str] = []
 
     def compile_best(self, mode_id: str):
@@ -135,7 +145,8 @@ class TierEngine(ReviewEngine):
         tier = self.tiers.get(mode_id, Tier.T3)
         if isinstance(tier, Exception):
             raise tier
-        return ModePlan(mode_id, self.trio.modes.modes[mode_id].label, tier, "", False, {}), ""
+        label = self.trio.modes.modes[mode_id].label
+        return ModePlan(mode_id, label, tier, "", False, _targets(self.driven)), ""
 
 
 def counted(monkeypatch) -> list[tuple[str, bool]]:
@@ -724,6 +735,36 @@ def test_a_thumbnail_sig_changes_with_one_colour_and_with_the_basis_alone():
     assert as_heads["sig"] != sig
 
 
+def _lit(thumb) -> list[str]:
+    """The positions a card thumbnail colours (a module with a colour or per-head colours), in its order."""
+    return [m["pos"] for m in thumb["modules"] if m["color"] is not None or m["colors"] is not None]
+
+
+def test_a_card_lights_only_the_positions_the_engine_drives():
+    """D62 and C1: a position with no device is left out of every look, so its panel on the card is dark (no colour,
+    no per-head colours), as Now Showing leaves it; the sig follows the mask, so the kiosk repaints the card."""
+    ctx = _ctx()
+    order = [m["pos"] for m in canopy_geometry(ctx.canopy)["modules"]]
+    for basis, design in (
+        ("modules", mode_design(GOLDEN, ctx, heads=False)),
+        ("heads", mode_design(GOLDEN, ctx)),
+    ):
+        thumb = IM.design_thumb(design, basis)
+        assert _lit(thumb) == order
+        two = IM.mask_thumb(thumb, {"r0c0", "r0c1"})
+        assert two["basis"] == basis and [m["pos"] for m in two["modules"]] == order
+        assert _lit(two) == ["r0c0", "r0c1"]
+        dark = {"color": None, "colors": None}
+        for kept, item in zip(two["modules"], thumb["modules"], strict=True):
+            assert kept == (item if item["pos"] in ("r0c0", "r0c1") else {"pos": item["pos"], **dark})
+        assert HEX12.match(two["sig"]) and two["sig"] != thumb["sig"]
+        assert thumb == IM.design_thumb(design, basis)  # the cached, unmasked thumb is never changed
+        assert IM.mask_thumb(thumb, set(order)) == thumb  # all nine driven: the same card, the same sig
+        none = IM.mask_thumb(thumb, frozenset())
+        assert _lit(none) == [] and none["sig"] not in (thumb["sig"], two["sig"])
+    assert IM.mask_thumb(None, {"r0c0"}) is None
+
+
 def test_catalog_thumbs_draws_only_the_ids_asked_and_never_fails(monkeypatch):
     trio = review_trio(git_trio(CONFIG_DIR))
     canopy = load_canopy(str(CONFIG_DIR))
@@ -990,16 +1031,84 @@ def test_the_panel_lists_eighteen_options_with_their_group_and_design(app_client
         assert word not in text
 
 
+# the show box's two registered modules (D62; tests/partial_canopy.py)
+TWO_KITS = ["canopy-r0c0", "canopy-r0c1"]
+
+
+def test_on_a_partial_canopy_every_card_lights_only_the_modules_its_plan_drives(app_client, monkeypatch):
+    """C1 with D62: the engine's plan for a scene drives only the registered modules, so its card lights only those
+    panels, on either basis; the scene showing now follows the plan showing now. The mask never recomputes a design."""
+    trio = install_review(_svc(app_client))
+    engine = _engine(app_client, trio, TierEngine, tiers={GOLDEN: Tier.T1}, driven=TWO_KITS)
+    by_id = {s["id"]: s for s in _panel(app_client)["scenes"]}
+    assert by_id[GOLDEN]["thumb"]["basis"] == "heads"
+    for sid in REVIEW_IDS:
+        thumb = by_id[sid]["thumb"]
+        assert len(thumb["modules"]) == 9 and _lit(thumb) == ["r0c0", "r0c1"], sid
+    full = IM.design_thumb(mode_design(GOLDEN, _ctx(trio)), "heads")
+    assert by_id[GOLDEN]["thumb"] == IM.mask_thumb(full, {"r0c0", "r0c1"})
+    assert by_id[GOLDEN]["thumb"]["sig"] != full["sig"]
+    calls = counted(monkeypatch)
+    # the plan showing now answers for its own scene: one module driven, one panel lit
+    showing = ModePlan(CALM, "Lowcountry Calm", Tier.T3, "", False, _targets(["canopy-r1c1"]))
+    engine.current_plan = lambda: showing
+    by_id = {s["id"]: s for s in _panel(app_client)["scenes"]}
+    assert _lit(by_id[CALM]["thumb"]) == ["r1c1"]
+    assert _lit(by_id["coastal-tides"]["thumb"]) == ["r0c0", "r0c1"]
+    # every module registered and driven: the whole card again
+    engine.driven = CANOPY_IDS
+    engine.current_plan = lambda: None
+    by_id = {s["id"]: s for s in _panel(app_client)["scenes"]}
+    assert all(len(_lit(by_id[sid]["thumb"])) == 9 for sid in REVIEW_IDS)
+    assert by_id[GOLDEN]["thumb"] == full
+    assert calls == []  # the cached designs were masked, never redrawn
+
+
+def test_with_no_plan_a_card_lights_only_the_registered_positions(app_client, monkeypatch):
+    """No engine (or no plan from it): the card lights the positions with a device registered on the engine's
+    driver (`show.registered_canopy_ids`), never all nine on a partial canopy."""
+    from conductor.config import Registry
+
+    install_review(_svc(app_client))
+    real = Registry.address
+    monkeypatch.setattr(
+        Registry, "address", lambda self, d, drv: real(self, d, drv) if d in TWO_KITS else None
+    )
+    body = _panel(app_client)  # the engine is off: no plan for any scene
+    assert [s["id"] for s in body["scenes"]] == REVIEW_IDS
+    assert all(_lit(s["thumb"]) == ["r0c0", "r0c1"] for s in body["scenes"])
+
+
+def test_on_the_partial_live_canopy_the_cards_light_the_two_panels_now_showing_lights(monkeypatch, tmp_path):
+    """The real engine with only the two kits registered (as on the show box before install): Now Showing lights two
+    panels and leaves seven dark, and every review card does the same."""
+    from partial_canopy import LIVE, partial_show, showing
+
+    assert list(LIVE) == TWO_KITS
+    with partial_show(monkeypatch, tmp_path, LIVE) as c:
+        showing(c)
+        install_review(_svc(c))
+        body = _panel(c)
+        lit = body["state"]["lit"]["modules"]
+        assert sorted(m["pos"] for m in lit if m["state"] == "dark") == [
+            m["pos"] for m in lit if m["pos"] not in ("r0c0", "r0c1")
+        ]
+        assert len(body["scenes"]) == 18
+        for s in body["scenes"]:
+            assert s["thumb"] is not None and s["thumb"]["basis"] == "modules", s["id"]
+            assert _lit(s["thumb"]) == ["r0c0", "r0c1"], s["id"]
+
+
 def test_six_or_fewer_visible_compute_and_send_no_thumbnail(app_client, monkeypatch):
     calls = counted(monkeypatch)
     bases: list[tuple] = []
-    real = GP.thumb_basis
+    real = GP.thumb_plans
 
     def counted_basis(*a, **kw):
         bases.append(a)
         return real(*a, **kw)
 
-    monkeypatch.setattr(GP, "thumb_basis", counted_basis)
+    monkeypatch.setattr(GP, "thumb_plans", counted_basis)
     for _ in range(3):  # the git config: six scenes
         body = _panel(app_client)
         assert len(body["scenes"]) == 6 and all(s["thumb"] is None for s in body["scenes"])
@@ -1056,7 +1165,7 @@ def test_a_panel_whose_thumbnails_fail_altogether_still_serves(app_client, monke
     def boom(*_a, **_k):
         raise RuntimeError("no thumbnails")
 
-    monkeypatch.setattr(GP, "thumb_basis", boom)
+    monkeypatch.setattr(GP, "thumb_plans", boom)
     body = _panel(app_client)
     assert [s["id"] for s in body["scenes"]] == REVIEW_IDS and all(s["thumb"] is None for s in body["scenes"])
 

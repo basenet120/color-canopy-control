@@ -29,7 +29,8 @@ registered there). Ops only: the auth middleware already keeps kiosk and tester 
 
 `mode_design(mode_id, ctx, heads=False)` skips the 270 heads (`heads` is None; `modules` is unchanged): the iPad's
 review cards (D76, conductor/ipad_menu.py) draw a module-level scene from its nine module colours, about 1 ms for six
-modes against 22 ms for their heads. `/api/canopy/design` keeps the default.
+modes against 22 ms for their heads. `/api/canopy/design` keeps the default. The cards, unlike the Studio, then leave
+dark every position the engine doesn't drive (`ipad_menu.mask_thumb`, D62): they are copy for guests.
 """
 
 from __future__ import annotations

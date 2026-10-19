@@ -13,10 +13,12 @@ attention" lines, the conductor.yaml fold for the overlay download, and the revi
   hides nothing. `services.settings` is changed in place and never rebound (the engine keeps the object).
 - **The fold** (`conductor_yaml_diff`): the list in force as a `git apply` hunk for config/conductor.yaml's one-line
   `hidden_scenes: [...]`, appended to the /ops overlay download (07 §8: "downloadable as a diff to commit back").
-- **Card thumbnails** (`design_thumb`, `catalog_thumbs`): a still picture of each scene for the review menu's cards,
-  from `routes.design.mode_design` on the basis the caller chose: `"heads"` (the design at every light, for a scene
-  the engine would show per light) or `"modules"` (its nine module colours). The caller (guest_panel.thumb_basis)
-  picks the basis from the tier the engine would use now, because a picture is copy too.
+- **Card thumbnails** (`design_thumb`, `catalog_thumbs`, `mask_thumb`): a still picture of each scene for the review
+  menu's cards, from `routes.design.mode_design` on the basis the caller chose: `"heads"` (the design at every
+  light, for a scene the engine would show per light) or `"modules"` (its nine module colours). The caller
+  (guest_panel.thumb_plans) picks the basis from the tier the engine would use now, because a picture is copy too,
+  and masks each card to the positions that plan drives (`mask_thumb`): on a partial canopy a card lights only the
+  panels Now Showing lights (D62), never all nine.
 
 Imports: conductor.config and conductor.scenes only at module level; looks.live and routes.design inside functions.
 Never guest_panel or routes.kiosk: routes.kiosk imports this module, and guest_panel imports routes.kiosk.
@@ -29,7 +31,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -302,8 +304,26 @@ def design_thumb(design: Mapping[str, Any], basis: Basis | None) -> dict | None:
         ]
     else:
         return None
+    return _signed(basis, items)
+
+
+def _signed(basis: str, items: list[dict[str, Any]]) -> dict:
     compact = json.dumps({"basis": basis, "modules": items}, separators=(",", ":"))
     return {"sig": hashlib.sha256(compact.encode()).hexdigest()[:12], "basis": basis, "modules": items}
+
+
+def mask_thumb(thumb: Mapping[str, Any] | None, driven: Collection[str]) -> dict | None:
+    """`thumb` with every module whose canopy position isn't in `driven` drawn dark (`color` and `colors` None), as
+    Now Showing (`state.lit`) leaves a position the engine doesn't drive: a position with no device registered is
+    left out of every look (D62), so a card on a partial canopy lights only the panels the ceiling lights. The `sig`
+    follows the mask. Every module driven: `thumb` as it is (a shallow copy, the same sig); None stays None."""
+    if thumb is None:
+        return None
+    modules = thumb["modules"]
+    if all(m["pos"] in driven for m in modules):
+        return dict(thumb)
+    items = [m if m["pos"] in driven else {"pos": m["pos"], "color": None, "colors": None} for m in modules]
+    return _signed(thumb["basis"], items)
 
 
 def _log_thumb_failure(scene_id: str, exc: BaseException) -> None:
@@ -321,7 +341,8 @@ def catalog_thumbs(
 ) -> dict[str, dict | None]:
     """Each id in `basis` → its card thumbnail (`design_thumb`) on that basis, from `trio`'s modes and recipes over
     `canopy` (pass the panel geometry's own canopy, so the heads line up with its modules' heads). A scene that can't
-    be drawn is None (logged once per reason), never a failed panel."""
+    be drawn is None (logged once per reason), never a failed panel. It draws all nine positions, as the design
+    does; the caller masks each card to the positions the engine drives (`mask_thumb`, D62)."""
     from conductor.looks import CompileContext
     from conductor.routes import design as design_route  # looked up per call: tests count mode_design
 
