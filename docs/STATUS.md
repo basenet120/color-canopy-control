@@ -6,7 +6,7 @@ targeting `main`; all four built and verified in sim, none pushed; see their blo
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
 still tier, the idle breath off); PR C `claude/ipad-review-menu` (D76: the iPad review menu, hide and promote); PR D
 `claude/preset-options-catalog` (D77: the 18-option catalog, three per scene, every one moving, built on a merge of A,
-B (with its review rounds 1–6, Oct 19) and C; D's own review round 1 fixed, tests and docs only; round 2 moved Garden #3 and Goodnight #2 to the plan's designs). #37 is merged (`3c3ad38`). Deploy nothing until Alon asks; PR D's deploy order is in its block). Before that 2026-10-18 evening (PR G `claude/flagged-not-changing`: a
+B (with its review rounds 1–6, Oct 19) and C; D's own review round 1 fixed, tests and docs only; round 2 moved Garden #3 and Goodnight #2 to the plan's designs; round 3 re-ran the soak on the final catalog, now PASS). #37 is merged (`3c3ad38`). Deploy nothing until Alon asks; PR D's deploy order is in its block). Before that 2026-10-18 evening (PR G `claude/flagged-not-changing`: a
 flagged note no longer holds the panel at "changing", D73, merged as #37 `3c3ad38`; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -92,21 +92,23 @@ and "§4 as built"; decision D77.
   fourth through `tests/test_kiosk_node.py` (one wrapper, integration C24) and lab-model through
   `tests/test_lab_static.py`.
 - **`make soak` (seed 0; `config/sim/acceptance.yaml` untouched), committed in `docs/reports/sim-acceptance.md`:**
-  - **Every pinned row passes.** Main run: 148 changes, p95 4.66 s. By tier: canvas 4, modules 48, stepped 122
-    (every mood steps when a guest chooses it), and 7 runs settled onto their canvas or slot.
+  - **The report reads PASS** (re-run on the final catalog after review round 2, review D-R3-1). **Every pinned row
+    passes.** Main run: 148 changes, p95 4.70 s, max 5.80 s. By tier: canvas 4, modules 48, stepped 122 (every mood
+    steps when a guest chooses it), and 7 runs settled onto their canvas or slot. Silent drops that mattered: 31,
+    healed p95 5.10 s. Out-of-band heal: 12 changes, p95 8.82 s, **max 9.70 s against the 10 s limit** (thin margin;
+    seeds 1–5 give max 5.70–6.70 s).
   - **The ripple run, rungs stripped (the live path):** 59 of 60 changes landed ring by ring (one went out as the
-    SIMULATED motion burst). Every module got exactly 1 PUT, none early, and there were 0 downgrades. **The last-ring
-    settle reads FAIL: p95 7.52 s against 7.4 s.** That target is a soak.yaml proposal, not pinned. The fin-ring
-    options ripple as rings of 1, 4 and 4 strands, so the last ring waits on four corners (those changes average
-    4.5–4.8 s against 4.2–4.5 s for the others). Seeds 1–5 give p95 6.08, 7.15, 6.34, 5.57 and 6.25 s. Nothing was
-    tuned. The ring spread is p95 2.22 s (reported, not gating).
+    SIMULATED motion burst). Every module got exactly 1 PUT, none early, and there were 0 downgrades. The last-ring
+    settle (a soak.yaml proposal, not pinned) is p95 7.05 s against 7.4 s, PASS. Seeds 1–5 give p95 5.65, 7.00,
+    5.92, 6.11 and 6.48 s, all PASS (scratch reports). Nothing was tuned. The ring spread is p95 2.20 s (reported,
+    not gating).
   - **The stepped scenario:** 12 runs of Golden Hour, Coastal Tides, Lowcountry Calm, Garden Gathering, Garden
     Gathering #3 and The Goodnight Glow, each on its own rung. 175 steps landed, with 0 superseded, failed or skipped
     (1 was carried after a pinned fault, of 15 faulted writes). Each step sent 1 PUT per changed module. At most 72
     program PUTs and 83 writes of any kind landed in any 60 s on the account. There were 0 governor trips and 0
     downgrades. The 9 finished runs settled canvas 3 and stepped 6. 3 runs were cut short by another mood, which ran
     its own rung. The idle return came at 180.4 s and installed Calm #1 still at modules, with no runner.
-  - The report reads FAIL because of the ripple row; the reported spreads fail as before.
+  - Only the two reported (non-gating) spreads fail, as before.
 - `git diff 6db9799 -- config/scenes.yaml`: the six #1 palettes are unchanged; only the names and Calm #1's
   description changed. `git diff --stat origin/main...HEAD -- .github/workflows`: empty. gitleaks over
   `origin/main..HEAD`: no leaks.
@@ -209,6 +211,17 @@ code, JS or tag changed.** Each test fix was mutation-checked: the mutation fail
   for the two new designs);** the Lab walk-through's "nine Fins pressed" and "seeds 31 and 25" lines predate it.
   `docs/reports/sim-acceptance.md` was not re-run: its stepped scenario includes garden-gathering-3, whose design
   changed (same shimmer parameters).
+- **Review round 3 (D-R3-1, D-R3-3), docs and the soak report only, no code or config changed:**
+  - **D-R3-1:** `make soak` (seed 0) re-run on the final tree (after round 2's Garden #3 and Goodnight #2) and
+    `docs/reports/sim-acceptance.md` committed: it now reads **PASS** (it read FAIL on the pre-round-2 catalog). The
+    soak bullet above and D77's "The soak." carry the new numbers (main p95 4.70 s, ripple last ring p95 7.05 s,
+    out-of-band heal max 9.70 s); the "fin rings ripple as 1, 4 and 4" explanation for a FAIL is dropped and seeds
+    1–5 were re-measured (`nice -n 15 uv run --offline python -m conductor.soak --seed N --report <scratch>`, each
+    exit 0 and PASS). The stepped-scenario lines are unchanged.
+  - **D-R3-3:** guest-panel.md §12 item 10 no longer says the card thumbnails reuse the fin layout; it points at
+    item 11 (C12 option b: no fins, a thumbnail dot radius), which matches `paintThumb` in kiosk.js.
+  - No test added: neither fix changes behaviour; the soak re-run is the check. Full pytest not re-run (no code or
+    config changed since round 2's 3200 passed).
 
 **Not run / UNVERIFIED:**
 - **`make e2e`: UNVERIFIED.** Playwright's browsers aren't installed on this Mac (07 §9). The e2e files collect (57

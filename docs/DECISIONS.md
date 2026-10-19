@@ -1389,10 +1389,10 @@ the client review only, until PR E.**
 - **The soak.** The stepped scenario's candidates are D75's six with Garden Gathering #3 (the first shimmer) in
   Rainbow Row Sunset's place, and there are no `simulated:` overrides. A mood chosen mid-run starts its own run. The
   idle return must install Calm #1 with no runner. The ripple run strips every stepped rung from its config copy,
-  which is the live path until Gate R. In `make soak` (seed 0) every pinned `acceptance.yaml` row passes. The
-  ripple's last-ring settle, a soak.yaml proposal that isn't pinned, is p95 7.52 s against 7.4 s: the fin-ring options
-  ripple as rings of 1, 4 and 4 strands, so the last ring waits on four corners. Seeds 1–5 give 5.57–7.15 s. Nothing
-  was tuned.
+  which is the live path until Gate R. In `make soak` (seed 0) on the final catalog the report reads PASS: every
+  pinned `acceptance.yaml` row passes (main run p95 4.70 s; out-of-band heal max 9.70 s against 10 s), and the
+  ripple's last-ring settle, a soak.yaml proposal that isn't pinned, is p95 7.05 s against 7.4 s. Seeds 1–5 give
+  5.65–7.00 s for it, all PASS. Only the two reported spreads fail, as before. Nothing was tuned.
 - **Deviations from plan §4's prose** are listed in the plan's "§4 as built".
 - **Deploy order.** First, export any live Lab publication (GET `/api/lab/export`): the ids, order and ladders differ
   from git, so after D the show falls back to approved with an /ops warning. Second, deploy D before commissioning
