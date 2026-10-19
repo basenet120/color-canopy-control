@@ -337,8 +337,28 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
         "1 carried by the next step after a pinned fault hit a module's write (429 on every attempt, or a "
         "silent drop; of 2 step writes hit that way)" in line
     )
-    assert "golden-hour: its own (config/modes.yaml), 6 steps a cycle" in line
-    assert "coastal-tides: a SIMULATED one, 6 steps a cycle" in line
+    # D65's travel wording in full, from the fixture's techniques (not config: make lab-roundtrip moves config)
+    assert "golden-hour: its own (config/modes.yaml), 6 steps a cycle, 6 s steps designed, 90 s runs" in line
+    assert "coastal-tides: a SIMULATED one, 6 steps a cycle, 6 s steps designed, 90 s runs" in line
+    # D75's breath wording in full: its kind, swing, lag and timing
+    timing = {"steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0}
+    breaths = {
+        "garden-gathering": {
+            "own": False,
+            **timing,
+            "mode": "breathe",
+            "brightness_swing": 6,
+            "lag_steps": 2,
+        },
+        "golden-hour": {"own": True, **timing, "mode": "shimmer", "brightness_swing": 4, "lag_steps": 3},
+    }
+    breaths["golden-hour"].update(steps_per_cycle=4, step_s=8.0, run_s=60.0)
+    line = soak._stepped_line(_stepped(techniques=breaths))
+    assert (
+        "garden-gathering: a SIMULATED breathe (swing 6, lag 2), 6 steps a breath, 6 s steps designed, 90 s runs; "
+        "golden-hour: its own shimmer (config/modes.yaml) (swing 4, lag 3), 4 steps a breath, 8 s steps designed, "
+        "60 s runs; `motion.stepped.live_enabled` stays false" in line
+    )
 
 
 def test_most_in_60s_counts_a_half_open_window():

@@ -6,8 +6,8 @@ targeting `main`; all four built and verified in sim, none pushed; see their blo
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
 still tier, the idle breath off); PR C `claude/ipad-review-menu` (D76: the iPad review menu, hide and promote); PR D
 `claude/preset-options-catalog` (D77: the 18-option catalog, three per scene, every one moving, built on a merge of A,
-B and C). #37 is merged (`3c3ad38`). Deploy nothing until Alon asks; PR D's deploy order is in its block). Before that 2026-10-18 evening (PR G `claude/flagged-not-changing`: a
-flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
+B (with its review rounds 1–6, Oct 19) and C). #37 is merged (`3c3ad38`). Deploy nothing until Alon asks; PR D's deploy order is in its block). Before that 2026-10-18 evening (PR G `claude/flagged-not-changing`: a
+flagged note no longer holds the panel at "changing", D73, merged as #37 `3c3ad38`; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
@@ -291,7 +291,8 @@ only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/pr
 **Blocked:** nothing.
 
 ## preset-options PR B — motion on every scene (D75), `claude/motion-every-scene` → `main` (Oct 18)
-Cut from `origin/claude/flagged-not-changing` (= `main` + #37). **Merge #37 first.** Not pushed, no PR yet. Any scene
+Cut from `origin/claude/flagged-not-changing` (= `main` + #37). **Merge #37 first** (already satisfied: #37 is merged
+into `main`, `3c3ad38`). Not pushed, no PR yet. Any scene
 may carry one stepped rung (just before `[modules, strand]`) of three kinds: travel (D65), **breathe** (each strand's
 colour and/or level swells and softens in place, the design's start leading) and **shimmer** (each strand on its own
 seeded rhythm). A breath's brightness rides in the step's own PUT. A guest's (kiosk) choice runs the rung first and
@@ -303,7 +304,7 @@ beside a rung. **No scene changes** (`config/scenes.yaml`, `modes.yaml`, `recipe
 options), and **nothing changes on real lights**: `motion.stepped.live_enabled` stays false.
 
 **The preset-options stack, in merge order** (each targets `main`, merge commits, not squash): #37
-`claude/flagged-not-changing` → preset-options PR A `claude/fin-visualizer` (D74) → **PR B `claude/motion-every-scene`
+`claude/flagged-not-changing` (merged, `3c3ad38`) → preset-options PR A `claude/fin-visualizer` (D74) → **PR B `claude/motion-every-scene`
 (D75)** → PR C `claude/ipad-review-menu` (D76) → PR D (the 18-option catalog, D77: "merge #A, #B, #C first"). Lab
 exports made before D77 lands propose a reserved D-number; renumber by hand.
 
@@ -359,11 +360,63 @@ exports made before D77 lands propose a reserved D-number; renumber by hand.
     with nothing stepping; the finished-run re-pick test now downgrades before its upgrade, so that step can fail.
   - **B-R3-TS-5:** a runner test with sends landing 5 ms after each boundary (as on hardware) and one 429 retry in
     the window: no step held; counting the full 60 s held step 8 (73 + 9 + 9 = 91).
+- **Review round 4 (Oct 19): every confirmed finding fixed**, each with a test and a mutation check (the fixed line
+  or the pinned branch reverted, its test failing, restored, `git status` showing only the intended changes):
+  - **B-R4-C1:** an idle breath on modules carrying only a flagged note (D73; Modules 1–2's D54 note) read "Changing
+    the light…" while nothing was sent (8 s on a level breath, 26 s on a lagged one): the runner counted a module
+    showing the hold as verified only when it read ready. A flagged-only module with its look confirmed
+    (`tracker.flagged_only`) now counts too (D75 notes it). Test: every module flagged, the reconciler's idle breath
+    sampled every 0.25 s for 30 s, never `updating` (breathe-level and breathe-rings). Only after Gate R with
+    `motion.idle` on; both are off today.
+  - **B-R4-2:** this file: #37 is merged (`3c3ad38`); "merge #37 first" stays, marked satisfied.
+  - **B-R4-TS-2:** on an approved trio that already breathes (every PR D seed will), changing only the swing, the
+    shift or the lag (the colours reached unchanged) gives the generated sentence for "the kind of motion changed"
+    alone, and the save accepts it. Kills `_motion_kind` reduced to the mode or missing any one part.
+  - **B-R4-TS-3:** a colour-only breathe and shimmer (shift 0.3, swing 0) generate exactly "its next colour" with
+    "drifts and settles" / "drift and settle", and apply. Kills each colour-only branch of `_breath_sentence`.
+  - **B-R4-TS-6:** the soak report's technique words are pinned in full from the test fixture (D65's "6 s steps
+    designed, 90 s runs", and a breathe and a shimmer line), not from config, so `make lab-roundtrip` still holds.
+- **Review round 5 (Oct 19): every confirmed finding fixed.** All four were test gaps over code that was already
+  right, so no code changed; each new test was mutation-checked (the line it pins reverted, the test failing,
+  `git checkout --` and `git status` showing only the test changes):
+  - **B-R5-TS-2:** a guest's run that ends on its own, then a Lab publish with a longer run (150 s) as the very first
+    re-pick: it only holds, no step. Kills `finish` without `note_run_over` (that re-pick restarted the steps). The
+    older test always re-picked through the reconciler first, and `_install` marked the choice itself.
+  - **B-R5-TS-3:** the 07 §6 settle test was vacuous: a run ends on its last step (step 14 = cycle step 2), not on
+    the hold, so the two "unchanged" modules weren't. Their T1 rows now come from the step sent last, which the test
+    checks before the settle, and a second test runs the deferred settle (`_settle_later`, a run the budget ended)
+    onto a motion plan. Kills either `if still.motion:` (7 settles instead of 9).
+  - **B-R5-TS-4:** a guest's Golden Hour that ran before commissioning held at module level, then lifts to the sun
+    once commissioning's re-pick fires (one write per module, no step), under the show's own T1 rule; and a guest's
+    Golden Hour chosen during a cool-off shows the sun at once. Each kills one of the two lift paths on its own
+    (`_repick_best`'s lift, `_install`'s swap); before, nothing caught removing both.
+  - **B-R5-TS-5:** a static test pins that `motionPaint` plays `M.paceSteps(st, tl.pace)` with `levels:
+    step.levels`, and that `paintStage` passes a per-head level function through. Kills each of the three reverts,
+    including the one that brought back B-R1-3.
+- **Review round 6 (Oct 19): every confirmed finding fixed**, each with a test and a mutation check (the fixed or
+  pinned line reverted, the test failing, restored, `git status` showing only the intended changes):
+  - **B-R6-1:** a lagged breath whose nine starts all came out equal (a shimmer's seed, 183 at lag 1 among 10 of
+    seeds 0–1999; or a design whose t rounds to one step at every module centre, a 600 in sun at lag 1) breathed as
+    one under "on their own" or "from one edge", and passed the schema, the blocking rules and the Lab's apply. The
+    schema now refuses it wherever there is a canopy (`_lag_problems`, through `_stepped_problems`: the load, the
+    scene rules, the Lab's apply), on `stepped.seed` or `stepped.lag_steps`; D75 and doc 04 say so. Tests: schema,
+    a scene-rules MUTATIONS case, the Lab's apply. **PR D:** a hand-picked seed or lagged design that collapses is
+    now refused at load, so `make scene-pins` and the suite catch it.
+  - **B-R6-TS-2:** a colour-only breath (shift 0.05) on a sun at r0c0's centre names soft gold to rose, never
+    lavender, and the names equal the stops nearest `composer._offset_t` at the nine centres. Kills a wrap in
+    `reached_stops`.
+  - **B-R6-TS-4:** a guest's 90 s run of the idle look with `motion.idle` every 60 s: one runner to the end, no idle
+    breath until it ends on its own, then the breath. Kills removing both run guards (reconciler and engine).
+  - **B-R6-TS-5:** a try-on of breathe-level (rung first) cleared by a pause comes back at module level, no runner,
+    no program command through the pause and after the resume. Kills `_restore_approved` without `| STILL_ONLY`.
+  - Not rerun after round 6 (no JS and no step changed): `LAB_ROUNDTRIP=1` (its breathe case's export was checked to
+    apply and load, lags 0, 1, 2) and the browser checks.
 - **Verified (sim, macOS), how** (final tree, after the review fixes):
-  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 3): **2589 passed, 6
-    skipped, 44 subtests** (11.5 min; 2583 after round 2, 2577 after round 1).
+  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 6): **2607 passed, 6
+    skipped, 44 subtests** (11.6 min; 2601 after round 5, 2596 after round 4, 2589 after round 3, 2583 after
+    round 2, 2577 after round 1).
   - `node --test tests/*.test.mjs`: 157/157 pass. `ruff check .` and `ruff format --check .`: clean (251 files).
-  - After round 2, and again after round 3, `python -m conductor.soak` (seed 0) to a scratch path gives the
+  - After rounds 2, 3, 4 and 6, `python -m conductor.soak` (seed 0) to a scratch path gives the
     committed report line for line (only the generated time and wall time differ), so
     `docs/reports/sim-acceptance.md` stands as committed.
   - `make scene-pins` / `regen_scene_pins.py --check`: up to date (only the two stepped `_pins` gained the new keys).
@@ -529,6 +582,7 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
   `tests/review_fixture.py` and C's six-count tests to the real 18-scene catalog (integration notes).
 
 ## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
+**Merged into `main` as #37 (`3c3ad38`, Oct 18 17:14).**
 **Deployed first, Oct 18 16:23 (Alon asked): `7b21918`** (main after #35: D70 + D71 + D72) on the Mac show box —
 backup `canopy-data-20261018-162349-manual.tar.gz`, previous `0f8f38c` in `~/canopy-prev-sha.txt`, preflight ok,
 rc 0, `/healthz` OK, `bench` reconnected in ~2 s, the running config read back `fast_pacing: True, 2 s`. **True on
@@ -1057,14 +1111,13 @@ Lab); both target `main`; merge commits, not squash.
 
 ## PR stack (merge order — merge commits, not squash)
 00. **Oct 18:** #28–#35 (PR A, B, B2, C, the C deploy notes, D, E, F) are merged into `main`; the show box runs
-    `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **Open: PR G `claude/flagged-not-changing`** (D73; no
-    other PR first). **Open: preset-options PR A `claude/fin-visualizer` → `main`** (D74; merge #37 first). **Then
-    preset-options PR B `claude/motion-every-scene`** (D75) → `main`, merge #37 first (built and sim-verified, not
-    pushed, no PR number yet; its block at the top). **Then preset-options PR C `claude/ipad-review-menu`** (D76; cut
-    from PR G's tip: merge #37 first; merge commits). **Then preset-options PR D `claude/preset-options-catalog` →
-    `main`** (D77; built on a merge of A, B and C, so "merge A, B and C first"; merge commits, not squash). **#37 is
-    merged (`3c3ad38`, Oct 19)**, so A, B and C's "merge #37 first" is met. The preset-options stack in merge order:
-    A, B, C, D.
+    `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **PR G `claude/flagged-not-changing` (D73) is merged
+    as #37 (`3c3ad38`, Oct 18 17:14)**, so A, B and C's "merge #37 first" is met. **Open: preset-options PR A
+    `claude/fin-visualizer` → `main`** (D74). **Then preset-options PR B `claude/motion-every-scene`** (D75) → `main`
+    (built and sim-verified with review rounds 1–6 fixed, not pushed, no PR number yet; its block at the top). **Then
+    preset-options PR C `claude/ipad-review-menu`** (D76; merge commits). **Then preset-options PR D
+    `claude/preset-options-catalog` → `main`** (D77; built on a merge of A, B and C, so "merge A, B and C first";
+    merge commits, not squash). The preset-options stack in merge order: A, B, C, D.
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -1599,13 +1652,13 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
     or broken `config/fins.json` now fails the preflight before the restart. Then preset-options PRs B and C (in
     parallel, merged after A), then D (the 18-option catalog).
 00000. **preset-options PR B (D75, `claude/motion-every-scene`):** review it (its block at the top, including the
-    review fixes), then open its PR to `main` ("merge #37 first"; merge commit, not squash). Alon merges. Nothing
+    review fixes), then open its PR to `main` ("merge #37 first", already satisfied; merge commit, not squash). Alon merges. Nothing
     changes on real lights until Gate R and Alon's `live_enabled` PR.
 00000. **Alon (preset-options PR C, D76):** after #37, review and merge `claude/ipad-review-menu` (nothing changes
     on the iPad until PR D's options are in git); answer its two questions (tier-true cards vs a labelled design
     view; thumbnails on the six cards after PR E). Hard-reload `/ops` and `/ops/showcase` after deploying it.
-0000. **Alon (PR G, D73):** review and merge `claude/flagged-not-changing`; deploy it (the box runs `7b21918`); then a
-    second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
+0000. **Alon (PR G, D73, merged as #37 `3c3ad38`):** deploy it if the box still runs `7b21918` (its last record
+    here); then a second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
     some iPad reloads). Run the account probe once (`docs/runbooks/account-rate-probe.md`), not during a demo.
 000. **PR F (D72) merged (#35) and deployed with D70 + D71 (`7b21918`, Oct 18 16:23).**
 00. **PR C (D69) is merged and deployed (Oct 18, `0f8f38c`).** Still to try on the kits: tap a scene, dim right

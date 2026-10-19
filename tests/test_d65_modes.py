@@ -291,9 +291,11 @@ def test_a_throttle_downgrade_from_golden_hours_sun_eases_off_to_a_still_rung_ne
 
 
 # ---- D75: a guest's choice runs the rung, then the run holds on the best still tier ----------------------------------
-async def _golden_world(**sections):
+async def _golden_world(*, commission: bool = True, **sections):
     """The shipped modes through the real engine at the simulator's profile (Golden Hour's sun compiles), started and
-    commissioned (its slots recorded), with the sim's writes logged as (monotonic time, device id, rows)."""
+    commissioned (its slots recorded), with the sim's writes logged as (monotonic time, device id, rows).
+    `commission=False` leaves commissioning to the test, under the show's own canvas rule (ShowWiring.tier_allowed):
+    T1 only while commissioning or once every module's slot holds a commissioned record."""
     w = make_world(settings=settings_with(**sections) if sections else None)
     looks = EngineCompiler(w.registry)
     w.engine.deps.compile, w.engine.deps.ladder, w.engine.deps.modes = (
@@ -310,8 +312,22 @@ async def _golden_world(**sections):
 
     w.sim.write = logged
     w.writes = writes
+    if not commission:
+
+        def tier_allowed(mode_id: str, tier: Tier) -> tuple[bool, str]:
+            if tier is not Tier.T1 or w.engine.commissioning:
+                return True, ""
+            slot = getattr(MODES.modes[mode_id], "slot", None)
+            missing = [e.id for e in MODULES if not slot or w.engine.recorded_slot(e.id, slot) is None]
+            return (
+                not missing,
+                f"{slot} hasn't been commissioned on {len(missing)} module(s) yet" if missing else "",
+            )
+
+        w.engine.deps.tier_allowed = tier_allowed
     await w.engine.start()
-    await w.engine.commission(source="ops")
+    if commission:
+        await w.engine.commission(source="ops")
     await w.run_for(70)  # start-up's burst and the slot writes are out of the 60 s rate window
     return w
 
@@ -472,6 +488,91 @@ def test_a_choice_that_couldnt_run_when_it_was_installed_never_starts_on_a_re_pi
     assert tier is Tier.STEPPED and not ran and "cool-off" in ended  # it held still, as it should
     assert seen == [(s, Tier.STEPPED, False) for s in ("reconciler", "recovery", "startup", "looks")]
     assert program == [] and not running  # nothing stepped after the cool-off
+
+
+def test_a_run_that_ended_before_commissioning_lifts_to_the_per_head_sun_once_commissioned():
+    """D75 (review B-R5-TS-4): a guest's Golden Hour chosen before commissioning steps, then holds at module level (no
+    sun to settle onto yet). Commissioning ends with a re-pick (`_replan_soon` → `_repick_best`), which lifts the
+    finished stepped plan to the per-head sun: one write per module, no step. Later re-picks and a clean interval
+    keep it there and never step. (`_repick_best` must lift it itself: `_replan_soon` shows only a plan whose tier,
+    copy or motion differs, so a re-pick that came back stepped would leave the hold up for good.)"""
+
+    async def main():
+        w = await _golden_world(commission=False)
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        first = (w.engine.current_plan().tier, w.engine.runner.running)
+        end = _run_end(w)
+        await w.run_for(end - w.clock.monotonic() + 10)
+        runner = w.engine.runner
+        held = (
+            w.engine.current_plan().tier,
+            runner.running,
+            runner.ended,
+            _queued_since(w, end - 1e-6, "settle"),
+        )
+        report = await w.engine.commission(source="ops")
+        since, n = w.clock.monotonic(), len(w.writes)
+        await w.run_for(5)  # commissioning's re-pick fires 1 s after it ends
+        plan, state = w.engine.current_plan(), w.engine.state()
+        lifted = (plan.tier, w.engine.runner, state.feature, state.program)
+        burst = [d for _, d, _ in w.writes[n:]]
+        await w.engine.request_mode("golden-hour", source="reconciler")
+        w.engine.upgrade("clean")
+        await w.run_for(10)
+        after = (w.engine.current_plan().tier, w.engine.runner)
+        out = (
+            first,
+            held,
+            report["ok"],
+            lifted,
+            burst,
+            after,
+            _queued_since(w, since, "program"),
+            w.all_correct(),
+        )
+        t1 = w.engine.deps.compile("golden-hour", Tier.T1)
+        await w.close()
+        return out, t1
+
+    (first, held, ok, lifted, burst, after, program, correct), t1 = run_virtual(main)
+    assert first == (Tier.STEPPED, True)  # a guest's choice runs the rung first
+    assert held == (Tier.STEPPED, False, "the run is over", [])  # no sun yet: the module-level hold
+    assert ok
+    assert lifted == (Tier.T1, None, t1.feature, None)  # the finished run lifted to the per-head sun
+    assert sorted(burst) == sorted(m.id for m in MODULES)  # one write per module
+    assert after == (Tier.T1, None) and program == [] and correct  # it stays, and nothing steps
+
+
+def test_a_guests_choice_that_cant_step_during_a_cool_off_shows_the_per_head_sun_at_once():
+    """D75 (review B-R5-TS-4): a guest's Golden Hour chosen while the account cools off after a governor trip can't
+    run its steps. `_install` counts that as its run and swaps the stepped plan for the mode's best still tier (its
+    sun) before anything is sent: one write per module, no step, and no re-pick once the cool-off is over starts the
+    steps. (Without the swap it would sit on the module-level hold, below a sun that can run.)"""
+
+    async def main():
+        w = await _golden_world()
+        account = w.engine._account_of(w.engine.target_of(MODULES[0].id).address)
+        w.engine.stepped_cooloff[account] = w.clock.monotonic() + 20.0
+        since, n = w.clock.monotonic(), len(w.writes)
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        plan, state = w.engine.current_plan(), w.engine.state()
+        chosen = (plan.tier, w.engine.runner, state.feature, w.engine._ran_for == w.engine._chosen_mono)
+        await w.run_for(10)
+        burst = [d for _, d, _ in w.writes[n:]]
+        await w.run_for(15)  # the cool-off is over
+        for source in ("reconciler", "looks"):
+            await w.engine.request_mode("golden-hour", source=source)
+        await w.run_for(10)
+        after = (w.engine.current_plan().tier, w.engine.runner)
+        out = (chosen, burst, after, _queued_since(w, since, "program"), w.all_correct())
+        t1 = w.engine.deps.compile("golden-hour", Tier.T1)
+        await w.close()
+        return out, t1
+
+    (chosen, burst, after, program, correct), t1 = run_virtual(main)
+    assert chosen == (Tier.T1, None, t1.feature, True)  # its sun at once; the choice counts as run
+    assert sorted(burst) == sorted(m.id for m in MODULES)  # one write per module
+    assert after == (Tier.T1, None) and program == [] and correct  # nothing steps after the cool-off
 
 
 def test_a_clean_interval_mid_run_never_restarts_the_steps_a_downgrade_stopped():

@@ -1123,7 +1123,11 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   `brightness_swing` (0–20) points either side of the rung's brightness. The waveform is one breath of
   `steps_per_cycle` steps per module: up to a peak on a whole step, back, down, back (`compile.breath_wave`; no two
   consecutive steps equal). `lag_steps` (0–6) makes the design's start lead the breath; a shimmer picks each
-  module's start from `seed` (sha256, the same on every run). Lags are counted over the modules the plan drives, so
+  module's start from `seed` (sha256, the same on every run). A lagged breath (a shimmer, or a breathe with
+  `lag_steps` > 0) whose nine starts all come out equal (a seed such as 183 at lag 1, or a design whose t rounds to
+  one step at every module centre) is refused wherever a canopy is checked (the load, the scene rules, the Lab's
+  apply), on its `seed` or `lag_steps`: it would breathe as one under "on their own" or its lead words (review
+  B-R6-1). Lags are counted over the modules the plan drives, so
   the two live kits never rest together under copy that says they move, and a breath whose driven strands would get
   nothing for a whole step refuses to compile there (the still look holds). Step 0 is the still design in every
   mode; the program's cycle is a breath plus its largest lag. Travel takes none of the breath's parameters ("set"
@@ -1174,7 +1178,10 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   rehearsing, trying on or while a guest's brightness or off is in force, and runs only through `tier_allowed` (never
   on live hardware until `live_enabled`). The show refuses `motion.idle` when the idle look has no stepped rung or
   `breathe_run_s` fits fewer than two paced steps. Alon turns it on only after a 30-minute live soak (live_enabled
-  on, then motion.idle on, watched on /ops, `null` to revert).
+  on, then motion.idle on, watched on /ops, `null` to revert). A breath sends nothing at its start (step 0 is the
+  hold), so a module already showing the hold counts as verified then, whether it reads ready or carries only a
+  flagged note with its look confirmed (D73, `tracker.flagged_only`: Modules 1–2's D54 note); the guest panel never
+  says "Changing the light…" while nothing is sent (review B-R4-C1).
 - **Any look can be rehearsed**, the idle look included: its own rung, or its module-level design at the D65 defaults.
 - **"This scene moves" is `Mode.moves`** (a stepped rung in the ladder). `Mode.motion` keeps its 07 §6 meaning (the
   on-device all-or-none burst flag): it stays false, and the schema now refuses `motion: true` beside a stepped rung

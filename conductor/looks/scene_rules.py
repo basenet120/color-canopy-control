@@ -558,10 +558,12 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
             f"the moving copy must name the flow {words!r}",
         )
     if tech.mode != "travel":
-        # a breath names no flow but its own start (parse_modes' cross-check, here too: the rules stand on their own
-        # over a trio built without it, as the Lab's and the tests' are)
+        # a breath names no flow but its own start, and a lagged one doesn't start every module together
+        # (parse_modes' cross-check, here too: the rules stand on their own over a trio built without it, as the
+        # Lab's and the tests' are); each problem keeps the field its path names (moving_feature, seed, lag_steps)
         for problem in _stepped_problems(scene.id, tech, dict(canopy)):
-            out.add("stepped", scene.id, "techniques → stepped → moving_feature", problem.split(": ", 1)[1])
+            where, _, message = problem.partition(": ")
+            out.add("stepped", scene.id, where.removeprefix(f"mode {scene.id!r} → "), message)
     if STEPPED_PACE not in moving:
         out.add(
             "stepped",

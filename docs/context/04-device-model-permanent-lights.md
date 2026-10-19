@@ -184,7 +184,8 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
 - **Breathe and shimmer (D75).** Each module's colour moves up to `shift` (0–0.5) along the design's own t (clamped,
   never wrapped) and its brightness up to `brightness_swing` (0–20) points either side of the rung's, one breath of
   `steps_per_cycle` steps per module (up, back, down, back: `compile.breath_wave`). `lag_steps` lets the design's
-  start lead (breathe) or seeds each module's own start (shimmer, `seed`). Lags count over the driven strands, so a
+  start lead (breathe) or seeds each module's own start (shimmer, `seed`); a seed or design that starts all nine
+  together is refused (it would breathe as one). Lags count over the driven strands, so a
   partial canopy's kits never rest together under moving copy (a breath that would send nothing for a step holds
   still instead), and the cycle is a breath plus the largest lag. A guest's brightness during a breath stays relative:
   the breath swings around it, never below `kiosk.guest_brightness_min`. The copy says what changes: "swells and

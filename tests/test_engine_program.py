@@ -1572,6 +1572,44 @@ def test_motion_idle_breathes_every_every_s_and_never_moves_the_idle_clocks():
     assert [e["run_s"] for e in events if e.get("action") == "idle_breath"] == [30.0] * len(started)
 
 
+D54_NOTE = "the controller reports 60 entries for 30 heads and this kit has no proven map yet (D54): test"
+
+
+@pytest.mark.parametrize("idle_mode", ["breathe-level", "breathe-rings"])
+def test_an_idle_breath_on_flagged_modules_never_reads_changing_while_nothing_is_sent(idle_mode):
+    """D73 on the idle breath (review B-R4-C1). On the show box Modules 1–2 carry only D54's "no proven map yet" note
+    (`tracker.flagged_only`: needs attention, look confirmed). An idle breath sends nothing at its start (step 0 is
+    the hold), so a module showing the hold counts as verified when the runner is installed, flagged or not. Before
+    the fix a flagged module waited for its own first breath write to verify: the guest panel said "Changing the
+    light…" for 8 s (breathe-level) or 26 s (breathe-rings, whose lag-3 corners are first written at step 4)."""
+
+    async def main():
+        w = stepped_world(kiosk={"idle_mode": idle_mode}, motion=BREATH_30)
+        await quiet_start(w)
+        modules = list(w.engine.current_plan().modules)
+        for d in modules:
+            w.tracker.flag_problem(w.address(d), D54_NOTE)
+        flagged = all(w.tracker.flagged_only(w.address(d)) for d in modules)
+        await w.until(lambda: w.engine.runner is not None and w.engine.runner.running, timeout=300, step=0.25)
+        start, n = w.clock.monotonic(), len(w.writes)
+        runner = w.engine.runner
+        seen = []
+        while w.clock.monotonic() - start < 30.0:
+            state = w.engine.state()
+            seen.append((round(w.clock.monotonic() - start, 2), state.look_phase, w.engine.breathing))
+            await w.run_for(0.25)
+        writes = [t - start for t, _, _ in w.writes[n:]]
+        await w.close()
+        return flagged, start, runner, seen, writes
+
+    flagged, start, runner, seen, writes = run_virtual(main)
+    assert flagged  # every module carries only the flagged note, its look confirmed
+    assert start >= 120.0 and runner.program.mode == "breathe" and seen[0][2]  # the reconciler's idle breath
+    assert writes and not [t for t in writes if t < 1.0]  # it steps later, but sends nothing at its start
+    changing = [(t, phase) for t, phase, _ in seen if phase is CanopyPhase.UPDATING]
+    assert not changing, changing  # was 0–8.25 s (breathe-level), 0–26.25 s (breathe-rings)
+
+
 def test_with_motion_idle_on_the_idle_return_from_another_look_lands_as_one_breath():
     """D75 (review B-R2-TS-2): with motion.idle on, the idle return from a guest's look is one breath of
     breathe_run_s, not the rung's 90 s run, and it counts as the period's breath (`last_breath_mono`), as the Lab's
@@ -1685,11 +1723,73 @@ def test_the_idle_breath_waits_while_anything_else_holds_the_canopy():
         await w.close()
         return out
 
-    async def main():
-        return {case: await held(case) for case in ("paused", "try-on", "rehearsal", "guest", "outage")}
+    async def guest_run() -> tuple:
+        """A guest's run of the idle look itself (90 s) outlasting every_s (60 s), which no config rule rules out
+        (IdleMotionSettings checks only every_s > breathe_run_s): the period comes due mid-run (60 s after the
+        choice), and the breath waits for the run to end on its own (review B-R6-TS-4)."""
+        w = stepped_world(
+            kiosk={**IDLE_BREATH, "idle_reset_s": 3600}, motion={"idle": {"breathe_run_s": 30, "every_s": 60}}
+        )
+        await w.engine.start()
+        await w.run_for(5)
+        assert not (await w.engine.request_mode("breathe-level", source="kiosk")).refused
+        chosen, runner = w.clock.monotonic(), w.engine.runner
+        same, during = [], None
+        while runner.running and w.clock.monotonic() - chosen < 200:
+            same.append(w.engine.runner is runner)
+            during = [e for e in w.events("program") if e.get("action") == "idle_breath"]
+            await w.run_for(0.5)
+        lasted, ended = w.clock.monotonic() - chosen, runner.ended
+        await w.run_for(10)  # the period is long due: the breath comes once the run is over
+        after = (w.engine.breathing, w.engine.runner is not runner)
+        await w.close()
+        return runner.program.run_s, same, during, lasted, ended, after
 
-    out = run_virtual(main)
+    async def main():
+        cases = {case: await held(case) for case in ("paused", "try-on", "rehearsal", "guest", "outage")}
+        return cases, await guest_run()
+
+    out, (run_s, same, during, lasted, ended, after) = run_virtual(main)
     assert out == {case: [] for case in out}
+    assert run_s == 90.0 and len(same) > 120 and all(same)  # one runner, the guest's, from choice to end
+    assert during == []  # no idle breath while it ran, though every_s (60 s) was up 30 s before its end
+    assert 90.0 <= lasted <= 91.0 and ended == "the run is over"  # it ended on its own
+    assert after == (True, True)  # then the idle look breathes (its period was due all along)
+
+
+def test_a_try_on_cleared_by_a_pause_puts_its_look_back_still():
+    """D75 (review B-R6-TS-5): the transactional restore (`_restore_approved`) puts a cleared try-on's approved look
+    back still, as end_trial's own request does. A pause ends a try-on that way: for a look whose stepped rung is
+    first in its ladder (breathe-level: [stepped, modules]) the look goes back at module level, with no runner and
+    nothing stepped after, through the pause and after the resume. Never a run timed from the try-on's start."""
+    from conductor.canopy import Trial
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        now = w.clock.monotonic()
+        trial = Trial("breathe-level", "Breathe (draft)", None, None, now, now + 700, w.clock.now())
+        assert not (await w.engine.start_trial(trial)).refused
+        tried = (w.engine.current_plan().tier, w.engine.runner)
+        await w.run_for(10)
+        since = w.clock.now()
+        w.engine.pause_guest_input(True, source="ops")
+        plan = w.engine.current_plan()
+        paused = (w.engine.trial_active, plan.mode_id, plan.tier, plan.program, w.engine.runner)
+        await w.run_for(5)
+        w.engine.pause_guest_input(False, source="ops")
+        await w.run_for(20)
+        plan = w.engine.current_plan()
+        after = (plan.mode_id, plan.tier, w.engine.runner)
+        out = (tried, paused, after, program_since(w, since))
+        await w.close()
+        return out
+
+    tried, paused, after, program = run_virtual(main)
+    assert tried == (Tier.T3, None)  # the try-on itself is still (D66)
+    assert paused == (False, "breathe-level", Tier.T3, None, None)  # back still, the try-on over
+    assert after == ("breathe-level", Tier.T3, None)
+    assert program == []  # nothing stepped, during the pause or after it
 
 
 def test_motion_idle_with_the_live_gate_shut_never_breathes():
@@ -1817,44 +1917,155 @@ def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
         assert eased == (True, Tier.T3, {}), case  # back up to the still rung, never the stepped one
 
 
-def test_a_settle_onto_a_motion_plan_re_triggers_every_module():
-    from dataclasses import replace
+def test_a_run_that_ends_on_its_own_marks_its_choice_run_before_any_re_pick():
+    """D75 (spec summary point 3, review B-R5-TS-2): a guest's run that runs out marks its choice as run when it ends
+    (`finish` → `note_run_over`), so the first re-pick after it — here a Lab publish whose run is longer (150 s) than
+    the one that ran — only holds. Without the mark, that re-pick's runner would count its 150 s from the choice and
+    start the steps again 95 s in. (The test above always re-picks through the reconciler first, and `_install` marks
+    a choice whose runner can't run itself, so it can't see this.)"""
+    from conductor.canopy import LOOKS_SOURCE
 
     async def main():
         w = stepped_world()
-        compile = w.engine.deps.compile
-
-        def with_t1(mode_id, tier):
-            if mode_id == "radial-outward" and tier is Tier.T1:  # a painted, animating "canvas" stand-in
-                hold = compile(mode_id, Tier.T3)
-                modules = {}
-                for i, (d, mt) in enumerate(hold.modules.items()):
-                    if i >= 2:  # two modules keep the rows they were sent; the other seven change
-                        rows = [R.brightness(55) if r.key == ("brightness", None) else r for r in mt.rows]
-                        mt = replace(mt, rows=rows, expect=rows)
-                    modules[d] = mt
-                return replace(
-                    hold, tier=Tier.T1, motion=True, modules=modules, waves=None, feature="T1 (test)"
-                )
-            return compile(mode_id, tier)
-
-        w.engine.deps.compile = with_t1
-        w.engine.deps.ladder = lambda m: (
-            [Tier.T1, Tier.STEPPED, Tier.T3] if m == "radial-outward" else ladder(m, MODES)
-        )
         await quiet_start(w)
         await w.engine.request_mode("radial-outward", source="kiosk")
-        first = w.engine.current_plan().tier
-        await w.run_for(92)
-        settles = [c for c in w.events("command") if c["source"] == "settle"]
-        out = (first, w.engine.current_plan(), w.engine.runner, settles)
+        runner = w.engine.runner
+        first = (runner.running, runner.count * runner.step_s)
+        await w.run_for(95)  # its 90 s run ends on its own
+        ended = (runner.running, runner.ended, w.engine.runner is runner)
+        compile = w.engine.deps.compile
+
+        def longer(m, tier):  # a publish whose run is longer than the one that ran
+            plan = compile(m, tier)
+            if plan.program is not None:
+                plan.program.run_s = 150.0
+            return plan
+
+        w.engine.deps.compile = longer
+        since = w.clock.now()
+        await w.engine.request_mode("radial-outward", source=LOOKS_SOURCE)  # the first re-pick after the end
+        plan, after = w.engine.current_plan(), w.engine.runner
+        repick = (plan.tier, plan.program.run_s, after.running, after.ended)
+        await w.run_for(20)
+        out = (first, ended, repick, program_since(w, since), w.engine.runner.running)
+        w.engine.deps.compile = compile
         await w.close()
         return out
 
-    first, plan, runner, settles = run_virtual(main)
-    assert first is Tier.STEPPED  # a guest's choice runs the rung first
-    assert plan.tier is Tier.T1 and runner is None
+    first, ended, repick, program, running = run_virtual(main)
+    assert first == (True, 90.0)
+    assert ended == (False, "the run is over", True)  # it ran out: no guest, no re-pick ended it
+    assert repick == (Tier.STEPPED, 150.0, False, "this choice already ran (a re-pick only holds)")
+    assert program == [] and not running  # nothing steps again after the publish
+
+
+def _motion_t1_world(keep: dict[str, list]):
+    """radial-outward on the ladder [T1, STEPPED, T3], its T1 a painted, animating "canvas" stand-in (motion True):
+    the modules in `keep` (filled in by the test once it knows what they were last sent) get exactly those rows, so
+    nothing but 07 §6 sends them anything; the others a level (55) no step or hold of it sends."""
+    from dataclasses import replace
+
+    w = stepped_world()
+    compile = w.engine.deps.compile
+
+    def with_t1(mode_id, tier):
+        if mode_id == "radial-outward" and tier is Tier.T1:
+            hold = compile(mode_id, Tier.T3)
+            modules = {}
+            for d, mt in hold.modules.items():
+                rows = keep.get(d) or [
+                    R.brightness(55) if r.key == ("brightness", None) else r for r in mt.rows
+                ]
+                modules[d] = replace(mt, rows=list(rows), expect=list(rows))
+            return replace(hold, tier=Tier.T1, motion=True, modules=modules, waves=None, feature="T1 (test)")
+        return compile(mode_id, tier)
+
+    w.engine.deps.compile = with_t1
+    w.engine.deps.ladder = lambda m: (
+        [Tier.T1, Tier.STEPPED, Tier.T3] if m == "radial-outward" else ladder(m, MODES)
+    )
+    return w
+
+
+def test_a_settle_onto_a_motion_plan_re_triggers_every_module():
+    """07 §6 (D75, review B-R5-TS-3): a run that ends on its own settles onto a motion plan by re-triggering all nine
+    modules, the two whose T1 rows are exactly what the run's last step sent them included. (A run ends on its last
+    step, not on the hold: 90 s of 6 s steps is 15 steps, and step 14 is cycle step 2, so the two modules' T1 rows are
+    built from that step; built from the hold, they'd differ from what was sent and count as changed anyway.)"""
+
+    async def main():
+        keep: dict[str, list] = {}
+        w = _motion_t1_world(keep)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        first = (w.engine.current_plan().tier, runner.running)
+        kept = list(runner.plan.modules)[:2]
+        last = step_rows(runner.plan, runner.count - 1)  # the step the run ends on
+        keep.update({d: list(last[d]) for d in kept})
+        before: dict[str, list | None] = {}
+        settle = w.engine.settle_after_run
+
+        def spy(r):  # what the two modules were last sent, as the run hands over to the settle
+            before.update({d: w.engine.sent_rows.get(d) for d in kept})
+            return settle(r)
+
+        w.engine.settle_after_run = spy
+        await w.run_for(92)
+        settles = [c for c in w.events("command") if c["source"] == "settle"]
+        out = (first, runner.ended, w.engine.current_plan(), w.engine.runner, kept, keep, before, settles)
+        await w.close()
+        return out
+
+    first, ended, plan, runner, kept, keep, before, settles = run_virtual(main)
+    assert first == (Tier.STEPPED, True)  # a guest's choice runs the rung first
+    assert ended == "the run is over" and plan.tier is Tier.T1 and runner is None
+    assert all(plan.modules[d].rows == keep[d] for d in kept)
+    assert before == {d: keep[d] for d in kept}  # those two already show their T1 rows: only 07 §6 sends them
     assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: radial-outward"}
+    assert {c["device_id"].removeprefix("sim-") for c in settles} == set(plan.modules)
+
+
+def test_a_deferred_settle_onto_a_motion_plan_re_triggers_every_module():
+    """07 §6 through `_settle_later` (D75, review B-R5-TS-3): a run the write budget ended (HELD_STEPS_END holds in a
+    row) sends its hold at once, and one cap window later `_settle` moves it to a motion plan by re-triggering all nine
+    modules, the two whose T1 rows are exactly the hold they were just sent included."""
+
+    async def main():
+        keep: dict[str, list] = {}
+        w = _motion_t1_world(keep)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        kept = list(runner.plan.modules)[:2]
+        keep.update({d: list(runner.plan.modules[d].rows) for d in kept})  # the hold: the plan's own rows
+        await w.run_for(20)  # a few steps are out
+        real = w.executor.account_writes
+        w.executor.account_writes = lambda address, **kw: real(address, **kw) + 120  # the 60 s window is full
+        while runner.running:
+            await w.run_for(0.5)
+        end = w.clock.monotonic()
+        w.executor.account_writes = real
+        ended = (runner.ended, w.engine.current_plan().tier)
+        await w.run_for(30)  # the hold is out; the settle waits one cap window
+        before = (
+            {d: w.engine.sent_rows.get(d) for d in kept},
+            [c for c in w.events("command") if c["source"] == "settle"],
+        )
+        await w.run_for(end + 65 - w.clock.monotonic())
+        settles = [c for c in w.events("command") if c["source"] == "settle"]
+        out = (ended, before, w.engine.current_plan(), w.engine.runner, kept, keep, settles)
+        await w.close()
+        return out
+
+    ended, (sent, early), plan, runner, kept, keep, settles = run_virtual(main)
+    assert ended == ("the account's write budget held back 2 steps in a row", Tier.STEPPED)
+    assert early == []  # nothing settles inside the cap window
+    # those two already show their T1 rows (the hold they were just sent): only 07 §6 sends them
+    assert sent == {d: keep[d] for d in kept}
+    assert plan.tier is Tier.T1 and runner is None and all(plan.modules[d].rows == keep[d] for d in kept)
+    assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: radial-outward"}
+    assert {c["device_id"].removeprefix("sim-") for c in settles} == set(plan.modules)
 
 
 # ---- gates and config ---------------------------------------------------------------------------------------------
