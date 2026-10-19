@@ -38,10 +38,13 @@ presses **Rehearse** in the confirm dialog on `/ops`.
    stepped design of its own in `config/modes.yaml` (none since D77, but a Lab edit can take one off), its
    module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward. To watch level steps on
    the nine show kits (bench item 6: does a step read as a breath or a blink?), rehearse a level breath such as
-   **The Goodnight Glow #1** or **Lowcountry Calm #2**. When Gate R should carry the full write rate, use a breathe
-   with `lag_steps: 0` (The Goodnight Glow #1) or a travel look (Golden Hour #1, for one): those change every module
-   every step, while a lagged breath (or a shimmer) leaves its resting modules unwritten for several steps, so it
-   writes less. On the nine show kits the runner stretches the step to 7.5 s: at the full rate it paces all nine
+   **The Goodnight Glow #1** or **Lowcountry Calm #2**. **For the run on nine, rehearse Rainbow Row Sunset #2**
+   (`rainbow-row-sunset-2`, travel): its compiled steps change all nine modules every step, so it writes 9 PUTs a
+   step, the worst case Gate R has to carry. Every travel option and The Goodnight Glow #1 (a breathe with
+   `lag_steps: 0`) also write 9 a step. A lagged breath or a shimmer writes less, so a pass on one under-tests the
+   worst case: from the compiled steps on nine, Coastal Tides #1 writes 4–9 a step, Lowcountry Calm #1 2–9, Calm #2
+   and Goodnight #3 4–9, Garden Gathering #3 and Goodnight #2 3–9, and a small brightness step can round to no change.
+   On the nine show kits the runner stretches the step to 7.5 s: at the full rate it paces all nine
    modules on one account at 72 writes a minute, the account's cap of 90 less a 20% reserve for 429 retries and
    re-sends (`motion.stepped.budget_reserve`).
 3. Minutes: **10** for Gate R (1–10 are allowed; use 2 to try the page out).
@@ -121,8 +124,8 @@ A report with `"simulated": true` (made on a laptop or staging) **never counts f
 ## After
 
 - **Pass on the show kits:** tell Alon, with the report file and the observer's notes. **Only Alon** sets
-  `motion.stepped.live_enabled: true`, in a PR (D65 put the stepped rungs of Coastal Tides and Golden Hour in
-  `config/modes.yaml`; that setting is all that keeps them off the real lights). Nobody else flips it, whatever the report says.
+  `motion.stepped.live_enabled: true`, in a PR (since D77 every option has a stepped rung in `config/modes.yaml`;
+  that setting is all that keeps them off the real lights). Nobody else flips it, whatever the report says.
 - **Fail:** stepped motion stays off. Nothing else changes for the show. Send Alon the report. If the failure was a 403,
   check `/ops/accounts` before anything else. Don't run it again the same day without Alon.
 - In both cases the canopy is back on the look's best still tier: its canvas or slot where that can run, else its

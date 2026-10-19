@@ -637,7 +637,7 @@ def test_module_colours_as_the_eye_sees_them(scene_id):
     assert colours["r0c0"] != colours["r0c1"]  # the kits-differ warning: the show box's two kits differ
     skip_unless_drafted(scene_id)
     if scene_id in FIN_RINGS:
-        # D77, question 1: the nine fin-ring options pass two-d only on near-ties (ΔE76 0.33–1.13: r0c0/r2c2 at t
+        # D77, question 1: the nine fin-ring options pass two-d only on near-ties (ΔE76 0.33–1.23: r0c0/r2c2 at t
         # 0.6745 against r0c2/r2c0 at 0.6666). To the eye each is three rings: the centre, the edge-middles and the
         # corners. D77 and the PR body say so; Alon chooses whether to keep them on the fins.
         assert _seen(colours) == 3

@@ -26,9 +26,10 @@ Oct 29. **How long:** the whole show; each action below takes seconds.
   (Lowcountry Calm) is always on. The list is kept in `<data>/overrides/settings.yaml` and survives a restart;
   **Download ops edits** folds it into `config/conductor.yaml` (`kiosk.hidden_scenes`) as a diff to commit back.
   More than six scenes on the iPad gives guests the review menu: one row per scene with its options side by side,
-  and only the scene list scrolls.
+  and only the scene list scrolls. Since D77 the catalog has 18 (each scene's #1 plus its #2 and #3), all on the iPad
+  by default, so the review menu shows; switch the twelve #2 and #3 options off here to give guests the usual six.
 
-What guests see on the kiosk: the scenes on the iPad (six moods, unless /ops hid some or the review options are on);
+What guests see on the kiosk: the scenes on the iPad (since D77 the 18 review options, unless /ops hid some);
 after a choice the canopy changes in a few seconds ("Changing the light…"
 → "Ready"); the next choice (or brightness, or on/off) waits a moment, 2 s (D72's
 fast pacing; with `kiosk.fast_pacing: false`, the write budget: 7.5 s once all nine are driven), longer for two

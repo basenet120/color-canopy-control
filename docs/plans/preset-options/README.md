@@ -250,6 +250,42 @@ Checks to run while building:
 - Low brightness × dark colours (Night blue, Deep moss at 25%) may read near-black under the fins. Preview on a kit
   before the client session.
 
+### §4 as built (PR D, D77)
+The 18 options are in `config/scenes.yaml`, `config/modes.yaml` and `config/recipes.yaml` with this section's ids,
+palettes, moods and brightness. Where the build differs from the prose above, a rule forced it:
+- **Golden Hour #1** puts sunset pink on the deep centre by stretching the sun (`radius_in: 225`), not by retuning
+  the stops: the scene rules refuse stops that aren't evenly spaced.
+- **Lowcountry Calm #1 and Garden Gathering #1** tilt along the current through an inverted canopy-metric radial
+  centred at [122.5, 67.5], 12.5 in off the middle (`fins` takes no parameters), so their copy says "from one spot
+  just off the middle". Calm also gets `radius_in: 130`: its two colours are only ΔE76 11.8 apart, and that is what
+  makes a fourth module colour visible.
+- **The current** is field angle 18° (31.4° in true inches, because field angles are measured in the canopy's
+  proportions); Calm #3 uses 22° and Coastal Tides #2 140° (across it).
+- **Coastal Tides #3's sweep** is centred at [107.5, 55], off r1c1: a sweep centred on a module centre is refused.
+- **Lowcountry Calm #2's "rim steady"** can't be expressed (one swing for every module), so the centre leads by a
+  lag of one step instead.
+- **Golden Hour #2 reorders its stops** (decision D3) to warm white, honey, Home Depot orange, amber: on the fin rings
+  module level tops out at t ≈ 0.67, so the four corner strands show Home Depot orange and amber shows light by light
+  on the apron. Its description says "with orange on the corner strands"; "deepening" is gone.
+- **The descriptions** name the whole palette, as the approved ones do, without placement words module level
+  wouldn't show. Module-level copy names only colours that make up at least 30% of some strand's mix, and hedges
+  a minority colour ("a touch of", "a hint of"; D77 accepts a hedge at about a 35% mix).
+- **Coastal Tides #1's breath.** The plan's "the shoreline moves out a ring and back" with the centre never sent
+  anything does not hold under D75's waveform, which swings both ways: the centre strand takes some aqua at the
+  bottom of the breath. Its copy is the colour breath's: "… the deep ocean blue in the middle drifts and settles, out
+  over the aqua and back, like a tide."
+- **Motion as built:** 11 travel, 5 breathe (Calm #1 and Tides #1 shift the colour; Calm #2, Goodnight #1 and #3
+  swing the level), 2 shimmer (Garden #3 and Goodnight #2, `lag_steps: 2`, seeds 31 and 25 so the corners and the
+  show box's two kits start apart). Every `run_s` is a whole number of program cycles at the nine-strand pace (a
+  breath plus its largest lag): 90–150 s. The Bloom options' copy says "from the centre out".
+- **The apricot key.** Rainbow Row Sunset #2's "Apricot" is `rainbow-row-sunset-2-apricot`, kept off the plain
+  `apricot` that the Lab round trip's rename case writes.
+- **The nine fin-ring options read as three rings at module level** (the centre, the edge-middles, the corners).
+  They pass the two-d warning only on near-ties (ΔE76 0.33–1.23); a test pins them as three. Question 1 in STATUS.
+- **§1.3's radial samples.** `radial {centre_in: [112.5, 60], metric: canopy}` samples the module centres at
+  0 / 0.471 / 0.667 in code, not 0 / 0.67 / 0.94, and gives only three colours, which fails two-d. The fin rings
+  and the tilted radial replace it.
+
 ## 5. Motion that works on the real lights in this first iteration
 
 ### 5.1 The path: stepped motion for every option

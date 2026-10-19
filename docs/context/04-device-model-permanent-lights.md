@@ -109,14 +109,35 @@ What each tier does with the design:
 - **strand:** the scene's solid colour on every strand ("all nine Hubspace strands set to …", counted on a partial
   canopy). The safe look is Lowcountry Calm at this tier.
 
-| Scene | Design (D63) | Ladder | Brightness | Moves? | On live hardware now |
+The catalog is 18 options since D77: each scene's #1 (its approved palette, re-fitted to the fins) and two drafted
+options, `<id>-2` and `<id>-3` (`option_of: <id>`). Every option has a stepped rung.
+
+| Scene (#1) | Design (D63, re-fitted D77) | Ladder | Brightness | Moves? | On live hardware now |
 |---|---|---|---|---|---|
-| Lowcountry Calm (idle, safe look) | radial from the canopy's centre: sea glass in the middle, soft ivory at the corners | modules → strand | 70% | no rung today (D75 allows one: start-up and an idle return show it still unless `motion.idle` is on; a guest's choice runs it) | modules |
-| Rainbow Row Sunset (custom-1) | linear at 45°, corner to corner: pastel coral → blush pink → lilac | canvas → slot → modules → strand | 85% | no | modules |
-| Garden Gathering (custom-2) | radial from the middle of one long edge (112.5, 120): ivory there, sage green at the far corners | canvas → slot → modules → strand | 75% | no | modules |
-| Coastal Tides | a tilted shoreline, linear at 78°: ocean blue → aqua → seafoam → foam white | **stepped** → modules → strand | 85% | stepped: the tide rolls diagonally (forward: ocean blue moves on toward the foam-white side) | modules (stepped refused: live off) |
-| Golden Hour (custom-3) | a radial sun at the middle of the left edge (0, 60), in the canopy's proportions: soft gold → peach → sunset pink → rose → lavender | canvas → slot → **stepped** → modules → strand | 95% | a guest's choice: stepped first (sun rays move out from the left edge), then the per-head sun (T1/T2) where it can run, else module level (D75); an /ops choice: T1/T2 at once, stepped only where they can't run | modules (canvas, slot and stepped all refused) |
-| The Goodnight Glow | a radial moon over r0c2 (187.5, 20): moonlight blue there, periwinkle at the far corner | modules → strand | 28% | never | modules |
+| Lowcountry Calm #1 (idle, safe look) | rings tilted along the current: an inverted radial centred 12.5″ off the middle (122.5, 67.5), radius 130″: sea glass there, soft ivory at the corners | **stepped** → modules → strand | 70% | breathe (the sea glass drifts and settles, the centre leading) when a guest chooses it. It never starts a run on its own: start-up, the idle return and the safe look show it still while `motion.idle` is off (D75) | modules (stepped refused: live off) |
+| Rainbow Row Sunset #1 (custom-1) | linear along the fin current (field angle 18°, 31.4° in true inches): pastel coral → blush pink → lilac | canvas → slot → **stepped** → modules → strand | 85% | a guest's choice: stepped first (the facade colours move diagonally), then canvas or slot where they can run, else module level (D75); an /ops choice: ladder order | modules (canvas, slot and stepped all refused) |
+| Garden Gathering #1 (custom-2) | rings tilted along the current (an inverted radial centred at (122.5, 67.5)): ivory there, pale lime around it, sage green toward the corners | canvas → slot → **stepped** → modules → strand | 75% | as Sunset #1 (the colours move in toward one spot) | modules (canvas, slot and stepped all refused) |
+| Coastal Tides #1 | fin rings: ocean blue on the deep centre, aqua around it, seafoam on the corners (foam white light by light on the apron) | **stepped** → modules → strand | 85% | breathe (the ocean blue drifts and settles, out over the aqua and back) | modules (stepped refused: live off) |
+| Golden Hour #1 (custom-3) | a radial sun at the middle of the left edge (0, 60), radius 225″, in the canopy's proportions: soft gold → peach → sunset pink (exactly on the deep centre) → rose → lavender | canvas → slot → **stepped** → modules → strand | 95% | a guest's choice: stepped first (sun rays move out from the left edge), then the per-head sun (T1/T2) where it can run, else module level (D75); an /ops choice: T1/T2 at once, stepped only where they can't run | modules (canvas, slot and stepped all refused) |
+| The Goodnight Glow #1 | fin rings, inverted: moonlight blue on the deep centre, lavender around it, a touch of periwinkle at the corners | **stepped** → modules → strand | 28% | breathe (the level, 24–32) | modules (stepped refused: live off) |
+
+| Option | Design | Brightness | Moves |
+|---|---|---|---|
+| Lowcountry Calm #2 | fin rings | 70% | breathe: the level, the centre leading |
+| Lowcountry Calm #3 | linear along the current (22°), mirrored | 70% | travel, 8 steps a cycle |
+| Rainbow Row Sunset #2 | linear along the current (18°), six facade colours | 85% | travel |
+| Rainbow Row Sunset #3 | fin rings | 85% | travel, in toward the centre |
+| Garden Gathering #2 | fin rings | 75% | travel, from the centre out |
+| Garden Gathering #3 | fin rings | 75% | shimmer: the level (lag 2, seed 31) |
+| Coastal Tides #2 | linear across the current (140°), mirrored and inverted | 85% | travel |
+| Coastal Tides #3 | a sweep around (107.5, 55), mirrored | 85% | travel, 8 steps a cycle |
+| Golden Hour #2 | fin rings: warm white, honey, Home Depot orange on the corners (amber on the apron) | 95% | travel, from the centre out |
+| Golden Hour #3 | linear along the current (18°) | 95% | travel |
+| The Goodnight Glow #2 | fin rings | 25% | shimmer: the level (lag 2, seed 25) |
+| The Goodnight Glow #3 | fin rings | 26% | breathe: the level, the centre leading |
+
+Every option's ladder is **stepped** → modules → strand, and on live hardware now it shows modules (stepped refused:
+live off). The nine fin-ring options read as three rings at module level (centre, edge-middles, corners; D77).
 
 "On live hardware now": every scene runs at module level (or strand below it), because no upper rung is open yet.
 On the Mac show box as D62 recorded it (two kits registered, at r0c0 and r0c1) every look drives those two and
@@ -194,7 +215,10 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
   not gating, until Alon signs off a per-step target. Since D75 the stepped scenario steps all six scenes with all
   three kinds (153 steps, one PUT per changed module per step, at most 72 program PUTs a minute). Since the review's
   cap fix (B-R1-1: a step leaves room for a guest's burst) its all-writes maximum is 82 in any 60 s on seed 0 (80–89
-  over seeds 0–15), under the proposed 90 (D75).
+  over seeds 0–15), under the proposed 90 (D75). Since D77 every option steps on its own rung: the stepped scenario
+  runs Golden Hour, Coastal Tides, Lowcountry Calm, Garden Gathering, Garden Gathering #3 (a shimmer) and The
+  Goodnight Glow (175 steps on seed 0, at most 72 program PUTs and 83 writes of any kind in any 60 s), a mood chosen
+  mid-run starts its own run, and the ripple run strips the rungs (the live path until Gate R).
 - **Needs real hardware:** Gate R (below), whether a strand cuts or fades between colours (bench item 6), and the
   start skew across kits (gate 12).
 
