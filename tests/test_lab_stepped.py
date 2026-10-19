@@ -548,7 +548,11 @@ def test_the_route_previews_a_stepped_edit(app_client):
     r = app_client.post("/api/lab/preview", json={"scene_id": scene_id, "draft": draft})
     assert r.status_code == 200, r.text[:300]
     body = r.json()
-    assert len(body["stepped"]["steps"]) == 8 and body["stepped"]["direction"] == "reverse"
+    # a travel program is one cycle of steps_per_cycle steps; a breath's adds its largest lag (D75)
+    tech = LIVE.modes.mode(scene_id).techniques.stepped.model_copy(update={"steps_per_cycle": 8})
+    cycle = program_cycle(tech, module_lags(tech, list(D.GRID), CANOPY))
+    assert len(body["stepped"]["steps"]) == cycle == body["stepped"]["cycle"]
+    assert body["stepped"]["steps_per_cycle"] == 8 and body["stepped"]["direction"] == "reverse"
     assert body["stepped"]["live_sentence"] == STEPPED_LIVE_OFF
     assert body["copy"]["stepped"]["chosen"] == "generated"
     assert body["stepped"]["moving_feature"] == body["copy"]["stepped"]["sentence"]

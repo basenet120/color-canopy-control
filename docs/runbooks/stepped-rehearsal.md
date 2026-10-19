@@ -48,6 +48,10 @@ presses **Rehearse** in the confirm dialog on `/ops`.
    under the controls says when it ends. The kiosk's feature line says what the canopy is doing. For Golden Hour or
    Coastal Tides it is that scene's own moving copy, the one guests would see: "Colour and dimming through the
    Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so …".
+   A breathe or shimmer rung (D75) says what it sends instead: "Colour and dimming through the Hubspace cloud: each
+   Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so …", or "Colour
+   and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour and
+   a brighter or softer level every few seconds, so …".
    Only a look without a stepped rung of its own shows "Staff are testing the canopy: each Hubspace strand is sent
    its next colour every few seconds, so …".
 

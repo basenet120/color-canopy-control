@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from conductor import soak
+from conductor.config import CONFIG_DIR
+from conductor.looks import load_modes
 from conductor.sim.settings import SimSettings
 
 
@@ -34,18 +36,22 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     # the stepped scenario (D65, D75): every scene steps (its own rung in place, else a SIMULATED one before modules),
     # each step measured from the lights, each run's end by the tier it settled on
     st = results["stepped"]
-    timing = {"steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0}
+    # the two own rungs exactly as config/modes.yaml has them (no approved value pinned here: make lab-roundtrip)
+    keys = ("steps_per_cycle", "step_s", "run_s", "mode", "brightness_swing", "lag_steps")
+    own = {m: load_modes(CONFIG_DIR).mode(m).techniques.stepped for m in ("golden-hour", "coastal-tides")}
+    timing = {"steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0}  # the scenario's SIMULATED technique
     kinds = {
-        "golden-hour": (True, "travel", 0, 0),
-        "coastal-tides": (True, "travel", 0, 0),
-        "lowcountry-calm": (False, "travel", 0, 0),
-        "garden-gathering": (False, "breathe", 6, 2),
-        "rainbow-row-sunset": (False, "shimmer", 6, 3),
-        "goodnight-glow": (False, "breathe", 4, 0),
+        "lowcountry-calm": ("travel", 0, 0),
+        "garden-gathering": ("breathe", 6, 2),
+        "rainbow-row-sunset": ("shimmer", 6, 3),
+        "goodnight-glow": ("breathe", 4, 0),
     }
     assert st["techniques"] == {
-        m: {"own": own, **timing, "mode": mode, "brightness_swing": swing, "lag_steps": lag}
-        for m, (own, mode, swing, lag) in kinds.items()
+        **{m: {"own": True, **{k: getattr(t, k) for k in keys}} for m, t in own.items()},
+        **{
+            m: {"own": False, **timing, "mode": mode, "brightness_swing": swing, "lag_steps": lag}
+            for m, (mode, swing, lag) in kinds.items()
+        },
     }
     assert st["tiers"] == {"stepped": 4} and st["runs"] == 4 and st["interrupted"] == 1
     # 7.5 s steps: the design's 6 s stretched to 9 modules at 72 a minute (the cap of 90 less the 20 % reserve)
@@ -70,9 +76,7 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
         and "Stepped scenario (D65, D75, SIMULATED)" in text
     )
     assert "garden-gathering: a SIMULATED breathe (swing 6, lag 2), 6 steps a breath" in text
-    assert (
-        "coastal-tides: its own (config/modes.yaml), 6 steps a cycle, 6 s steps designed, 90 s runs" in text
-    )
+    assert soak._technique_words("coastal-tides", st["techniques"]["coastal-tides"]) in text
     # the main run steps Coastal Tides (its stepped rung is first, D65) and every pinned row above still holds
     assert results["wiring"]["tiers"].get("stepped", 0) > 0
 

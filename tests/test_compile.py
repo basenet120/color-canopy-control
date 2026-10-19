@@ -382,5 +382,7 @@ def test_plan_json_is_serialisable():
     ("mode_id", "tier"), [(m, t) for m, mode in MODES.modes.items() for t in (Tier(x) for x in mode.ladder)]
 )
 def test_each_target_carries_its_device_brightness_range_for_guest_dimming(mode_id, tier):
-    plan = compile_mode(mode_id, tier, _ctx(_caps(brightness_range=(20, 80)), **_painted()))
-    assert {mt.brightness_range for mt in plan.modules.values()} == {(20, 80)}
+    # a range that clamps no scene's level: a breath clamped flat on every strand holds still instead (D75), so a
+    # narrower one would test the clamp, not the range carried
+    plan = compile_mode(mode_id, tier, _ctx(_caps(brightness_range=(2, 99)), **_painted()))
+    assert {mt.brightness_range for mt in plan.modules.values()} == {(2, 99)}

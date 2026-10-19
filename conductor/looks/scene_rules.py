@@ -45,6 +45,7 @@ from conductor.looks.schema import (
     Mode,
     ModesFile,
     ModuleSample,
+    _stepped_problems,
     breathe_words,
     motion_words,
 )
@@ -547,7 +548,8 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
             f"step {flat[0]} shows {len(set(pictures[flat[0]]))} colour(s) across the canopy; each step shows more than two",
         )
     words = motion_words(tech.canvas, dict(canopy), tech.direction) if tech.mode == "travel" else None
-    moving = tech.moving_feature  # a breath's words (what changes, where it starts) are the schema's to check
+    # a breath's words for what changes are the schema's (SteppedTechnique) to check
+    moving = tech.moving_feature
     if words is not None and words not in moving:
         out.add(
             "stepped",
@@ -555,6 +557,11 @@ def _stepped(scene: Scene, mode: Mode, recipes: RecipesFile, canopy: Mapping[str
             "techniques → stepped → moving_feature",
             f"the moving copy must name the flow {words!r}",
         )
+    if tech.mode != "travel":
+        # a breath names no flow but its own start (parse_modes' cross-check, here too: the rules stand on their own
+        # over a trio built without it, as the Lab's and the tests' are)
+        for problem in _stepped_problems(scene.id, tech, dict(canopy)):
+            out.add("stepped", scene.id, "techniques → stepped → moving_feature", problem.split(": ", 1)[1])
     if STEPPED_PACE not in moving:
         out.add(
             "stepped",
