@@ -67,14 +67,14 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-8">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-11">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert '<script type="module" src="./studio.js?v=screen-2"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-8"')
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-11"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
-    assert 'from "./lab-model.mjs?v=lab-8"' in _text("lab.js")
+    assert 'from "./lab-model.mjs?v=lab-11"' in _text("lab.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -196,6 +196,26 @@ def test_the_lab_calls_only_its_own_routes_and_never_sends_a_live_setting():
         "lab-fast",
         "lab-publish-show",
     ]
+
+
+def test_make_this_the_scene_is_a_working_draft_never_a_request():
+    """D76: "Make this the scene" swaps the base's working draft for the option's design, in the browser (Undo brings
+    it back); the base's Publish saves and publishes it. No new route, no new switch."""
+    js = _code(_text("lab.js"))
+    promote = _function(js, "promoteToBase")
+    for needle in ("M.promoteDraft(", "persist(base)", "M.undoPush(L.undo[base]", "window.confirm("):
+        assert needle in promote, needle
+    assert "api(" not in promote
+    assert "M.draftEquals(draft, L.working[base])" in promote  # nothing to make: say so, change nothing
+    assert promote.index("window.confirm(") < promote.index("L.working[base] = draft")
+    assert "text: M.PROMOTE" in js and "scene.option_of ?" in js
+    assert "onclick: promoteToBase" in js
+    # an option sits under its base in the list, and a scene /ops took off the iPad says so
+    scenes = _function(js, "renderSceneList")
+    assert '" is-option"' in scenes and "on_ipad === false" in scenes and '"lab-badge off-ipad"' in scenes
+    css = _code(_text("lab.css"))
+    assert ".lab-scene.is-option {" in css and ".lab-badge.off-ipad {" in css
+    assert "export const PROMOTE = " in _text("lab-model.mjs")
 
 
 def test_the_motion_lines_come_from_the_page_model():

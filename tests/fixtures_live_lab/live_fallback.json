@@ -38,7 +38,8 @@
         }
       ],
       "mood": "Settle in",
-      "held": false
+      "held": false,
+      "on_ipad": true
     },
     {
       "id": "rainbow-row-sunset",
@@ -59,7 +60,8 @@
         }
       ],
       "mood": "Stay a little longer",
-      "held": false
+      "held": false,
+      "on_ipad": true
     },
     {
       "id": "garden-gathering",
@@ -80,7 +82,8 @@
         }
       ],
       "mood": "Bring everyone together",
-      "held": false
+      "held": false,
+      "on_ipad": true
     },
     {
       "id": "coastal-tides",
@@ -105,7 +108,8 @@
         }
       ],
       "mood": "Find your coast",
-      "held": false
+      "held": false,
+      "on_ipad": true
     },
     {
       "id": "golden-hour",
@@ -134,7 +138,8 @@
         }
       ],
       "mood": "Let the evening glow",
-      "held": false
+      "held": false,
+      "on_ipad": true
     },
     {
       "id": "goodnight-glow",
@@ -155,7 +160,8 @@
         }
       ],
       "mood": "Slow the night down",
-      "held": false
+      "held": false,
+      "on_ipad": true
     }
   ],
   "history": [

@@ -1143,7 +1143,7 @@ test("the fixtures carry PLAN §2.11's keys", () => {
   assert.deepEqual(keys(LIVE_PUBLISHED), ["canopy", "current", "fallback", "history", "previous", "problem", "repaint", "scenes", "simulated", "source", "writable"]);
   assert.deepEqual(keys(LIVE_PUBLISHED.current), ["by", "changed", "git_changed", "id", "kind", "name", "published_at", "version", "version_exists"]);
   assert.deepEqual(keys(LIVE_PUBLISHED.previous), ["by", "id", "name", "published_at"]);
-  assert.deepEqual(keys(LIVE_PUBLISHED.scenes[0]), ["held", "id", "mood", "name", "palette", "source"]);
+  assert.deepEqual(keys(LIVE_PUBLISHED.scenes[0]), ["held", "id", "mood", "name", "on_ipad", "palette", "source"]);
   assert.deepEqual(keys(LIVE_PUBLISHED.history[0]), ["by", "changed", "id", "kind", "name", "outcome", "published_at", "repaint", "version", "version_exists"]);
   assert.deepEqual(keys(REPAINT), ["finished_at", "label", "modules", "publication", "queued_until", "running", "scene", "slot", "started_at"]);
   assert.deepEqual(keys(CONFIRM_409), ["changes", "confirm", "confirm_required", "cost", "detail", "ends_trial", "notes", "repaint", "replaces", "show_offer", "warnings"]);
@@ -1451,6 +1451,83 @@ test("ipadCards: the live catalog (names + swatches), else the approved one", ()
   assert.deepEqual(cards[4], { id: "golden-hour", name: "Golden Hour", source: "published", palette: ["#FFDB9B", "#FFB38A", "#FF8FBF", "#E779B0", "#B59AE2"] });
   const old = M.ipadCards(null, { scenes: [{ id: "golden-hour", name: "Golden Hour", approved: golden() }] });
   assert.deepEqual(old, [{ id: "golden-hour", name: "Golden Hour", source: "approved", palette: golden().palette.map((c) => c.hex) }]);
+});
+
+test("ipadCards leaves scenes off the iPad out", () => {
+  const scenes = [
+    { id: "a", name: "A", source: "approved", palette: [{ name: "x", hex: "#111111" }], on_ipad: false },
+    { id: "b", name: "B", source: "published", palette: [{ name: "y", hex: "#222222" }], on_ipad: true },
+    { id: "c", name: "C", source: "approved", palette: [{ name: "z", hex: "#333333" }] },
+  ];
+  const cards = M.ipadCards({ scenes }, null);
+  assert.deepEqual(cards, [
+    { id: "b", name: "B", source: "published", palette: ["#222222"] },
+    { id: "c", name: "C", source: "approved", palette: ["#333333"] },
+  ]);
+  // the catalog fallback (no publishing here) follows the same switch
+  const fromCatalog = M.ipadCards(null, { scenes: [{ id: "golden-hour", name: "Golden Hour", approved: golden(), on_ipad: false }, { id: "x", name: "X", approved: golden(), on_ipad: true }] });
+  assert.deepEqual(fromCatalog.map((c) => c.id), ["x"]);
+  assert.ok(LIVE_PUBLISHED.scenes.every((s) => s.on_ipad === true), "the fixtures say on_ipad");
+});
+
+// ---- "Make this the scene" (D76) -------------------------------------------------------------------------------------
+
+function option(extra = {}) {
+  return golden({
+    scene_id: "golden-hour-2",
+    name: "Golden Hour #2",
+    mood: "Dusk, the other way round",
+    description: "Lavender through rose and peach to soft gold.",
+    palette: [
+      { name: "Lavender", hex: "#B59AE2" },
+      { name: "Rose", hex: "#E779B0" },
+      { name: "Peach", hex: "#FFB69D" },
+    ],
+    layout: { kind: "linear", transform: "mirror", invert: true, cycles: 1, angle_deg: 30 },
+    sample_at: "mean",
+    brightness: 80,
+    solid: 1,
+    stepped: { direction: "reverse", steps_per_cycle: 9, step_s: 8.0, run_s: 120.0 },
+    copy: { modules: "generated", stepped: "approved" },
+    ...extra,
+  });
+}
+
+test("promoteDraft copies the option's design into the base and keeps the base's identity", () => {
+  const base = golden();
+  const opt = option();
+  const baseBefore = JSON.parse(JSON.stringify(base));
+  const optBefore = JSON.parse(JSON.stringify(opt));
+  const { draft, notes } = M.promoteDraft(base, opt);
+  for (const k of ["palette", "layout", "sample_at", "brightness", "solid", "description", "stepped"]) assert.deepEqual(draft[k], opt[k], k);
+  for (const k of ["scene_id", "name", "mood"]) assert.equal(draft[k], base[k], k);
+  assert.deepEqual(draft.copy, { modules: "auto", stepped: "auto" });
+  assert.deepEqual(notes, []);
+  assert.deepEqual(base, baseBefore, "the base is never changed");
+  assert.deepEqual(opt, optBefore, "the option is never changed");
+  assert.ok(!M.draftEquals(draft, base));
+  assert.ok(M.draftEquals(M.promoteDraft(draft, opt).draft, draft), "promoting twice changes nothing more");
+  draft.palette[0].hex = "#000000";
+  assert.equal(opt.palette[0].hex, "#B59AE2", "the draft shares nothing with its inputs");
+});
+
+test("promoteDraft never adds or drops a stepped rung", () => {
+  const still = golden({ stepped: null });
+  let out = M.promoteDraft(still, option(), { baseStepped: false });
+  assert.equal(out.draft.stepped, null);
+  assert.deepEqual(out.notes, ["no-rung"]);
+  out = M.promoteDraft(golden(), option({ stepped: null }), { baseStepped: true });
+  assert.deepEqual(out.draft.stepped, golden().stepped);
+  assert.deepEqual(out.notes, ["kept-motion"]);
+  out = M.promoteDraft(still, option({ stepped: null }));
+  assert.equal(out.draft.stepped, null);
+  assert.deepEqual(out.notes, [], "neither moves: nothing to say");
+  assert.equal(M.PROMOTE, "Make this the scene");
+  // the notices name both scenes and never claim a publish
+  const words = [M.PROMOTE_COPY.title("O", "B"), M.PROMOTE_COPY.question("O", "B"), M.PROMOTE_COPY.done("O", "B"), M.PROMOTE_COPY.noRung("B"), M.PROMOTE_COPY.keptMotion("O", "B"), M.PROMOTE_COPY.same("O", "B")];
+  for (const w of words) assert.match(w, /\bB\b/);
+  assert.match(M.PROMOTE_COPY.question("O", "B"), /Nothing is published until you press Publish/);
+  assert.match(M.PROMOTE_COPY.done("O", "B"), /Nothing was published/);
 });
 
 test("repaintNote: the server's sentence, plus the B1 note only over commissioned slots", () => {

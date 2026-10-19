@@ -457,6 +457,49 @@ export function setField(draft, key, value) {
   return d;
 }
 
+// ---- "Make this the scene" (D76): an option's design into its base's working draft ------------------------------------
+
+export const PROMOTE = "Make this the scene";
+export const PROMOTE_COPY = Object.freeze({
+  title: (option, base) => `Copy ${option}’s palette, layout, brightness, solid colour and description into ${base}’s working draft`,
+  question: (option, base) =>
+    `Make ${option} the scene? ${base}’s working draft takes ${option}’s palette, layout, brightness, solid colour and description; ${base} keeps its name and mood. Nothing is published until you press Publish, and Undo brings ${base}’s draft back.`,
+  done: (option, base) => `${base}’s working draft now has ${option}’s design. Nothing was published: Publish puts it on the show, and Undo brings ${base}’s draft back.`,
+  noRung: (base) => `${base} has no stepped rung, so it stays still: the option’s stepped timing wasn’t copied.`,
+  keptMotion: (option, base) => `${option} has no stepped timing, so ${base} keeps its own.`,
+  same: (option, base) => `${base}’s working draft already has ${option}’s design.`,
+});
+
+/** `{draft, notes}`: `base`'s draft with `option`'s palette, layout, sample, brightness, solid and description (the
+ * description is the option's, so the base's Now-showing line stays true of the design it now has). The scene id,
+ * name and mood stay the base's. The stepped timing is the option's only when the base has a stepped rung (a draft
+ * can't add or drop one): "no-rung" when the option's was left behind, "kept-motion" when the base keeps its own. The
+ * copy choices go back to auto (the generated sentences follow the new design). Neither input is changed. */
+export function promoteDraft(base, option, { baseStepped = !!(base && base.stepped) } = {}) {
+  const b = clone(base);
+  const o = clone(option);
+  const notes = [];
+  let stepped = b.stepped ?? null;
+  if (baseStepped && o.stepped) stepped = o.stepped;
+  else if (baseStepped) notes.push("kept-motion");
+  else if (o.stepped) notes.push("no-rung");
+  const draft = {
+    ...b,
+    palette: o.palette,
+    layout: o.layout,
+    sample_at: o.sample_at ?? "centre",
+    brightness: o.brightness,
+    solid: o.solid,
+    description: o.description,
+    stepped,
+    copy: { modules: "auto", stepped: "auto" },
+    scene_id: b.scene_id,
+    name: b.name,
+    mood: b.mood,
+  };
+  return { draft, notes };
+}
+
 // ---- layout controls ---------------------------------------------------------------------------------------------------
 
 /** Which layout controls show for this layout. linear → angle; radial → centre (step 2.5), metric; sweep → centre,
@@ -1760,11 +1803,12 @@ export function liveNotice(prev, next, { nowMs = Date.now() } = {}) {
   return `The show changed: “${c.name}” was published${at}${by}.`;
 }
 
-/** What the iPad's six cards show now: LiveJSON's scenes (name + swatches), else (no publishing here) the catalog's
- * approved ones — the iPad follows the live catalog, never a draft or a try-on. */
+/** What the iPad's cards show now: LiveJSON's scenes (name + swatches), else (no publishing here) the catalog's
+ * approved ones — the iPad follows the live catalog, never a draft or a try-on — less the scenes /ops took off the
+ * iPad (`on_ipad: false`, D76). */
 export function ipadCards(live, catalog) {
   const fromLive = !!(live && Array.isArray(live.scenes) && live.scenes.length);
-  const scenes = fromLive ? live.scenes : (catalog && catalog.scenes) || [];
+  const scenes = (fromLive ? live.scenes : (catalog && catalog.scenes) || []).filter((s) => s.on_ipad !== false);
   return scenes.map((s) => {
     const palette = fromLive ? s.palette : s.approved && s.approved.palette;
     return { id: s.id, name: s.name, source: fromLive ? s.source || "approved" : "approved", palette: (Array.isArray(palette) ? palette : []).map((c) => String(c.hex)) };

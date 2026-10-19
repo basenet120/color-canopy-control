@@ -794,6 +794,41 @@ def test_the_lab_never_writes_the_ipad_menu():
             "SETTINGS_OVERLAY_FILE",
         ):
             assert word not in text, f"{path.name} names {word}"
+        # the Lab reads the menu (CatalogJSON / LiveJSON on_ipad) and nothing else of it
+        for imported in re.findall(r"from conductor\.ipad_menu import ([^\n]+)", text):
+            assert imported.strip() == "live_menu", (path.name, imported)
+        assert "import ipad_menu" not in text and "ipad_menu as" not in text, path.name
+
+
+# ---- "Make this the scene" against the Lab's own checks -------------------------------------------------------------------
+def test_a_promoted_draft_passes_the_labs_own_checks(app_client):
+    """What promoteDraft leaves (another design's palette, layout, sample and description in a base's draft) applies
+    and saves through the Lab's real rules. Git has no options before PR D, so the stand-in is another scene's
+    design (rainbow-row-sunset's) promoted into golden-hour, a painted base."""
+    from conductor.design_lab import draft as D
+
+    git = git_trio(CONFIG_DIR)
+    other = D.seed_draft(git, "rainbow-row-sunset")
+    promoted = D.seed_draft(git, GOLDEN).model_copy(
+        update={
+            "palette": other.palette,
+            "layout": other.layout,
+            "sample_at": other.sample_at,
+            "description": other.description,
+            "solid": min(other.solid, len(other.palette) - 1),
+        }
+    )
+    patched = D.apply_drafts(
+        git, {GOLDEN: promoted}, canopy=load_canopy(str(CONFIG_DIR)), settings=load_settings()
+    )  # raises DraftError on any Lab rule
+    keys = [s.color for s in patched.modes.mode(GOLDEN).techniques.modules.sample.canvas.stops]
+    # the other scene owns the plain slugs, so the base takes '<base id>-<slug>' keys (draft.py recipe_keys)
+    assert keys == [f"{GOLDEN}-{D.slug(c.name)}" for c in other.palette], keys
+    assert [(c.name, c.hex) for c in patched.scenes.get(GOLDEN).palette] == [
+        (c.name, c.hex) for c in other.palette
+    ]
+    r = app_client.post("/api/lab/versions", json={"drafts": {GOLDEN: promoted.model_dump(mode="json")}})
+    assert r.status_code == 201, r.text
 
 
 # ---- the review cards' basis ---------------------------------------------------------------------------------------------
