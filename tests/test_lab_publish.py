@@ -1157,38 +1157,66 @@ def test_a_refused_repick_during_a_try_on_puts_the_safe_look_up_never_the_draft(
 
 
 # ---- the fins' rings (D74): a fins design publishes to the simulated show -----------------------------------------
-def test_a_fins_design_publishes_to_the_simulated_show(no_threads):
-    """The Lab's Fins layout, published with Show: one burst of Coastal Tides on the fins' rings, nine look writes,
-    the copy from the centre out, and the installed trio carries the fins field (D68 validate → install → compile)."""
+def off_the_fins() -> str:
+    """An unpainted scene with a travel rung whose approved design isn't on the fins, so a Fins layout edit to it is
+    a real change of design (integration C25: D77 ships Coastal Tides #1 on the fins, where that edit changes
+    nothing). Golden Hour #3 (along the current, linear 18°) on D77's catalog; after the session's exports, the
+    first such scene in catalog order."""
     from conductor.looks import field as F
+
+    def qualifies(scene_id: str) -> bool:
+        tech = GIT.modes.mode(scene_id).techniques
+        return (
+            tech.canvas is None
+            and tech.stepped is not None
+            and tech.stepped.mode == "travel"
+            and not isinstance(tech.modules.sample.canvas.field, F.FinsField)
+        )
+
+    return next(x for x in ("golden-hour-3", *(s.id for s in GIT.scenes.scenes)) if qualifies(x))
+
+
+def test_a_fins_design_publishes_to_the_simulated_show(no_threads):
+    """The Lab's Fins layout on a scene that isn't on the fins (off_the_fins), published with Show: the installed
+    trio's design moves onto the fins' rings (D68 validate → install → compile), the copy is regenerated from the
+    centre out, and the show sends one burst of it, nine look writes."""
+    from conductor.looks import field as F
+
+    scene_id = off_the_fins()
+    approved = GIT.modes.mode(scene_id).techniques
 
     async def main():
         w = await show()
+        before = w.looks.trio.modes.mode(scene_id).techniques.modules.sample.canvas.field
         writes = spy_writes(w)
         async with client_of(w) as c:
-            draft = edited(
-                TIDES, layout={"kind": "fins"}, copy={"modules": "generated", "stepped": "generated"}
-            )
-            vid = await save(c, {TIDES: draft})
+            vid = await save(c, {scene_id: edited(scene_id, layout={"kind": "fins"})})
             r = await publish(c, vid, show=True)
             await w.engine.wait_idle()
         plan = w.engine.current_plan()
-        field = w.looks.trio.modes.mode(TIDES).techniques.modules.sample.canvas.field
-        out = r.status_code, r.text, plan.mode_id, plan.feature, list(writes), field
+        tech = w.looks.trio.modes.mode(scene_id).techniques
+        fields = before, tech.modules.sample.canvas.field, tech.stepped.canvas.field
+        out = r.status_code, r.text, plan.mode_id, plan.feature, list(writes), fields, tech
         await w.close()
         return out
 
-    status, text, mode, feature, writes, field = run_virtual(main)
+    status, text, mode, feature, writes, fields, tech = run_virtual(main)
+    before, after, stepped = fields
     assert status == 200, text
-    assert mode == TIDES and "from the centre out" in feature
+    assert not isinstance(before, F.FinsField)  # the show had the approved, off-the-fins design
+    assert isinstance(after, F.FinsField) and isinstance(stepped, F.FinsField)
+    # the copy is regenerated for the rings (the approved sentence named the old layout)
+    assert tech.modules.feature != approved.modules.feature and "from the centre out" in tech.modules.feature
+    assert tech.stepped.moving_feature != approved.stepped.moving_feature
+    assert mode == scene_id and "from the centre out" in feature
     looks = look_writes(writes)
     assert len(looks) == 9 and len({a for _t, a, _r in looks}) == 9  # one per module
-    assert isinstance(field, F.FinsField)
 
 
 def test_fins_drafts_pass_the_published_trio_checks():
-    """A trio with Coastal Tides (stepped) and Golden Hour (painted, T1) on the fins passes everything a published
-    trio is held to at every start (the blocking scene rules and the stepped run limit included), and compiles."""
+    """A trio with a stepped scene (off_the_fins) and Golden Hour (painted, T1) moved onto the fins passes everything
+    a published trio is held to at every start (the blocking scene rules and the stepped run limit included), and
+    compiles on the fins."""
     from conductor.capabilities import detect
     from conductor.config import load_registry, load_settings
     from conductor.geometry import load_canopy_config
@@ -1196,9 +1224,12 @@ def test_fins_drafts_pass_the_published_trio_checks():
     from conductor.looks import field as F
     from conductor.sim.profiles import profile_parts
 
-    tides = edited(TIDES, layout={"kind": "fins"})
+    scene_id = off_the_fins()
+    for x in (scene_id, GOLDEN):  # both are real changes of design: neither is on the fins in git
+        assert not isinstance(GIT.modes.mode(x).techniques.modules.sample.canvas.field, F.FinsField), x
+    stepped = edited(scene_id, layout={"kind": "fins"})
     golden = edited(GOLDEN, layout={"kind": "fins"})
-    trio = patched_trio(tides, golden)
+    trio = patched_trio(stepped, golden)
     canopy = load_canopy_config(CONFIG_DIR / "canopy.yaml")
     validated = L.validate_trio(trio.dump(), git=GIT, settings=load_settings(CONFIG_DIR), canopy=canopy)
     assert validated.dump() == trio.dump()
@@ -1211,7 +1242,7 @@ def test_fins_drafts_pass_the_published_trio_checks():
         recipes=trio.recipes,
         canopy=canopy,
     )
-    assert compile_mode(TIDES, Tier.STEPPED, ctx).program.field["kind"] == "fins"
+    assert compile_mode(scene_id, Tier.STEPPED, ctx).program.field["kind"] == "fins"
     assert compile_mode(GOLDEN, Tier.T3, ctx).tier is Tier.T3
     # Golden Hour is painted: its T1 canvas is the fins design too, so the operator repaint applies (D68 B2)
     assert isinstance(trio.modes.mode(GOLDEN).techniques.canvas.canvas.field, F.FinsField)
