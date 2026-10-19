@@ -66,8 +66,13 @@ only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/pr
 - Lab exports made before D77 lands propose a reserved D-number; renumber by hand.
 
 **Verified (sim, macOS, this branch):**
-- `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` on the final code (`1ca5bca`; the docs commit after it
-  changes no code): ****2559 passed, 5 skipped, 44 subtests in 684 s****. (Before this PR, at #37: 2473 passed.)
+- `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` on the final code (`310454f`, the review fix; the docs
+  commit after it changes no code): ****2560 passed, 5 skipped, 44 subtests in 687 s****. (Before this PR, at #37:
+  2473 passed.)
+- Review A-R1-2 (the preview's fin-map refusal): `resolve_copy` over the frozen baseline canopy raises the plain
+  DraftError, and `POST /api/lab/preview` with that canopy answers 422 with exactly that problem
+  (`tests/test_lab_draft.py`, `tests/test_lab_routes_preview.py`). Mutation check: with the new guard removed both
+  fail (the field's bare ValueError); restored, both pass.
 - The spec's targeted list (22 files) plus `tests/test_static.py`: 757 passed in 132 s.
 - `ruff check .` and `ruff format --check .`: clean.
 - Node: canopy-preview + guest-panel **38/38** (33 before), lab-model **86/86** (85 before); both now also run under
@@ -77,7 +82,7 @@ only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/pr
   reorder: each export applied to a scratch copy of this tree passes the whole suite there).
 - `load_canopy_config()` → `FinMap(650 fins, sha256 7a1754886f97)`, the fins section and all nine panels;
   `preflight.run` over an empty sim data dir → 0; with fins.json deleted or one fin's `angle_deg` 181 → 1 (tests).
-- gitleaks over the branch's 15 commits (`--log-opts=origin/claude/flagged-not-changing..HEAD`) and over a bare clone
+- gitleaks over the branch's 17 commits (`--log-opts=origin/claude/flagged-not-changing..HEAD`) and over a bare clone
   of the branch (no `.gitleaksignore`, what CI sees for new commits): no leaks found.
 - **Browser walk on the simulator** (`scripts/dev_design_lab.py --port 8301`, auth off, a throwaway data dir;
   Chromium in the Claude browser pane; stopped afterwards):
