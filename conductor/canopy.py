@@ -91,8 +91,9 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   moves, `feature` is the program's moving sentence and `CanopyState.program` says what each step shows (colours and
   levels; a budget-held step is drawn as the step last sent); the phase judges each module by whether the writes
   sent to it verify (`ProgramRunner.status`), not by the step in flight. A guest brightness change just before a
-  step goes out with that step; a guest level during a breath keeps the breath, swung around the guest's level and
-  never below `kiosk.guest_brightness_min` (D75, `_guest_rows`).
+  step goes out with that step; a guest level during a breath keeps the breath, swung around the guest's level, its
+  centre moved so the whole swing stays within [`kiosk.guest_brightness_min`, the device's 100]: every step still
+  changes something under the moving copy (D75, `_guest_rows`).
 - **Which plan a source shows (D75, `_pick`).** Any scene may carry one stepped rung, placed just before
   [modules, strand]. A guest's choice (kiosk) runs the rung first (`compile_best(prefer=STEPPED)`), the idle scene
   included; an /ops choice keeps the ladder order (D65; "show after publish" is one); a re-pick of the look now
@@ -824,8 +825,8 @@ class CanopyEngine:
 
     # ---- guest brightness and power (D60) ---------------------------------------------------------------------
     async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
-        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100]. Turns
-        the canopy on. One write per module (the full state vector with this brightness row; never a frame)."""
+        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (during a
+        breath the breath swings around it, inside that range: `_guest_rows`, D75). Turns the canopy on. One write per module (the full state vector with this brightness row; never a frame)."""
         floor = self.deps.settings.kiosk.guest_brightness_min
         # True, 0.5, NaN, "30": refused, not coerced.
         if isinstance(level, bool) or not isinstance(level, int):
@@ -923,37 +924,54 @@ class CanopyEngine:
         if plan is None:
             return []
         mt = plan.modules[device_id]
-        step = self._runner.rows_for(device_id) if self._runner is not None else None
-        return self._guest_rows(list(step if step is not None else mt.rows), mt)
+        runner = self._runner
+        step = runner.rows_for(device_id) if runner is not None else None
+        if step is not None:  # a stepped look's step: its breath keeps its swing around a guest's level (D75)
+            return self._guest_rows(list(step), mt, swing=runner.swing(device_id))
+        return self._guest_rows(list(mt.rows), mt)
 
-    def _guest_rows(self, rows: list[StateRow], mt: ModuleTarget) -> list[StateRow]:
+    def _guest_rows(
+        self, rows: list[StateRow], mt: ModuleTarget, *, swing: tuple[int, int] | None = None
+    ) -> list[StateRow]:
+        """`rows` with the guest's settings: off, or the guest's level (D60). Within the device's own range and never
+        below `kiosk.guest_brightness_min`, as the compiler clamps a designed level; the brightness row is replaced in
+        place, so the row order inside the PUT is kept.
+
+        A breath's step (`swing`: how far that module's steps go below and above its hold, D75) keeps its offset from
+        the hold around the guest's level, and that centre moves so the whole swing fits the range: at 100 a swing
+        of 4 breathes 92–100, at the minimum of 10 it breathes 10–18. So every step still changes something, as the
+        moving copy says, whatever the guest picks. Every other plan's offset is 0: the guest's level is absolute."""
         if not self._guest_power:
             return [R.power(False)]
         if self._guest_brightness is None:
             return rows
-        # Within the device's own range, as the compiler clamps a designed level; the brightness row is replaced in
-        # place, so the row order inside the PUT is kept. A breath's step keeps its swing around the guest's level
-        # (D75: the step's offset from the hold, never below guest_brightness_min); 0 for every other plan.
         lo, hi = mt.brightness_range or (1, 100)
+        floor = max(lo, self.deps.settings.kiosk.guest_brightness_min)
         step, hold = _brightness_of(rows), _brightness_of(mt.rows)
         offset = step - hold if step is not None and hold is not None else 0
-        floor = self.deps.settings.kiosk.guest_brightness_min
-        level = R.brightness(max(lo, min(hi, max(floor, self._guest_brightness + offset))))
+        centre = self._guest_brightness
+        if swing is not None and floor + swing[0] <= hi - swing[1]:
+            centre = max(floor + swing[0], min(hi - swing[1], centre))
+        level = R.brightness(max(floor, min(hi, centre + offset)))
         return [level if r.key == BRIGHTNESS_KEY else r for r in rows]
 
-    def level_sent(self, device_id: str, rows: Sequence[StateRow]) -> int | None:
-        """The brightness `rows` (a step's) are sent at to `device_id` now, the guest's level applied (D75: the
-        guest panel draws it as that panel's opacity). None when the canopy is off or the rows carry no level."""
+    def level_sent(
+        self, device_id: str, rows: Sequence[StateRow], *, swing: tuple[int, int] | None = None
+    ) -> int | None:
+        """The brightness `rows` are sent at to `device_id` now, the guest's level applied (D75: the guest panel
+        draws it as that panel's opacity): a step's with its `swing` (`ProgramRunner.swing`), the hold's without.
+        None when the canopy is off or the rows carry no level."""
         plan = self._plan
         mt = plan.modules.get(device_id) if plan is not None else None
         if mt is None:
             return _brightness_of(rows)
-        return _brightness_of(self._guest_rows(list(rows), mt))
+        return _brightness_of(self._guest_rows(list(rows), mt, swing=swing))
 
     def _desired_expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
-        step = self._runner.rows_for(device_id) if self._runner is not None and plan is self._plan else None
+        runner = self._runner if plan is self._plan else None
+        step = runner.rows_for(device_id) if runner is not None else None
         if step is not None:  # a stepped look's step: a full state vector, read back as sent
-            return self._guest_rows(list(step), mt)
+            return self._guest_rows(list(step), mt, swing=runner.swing(device_id))
         return self._guest_rows(self._expect(device_id, mt, plan), mt)
 
     def _desired_label(self, plan: ModePlan) -> str:

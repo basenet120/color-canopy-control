@@ -117,6 +117,7 @@ class ProgramRunner:
         self._pending: dict[str, float] = {}  # device id → when the oldest write not yet verified was sent
         self._verified: set[str] = set()  # modules with a verified write since the plan was installed
         self._task: asyncio.Task | None = None
+        self._swings: dict[str, tuple[int, int] | None] = {}  # device id → its breath's swing (`swing`)
         self._tripped = False
         self._unsubscribe: Any = None
         self._sleep = self.clock.sleep  # tests make a step late by wrapping it
@@ -466,6 +467,22 @@ class ProgramRunner:
             return None
         return self.program.steps[self.shown % self.cycle].rows.get(device_id)
 
+    def swing(self, device_id: str) -> tuple[int, int] | None:
+        """How far this module's steps go below and above its hold's brightness (a breath's swing, D75), or None
+        when no step changes its level (travel, a colour-only breath). The engine keeps a guest's level inside the
+        device's range by moving the breath's centre, not by flattening its steps (`CanopyEngine._guest_rows`)."""
+        if device_id not in self._swings:
+            mt = self.plan.modules.get(device_id)
+            hold = _level(mt.rows) if mt is not None else None
+            offsets = [
+                level - hold
+                for step in self.program.steps
+                if hold is not None and (level := _level(step.rows.get(device_id) or [])) is not None
+            ]
+            down, up = max(0, -min(offsets, default=0)), max(0, max(offsets, default=0))
+            self._swings[device_id] = (down, up) if down or up else None
+        return self._swings[device_id]
+
     def sync(self) -> None:
         """Recovery: the step the schedule is at becomes the desired state (the outage held it back)."""
         if self.running:
@@ -527,7 +544,12 @@ class ProgramRunner:
             for pos in GRID:
                 device_id = positions.get(pos)
                 rows = step.rows.get(device_id) if device_id is not None else None
-                row.append(self.engine.level_sent(device_id, rows) if rows is not None else None)
+                if rows is None:
+                    row.append(None)
+                    continue
+                # a step keeps its breath's swing around a guest's level; the last frame is the hold (the guest's own)
+                swing = self.swing(device_id) if k != self.count else None
+                row.append(self.engine.level_sent(device_id, rows, swing=swing))
             levels.append(row)
         return {
             "t0": self.t0_wall,
@@ -589,3 +611,8 @@ class ProgramRunner:
 
         self._tripped = True
         asyncio.get_running_loop().call_soon(stop)
+
+
+def _level(rows: list) -> int | None:
+    """The brightness row's level in `rows` (None without one)."""
+    return next((r.value for r in rows if r.key == ("brightness", None) and isinstance(r.value, int)), None)

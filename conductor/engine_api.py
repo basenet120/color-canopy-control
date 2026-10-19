@@ -270,8 +270,9 @@ class CanopyEngineAPI(Protocol):
         via state()/WS)."""
 
     async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
-        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (D60). It
-        becomes part of the desired state (the reconciler keeps it); it turns the canopy on; one write per module (the
+        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (D60);
+        during a breath (D75) the breath swings around it instead, its centre moved so the whole swing fits that
+        range. It becomes part of the desired state (the reconciler keeps it); it turns the canopy on; one write per module (the
         brightness row of the full state vector, never a frame). Kiosk requests are refused like `request_mode`
         (cooldown, paused, resting); the refusal comes back as a state with `refused=True`."""
 

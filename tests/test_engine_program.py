@@ -1124,9 +1124,26 @@ def test_a_breath_under_a_guest_mash_draws_held_steps_as_held_and_ends_after_two
     assert all(b - a >= 1.0 - 1e-6 for times in by_device.values() for a, b in pairwise(times))
 
 
-def test_a_guest_brightness_moves_the_breath_instead_of_flattening_it():
-    """D75 (B3): a guest level during a breath keeps the breath, swung around the guest's level (never below
-    kiosk.guest_brightness_min); the moving copy stays."""
+@pytest.mark.parametrize(
+    ("guest", "centre"),
+    [
+        (50, 50),  # mid-range: the breath swings 46–54 around the guest's level
+        (
+            100,
+            96,
+        ),  # B-R1-1: full brightness. Clamped level by level it read 100, 100, 100, 96: half the steps silent
+        (
+            10,
+            14,
+        ),  # TS-1: kiosk.guest_brightness_min (10). Never 6, and not 10, 14, 10, 10 (a silent step either)
+    ],
+)
+def test_a_guest_brightness_moves_the_breath_instead_of_flattening_it(guest, centre):
+    """D75 (B3): a guest level during a breath keeps the breath, swung around the guest's level, and the moving copy
+    stays. The breath's centre moves so its whole swing (± 4 here) fits [kiosk.guest_brightness_min, 100]: every step
+    still sends every module a new level, so the copy ("sent a brighter or softer level every few seconds") stays
+    true at 100 and at the minimum. The iPad's levels (state.program) are the levels sent, the guest's applied (TS-2);
+    the last frame (the hold) is the guest's own level."""
 
     async def main():
         w = stepped_world()  # 6 s steps
@@ -1134,31 +1151,47 @@ def test_a_guest_brightness_moves_the_breath_instead_of_flattening_it():
         await w.engine.request_mode("breathe-level", source="ops")
         plan, runner = w.engine.current_plan(), w.engine.runner
         await w.run_for(8.5)  # step 1 is out; 3.5 s before step 2
-        sent: list[tuple[str, str, set]] = []
+        sent: list[tuple[str, str, int, set]] = []
         original = w.engine.send
 
         def spy(device_ids, *, source, label):
             ids = original(device_ids, source=source, label=label)
-            sent.append((source, label, {level_of(w.engine.sent_rows[d]) for d in ids}))
+            sent.append((source, label, len(ids), {level_of(w.engine.sent_rows[d]) for d in ids}))
             return ids
 
         w.engine.send = spy
-        state = await w.engine.set_guest_brightness(50, source="ops")
+        state = await w.engine.set_guest_brightness(guest, source="ops")
+        program = state.program
         await w.run_for(40)
-        out = (plan, runner.running, state, sent, w.engine.state())
+        out = (plan, runner.running, runner.count, state, program, list(sent), w.engine.state())
+        await w.run_for(50)  # the run ends at 90 s
+        hold = [entry for entry in sent if entry[1].startswith("hold")]
+        after = {level_of(w.engine.desired_rows(d)) for d in plan.modules}
+        out = (*out, runner.ended, hold, after)
         await w.close()
         return out
 
-    plan, running, state, sent, later = run_virtual(main)
-    swing = [50 + level - 28 for level in BREATH_LEVELS]
-    assert swing == [50, 54, 50, 46]
+    plan, running, count, state, program, sent, later, ended, hold, after = run_virtual(main)
+    swing = [centre + level - 28 for level in BREATH_LEVELS]  # 28 ± 4: offsets 0, +4, 0, −4
+    assert min(swing) >= 10 and max(swing) <= 100 and len({*swing}) == 3
     burst, *steps = sent
-    assert burst[0] == "ops" and burst[2] == {54}  # sent at once, at step 1: the guest's level + 4
-    assert [label.split()[1] for _, label, _ in steps][:6] == ["2", "3", "4", "5", "6", "7"]
-    for source, label, levels in steps:
-        assert source == "program" and levels == {swing[int(label.split()[1]) % 4]}, label
+    assert burst[0] == "ops" and burst[2] == 9 and burst[3] == {swing[1]}  # sent at once, at step 1's offset
+    assert [label.split()[1] for _, label, _, _ in steps][:6] == ["2", "3", "4", "5", "6", "7"]
+    for source, label, n, levels in steps:
+        # every step sends every module its new level: no silent step under the moving copy
+        assert source == "program" and n == 9 and levels == {swing[int(label.split()[1]) % 4]}, label
     assert state.feature == plan.program.moving_feature and later.feature == plan.program.moving_feature
     assert running
+    # TS-2: the levels the guest panel draws, from the current step on, are the levels sent (the guest's applied)
+    levels = program["levels"]
+    assert program["step"] == 1 and len(levels) == count + 1
+    for n in range(1, count):
+        assert levels[n] == [swing[n % 4]] * 9, n
+    assert levels[count] == [guest] * 9  # the hold after the run: the guest's own level
+    # after the run the still look is at the guest's own level: the hold goes out where the moved centre left the
+    # last step elsewhere (at 50 the last step, offset 0, already is the hold)
+    assert ended == "the run is over" and after == {guest}
+    assert [(n, levels) for _, _, n, levels in hold] == ([(9, {guest})] if centre != guest else [])
 
 
 def test_the_state_carries_each_frames_levels():
