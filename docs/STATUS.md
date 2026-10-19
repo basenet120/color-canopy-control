@@ -42,8 +42,9 @@ only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/pr
   canopy without one is a plain sentence per canvas.
 - **The Lab:** the layout picker offers **Fins** (`LAYOUT_KINDS`, pinned to `F.FIELD_KINDS`): no parameters, Mirror
   disabled, and a note true for every palette size, plain or inverted. Server side, a fins draft over a canopy
-  without a fin map is one plain problem from `apply_drafts` and `draft_changes`, `export.describe_field` names "fin
-  rings", and the router drops every kind's union tag. **A fins design can be published to the live show from this
+  without a fin map is one plain problem from `apply_drafts`, `draft_changes` and `resolve_copy` (which the preview
+  calls first, so `/api/lab/preview` answers it as a 422 on `layout`, not a 500; review A-R1-2),
+  `export.describe_field` names "fin rings", and the router drops every kind's union tag. **A fins design can be published to the live show from this
   PR** (D68's path); sim tests publish a fins Coastal Tides to the simulated show and pass a fins Tides + Golden Hour
   trio through `validate_trio` and the STEPPED/T3 compiles. The Lab's stage paints the rings per head (no fin
   strokes there). Lab tag `lab-8` → **`lab-9`**.

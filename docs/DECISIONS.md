@@ -1073,7 +1073,10 @@ orientation question: **p14** (all 270 drawn lights sit on the p14 lattice; 150 
   gets past t ≈ 0.675, so the T3 phrase "<first> at both ends" would be false copy on the kiosk. The layout words are
   always "from the centre out". `F.bands` rounds a fins t to 2 decimals, so the drawing's three symmetric rings
   (centre 0, edge-middles ≈ 0.39, corners ≈ 0.67) stay whole for the D64 ripple. A fins design over a canopy with no
-  fin map is a plain ConfigError in modes.yaml and one DraftError in the Lab, before any field is read.
+  fin map is a plain ConfigError in modes.yaml and one DraftError in the Lab, before any field is read: from
+  `apply_drafts`, `draft_changes` and `resolve_copy`, which the preview calls first, so `/api/lab/preview` answers it
+  as a 422 problem on `layout`, never a 500 (the shipped canopy.yaml has the fin map, so only a canopy without one
+  meets it).
 - **The Lab.** The layout picker offers **Fins** (`LAYOUT_KINDS` = `F.FIELD_KINDS`, pinned): no parameters, Mirror
   disabled, and a note that is true for every palette size, plain or inverted (the rim's colour shows light by
   light, never on a whole strand). The generated module-level sentence names only `reached_stops`. **From here a fins

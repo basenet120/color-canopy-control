@@ -421,7 +421,12 @@ def _choose(asked: str, approved: str, generated: str, reasons: list[str]) -> Co
 def resolve_copy(approved: ConfigTrio, draft: SceneDraft, canopy: dict) -> dict[str, CopyChoice | None]:
     """{"modules", "stepped" (None without a stepped rung), "strand"}: each rung's sentence by the rules of §3.3. T3
     keeps the approved sentence only while the layout is model-equal and the colour names and their order are
-    unchanged; stepped also needs the direction unchanged; strand only needs the solid colour's name unchanged."""
+    unchanged; stepped also needs the direction unchanged; strand only needs the solid colour's name unchanged.
+
+    A fins draft over a canopy with no fin map is a DraftError (D74), before the field is read: the preview calls
+    this before apply_draft, so the refusal must be the Lab's plain problem here, not the field's ValueError."""
+    if problems := _fin_map_problems(draft.scene_id, draft, canopy):
+        raise DraftError(problems)
     seed = seed_draft(approved, draft.scene_id)
     mode = approved.modes.mode(draft.scene_id)
     generated = generated_copy(mode, draft, canopy)
@@ -651,7 +656,8 @@ def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list
 
 def _fin_map_problems(sid: str, draft: SceneDraft, canopy: Mapping) -> list[Problem]:
     """A fins layout over a canopy with no fin map (D74): one plain problem, found before any field is evaluated
-    (resolve_copy reads the design through reached_stops, and the fins field has no value without the map)."""
+    (resolve_copy reads the design through reached_stops, and the fins field has no value without the map).
+    apply_drafts, draft_changes and resolve_copy (so the preview, which calls it first) each refuse with it."""
     if isinstance(draft.layout, F.FinsField) and not F.has_fins(canopy):
         return [Problem(f"the draft of {sid} → layout", "layout", F.NO_FIN_MAP)]
     return []

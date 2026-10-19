@@ -865,6 +865,10 @@ def test_a_fins_draft_over_a_canopy_without_fins_is_a_draft_error():
     with pytest.raises(D.DraftError) as changed:
         D.draft_changes(TRIO, draft, canopy=bare)
     assert changed.value.problems == want
+    # the preview calls resolve_copy before apply_draft: it refuses the same way, not with the field's ValueError
+    with pytest.raises(D.DraftError) as copied:
+        D.resolve_copy(TRIO, draft, bare)
+    assert copied.value.problems == want
     # over the real canopy the same draft applies and reads from the centre out
     patched = apply(draft)
     assert "from the centre out" in patched.modes.mode("golden-hour").techniques.modules.feature
