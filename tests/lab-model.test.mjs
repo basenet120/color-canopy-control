@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CANOPY, designPaint } from "../web/ops/showcase/demo-model.mjs";
+import { CANOPY, designPaint, paintCanopy } from "../web/ops/showcase/demo-model.mjs";
 import { UNLIT as KIOSK_UNLIT } from "../web/kiosk/canopy-preview.mjs";
 import * as M from "../web/ops/showcase/lab-model.mjs";
 
@@ -979,6 +979,106 @@ test("setStepped keeps whole steps, half-second times and a run of at least one 
   const still = golden({ stepped: null });
   assert.equal(M.setStepped(still, { step_s: 8 }, CATALOG_LIMITS), still, "no stepped rung, nothing to set");
   assert.ok(M.draftEquals(M.setStepped(a, { step_s: 6 }, CATALOG_LIMITS), a));
+});
+
+// ---- D75: the kind of motion ----------------------------------------------------------------------------------------
+const CATALOG_D75 = {
+  palette: [2, 6],
+  stepped: { ...CATALOG_LIMITS.stepped, modes: ["travel", "breathe", "shimmer"], shift: [0.0, 0.5], shift_increment: 0.05, brightness_swing: [0, 20], lag_steps: [0, 6] },
+};
+
+test("the motion kind and the breathe controls: bounds, valid defaults, travel keeps only its timing", () => {
+  const travel = M.steppedControls(SCENE_GOLDEN, golden(), CATALOG_D75);
+  assert.deepEqual([travel.mode, travel.breathes, travel.shimmer, travel.modes], ["travel", false, false, ["travel", "breathe", "shimmer"]]);
+  assert.deepEqual(travel.shift, { min: 0, max: 0.5, step: 0.05, value: 0 });
+  assert.deepEqual(travel.swing, { min: 0, max: 5, step: 1, value: 0 }, "min(20, 100 − 95, 95 − 1)");
+  assert.deepEqual(travel.lag, { min: 0, max: 6, step: 1, value: 0 });
+  assert.equal(travel.seed, null);
+  assert.equal(travel.note, "");
+  for (const [b, top] of [[95, 5], [85, 15], [50, 20], [10, 9], [1, 0], [100, 0]]) assert.equal(M.maxSwing(b), top, `b = ${b}`);
+  assert.equal(M.steppedControls(SCENE_GOLDEN, golden({ brightness: 85 }), CATALOG_D75).swing.max, 15);
+  // the catalog says nothing: the schema's own bounds
+  assert.deepEqual(M.steppedControls(SCENE_GOLDEN, golden(), CATALOG_LIMITS).lag, { min: 0, max: 6, step: 1, value: 0 });
+  // an idle look with a rung shows the server's note
+  const idle = M.steppedControls({ ...SCENE_GOLDEN, idle: true, idle_note: "Golden Hour is the idle look: …" }, golden(), CATALOG_D75);
+  assert.equal(idle.note, "Golden Hour is the idle look: …");
+
+  const a = golden();
+  const before = JSON.stringify(a);
+  const breathe = M.setStepped(a, { mode: "breathe" }, CATALOG_D75).stepped;
+  assert.deepEqual([breathe.mode, breathe.brightness_swing, breathe.shift, breathe.lag_steps, breathe.seed], ["breathe", 5, 0, 0, null], "95 + 5 = 100");
+  assert.equal(M.setStepped(golden({ brightness: 85 }), { mode: "breathe" }, CATALOG_D75).stepped.brightness_swing, 6);
+  assert.equal(M.steppedControls(SCENE_GOLDEN, { ...a, stepped: breathe }, CATALOG_D75).breathes, true);
+  // the brightness moves the swing's top: 97 leaves room for ±3
+  const brighter = M.setField({ ...a, stepped: breathe }, "brightness", 97);
+  assert.equal(brighter.stepped.brightness_swing, 3);
+  assert.deepEqual(M.setField(a, "brightness", 97).stepped, a.stepped, "a travel draft's timing is untouched");
+  const shimmer = M.setStepped(a, { mode: "shimmer" }, CATALOG_D75).stepped;
+  assert.ok(shimmer.lag_steps >= 1 && shimmer.seed === 1 && shimmer.brightness_swing === 5, JSON.stringify(shimmer));
+  const sc = M.steppedControls(SCENE_GOLDEN, { ...a, stepped: shimmer }, CATALOG_D75);
+  assert.deepEqual([sc.mode, sc.breathes, sc.shimmer, sc.seed], ["shimmer", true, true, 1]);
+  assert.equal(M.setStepped({ ...a, stepped: shimmer }, { seed: 41.6 }, CATALOG_D75).stepped.seed, 42);
+  assert.equal(M.setStepped({ ...a, stepped: shimmer }, { mode: "breathe" }, CATALOG_D75).stepped.seed, null, "only a shimmer keeps a seed");
+  const back = M.setStepped({ ...a, stepped: { ...shimmer, shift: 0.2 } }, { mode: "travel" }, CATALOG_D75).stepped;
+  assert.deepEqual([back.mode, back.shift, back.brightness_swing, back.lag_steps, back.seed], ["travel", 0, 0, 0, null]);
+  assert.ok(M.draftEquals({ ...a, stepped: back }, a), "travel again equals the approved travel draft");
+  assert.equal(M.setStepped({ ...a, stepped: breathe }, { shift: 0.33 }, CATALOG_D75).stepped.shift, 0.35);
+  assert.equal(M.setStepped({ ...a, stepped: breathe }, { shift: 0.9 }, CATALOG_D75).stepped.shift, 0.5);
+  assert.equal(M.setStepped({ ...a, stepped: breathe }, { brightness_swing: 25 }, CATALOG_D75).stepped.brightness_swing, 5);
+  assert.equal(M.setStepped({ ...a, stepped: breathe }, { lag_steps: 9 }, CATALOG_D75).stepped.lag_steps, 6);
+  assert.equal(M.setStepped(a, { mode: "sparkle" }, CATALOG_D75).stepped.mode, "travel");
+  assert.equal(JSON.stringify(a), before, "the input is never changed");
+});
+
+test("an older draft without the breathe keys equals one with their defaults; the stepped painter draws levels", () => {
+  const old = golden();
+  assert.equal(Object.prototype.hasOwnProperty.call(old.stepped, "mode"), false);
+  const full = golden({ stepped: { ...old.stepped, mode: "travel", shift: 0, brightness_swing: 0, lag_steps: 0, seed: null } });
+  assert.ok(M.draftEquals(old, full));
+  assert.deepEqual(M.normaliseDraft(old).stepped, { direction: "forward", steps_per_cycle: 6, step_s: 6, run_s: 90, mode: "travel", shift: 0, brightness_swing: 0, lag_steps: 0, seed: null });
+  assert.ok(!M.draftEquals(old, golden({ stepped: { ...old.stepped, mode: "breathe", brightness_swing: 4 } })));
+  assert.ok(M.draftEquals(golden({ stepped: { ...old.stepped, brightness_swing: "4", mode: "breathe" } }), golden({ stepped: { ...old.stepped, brightness_swing: 4, mode: "breathe" } })));
+  // the painter: a step's levels per module, the draft's brightness where it says nothing
+  const p = preview();
+  const step = steppedJSON().steps[1];
+  const breathing = M.viewPainter(p, "stepped", { step: { colours: step.colours, positions: null, levels: { r0c0: 20 } } });
+  assert.equal(typeof breathing.level, "function");
+  const r0c0 = CANOPY.heads.find((h) => h.module === "r0c0");
+  const r2c2 = CANOPY.heads.find((h) => h.module === "r2c2");
+  assert.equal(breathing.level(r0c0), 20);
+  assert.equal(breathing.level(r2c2), p.brightness);
+  assert.equal(M.viewPainter(p, "stepped", { step: { colours: step.colours, positions: null } }).level, p.brightness, "no levels: the number");
+  assert.equal(M.steppedSummary(golden().stepped), "Forward · 6 steps · 6 s a step · runs 90 s");
+  assert.equal(M.steppedSummary({ ...golden().stepped, mode: "breathe", steps_per_cycle: 4, step_s: 10 }), "Breathe · 4 steps a breath · 10 s a step · runs 90 s");
+  assert.equal(M.steppedSummary({ ...golden().stepped, mode: "shimmer" }), "Shimmer · 6 steps a breath · 6 s a step · runs 90 s");
+  // steppedOf carries the kind of motion and keeps each step's levels
+  const st = M.steppedOf(preview({ stepped: steppedJSON({ mode: "breathe", steps: steppedJSON().steps.map((s) => ({ ...s, levels: { r0c0: 90 + s.index } })) }) }));
+  assert.equal(st.mode, "breathe");
+  assert.deepEqual(st.steps.map((s) => s.levels.r0c0), [90, 91, 92, 93, 94, 95]);
+  assert.equal(M.steppedOf(preview({ stepped: steppedJSON() })).mode, "travel", "a server without the kind of motion");
+});
+
+test("demo-model's paintCanopy draws a function level per head, the floor glow at its heads' mean; a number as before", () => {
+  const attr = () => {
+    const a = {};
+    return { a, setAttribute: (k, v) => (a[k] = v) };
+  };
+  const heads = [
+    { module: "r0c0", x: 10, y: 10 },
+    { module: "r0c2", x: 215, y: 10 },
+  ];
+  const view = { layout: { width: 225 }, nodes: heads.map((h) => ({ head: h, bulb: attr(), halo: attr() })), spills: [0.15, 0.85].map((p) => ({ position: p, element: attr() })) };
+  const white = () => ({ r: 255, g: 255, b: 255 });
+  paintCanopy(view, white, white, (h) => (h.module === "r0c0" ? 20 : 80));
+  assert.equal(view.nodes[0].bulb.a.opacity, 0.3 + (0.7 * 20) / 100);
+  assert.equal(view.nodes[1].bulb.a.opacity, 0.3 + (0.7 * 80) / 100);
+  assert.equal(view.spills[0].element.a.opacity, 0.04 + (0.15 * 20) / 100);
+  assert.equal(view.spills[1].element.a.opacity, 0.04 + (0.15 * 80) / 100);
+  paintCanopy(view, white, white, 60);
+  for (const n of view.nodes) assert.equal(n.bulb.a.opacity, 0.3 + (0.7 * 60) / 100);
+  for (const n of view.spills) assert.equal(n.element.a.opacity, 0.04 + (0.15 * 60) / 100);
+  paintCanopy(view, white, white);
+  assert.equal(view.nodes[0].halo.a.opacity, 0.1 + 0.6, "the default level is 100");
 });
 
 test("the live line, the run line and the effects card: the Lab says where each stands and changes none", () => {

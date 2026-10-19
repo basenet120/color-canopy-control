@@ -10,7 +10,7 @@
 // - Brightness is a level (drawn as opacity by paintCanopy), never multiplied into a colour (D59).
 // - A module the running tier wouldn't light is drawn UNLIT, and a colour nobody can vouch for is UNLIT too.
 
-import { CANOPY, defaultDesignLevel, designPaint, rgbFromHex } from "./demo-model.mjs?v=show-design-3";
+import { CANOPY, defaultDesignLevel, designPaint, rgbFromHex } from "./demo-model.mjs?v=show-design-4";
 import { paintFor } from "../../kiosk/canopy-preview.mjs";
 
 export const VIEWS = ["canvas", "modules", "strand", "today", "showBox"]; // the stage's tabs, in order
@@ -218,7 +218,16 @@ function steppedPainter(preview, step, heads, width) {
   });
   const paint = designPaint({ ladder: ["stepped"], modules }, "modules", heads, width);
   if (!paint) return { error: "This step can't be drawn." };
-  return { head: paint.head, spill: paint.spill, level: preview.brightness, caption: CAPTIONS.stepped };
+  // D75: a breath sends each module its own level (PreviewJSON.stepped.steps[i].levels), drawn per head; a step
+  // without levels (a travel look, an older server) is the draft's one brightness
+  const levels = step.levels && typeof step.levels === "object" ? step.levels : null;
+  const level = levels
+    ? (h) => {
+        const v = Number(levels[h.module]);
+        return Number.isFinite(v) && levels[h.module] !== null ? v : preview.brightness;
+      }
+    : preview.brightness;
+  return { head: paint.head, spill: paint.spill, level, caption: CAPTIONS.stepped };
 }
 
 function basePainter(preview, view, { heads, width, step }) {
@@ -346,7 +355,12 @@ export function normaliseDraft(d) {
   out.sample_at = out.sample_at || "centre";
   for (const k of ["brightness", "solid"]) if (numeric(out[k]) !== null) out[k] = numeric(out[k]);
   if (out.stepped) {
-    for (const k of ["steps_per_cycle", "step_s", "run_s"]) if (numeric(out.stepped[k]) !== null) out.stepped[k] = numeric(out.stepped[k]);
+    // D75: a draft saved before the kind of motion existed is a travel one (SteppedTechnique's defaults)
+    out.stepped = { ...STEPPED_DEFAULTS, ...out.stepped };
+    if (out.stepped.seed === undefined) out.stepped.seed = null;
+    for (const k of ["steps_per_cycle", "step_s", "run_s", "shift", "brightness_swing", "lag_steps", "seed"]) {
+      if (numeric(out.stepped[k]) !== null) out.stepped[k] = numeric(out.stepped[k]);
+    }
   } else out.stepped = null;
   out.copy = { modules: "auto", stepped: "auto", ...(out.copy || {}) };
   return out;
@@ -454,6 +468,10 @@ export function setLayoutKind(draft, kind) {
 export function setField(draft, key, value) {
   const d = clone(draft);
   d[key] = value;
+  // D75: a breath's swing stays inside 1–100 around the brightness (SteppedTechnique: brightness ± swing)
+  if (key === "brightness" && d.stepped && Number.isFinite(Number(d.stepped.brightness_swing))) {
+    d.stepped.brightness_swing = Math.min(Number(d.stepped.brightness_swing), maxSwing(value));
+  }
   return d;
 }
 
@@ -596,11 +614,15 @@ export function saveProblemLines(problems, sceneNames = {}, limit = 4) {
   });
 }
 
-/** A read-only summary of the stepped rung (its editor is Slice C). */
+/** A read-only summary of the stepped rung (its editor is Slice C): travel by its direction, a breath by its kind. */
 export function steppedSummary(stepped) {
   if (!stepped) return "";
+  const timing = `${Number(stepped.step_s)} s a step · runs ${Number(stepped.run_s)} s`;
+  if (stepped.mode === "breathe" || stepped.mode === "shimmer") {
+    return `${capital(stepped.mode)} · ${stepped.steps_per_cycle} steps a breath · ${timing}`;
+  }
   const dir = stepped.direction === "reverse" ? "Reverse" : "Forward";
-  return `${dir} · ${stepped.steps_per_cycle} steps · ${Number(stepped.step_s)} s a step · runs ${Number(stepped.run_s)} s`;
+  return `${dir} · ${stepped.steps_per_cycle} steps · ${timing}`;
 }
 
 /** The flags on a version row. */
@@ -1032,7 +1054,21 @@ export const RIPPLE_STAGGER_MAX_S = 1.2; // RIPPLE_SPAN_MAX_S 2.4 / (RIPPLE_MAX_
 export const RIPPLE_STAGGER_STEP_S = 0.1;
 export const RIPPLE_DEFAULT_S = 0.6;
 export const RIPPLE_HOLD_S = 1.5; // the landed look stays this long, then the stage goes back to its view
-export const STEPPED_DEFAULT_LIMITS = Object.freeze({ steps_per_cycle: [3, 12], step_s: [4, 12], run_s_max: 180 });
+export const STEPPED_DEFAULT_LIMITS = Object.freeze({
+  steps_per_cycle: [3, 12],
+  step_s: [4, 12],
+  run_s_max: 180,
+  // D75: the kind of motion and a breath's ranges (= SteppedTechnique's bounds; CatalogJSON.limits.stepped)
+  modes: ["travel", "breathe", "shimmer"],
+  shift: [0, 0.5],
+  shift_increment: 0.05,
+  brightness_swing: [0, 20],
+  lag_steps: [0, 6],
+});
+// SteppedTechnique's defaults for the D75 keys: what a draft without them means (a travel look)
+export const STEPPED_DEFAULTS = Object.freeze({ mode: "travel", shift: 0, brightness_swing: 0, lag_steps: 0, seed: null });
+export const SEED_MAX = 2147483647;
+export const BREATHE_DEFAULT_SWING = 6; // a breath needs a shift or a swing: switching to one starts at ±6 points
 export const MOTION_COPY = Object.freeze({
   live: "Stepped motion is off on the real lights until Gate R passes; Alon sets motion.stepped.live_enabled",
   liveOn: "Stepped motion is on for the real lights (motion.stepped.live_enabled is set); only Alon changes that, never the Lab",
@@ -1044,13 +1080,18 @@ export const MOTION_COPY = Object.freeze({
   noSteps: "The server sent no stepped steps for this draft, so there is nothing to play (this server may not have the stepped preview yet).",
   waiting: "Waiting for the server's steps…",
   noRings: "The server sent no ripple rings for this draft, so the ripple can't be previewed here.",
-  idle: "This is the idle look: the canopy's resting look stays still, so it never steps.",
-  none: "This scene has no stepped rung: it stays still at module level. Adding one is a modes.yaml change for Alon (D65).",
+  idle: "This is the idle look and it has no stepped rung: it stays still at module level. Adding one is a modes.yaml change for Alon (D75).",
+  none: "This scene has no stepped rung: it stays still at module level. Adding one is a modes.yaml change for Alon (D75).",
   noDraft: "This draft carries no stepped timing; Revert to approved brings the approved timing back.",
   design: "Moves the scene's own layout (the same design as every rung): change it under Layout.",
   direction: "Forward flows the way the layout reads; reverse flows back.",
   cycle: "Steps per cycle: how many steps it takes the design to move by one full repeat.",
+  mode: "Travel moves the design across the canopy; breathe swells and softens each module in place, or drifts its colour; shimmer does that on each module's own rhythm.",
+  breath: "Steps per breath: how many steps one module's breath takes (up, back, down, back).",
+  lag: "Lag: how many steps later the far end of the design starts its breath (0: every module together).",
+  seed: "Seed: any whole number; it picks each module's own rhythm, the same on every run.",
 });
+const MOTION_KINDS = ["travel", "breathe", "shimmer"];
 const EPS = 1e-6;
 const COUNT_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 
@@ -1076,24 +1117,45 @@ export function sentence(t) {
 }
 const unstop = (t) => String(t).replace(/\.$/, "");
 
-/** CatalogJSON.limits.stepped with the schema's defaults where it says nothing: {steps_per_cycle, step_s, run_s_max}. */
+/** CatalogJSON.limits.stepped with the schema's defaults where it says nothing: {steps_per_cycle, step_s, run_s_max,
+ * modes, shift, shift_increment, brightness_swing, lag_steps}. */
 export function steppedLimits(limits) {
   const s = (limits && limits.stepped) || {};
+  const D = STEPPED_DEFAULT_LIMITS;
+  const modes = Array.isArray(s.modes) ? s.modes.filter((m) => MOTION_KINDS.includes(m)) : [];
   return {
-    steps_per_cycle: pairOf(s.steps_per_cycle, STEPPED_DEFAULT_LIMITS.steps_per_cycle),
-    step_s: pairOf(s.step_s, STEPPED_DEFAULT_LIMITS.step_s),
-    run_s_max: positive(s.run_s_max) || STEPPED_DEFAULT_LIMITS.run_s_max,
+    steps_per_cycle: pairOf(s.steps_per_cycle, D.steps_per_cycle),
+    step_s: pairOf(s.step_s, D.step_s),
+    run_s_max: positive(s.run_s_max) || D.run_s_max,
+    modes: modes.length ? modes : [...D.modes],
+    shift: pairOf(s.shift, D.shift),
+    shift_increment: positive(s.shift_increment) || D.shift_increment,
+    brightness_swing: pairOf(s.brightness_swing, D.brightness_swing),
+    lag_steps: pairOf(s.lag_steps, D.lag_steps),
   };
 }
 
+/** The largest breath swing a brightness takes (D75, SteppedTechnique: brightness ± swing stays within 1–100):
+ * min(20, 100 − b, b − 1), never below 0. */
+export function maxSwing(b, top = STEPPED_DEFAULT_LIMITS.brightness_swing[1]) {
+  const n = Number(b);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(top, 100 - n, n - 1));
+}
+
 /** The Motion section's controls for a scene (a CatalogJSON scene) and its working draft: {editable, reason} plus, when
- * editable, the direction and the three number controls with their bounds (SteppedTechnique + show._check_stepped). */
+ * editable, the direction and the three number controls with their bounds (SteppedTechnique + show._check_stepped),
+ * and (D75) the kind of motion with a breath's shift, swing (≤ maxSwing of the brightness), lag and seed, and the
+ * server's idle note when the scene is the idle look. */
 export function steppedControls(scene, draft, limits) {
   if (!scene || !scene.stepped) return { editable: false, reason: scene && scene.idle ? MOTION_COPY.idle : MOTION_COPY.none };
   const s = draft && draft.stepped;
   if (!s) return { editable: false, reason: MOTION_COPY.noDraft };
   const b = steppedLimits(limits);
   const stepS = Number(s.step_s);
+  const mode = MOTION_KINDS.includes(s.mode) ? s.mode : "travel";
+  const swingMax = maxSwing(draft.brightness, b.brightness_swing[1]);
+  const seed = numeric(s.seed);
   return {
     editable: true,
     reason: "",
@@ -1102,17 +1164,30 @@ export function steppedControls(scene, draft, limits) {
     step_s: { min: b.step_s[0], max: b.step_s[1], step: STEP_S_STEP, value: stepS },
     run_s: { min: Math.min(stepS, b.run_s_max), max: b.run_s_max, step: STEP_S_STEP, value: Number(s.run_s) },
     runLimit: `Run length: ${fmtS(b.run_s_max)} s at most (a run ends within 180 s and before the kiosk's idle return, kiosk.idle_return_s), and at least one step.`,
+    modes: b.modes,
+    mode,
+    breathes: mode !== "travel",
+    shimmer: mode === "shimmer",
+    shift: { min: b.shift[0], max: b.shift[1], step: b.shift_increment, value: Number(s.shift) || 0 },
+    swing: { min: b.brightness_swing[0], max: swingMax, step: 1, value: Number(s.brightness_swing) || 0 },
+    lag: { min: b.lag_steps[0], max: b.lag_steps[1], step: 1, value: Number(s.lag_steps) || 0 },
+    seed: seed === null ? null : seed,
+    note: typeof scene.idle_note === "string" && scene.idle_note ? scene.idle_note : "",
   };
 }
 
 /** A new draft with its stepped timing patched and held inside the bounds: whole steps, half-second times for the
  * field being edited (an approved time off the half second, which SteppedTechnique allows, is kept until it is
- * edited), and a run never shorter than one step (raising the step time past the run raises the run with it). */
+ * edited), and a run never shorter than one step (raising the step time past the run raises the run with it).
+ * D75: the kind of motion keeps only its own parameters — travel zeroes the shift, swing and lag and drops the seed;
+ * a breath with neither a shift nor a swing starts at a swing of min(6, maxSwing); a shimmer has a lag of at least
+ * one step and a seed (1 unless set); only a shimmer keeps a seed. An edited shift snaps to its increment, the swing
+ * stays within maxSwing of the brightness, the lag and the seed are whole numbers. */
 export function setStepped(draft, patch, limits) {
   if (!draft || !draft.stepped) return draft;
   const d = clone(draft);
   const b = steppedLimits(limits);
-  const s = { ...d.stepped, ...patch };
+  const s = { ...STEPPED_DEFAULTS, ...d.stepped, ...patch };
   const edited = (k) => patch && Object.prototype.hasOwnProperty.call(patch, k);
   s.direction = s.direction === "reverse" ? "reverse" : "forward";
   s.steps_per_cycle = clampTo(Math.round(Number(s.steps_per_cycle) || b.steps_per_cycle[0]), ...b.steps_per_cycle);
@@ -1120,6 +1195,23 @@ export function setStepped(draft, patch, limits) {
   s.step_s = clampTo(edited("step_s") ? snap(stepS, STEP_S_STEP) : stepS, ...b.step_s);
   const runS = Number(s.run_s) || s.step_s;
   s.run_s = clampTo(edited("run_s") ? snap(runS, STEP_S_STEP) : runS, s.step_s, Math.max(s.step_s, b.run_s_max));
+  s.mode = b.modes.includes(s.mode) ? s.mode : "travel";
+  const top = maxSwing(d.brightness, b.brightness_swing[1]);
+  const shift = Number(s.shift) || 0; // snapped when edited (an approved shift off the increment is kept, as step_s)
+  s.shift = Math.round(clampTo(edited("shift") ? snap(shift, b.shift_increment) : shift, ...b.shift) * 1000) / 1000;
+  s.brightness_swing = clampTo(Math.round(Number(s.brightness_swing) || 0), b.brightness_swing[0], top);
+  s.lag_steps = clampTo(Math.round(Number(s.lag_steps) || 0), ...b.lag_steps);
+  const seed = numeric(s.seed);
+  s.seed = seed === null ? null : clampTo(Math.round(seed), 0, SEED_MAX);
+  if (s.mode === "travel") {
+    Object.assign(s, { shift: 0, brightness_swing: 0, lag_steps: 0, seed: null });
+  } else {
+    if (s.shift === 0 && s.brightness_swing === 0) s.brightness_swing = Math.min(BREATHE_DEFAULT_SWING, top);
+    if (s.mode === "shimmer") {
+      s.lag_steps = Math.max(1, s.lag_steps);
+      s.seed = s.seed ?? 1;
+    } else s.seed = null;
+  }
   d.stepped = s;
   return d;
 }
@@ -1137,8 +1229,10 @@ export function steppedOf(preview) {
   const runs = s.runs && typeof s.runs === "object" ? s.runs : {};
   const stillOf = (k) => (runs[k] && typeof runs[k].still === "string" && runs[k].still ? runs[k].still : null);
   return {
-    steps,
+    steps, // each {index, colours, levels?}: D75's per-module levels ride with their step
     cycle: steps.length,
+    // D75: the kind of motion (a server without it sends none: travel)
+    mode: MOTION_KINDS.includes(s.mode) ? s.mode : "travel",
     stepsPerCycle: positive(s.steps_per_cycle) || steps.length,
     designStepS: positive(s.design_step_s),
     runS: positive(s.run_s),
