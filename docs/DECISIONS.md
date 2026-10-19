@@ -1045,3 +1045,48 @@ makes the module "stuck" at once: /ops shows the note immediately (true), the gu
 soon as the kits confirm, and a readback that really differs still gets its 10 s of "changing" while the reconciler
 retries. Reproduced first (`tests/test_flagged_not_changing.py`: 10.1 s of "changing", the second scene at 11.4 s on
 the two-kit setup), then fixed (under 3 s, and under 4 s through the panel).
+
+**D76 — The iPad review menu: options grouped in rows, cards drawn at the tier in use, hide without a deploy, "Make
+this the scene" (Oct 18, preset-options PR C; plan docs/plans/preset-options/README.md §6).** A scene may name
+`option_of: <base id>` (config/scenes.yaml): one level deep, and the base must be a scene in the same catalog. While
+more than six scenes are visible (`GRID_MAX`, one number in conductor/ipad_menu.py, web/kiosk/panel-model.mjs and
+web/ops/ipad-model.mjs), the iPad shows the review menu: one row per scene group with its options side by side, each
+group starting at the left, and only the scene list scrolls under a pinned Now Showing and brightness. At six or
+fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the live iPad until PR D adds options.
+- **The cards draw each scene at the tier the engine would show it at now.** Per light only when the likely plan is
+  canvas or slot (T1/T2, the rule /api/kiosk/modes already uses); otherwise its nine module colours (module level
+  and the stepped hold); none for a whole-strand look. Plan §5.4 said the iPad picture shows the per-light design,
+  but CLAUDE.md's copy rule and the panel's own rule ("a picture is copy too") say the card must be what the lights
+  can show; on the show box that is module level until per-light is commissioned. Alon's question 1 in the PR: keep
+  the tier-true cards, or add a labelled per-light design view (new client copy). Thumbnails appear only in the
+  review menu; the six-card grid keeps its palette strips (the question for PR E is in STATUS).
+- **Card thumbnails draw no fins** and use a thumbnail dot radius (`DOT_R_IN` × the card's scale; integration
+  conflict C12, option b): the nine panels as hairlines and the heads as dots, still, brightness as opacity. They are
+  computed on the server (`ipad_menu.catalog_thumbs`, from `routes.design.mode_design`), cached per scene, per
+  live-looks generation and basis, and drawn on a rebuild or resize only (D69).
+- **`kiosk.hidden_scenes`** (git default `[]`, one foldable line in config/conductor.yaml) has an ops overlay,
+  `<data>/overrides/settings.yaml` (`{kiosk: {hidden_scenes: [ids]}}`), written by the /ops "On the iPad" switches
+  atomically at 0600 with a history copy. The overlay replaces git's list; it never fails a start (a file that can't
+  be used leaves git's list in force with an /ops "Needs attention" line, as 07 §8 asks). Ids that aren't scenes now
+  and the idle scene's id hide nothing, are named on /ops, and the next switch drops them. The /ops overlay download
+  folds the list in force back into config/conductor.yaml as a `git apply` hunk, so 07 §8 needs no edit. The
+  setting is changed in place (`services.settings` is never rebound: the engine keeps the object).
+- **A hidden scene** leaves the cards, the attract screen and both kiosk choose routes (the calm 404). It stays in
+  the catalog: ops can still choose it (the picker says "(off the iPad)"), the Design Lab still edits it, and while
+  it is showing the iPad still names it in Now Showing (the panel's `showing`). The idle scene (`kiosk.idle_mode`, and
+  `kiosk.idle_scene` when set) can never be hidden: git's list refuses it at load, the switch answers 409.
+- **"Make this the scene"** is client-side in the Lab, with no new route: `promoteDraft` copies the option's palette,
+  layout, sample, brightness, solid colour and description into the base's working draft (the description is the
+  option's, so the base's Now-showing line stays true of the design it now has), keeps the base's id, name and mood,
+  never adds or drops a stepped rung, and resets the copy choices to auto. Undo brings the base's draft back; the
+  base's Publish saves and publishes it. The base's name keeps any "#1" until PR E or a Lab rename at the session
+  (C27).
+- **The export prompts for the sign-off instead of claiming it.** A base whose palette and module-level field equal
+  one of its options' (and differ from its own design in git) gets a "Made the scene on site" line directly after
+  the D59 line, asking whoever exports to add who chose it and when: that choice is the D59 sign-off for its colours.
+  The record is inferred, never stored (Version and SceneDraft are extra=forbid, so older Conductors still read saved
+  versions); a later tweak of the base drops the line, and the D59 line still asks for the sign-off.
+- **`option_of` is left out of every dump while unset**, so a catalog with no options dumps exactly as before
+  (`trio_sha`, published looks, the scene pins). It is pinned like the ids: a published trio or a Lab draft can never
+  regroup a scene (validate_trio, the Lab's shape check).
+- Lab exports made before D77 lands propose a reserved D-number (`_next_decision` is max + 1); renumber by hand.

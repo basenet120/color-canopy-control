@@ -4,9 +4,10 @@ The iPad on the stand at the Home Depot × Hearst "Whole Home" activation. Guest
 
 `REF/` = the Hubspace reference set (App Store / Play screenshots, Home Depot product and support pages, press reviews) gathered for this design. Those images are third-party screenshots and are **not** committed; the paths below name them so the choices can be traced. The values taken from them are written out in this spec.
 
-Data contract (unchanged, from `conductor/routes/guest.py`):
+Data contract (from `conductor/routes/guest.py`):
 - `GET /api/kiosk/panel` returns `scenes[] {id, name, mood, description, palette[{name,hex}], frame[30][r,g,b], brightness_draft}`, `brightness_range [10,100]` and `state {power, brightness, scene, look, phase: ready|changing|resting|paused|cooldown, message, feature, cooldown_remaining_s}`. Each scene also carries `solid` (the one-colour fallback) and `state.look` is `"gradient"`, `"solid"` or null, so the preview draws what is actually lit.
-- Writes: `POST /api/kiosk/scene|brightness|power`. A refusal returns `{detail, retry_after_s?}`, and `detail` is shown verbatim in a toast.
+- From D76 `scenes` lists only the scenes the iPad offers (`kiosk.hidden_scenes` left out, in catalog order), and each scene also carries `option_of` (its base scene's id, or null), `group` (its base's id, or its own) and `thumb`: null, or — only while more than six scenes are visible — `{sig, basis: "heads" | "modules", modules: [{pos, color, colors}] × 9}`, the review card's still picture (§4.5). The panel adds `showing`: null, or the scene showing now when it is hidden (Now showing still names it; `state.scene` is checked against the whole catalog).
+- Writes: `POST /api/kiosk/scene|brightness|power`. A refusal returns `{detail, retry_after_s?}`, and `detail` is shown verbatim in a toast. A hidden scene's id gets the same calm 404 as an unknown one ("That scene isn't one of the panel's choices.").
 
 Units: CSS px. iPad Safari renders 1 CSS px = 1 pt.
 
@@ -151,9 +152,9 @@ No emoji. No icon font. No Schedule or Settings icons: they would promise featur
 - Height 24, margin-bottom 16.
 
 ### 2.5 Scene card (Hubspace card plus the custom-pattern preview)
-Six cards in fixed order from `config/scenes.yaml`.
+The scenes the iPad offers, in catalog order from `config/scenes.yaml` (`kiosk.hidden_scenes` left out, D76): six cards today. While six or fewer are visible they form the 3 × 2 grid, each card with the palette strip described below; while more are visible the panel shows the review menu (§4.5), where each card's picture is its thumbnail instead of the strip.
 - `<button>`, white `--card`, radius 16, `--sh-card`, padding 16, `overflow: hidden`.
-- **Palette strip** at the top: full card width minus padding, 28px tall, radius 999. It is 30 equal segments from `scene.frame` (`rgb(r,g,b)`), with no gaps. It shows the scene's colours in order, not a picture of the canopy: the canopy's own picture is Now showing (§2.6). The outer pill has `box-shadow: inset 0 0 0 1px rgba(0,0,0,.06)` so ivory scenes don't vanish on white. This mirrors the striped track of the custom-mode brightness slider in `hb10035_c3.jpg`.
+- **Palette strip** at the top (six or fewer visible; the review menu draws the thumbnail, §4.5): full card width minus padding, 28px tall, radius 999. It is 30 equal segments from `scene.frame` (`rgb(r,g,b)`), with no gaps. It shows the scene's colours in order, not a picture of the canopy: the canopy's own picture is Now showing (§2.6). The outer pill has `box-shadow: inset 0 0 0 1px rgba(0,0,0,.06)` so ivory scenes don't vanish on white. This mirrors the striped track of the custom-mode brightness slider in `hb10035_c3.jpg`.
 - 14px gap, then **name** (2 lines max, clamp), 4px gap, then **mood** (1 line, ellipsis).
 - 12px gap, then **palette swatches**: palette circles 22px, 6px apart, each with `box-shadow: inset 0 0 0 1px rgba(0,0,0,.08)`. They mirror the colour preset circles in `iphoneX-03-Controls.png`. They are not interactive and are `aria-hidden`; the card's label carries the names.
 - Card min-height: see §4. Content is top-aligned and swatches sit at the bottom (`margin-top: auto`).
@@ -182,6 +183,7 @@ Six cards in fixed order from `config/scenes.yaml`.
 - **Motion** (`state.lit.motion`, phase-synced to the server's clock: `server_now` plus the local time since it was read): a `ripple` switches ring j at `t0 + j × stagger_s` and shows each ring's previous colours until then (a page with no previous picture shows those panels as unknown); `steps` shows frame `floor((now − t0) / step_s)` (nine colours in grid order, null = dark) and after `ends_at` holds the frame showing then (the last one sent). Any other kind shows the still picture. The page animates only while a motion has a frame to come.
 - **Orientation**: the geometry is the reflected-ceiling view (looking up, origin at the canopy's top-left, as config/canopy.yaml lists it). `canopy.view` (`kiosk.preview` in config/conductor.yaml, set at install) turns it to match what a guest at the stand sees overhead: `mirror_x` flips left and right first, then `rotate_deg` turns it clockwise by quarter turns. The default is unmirrored and unturned; a quarter-turned view letterboxes into the card.
 - **Accessible name**: "Preview: 2 of 9 panels lit" (plus ", N changing" and ", N not shown" when they apply), or "Preview: the canopy is off".
+- **A hidden scene that is showing** (D76: ops chose it, or it was showing when /ops took it off the iPad) is still named here, from the panel's `showing`: its name and description, and the canopy's picture as `state.lit` says. No card is selected, because it has none.
 - **Fallback, the serpentine of 30 lights** (when `state.lit` is null: no look yet, or an older server), copied from `hb10035_c3.jpg` and `pcworld_app_scenes-2.png`: 3 rows of 10 square tiles. Tile size = (card inner width − 2×cap) / 10, max 30px, with 2px gaps. Rows run L→R, R→L, L→R. The ends connect through half-round U-turn caps of the same tile thickness: at the right between rows 1→2, at the left between rows 2→3. Head order: tile i of the snake = `frame[i]`. No numbers. The tile corner radius is 3; caps are full semicircles.
   - When power is off: every tile is `#D3D2D8` (the unattached-puck grey from `pcworld_app_scenes-2.png`), and the name line reads "Lights are off".
   - When the scene is unknown: tiles `#D3D2D8`, name "No scene yet", description "Choose a scene to light the canopy."
@@ -233,7 +235,7 @@ Six cards in fixed order from `config/scenes.yaml`.
 ### 2.13 Attract (idle) state
 - Trigger: 90 s with no `pointerdown`, while phase is `ready` or `cooldown`. It never triggers during `changing`, `paused` or `resting`.
 - Visual only: it never sends a command, and the lights keep whatever is showing.
-- Full screen, covering the header and sheet. Background: the header surface (§1.1) at full screen, cycling its palette blobs through the six scenes every 6 s with a 1.5 s crossfade.
+- Full screen, covering the header and sheet. Background: the header surface (§1.1) at full screen, cycling its palette blobs through the six scenes every 6 s with a 1.5 s crossfade. In the review menu (§4.5) it cycles one scene per group (its first visible member), so six strips, never eighteen; showing it puts the scene list back at the top for the next guest.
 - Content, centred:
   - Hub glyph badge 72px.
   - "The Color Canopy" (attract headline).
@@ -267,7 +269,7 @@ All text comes from the server where the server provides it. The front-end fallb
 
 ## 4. Layouts
 
-All layouts use one `.app` grid filling `100dvh`, `overflow: hidden`, with no page scroll. The header is fixed height; the sheet fills the rest.
+All layouts use one `.app` grid filling `100dvh`, `overflow: hidden`, with no page scroll. The header is fixed height; the sheet fills the rest. In the review menu (§4.5) the page still never scrolls: only the scene list does.
 
 ### 4.1 Landscape 1180×820 (primary; iPad 10th gen / Air 11")
 ```
@@ -319,8 +321,16 @@ BOTTOM BAR 88 (+safe) — feature left, lockup right
 
 ### 4.4 Rules shared by all layouts
 - Breakpoints: `@media (orientation: portrait)` selects §4.3. In landscape, `@media (max-width: 1100px)` selects §4.2. The default is §4.1. Below 1000 px wide in landscape, scale with §4.2 values (the content fits down to 960).
-- Never scroll during normal use. If the content overflows (e.g. very large Dynamic Type), only the sheet scrolls (`overflow-y: auto`) and the header and bottom bar stay put.
+- Never scroll during normal use. If the content overflows (e.g. very large Dynamic Type), only the sheet scrolls (`overflow-y: auto`) and the header and bottom bar stay put. In the review menu (§4.5) only the scene list (`#grid`) scrolls; the sheet itself doesn't.
 - Rotating re-lays out instantly with no animation.
+
+### 4.5 Review mode (more than six visible, D76)
+For the client review the catalog can hold options of a scene (`option_of`, D76): eighteen scenes, each base with its #2 and #3. While more than six are visible (`GRID_MAX`, one number in conductor/ipad_menu.py, panel-model.mjs and ops' ipad-model.mjs) the panel shows the review menu; `#app` carries `data-review="true"`.
+- **Rows.** One row per scene group (`group`: the base's id), its options side by side in catalog order. Each group starts a row at the left column (`.scene.row-start`), so a short row never pulls the next group up; a group of more than three wraps onto more rows. A hidden base's options still form its row. The cards stay flat children of `#grid`.
+- **Row height.** `--review-row` is 232 px (the default and portrait) and 214 px at 1024 landscape: a card with a two-line name fits it, so every row is one height and names never grow it. Cards stay ≥ 64 px targets.
+- **Scrolling.** `#grid` is the only scroll container: vertical only, overscroll contained, the foot faded over 24 px. Now showing and brightness stay pinned beside (landscape) or below (portrait) the list. The guest's place in the list is kept across a card rebuild (a published look, a switch on /ops) and goes back to the top when the attract screen shows. A drag on a card scrolls and cancels the press (10 px, `pointercancel`), so a scroll never chooses a scene.
+- **The card's picture is its thumbnail** (`<canvas class="thumb" aria-hidden="true" data-thumb="<sig>">`, in the strip's box): **the scene at the tier the engine would show it at now**, because a picture is copy too. Per light only when the likely plan is canvas or slot (T1/T2); otherwise its nine module colours, which is what module level and the stepped hold put on the ceiling; and none for a scene that would run as one whole-strand look. It is still: drawn on a rebuild or a resize only, never per frame, its brightness drawn as opacity, the nine panels as hairlines and the dots at a thumbnail radius with no fins. The server computes it (`thumb`); Now showing stays `state.lit`.
+- **Six or fewer visible**: the 3 × 2 grid with palette strips and no scroll, exactly as before (§4.1–§4.3). Hiding options on /ops until six remain brings it back.
 
 ---
 
@@ -365,7 +375,7 @@ BOTTOM BAR 88 (+safe) — feature left, lockup right
   - white on the toast > 12
 - Raw `#FA4616` is used only for non-text graphics (badge, check circle, ring). It is never used for text smaller than 18.66px bold.
 - Non-text contrast ≥ 3:1: switch-on `#FE9F2B` on `#323232` is 6.2. The slider knob is delimited by its shadow and the `#A0A0A0` remainder, and the value is always shown as text.
-- Semantics: cards are `<button aria-pressed>` with full names. The canopy picture is `role="img"` with a summary name (§2.6); the serpentine fallback is decorative. The switch is `role=switch`, the slider `role=slider`. The feature line and toast are `aria-live=polite`. The header title is `<h1>`, section headers `<h2>`.
+- Semantics: cards are `<button aria-pressed>` with full names. The canopy picture is `role="img"` with a summary name (§2.6); the serpentine fallback is decorative, and so are the review cards' thumbnails (§4.5: `aria-hidden`; the card's name carries the scene and its colours). The switch is `role=switch`, the slider `role=slider`. The feature line and toast are `aria-live=polite`. The header title is `<h1>`, section headers `<h2>`.
 - Colour is never the only signal: the selected card has a ring plus a check, and power has the switch position plus the "On"/"Off" text.
 - Text uses rem with root 16px; layouts tolerate 120% text before the sheet scrolls.
 - `lang="en"`, US spelling ("Color"), Title Case labels, sentence-case help copy ending in periods (the app's tone).
@@ -405,6 +415,7 @@ BOTTOM BAR 88 (+safe) — feature left, lockup right
 - "Tap anywhere to light the canopy"
 - "Hang on, we're reconnecting."
 - "No scene yet" · "Choose a scene to light the canopy." · "Lights are off"
+- The review menu (§4.5) adds no client strings: its names, moods and pictures all come from the server.
 
 ---
 
@@ -469,3 +480,7 @@ Where the build differs from the spec above, and why:
 7. **Debug** (`?debug=1`, ops viewers only): drawer with target, live updates (polling every 2 s, latency), capabilities, raw state, the last 50 commands, internals and lease holders, and controls (show attract, simulate a toast, iPad frame preview at `?debug=1&frame=1`).
 8. **Landscape right column**: the Now-showing card takes the spare height (the picture centred in it), so the brightness slider lines up with the bottom of the card grid. The header switch is centred on the title line. The 10% floor still shows a sliver of fill left of the knob. The SIMULATOR badge (sim only, `simulated: true`) sits in the top-left corner, clear of the title and the switch.
 9. **Now showing draws the canopy's 270 lights** (§2.6) from the server's `state.lit` instead of the 30-light serpentine, which stays as the fallback (no look yet). The serpentine walked one strand's wire, which is not what hangs overhead: with nine strands in a 3 × 3 grid, a 2-D design, a partial canopy and per-panel tiers, only the server knows what each panel truthfully shows. The picture is capped at 210 px tall in landscape so a quarter-turned view letterboxes instead of making the sheet scroll. The scene cards' strips stay, as palette strips (§2.5).
+
+(Item 10 is PR A's, the fins, D74; whichever of the two merges second renumbers.)
+
+11. **The review menu** (§4.5, D76). More than six visible scenes give one row per scene group with only the scene list scrolling, under a pinned Now showing and brightness; six or fewer keep the 3 × 2 grid unchanged. `kiosk.hidden_scenes` (/ops "On the iPad") takes scenes off the cards, the attract screen and both choose routes; the idle scene can't be hidden, and a hidden scene that is showing is still named. The review cards draw a still thumbnail at the tier the engine would use now instead of the strip (the plan's §5.4 said the per-light design; a picture is copy too, so the cards follow the tier). They draw no fins and use a thumbnail dot radius (C12). Fixture data only until PR D ships the options: verified in a browser against a stubbed panel (tests_e2e/test_kiosk.py), not yet on the iPad in Guided Access.

@@ -1,7 +1,8 @@
 # Status
 
-_Last updated: 2026-10-18 evening (PR G `claude/flagged-not-changing`: a flagged note no longer holds the panel at
-"changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
+_Last updated: 2026-10-18 night (preset-options PR C `claude/ipad-review-menu`: the iPad review menu, hide and
+promote, D76; built on PR G's tip, sim only; see its block). Before that 2026-10-18 evening (PR G
+`claude/flagged-not-changing`: a flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
@@ -19,6 +20,62 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## preset-options PR C `claude/ipad-review-menu` — the iPad review menu, hide and promote (D76) → `main` (Oct 18)
+**Merge #37 (`claude/flagged-not-changing`) first:** this branch is cut from its tip (main + #37). Merge commits, not
+squash. Plan `docs/plans/preset-options/README.md` §6; decision D76. **Nothing changes on the live iPad while six or
+fewer scenes are visible** (today's six): the review menu, the thumbnails and the promote button only appear once PR
+D's options are in git. Built and tested over an in-memory 18-scene fixture (`tests/review_fixture.py`: the six plus
+`<id>-2`/`-3` options at module level); the real catalog is PR D's.
+- **Built:** `Scene.option_of` (one level deep; left out of every dump while unset, so `trio_sha` and published looks
+  are byte-identical: `1444f9d4ae93` before and after, checked at step 1); `kiosk.hidden_scenes` with its never-fail ops overlay
+  `<data>/overrides/settings.yaml`, the idle scene never hideable; `conductor/ipad_menu.py` (the menu, the /ops
+  switch, its "Needs attention" lines, the conductor.yaml fold, card thumbnails); the panel serves only visible
+  scenes, `option_of`/`group`/`thumb` and `showing`, and a hidden id gets the calm 404 on both choose routes; /ops
+  "On the iPad" (switches, the picker's "(off the iPad)", the overlay download's conductor.yaml hunk); the kiosk
+  review menu (grouped rows, pinned side, only `#grid` scrolls, scroll kept across rebuilds and reset on attract,
+  still canvas thumbnails at the tier in use, true Now Showing for a hidden scene); published trios and Lab drafts
+  can't regroup a scene; the Lab's `option_of`/`group`/`on_ipad`, "Make this the scene" (client-side working-draft
+  swap, Undo, no new route) and the export's "Made the scene on site" line, which prompts for the client's sign-off
+  and never claims it. Lab cache tag `lab-11`, kiosk tag `review-1`.
+- **Verified (sim, macOS, Oct 18):** `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` → 2558 passed, 5 skipped, 44 subtests (11 min) (baseline
+  at #37: 2473 passed, 5 skipped); `ruff check` / `ruff format --check` clean; `node --test` on each of the ten
+  `tests/*.test.mjs` → fail 0 (guest-panel 30, ops-ipad 3, lab-model 88); `scripts/regen_scene_pins.py --check` exit
+  0 (no scene, mode or recipe changed); `pytest tests_e2e --collect-only` → 54 collected (review_fixture imports
+  conductor only). **Browser (local only; CI runs no browser):** the new e2e tests pass — 14 kiosk review tests
+  against the stubbed panel at 1180×820, 1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a tap
+  after scrolling, scroll kept across a rebuild, painted pixels and alpha at dpr 2, a quarter-turned view, six
+  options keep the 3 × 2, a hidden scene named in Now Showing, one attract strip per group), and the whole of
+  `tests_e2e/test_ops_visualizer.py` (11, with the new On the iPad switch test). Run with the system Chrome
+  (`channel="chrome"`, a scratch plugin: Playwright's own Chromium isn't downloaded on this Mac) on port 8303 only.
+  **Pre-existing, not PR C's:** `test_panel_ready_changing_cooldown` (`#hdr-spinner` not visible) and
+  `test_debug_drawer_is_for_ops_only` fail the same way on the untouched #37 tree with that browser.
+  **Soak:** `python -m conductor.soak` → the same numbers as the committed report (19 PASS; the gating settle row
+  FAIL at p95 5.19 s, as since D72; the two reported spreads FAIL as before); the report was restored, not
+  committed.
+- **Measured (for PR D):** `catalog_thumbs` over the 18 review scenes, warm: every card per head 72.2 ms / 55,837 B
+  of JSON (the worst case); module level 3.4 ms / 8,569 B. `thumb_basis` on the sim engine over 18 visible scenes:
+  11.0 ms (the three painted bases come out per head at T1 there). The spec's read-only baseline on git's six:
+  `mode_design` 22.8 ms, of which 1.0 ms is the modules.
+- **UNVERIFIED:** scrolling on the 9th-gen iPad in Guided Access (Chromium's synthesized touch scroll is the closest
+  proof); the promote UI in a real Lab (git has no options before PR D: covered by node, static and route tests,
+  and a promoted draft passes `apply_drafts` and `POST /api/lab/versions`); the 18-option and fins thumbnail costs;
+  the per-poll `thumb_basis` cost on the show box; Playwright's own Chromium (system Chrome used).
+- **Needs hardware:** nothing for the logic; the client review session at the venue.
+- **Deploy notes:** hard-reload `/ops` and `/ops/showcase` after the deploy (plain StaticFiles). Lab exports made
+  before D77 lands propose a reserved D-number; renumber by hand. If C merges before A and B, DECISIONS.md has a
+  D74–D75 gap until they land. Merge order per integration: #37, A, B, C (C may merge before D).
+- **Decisions recorded in D76:** card thumbnails draw no fins and use a thumbnail dot radius (C12); the base keeps
+  its "#1" until PR E or a Lab rename (C27).
+- **Questions for Alon:** (1) the review cards draw each scene at the tier the engine would use (per light only for a
+  painted scene shown as canvas or slot; module colours otherwise, which on the show box is every scene until
+  per-light is commissioned), against plan §5.4's per-light design on the iPad: keep tier-true cards, or add a
+  labelled design view (new client copy)? (2) Once PR E brings the iPad back to six, should those six cards also get
+  tier-true thumbnails instead of palette strips?
+- **Next:** PR D on a merge of A + B + C. Its verification should include a hand walk-through of promote on
+  `make lab-dev` with the 18 options (golden-hour-2 → golden-hour: the button, the swap, the notice, the recipe keys,
+  Publish, the export's promotion line) and `catalog_thumbs` / `thumb_basis` timings with fins. D also adapts
+  `tests/review_fixture.py` and C's six-count tests to the real 18-scene catalog (integration notes).
 
 ## PR G — a flagged note no longer holds the panel at "changing" (D73), `claude/flagged-not-changing` → `main` (Oct 18)
 **Deployed first, Oct 18 16:23 (Alon asked): `7b21918`** (main after #35: D70 + D71 + D72) on the Mac show box —
@@ -56,7 +113,8 @@ What the drawing says:
 
 Next: PRs A (fins and visualizer), B (motion for every scene, with Gate R and `live_enabled` on the critical path) and
 C (iPad review menu, hide, promote), in parallel. Then D (the 18-option catalog), then E (cleanup after the client
-session). Briefs are in plan §10. Nothing is built; nothing is verified on hardware.
+session). Briefs are in plan §10. **PR C is built** (D76, `claude/ipad-review-menu`, sim only; see its block);
+nothing is verified on hardware.
 
 ## PR F — fast guest pacing: 2 s whatever the size, backing off on real throttling (D72), `claude/guest-throttle-pacing` → `main` (Oct 18)
 Cut from `main` at `209e52b` (#31–#34 all merged; checked each branch tip is in `main`). Alon: D70's 7.5 s on nine
@@ -547,7 +605,8 @@ Lab); both target `main`; merge commits, not squash.
 ## PR stack (merge order — merge commits, not squash)
 00. **Oct 18:** #28–#35 (PR A, B, B2, C, the C deploy notes, D, E, F) are merged into `main`; the show box runs
     `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **Open: PR G `claude/flagged-not-changing`** (D73; no
-    other PR first).
+    other PR first). **Then preset-options PR C `claude/ipad-review-menu`** (D76; cut from PR G's tip: merge #37
+    first; merge commits).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -1064,6 +1123,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+00000. **Alon (preset-options PR C, D76):** after #37, review and merge `claude/ipad-review-menu` (nothing changes
+    on the iPad until PR D's options are in git); answer its two questions (tier-true cards vs a labelled design
+    view; thumbnails on the six cards after PR E). Hard-reload `/ops` and `/ops/showcase` after deploying it.
 0000. **Alon (PR G, D73):** review and merge `claude/flagged-not-changing`; deploy it (the box runs `7b21918`); then a
     second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
     some iPad reloads). Run the account probe once (`docs/runbooks/account-rate-probe.md`), not during a demo.
