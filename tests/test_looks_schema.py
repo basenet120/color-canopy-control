@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 from pathlib import Path
 
@@ -13,7 +14,15 @@ from conductor.config import CONFIG_DIR, ConfigError, load_recipes
 from conductor.geometry import load_canopy_config
 from conductor.looks import field as F
 from conductor.looks import load_modes, parse_modes
-from conductor.looks.schema import MOTION_WORDS, FieldCanvas, motion_words
+from conductor.looks.schema import (
+    BREATHE_COLOUR_PHRASES,
+    BREATHE_LEVEL_PHRASES,
+    MOTION_WORDS,
+    STEPPED_FALSE_CLAIMS,
+    FieldCanvas,
+    breathe_words,
+    motion_words,
+)
 
 SHIPPED = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
 
@@ -640,6 +649,246 @@ def test_a_stepped_canvas_names_known_colours():
 
     msg = _bad(unknown)
     assert "techniques → stepped → canvas → stops → [0] → color: unknown colour 'salmon'" in msg
+
+
+# ---- breathe and shimmer (D75): a stepped rung's kind of motion and the copy that says what changes ---------------
+PINS = Path(__file__).with_name("fixtures_scene_frames.json")
+LEVEL_COPY = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter "
+    "or softer level every few seconds, so the canopy swells and softens."
+)
+COLOUR_COPY = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next "
+    "colour every few seconds, so the palette drifts and settles."
+)
+SHIMMER_COPY = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter "
+    "or softer level every few seconds, so the strands glow and soften on their own."
+)
+BREATHE = {"mode": "breathe", "brightness_swing": 4, "moving_feature": LEVEL_COPY}
+SHIMMER = {
+    "mode": "shimmer",
+    "brightness_swing": 4,
+    "lag_steps": 2,
+    "seed": 7,
+    "moving_feature": SHIMMER_COPY,
+}
+
+
+def test_a_stepped_technique_defaults_to_travel_and_the_shipped_modes_load_as_pinned():
+    stepped = _stepped_ok(_stepped())
+    assert (stepped.mode, stepped.shift, stepped.brightness_swing, stepped.lag_steps, stepped.seed) == (
+        "travel",
+        0.0,
+        0,
+        0,
+        None,
+    )
+    pins = json.loads(PINS.read_text(encoding="utf-8"))["_pins"]
+    modes = load_modes()
+    assert set(modes.modes) == set(pins)
+    for mode_id, mode in modes.modes.items():
+        pin = pins[mode_id]
+        assert mode.moves == ("stepped" in pin)  # "this scene moves" is its stepped rung (D75)
+        assert mode.motion is False  # the on-device burst flag (07 §6), never set beside a stepped rung
+        if "stepped" in pin and "mode" in pin["stepped"]:  # the pin gains `mode` with scene_rules' D75 pin
+            assert mode.techniques.stepped.mode == pin["stepped"]["mode"]
+
+
+def test_explicit_defaults_on_a_travel_rung_load():
+    """ "Set" means not the default: a travel rung that spells out shift: 0 (or the other zeros) is still travel."""
+    stepped = _stepped_ok(_stepped(shift=0, brightness_swing=0, lag_steps=0, seed=None))
+    assert (stepped.mode, stepped.shift, stepped.brightness_swing, stepped.lag_steps, stepped.seed) == (
+        "travel",
+        0.0,
+        0,
+        0,
+        None,
+    )
+    assert _stepped_ok(_stepped(mode="travel", shift=0.0)).shift == 0.0
+
+
+@pytest.mark.parametrize(
+    ("over", "field", "message"),
+    [
+        ({"shift": 0.6}, "shift", "less than or equal to 0.5"),
+        ({"brightness_swing": 21}, "brightness_swing", "less than or equal to 20"),
+        ({"lag_steps": 7}, "lag_steps", "less than or equal to 6"),
+        ({"seed": -1}, "seed", "greater than or equal to 0"),
+        ({"mode": "sparkle"}, "mode", "'travel', 'breathe' or 'shimmer'"),
+    ],
+)
+def test_breathe_parameters_have_their_bounds(over, field, message):
+    msg = _bad(_stepped(**{**BREATHE, **over}))
+    assert f"mode 'coastal-tides' → techniques → stepped → {field}:" in msg and message in msg
+
+
+@pytest.mark.parametrize(
+    ("over", "message"),
+    [
+        ({"shift": 0.1}, "mode: travel moves the design itself"),
+        ({"brightness_swing": 2}, "mode: travel moves the design itself"),
+        ({"lag_steps": 1}, "mode: travel moves the design itself"),
+        ({"seed": 3}, "mode: travel moves the design itself"),
+        ({**BREATHE, "brightness_swing": 0}, "mode: breathe needs a shift (up to 0.5) or a brightness_swing"),
+        ({**BREATHE, "seed": 3}, "seed is for mode: shimmer only"),
+        ({**SHIMMER, "seed": None}, "mode: shimmer needs a seed"),
+        ({**SHIMMER, "lag_steps": 0}, "mode: shimmer needs lag_steps of at least 1"),
+        (
+            {**BREATHE, "brightness": 95, "brightness_swing": 8},
+            "brightness 95 ± brightness_swing 8 would run 87–103, outside 1–100",
+        ),
+        (
+            {**BREATHE, "brightness": 5, "brightness_swing": 5},
+            "brightness 5 ± brightness_swing 5 would run 0–10, outside 1–100",
+        ),
+    ],
+)
+def test_each_mode_takes_only_its_own_parameters(over, message):
+    msg = _bad(_stepped(**over))
+    assert "mode 'coastal-tides' → techniques → stepped:" in msg and message in msg
+
+
+def test_a_breathe_and_a_shimmer_rung_load_with_their_parameters():
+    breathe = _stepped_ok(_stepped(**BREATHE, lag_steps=2, shift=0.15))
+    assert (breathe.mode, breathe.shift, breathe.brightness_swing, breathe.lag_steps) == (
+        "breathe",
+        0.15,
+        4,
+        2,
+    )
+    shimmer = _stepped_ok(_stepped(**SHIMMER))
+    assert (shimmer.mode, shimmer.lag_steps, shimmer.seed) == ("shimmer", 2, 7)
+    # the swing may reach the ends of 1–100 exactly
+    assert (
+        _stepped_ok(_stepped(**{**BREATHE, "brightness": 85, "brightness_swing": 15})).brightness_swing == 15
+    )
+
+
+def test_a_lagged_breath_whose_modules_all_start_together_is_refused():
+    """Review B-R6-1: a shimmer with lag_steps 0 is refused because every module would breathe together, but a seed
+    or a layout can collapse the lags too (`compile.module_lags` over the nine modules all equal). The canopy would
+    then breathe as one under copy that says otherwise: a shimmer's "on their own", a breathe's lead words. Checked
+    wherever there is a canopy (parse_modes here, the scene rules and the Lab's apply too)."""
+    from conductor.looks.compile import module_lags
+
+    grid = [f"r{r}c{c}" for r in range(3) for c in range(3)]
+    # seed 183 at lag_steps 1: all nine hashes land on the same start (seed 7, the control, doesn't)
+    control = _stepped_ok(_stepped(**{**SHIMMER, "lag_steps": 1}))
+    assert set(module_lags(control, grid, CANOPY).values()) == {0, 1}
+    msg = _bad(_stepped(**{**SHIMMER, "lag_steps": 1, "seed": 183}))
+    assert (
+        "mode 'coastal-tides' → techniques → stepped → seed: lag_steps 1 with seed 183 starts every module "
+        "together, so the canopy breathes as one" in msg
+    )
+    assert "pick another seed or a larger lag_steps" in msg
+    spread = _stepped_ok(_stepped(**{**SHIMMER, "lag_steps": 2, "seed": 183}))  # a larger lag spreads it
+    assert len(set(module_lags(spread, grid, CANOPY).values())) > 1
+    # without a canopy the starts aren't checked (a breathe's need the module centres), as the layout words aren't
+    data = copy.deepcopy(RAW)
+    _stepped(**{**SHIMMER, "lag_steps": 1, "seed": 183})(data)
+    assert parse_modes(data, recipes=RECIPES).mode("coastal-tides").techniques.stepped.seed == 183
+
+    def sun(lag: int):
+        """A sun at the middle of the left edge, 600 in across: t < ½ at every module centre, so at lag_steps 1
+        every module's start rounds to 0 and nothing leads, though the copy says the breath starts from one edge."""
+
+        def mutate(d):
+            _sampled(
+                {"kind": "radial", "centre_in": [0, 60], "radius_in": 600},
+                feature="Each strand set to one colour, so the palette steps from one edge.",
+            )(d)
+            lead = f"{LEVEL_COPY[:-1]} from one edge."
+            _stepped(**{**BREATHE, "lag_steps": lag, "moving_feature": lead})(d)
+
+        return mutate
+
+    msg = _bad(sun(1))
+    assert (
+        "mode 'coastal-tides' → techniques → stepped → lag_steps: lag_steps 1 starts every module together on "
+        "this design" in msg
+    )
+    assert "so the breath doesn't start 'from one edge'; raise lag_steps, or set it to 0" in msg
+    led = _stepped_ok(sun(2))  # lag_steps 2: the far modules start a step later
+    assert (led.lag_steps, sorted(set(module_lags(led, grid, CANOPY).values()))) == (2, [0, 1])
+
+
+def test_breathe_copy_says_what_changes():
+    def breathe(**over):
+        return _stepped(**{**BREATHE, **over})
+
+    assert "with a brightness_swing, 'swells and softens' or" in _bad(breathe(moving_feature=COLOUR_COPY))
+    level_without_swing = _bad(breathe(brightness_swing=0, shift=0.2))
+    assert (
+        "moving_feature says 'swells and softens', but brightness_swing is 0, so no strand gets brighter or softer"
+        in level_without_swing
+    )
+    brighter = COLOUR_COPY.replace("its next colour", "its next colour, brighter")
+    assert "says 'brighter', but brightness_swing is 0" in _bad(
+        breathe(brightness_swing=0, shift=0.2, moving_feature=brighter)
+    )
+    colourless = LEVEL_COPY.replace("a brighter or softer level", "its next tone").replace(
+        "swells and softens", "changes"
+    )
+    assert (
+        "a colour-only breath (brightness_swing 0) says 'drifts and settles' or 'drift and settle'"
+        in _bad(breathe(brightness_swing=0, shift=0.2, moving_feature=colourless))
+    )
+    next_colour = LEVEL_COPY.replace("a brighter or softer level", "its next colour")
+    assert "says 'next colour', but shift is 0, so every strand keeps its colour" in _bad(
+        breathe(moving_feature=next_colour)
+    )
+    assert _stepped_ok(breathe(brightness_swing=0, shift=0.2, moving_feature=COLOUR_COPY)).shift == 0.2
+    both = LEVEL_COPY.replace("a brighter or softer level", "its next colour and a brighter or softer level")
+    assert _stepped_ok(breathe(shift=0.2, moving_feature=both)).brightness_swing == 4
+    # the breathe phrases are never a false claim, and the false claims still apply
+    assert not any(STEPPED_FALSE_CLAIMS.search(p) for p in (*BREATHE_LEVEL_PHRASES, *BREATHE_COLOUR_PHRASES))
+    assert "moving_feature says 'shimmers'" in _bad(breathe(moving_feature=f"{LEVEL_COPY} It shimmers."))
+    assert "must say the strands change 'every few seconds'" in _bad(
+        breathe(moving_feature=LEVEL_COPY.replace("every few seconds", "now and then"))
+    )
+
+    def radial(lag: int, words: str):
+        def mutate(d):
+            _sampled(RADIAL)(d)
+            _stepped(**{**BREATHE, "lag_steps": lag, "moving_feature": f"{LEVEL_COPY[:-1]} {words}."})(d)
+
+        return mutate
+
+    assert "a breathe look doesn't travel, so the copy may not say 'from the centre out'" in _bad(
+        radial(0, "from the centre out")
+    )
+    assert _stepped_ok(radial(2, "from the centre out")).lag_steps == 2
+    starts = _bad(radial(2, "column by column"))
+    assert "the breath starts 'from the centre out' (lag_steps 2), so the copy may say that but not" in starts
+    assert "'column by column'" in starts
+    assert "a shimmer look doesn't travel" in _bad(
+        _stepped(**{**SHIMMER, "moving_feature": f"{SHIMMER_COPY[:-1]} diagonally."})
+    )
+
+
+def test_breathe_words_name_the_family_the_rung_uses():
+    assert breathe_words(_stepped_ok(_stepped(**BREATHE))) == "swells and softens"
+    assert breathe_words(_stepped_ok(_stepped(**SHIMMER))) == "glow and soften"
+    colour = _stepped_ok(
+        _stepped(**{**BREATHE, "brightness_swing": 0, "shift": 0.2, "moving_feature": COLOUR_COPY})
+    )
+    assert breathe_words(colour) == "drifts and settles"
+    assert breathe_words(_stepped_ok(_stepped())) is None  # travel names a flow (motion_words) instead
+
+
+def test_motion_true_with_a_stepped_rung_is_refused():
+    def moving(d):
+        _stepped()(d)
+        d["modes"]["coastal-tides"]["motion"] = True
+
+    msg = _bad(moving)
+    assert "mode 'coastal-tides'" in msg and "motion: true is the on-device burst flag (07 §6)" in msg
+    # motion: true without a stepped rung is still the on-device burst flag (tests/fixtures_modes_techniques.yaml)
+    from technique_modes import TECHNIQUE_MODES
+
+    golden = TECHNIQUE_MODES.mode("golden-hour")
+    assert golden.motion is True and not golden.moves
 
 
 # ---- the fins' rings (D74) ----------------------------------------------------------------------------------------

@@ -243,6 +243,9 @@ class _Evaluator:
         kind = canvas.recipe
         if isinstance(canvas, GradientCanvas | FieldCanvas):
             self.stops = [(s.at, recipe_entry(recipes, s.color, kind)) for s in canvas.stops]
+            if isinstance(canvas, FieldCanvas):
+                # the design's own t, before mirror and invert (where a breath's colour offset applies, D75)
+                self.plain = canvas.field.model_copy(update={"transform": "linear", "invert": False})
         elif isinstance(canvas, PathwayCanvas):
             self.base = _level(recipes, canvas.base, kind)
             self.top = _level(recipes, canvas.path, kind)
@@ -261,13 +264,16 @@ class _Evaluator:
         else:  # pragma: no cover - the schema's discriminator admits nothing else
             raise PlanError(f"unknown canvas kind {getattr(canvas, 'kind', canvas)!r}")
 
-    def __call__(self, x: float, y: float, phase: float = 0.0) -> FrameEntry:
+    def __call__(self, x: float, y: float, phase: float = 0.0, offset: float = 0.0) -> FrameEntry:
+        assert not (phase and offset), "a step shifts the design (travel) or offsets its colour (breathe)"
         c = self.canvas
         if isinstance(c, GradientCanvas):
             t = (x / self.w) if c.axis == "x" else (y / self.h)
             return self._gradient(min(1.0, max(0.0, t)))
         if isinstance(c, FieldCanvas):
-            return self._gradient(F.value(c.field, x, y, self.canopy, phase))
+            if not offset:
+                return self._gradient(F.value(c.field, x, y, self.canopy, phase))
+            return self._gradient(self._offset_t(x, y, offset))
         if isinstance(c, PathwayCanvas):
             d = min(math.hypot(x - cx, y - cy) for cx, cy in self.curve)
             half = c.path.width_in / 2
@@ -278,6 +284,19 @@ class _Evaluator:
         local = x - math.floor(x / self.mw) * self.mw
         weight = _soft(abs(local - self.mw / 2), c.band.width_in / 2)
         return mix(self.base, self.top, weight)
+
+    def _offset_t(self, x: float, y: float, offset: float) -> float:
+        """A breath's t (D75): the design's own t before mirror and invert (`field.value` of a linear, uninverted
+        copy, so its repeat still applies), moved by `offset` and clamped, never wrapped (a rim module never jumps
+        to the centre's colour); then mirror, then invert, as `field.value` does. The offset is added before the fold,
+        so its sign means what travel's phase means (`forward` sends a negative one). field.py is not involved."""
+        spec = self.canvas.field
+        u = min(1.0, max(0.0, F.value(self.plain, x, y, self.canopy) + offset))
+        if spec.transform == "mirror":
+            u = 1.0 - abs(2.0 * u - 1.0)
+        if spec.invert:
+            u = 1.0 - u
+        return u
 
     def _gradient(self, t: float) -> FrameEntry:
         stops = self.stops
@@ -297,10 +316,14 @@ def evaluate(
     canopy: Mapping[str, Any],
     recipes: RecipesFile,
     phase: float = 0.0,
+    offset: float = 0.0,
 ) -> FrameEntry:
     """The canvas colour at one canopy point (inches from the top-left, reflected-ceiling view). `phase` shifts a
-    `field` canvas's design (`field.value`; a stepped look's steps); the other canvas kinds have none."""
-    return _Evaluator(canvas, canopy, recipes)(x, y, phase)
+    `field` canvas's design (`field.value`, which wraps; a travel look's steps). `offset` moves a `field` canvas's
+    colour along its t instead (a breathe/shimmer look's steps, D75): clamped to [0, 1], never wrapped, so a rim
+    module never jumps to the centre's colour, and applied before mirror and invert, so `forward` means what
+    travel's phase means. Never both at once. The other canvas kinds have neither."""
+    return _Evaluator(canvas, canopy, recipes)(x, y, phase, offset)
 
 
 def compose_canvas(

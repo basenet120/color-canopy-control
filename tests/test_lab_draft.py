@@ -122,6 +122,12 @@ def test_the_seed_is_the_scene_and_its_design():
         "steps_per_cycle": 6,
         "step_s": 6.0,
         "run_s": 90.0,
+        # D75: the kind of motion, at SteppedTechnique's defaults (Golden Hour travels)
+        "mode": "travel",
+        "shift": 0.0,
+        "brightness_swing": 0,
+        "lag_steps": 0,
+        "seed": None,
     }
     assert draft.copy.model_dump() == {"modules": "auto", "stepped": "auto"}
     assert D.seed_draft(TRIO, "lowcountry-calm").stepped is None
@@ -695,9 +701,15 @@ def test_a_draft_validates_with_an_idle_scene_set():
     settings = settings_with(kiosk={"idle_scene": "golden-hour"})
     patched = apply(edit("golden-hour", **DONE_MEANS), settings=settings)
     assert patched.modes.mode("golden-hour").techniques.modules.sample.brightness == 90
-    # and the check still runs: an idle mode that steps refuses every draft
-    found = problems(edit("lowcountry-calm"), settings=settings_with(kiosk={"idle_mode": "coastal-tides"}))
+    # D75: an idle look with a stepped rung is fine (start-up and an idle return show it still)
+    stepping_idle = settings_with(kiosk={"idle_mode": "coastal-tides"})
+    assert apply(edit("lowcountry-calm"), settings=stepping_idle).modes.mode("coastal-tides").moves
+    # and the check still runs: motion.idle on with an idle look that has no rung refuses every draft
+    breathing = settings_with(motion={"idle": {"breathe_run_s": 60, "every_s": 300}})
+    found = problems(edit("golden-hour"), settings=breathing)
     assert found and all(p.field == "draft" for p in found)
+    assert [p.path for p in found] == ["config/conductor.yaml → motion → idle"]
+    assert "has no stepped rung to breathe with" in found[0].message
 
 
 def test_blocking_scene_rules_refuse_and_warnings_never_do(monkeypatch):
@@ -794,6 +806,220 @@ def test_apply_never_mutates_its_inputs_or_the_show():
     # load_trio hands out copies, never the cached objects themselves
     fresh = D.load_trio(CONFIG_DIR)
     assert fresh.scenes is not cached and fresh.scenes.scenes[0] is not cached.scenes[0]
+
+
+# ---- the kind of motion (D75) ----------------------------------------------------------------------------------------
+BREATHE_GOLDEN = {
+    "stepped.mode": "breathe",
+    "stepped.brightness_swing": 5,
+    "stepped.lag_steps": 2,
+}  # 95 ± 5 fits
+
+
+def test_a_draft_carries_the_kind_of_motion_and_its_parameters_to_the_rung():
+    draft = edit("golden-hour", **BREATHE_GOLDEN)
+    patched = apply(draft)
+    st = patched.modes.mode("golden-hour").techniques.stepped
+    assert (st.mode, st.shift, st.brightness_swing, st.lag_steps, st.seed) == ("breathe", 0.0, 5, 2, None)
+    copy = D.resolve_copy(TRIO, draft, CANOPY)["stepped"]
+    assert copy.chosen == "generated" and "the kind of motion changed" in copy.why
+    # the colours a breath without a shift reaches are exactly the still design's (the T3 sentence's stops)
+    names = [c.name for c in draft.palette]
+    still = [names[i] for i in D.reached_stops(draft.layout, len(names), CANOPY)]
+    assert len(still) < len(names)  # Golden Hour's module level shows neither soft gold nor lavender
+    assert (
+        st.moving_feature
+        == copy.sentence
+        == D.BREATHE_TEMPLATE.format(
+            what="a brighter or softer level",
+            verb="swells and softens",
+            lead=" from one edge",
+            colours=D.colour_phrase(still, invert=draft.layout.invert, transform=draft.layout.transform),
+        )
+    )
+    # it parses through the show's own schema (apply did) and passes the blocking scene rules
+    assert not scene_rules.scene_mode_problems(
+        patched.scenes,
+        patched.modes,
+        patched.recipes,
+        CANOPY,
+        approved=TRIO.modes,
+        rules=scene_rules.BLOCKING,
+    )
+    # the patched rung seeds back to the same draft (the breathe parameters round-trip through seed_draft)
+    reseeded = D.seed_draft(patched, "golden-hour")
+    assert D.is_approved(patched, reseeded) and reseeded.stepped.model_dump() == draft.stepped.model_dump()
+    # a shimmer's sentence says the strands breathe on their own
+    shimmer = edit("golden-hour", **{**BREATHE_GOLDEN, "stepped.mode": "shimmer", "stepped.seed": 7})
+    moving = apply(shimmer).modes.mode("golden-hour").techniques.stepped.moving_feature
+    assert "so the strands glow and soften on their own: " in moving and STEPPED_PACE in moving
+
+
+def test_a_colour_only_breath_says_its_next_colour_and_drifts():
+    """D75 (review B-R4-TS-3): a breath with a shift and no brightness_swing changes only colour, so its generated
+    sentence says each strand is sent "its next colour" and the palette (or the strands) "drift and settle" (the
+    colour family, schema.BREATHE_COLOUR_PHRASES); a level word there would be refused at save (validator #9)."""
+    names = ["Soft gold", "Peach", "Sunset pink", "Rose", "Lavender"]  # a shift of 0.3 reaches all five
+    colours = D.colour_phrase(names, invert=False, transform="linear")
+    expected = {
+        "breathe": D.BREATHE_TEMPLATE.format(
+            what="its next colour", verb="drifts and settles", lead="", colours=colours
+        ),
+        "shimmer": D.SHIMMER_TEMPLATE.format(
+            what="its next colour", verb="drift and settle", colours=colours
+        ),
+    }
+    for mode, extra in (("breathe", {}), ("shimmer", {"stepped.lag_steps": 2, "stepped.seed": 7})):
+        colour_only = {"stepped.mode": mode, "stepped.shift": 0.3, "stepped.brightness_swing": 0}
+        draft = edit("golden-hour", **colour_only, **extra)
+        assert [c.name for c in draft.palette] == names and draft.layout.transform == "linear"
+        assert not draft.layout.invert
+        copy = D.resolve_copy(TRIO, draft, CANOPY)["stepped"]
+        assert copy.chosen == "generated" and copy.sentence == expected[mode], (mode, copy.sentence)
+        # the show's own schema parses it
+        st = apply(draft).modes.mode("golden-hour").techniques.stepped
+        assert (st.mode, st.shift, st.brightness_swing) == (mode, 0.3, 0)
+        assert st.moving_feature == expected[mode]
+        assert "level" not in st.moving_feature and "brighter" not in st.moving_feature
+
+
+def breathing_trio() -> D.ConfigTrio:
+    """An approved trio whose stepped scenes already breathe (as every PR D seed will): Golden Hour shifts 0.3 and
+    swings 5 (reaching all five colours), Coastal Tides only swings 5 (its module level shows all four colours)."""
+    swing = {"stepped.mode": "breathe", "stepped.brightness_swing": 5}
+    return apply(
+        edit("golden-hour", **swing, **{"stepped.shift": 0.3}),
+        edit("coastal-tides", **swing),
+    )
+
+
+def edit_from(trio: D.ConfigTrio, scene_id: str, **stepped) -> D.SceneDraft:
+    data = D.seed_draft(trio, scene_id).model_dump()
+    data["stepped"].update(stepped)
+    return D.SceneDraft.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("scene_id", "change"),
+    [
+        ("golden-hour", {"brightness_swing": 0}),  # swing > 0 → 0: a colour-only breath
+        ("golden-hour", {"lag_steps": 2}),  # lag 0 → 2: the breath now starts at one edge
+        ("coastal-tides", {"shift": 0.3}),  # shift 0 → > 0: the colour now breathes too
+        ("coastal-tides", {"shift": 0.3, "brightness_swing": 0}),  # and both at once
+    ],
+)
+def test_on_a_breathing_seed_a_swing_shift_or_lag_change_is_a_change_of_motion(scene_id, change):
+    """D75 (review B-R4-TS-2): with an approved breath, changing only whether it swings, shifts or lags (the
+    colours it reaches unchanged) changes what its sentence must say, so the approved sentence gives way to the
+    generated one, which the save accepts. Kept, the approved "swells and softens" with no swing, or "its next
+    colour" with no shift, would be refused (validator #9)."""
+    trio = breathing_trio()
+    approved = trio.modes.mode(scene_id).techniques.stepped.moving_feature
+    seed = D.seed_draft(trio, scene_id)
+    # the control: the seed keeps its approved sentence
+    assert D.resolve_copy(trio, seed, CANOPY)["stepped"].chosen == "approved"
+    draft = edit_from(trio, scene_id, **change)
+    # only the kind of motion moved: the breath reaches the same colours
+    assert D._breath_colours(draft, CANOPY) == D._breath_colours(seed, CANOPY)
+    copy = D.resolve_copy(trio, draft, CANOPY)["stepped"]
+    assert (copy.chosen, copy.why) == ("generated", "the kind of motion changed")
+    assert copy.sentence != approved
+    patched = D.apply_drafts(trio, {scene_id: draft}, canopy=CANOPY, settings=SETTINGS)
+    st = patched.modes.mode(scene_id).techniques.stepped
+    assert st.moving_feature == copy.sentence
+    assert (st.shift, st.brightness_swing, st.lag_steps) == (
+        draft.stepped.shift,
+        draft.stepped.brightness_swing,
+        draft.stepped.lag_steps,
+    )
+
+
+def test_a_breaths_copy_names_only_the_colours_it_reaches():
+    """Golden Hour's module level never shows soft gold or lavender (its T3 sentence leaves them out): a breath
+    without a shift keeps every strand's colour, so its sentence doesn't name them either; a shift of 0.5 carries
+    the strands at the ends of the design onto them, so it does, and says why the approved sentence went."""
+    level_only = apply(edit("golden-hour", **BREATHE_GOLDEN)).modes.mode("golden-hour").techniques.stepped
+    assert "soft gold" not in level_only.moving_feature and "lavender" not in level_only.moving_feature
+    shifted = edit("golden-hour", **{**BREATHE_GOLDEN, "stepped.shift": 0.5})
+    st = apply(shifted).modes.mode("golden-hour").techniques.stepped
+    assert "soft gold" in st.moving_feature and "lavender" in st.moving_feature
+    assert "sent its next colour and a brighter or softer level every few seconds" in st.moving_feature
+    copy = D.resolve_copy(TRIO, shifted, CANOPY)["stepped"]
+    assert "the colours the breath reaches changed" in copy.why
+    assert D.breath_offsets(shifted.stepped) == [-0.5, -0.25, 0.0, 0.25, 0.5]
+    assert D.breath_offsets(D.seed_draft(TRIO, "golden-hour").stepped) == [0.0]  # travel: the still design
+
+
+def test_a_breath_near_an_end_of_the_design_names_only_what_the_clamp_reaches():
+    """Review B-R6-TS-2: a breath's colour offset is clamped at the ends of the design, never wrapped
+    (`composer._offset_t`), so `reached_stops` clamps too. A sun at (37.5, 20) in sits on r0c0's centre (t 0): a
+    forward shift of 0.05 holds it at soft gold, where a wrap would carry it to t 0.95, lavender, which no strand is
+    ever sent. The colours named are exactly the stops nearest the t's the composer itself gives the nine module
+    centres over the breath's offsets, so the Lab's copy and the strands can't drift apart."""
+    from conductor.looks import composer
+
+    near_end = {
+        "stepped.mode": "breathe",
+        "stepped.shift": 0.05,
+        "stepped.brightness_swing": 0,
+        "layout": {"kind": "radial", "centre_in": [37.5, 20.0]},
+    }
+    draft = edit("golden-hour", **near_end)
+    patched = apply(draft)
+    st = patched.modes.mode("golden-hour").techniques.stepped
+    assert st.moving_feature.endswith("drifts and settles: soft gold, then peach, sunset pink and rose.")
+    assert "lavender" not in st.moving_feature.lower()
+    # the composer's own t at every module centre, over every offset the breath sends (both signs)
+    ev = composer._Evaluator(st.canvas, CANOPY, patched.recipes)
+    offsets = D.breath_offsets(draft.stepped)
+    assert offsets == [-0.05, -0.025, 0.0, 0.025, 0.05]
+    ts = [ev._offset_t(x, y, o) for x, y in F.module_centres(CANOPY, D.GRID).values() for o in offsets]
+    assert min(ts) == 0.0  # r0c0 is held at the start of the design, never wrapped round to its end
+    names = [c.name for c in draft.palette]
+    half = 0.5 / (len(names) - 1)
+    sent = [n for i, n in enumerate(names) if any(abs(t - i / (len(names) - 1)) <= half + 1e-9 for t in ts)]
+    assert D._breath_colours(draft, CANOPY) == sent == ["Soft gold", "Peach", "Sunset pink", "Rose"]
+
+
+def test_breathe_problems_land_on_the_stepped_fields(app_client):
+    # the schema's own checks of the kind of motion name the stepped rung
+    [nothing] = problems(edit("golden-hour", **{"stepped.mode": "breathe"}))  # no shift, no swing
+    assert nothing.field == "stepped" and "needs a shift (up to 0.5) or a brightness_swing" in nothing.message
+    [seeded] = problems(edit("golden-hour", **{**BREATHE_GOLDEN, "stepped.seed": 3}))
+    assert seeded.field == "stepped" and "seed is for mode: shimmer only" in seeded.message
+    # a bound pydantic refuses names its field, through the route too
+    live = D.load_trio(CONFIG_DIR)
+    for name, value in (("brightness_swing", 21), ("mode", "sparkle")):
+        body = D.seed_draft(live, "golden-hour").model_dump(mode="json")
+        body["stepped"][name] = value
+        r = app_client.post("/api/lab/preview", json={"scene_id": "golden-hour", "draft": body})
+        assert r.status_code == 422, r.text[:300]
+        assert [p["field"] for p in r.json()["problems"]] == [f"stepped.{name}"]
+    assert (
+        D.field_for("mode 'golden-hour' → techniques → stepped → brightness_swing")
+        == "stepped.brightness_swing"
+    )
+    assert D.field_for("mode 'golden-hour' → techniques → stepped → lag_steps") == "stepped.lag_steps"
+    assert D.field_for("mode 'golden-hour' → techniques → stepped → brightness") == "brightness"
+
+
+def test_a_lagged_breath_that_starts_every_module_together_is_refused_on_its_field():
+    """Review B-R6-1: the Lab's seed input takes any whole number and its layout any radius, and some collapse a
+    lagged breath's starts (`compile.module_lags` over the nine modules all equal). Applied, the canopy would breathe
+    as one under the generated "the strands glow and soften on their own" (shimmer) or "… from one edge" (a lagged
+    breathe). The apply refuses it on the field that collapses it; seed 7 and a 2-step lag are the controls."""
+    shimmer = {**BREATHE_GOLDEN, "stepped.mode": "shimmer", "stepped.lag_steps": 1}
+    (together,) = problems(edit("golden-hour", **{**shimmer, "stepped.seed": 183}))
+    assert together.field == "stepped.seed"
+    assert together.message.startswith("lag_steps 1 with seed 183 starts every module together")
+    moving = apply(edit("golden-hour", **{**shimmer, "stepped.seed": 7})).modes.mode("golden-hour")
+    assert "on their own" in moving.techniques.stepped.moving_feature
+    # the sun at the middle of the left edge, 600 in across: every module's start rounds to 0 at lag_steps 1
+    sun = {**BREATHE_GOLDEN, "layout": {"kind": "radial", "centre_in": [0.0, 60.0], "radius_in": 600}}
+    (flat,) = problems(edit("golden-hour", **{**sun, "stepped.lag_steps": 1}))
+    assert flat.field == "stepped.lag_steps" and "the breath doesn't start 'from one edge'" in flat.message
+    led = apply(edit("golden-hour", **{**sun, "stepped.lag_steps": 2})).modes.mode("golden-hour")
+    assert "swells and softens from one edge" in led.techniques.stepped.moving_feature
 
 
 def test_a_flat_stepped_frame_is_blamed_on_the_layout_not_the_read_only_run():

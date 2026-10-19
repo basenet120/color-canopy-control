@@ -398,6 +398,76 @@ async def _stepped_rehearsal(env: Env, address: str) -> str:
     return str(commands[-1]["status"])
 
 
+def _stepped_plans(device_id: str, *, run_s: float = 8.0):
+    """A stand-in compile with a two-step program (4 s steps) over one module, its still hold (T3) and a painted
+    stand-in (T1, rows of their own), for the D75 writer paths."""
+    from conductor.engine_api import ModePlan, ModuleTarget, Program, ProgramStep, Tier
+
+    def look(rgb):
+        return R.full_state_vector(R.Look("rgb", rgb=rgb, brightness=80))
+
+    hold = look((250, 120, 40))
+
+    def compile(mode_id, tier):
+        if tier is Tier.STEPPED:
+            steps = [
+                ProgramStep(index=i, rows={device_id: look(rgb)}, colours={"r0c0": "#000000"})
+                for i, rgb in enumerate([(250, 120, 40), (40, 120, 250)])
+            ]
+            program = Program("stepped", {}, "forward", 4.0, run_s, steps, "Colour through the cloud (test).")
+            target = ModuleTarget(device_id, hold, hold)
+            return ModePlan(
+                mode_id, "Stepped", Tier.STEPPED, "test", False, {device_id: target}, program=program
+            )
+        rows = look((120, 250, 40)) if tier is Tier.T1 else hold
+        return ModePlan(
+            mode_id, "Still", tier, "test", False, {device_id: ModuleTarget(device_id, rows, rows)}
+        )
+
+    return compile
+
+
+async def _program_settle(env: Env, address: str) -> str:
+    """D75: a guest's run ends on the mode's best still tier (`CanopyEngine.settle_after_run`): one ENGINE command
+    per module that changes, through engine.send (source "settle")."""
+    engine, device_id = _canopy_engine(env, address)
+    engine.deps.compile = _stepped_plans(device_id)
+    engine.deps.ladder = lambda _mode: [Tier.T1, Tier.STEPPED, Tier.T3]
+    await engine.request_mode("stepped-test", source="kiosk")
+    await engine.wait_idle()
+    plan = engine.current_plan()
+    await env.world.clock.sleep(9.0)  # past the 8 s run
+    await engine.wait_idle()
+    commands = [c for c in env.executor.telemetry.recent(kind="command") if c["source"] == "settle"]
+    settled = engine.current_plan()
+    await engine.stop()
+    assert plan.tier is Tier.STEPPED and settled.tier is Tier.T1 and commands, "the run didn't settle"
+    return str(commands[-1]["status"])
+
+
+async def _idle_breath(env: Env, address: str) -> str:
+    """D75 motion.idle: the idle look breathes once (`CanopyEngine.idle_breath`, from the reconciler's tick): its
+    steps go through engine.send (source "program") like any run."""
+    from fake_compiler import settings_with
+
+    engine, device_id = _canopy_engine(env, address)
+    engine.deps.settings = settings_with(motion={"idle": {"breathe_run_s": 8.0, "every_s": 300.0}})
+    engine.deps.compile = _stepped_plans(device_id, run_s=90.0)
+    engine.deps.ladder = lambda _mode: [Tier.STEPPED, Tier.T3]
+    await engine.request_mode("lowcountry-calm", source="idle")  # the idle look, still (start-up never steps)
+    await engine.wait_idle()
+    still = engine.current_plan()
+    await engine.idle_breath()
+    breath = engine.current_plan()
+    await env.world.clock.sleep(4.5)  # step 1
+    await engine.wait_idle()
+    commands = [c for c in env.executor.telemetry.recent(kind="command") if c["source"] == "program"]
+    await engine.stop()
+    assert still.tier is Tier.T3 and breath.program is not None and breath.program.run_s == 8.0
+    assert commands, "the idle breath didn't try to send its step"
+    return str(commands[-1]["status"])
+
+
 async def _lab_trial(env: Env, address: str) -> str:
     """The Design Lab's try-on (D66 Slice B): ops applies a draft; the engine shows it at module level (sunset's T3
     rung: the try-on skips T1/T2/stepped) as one burst through engine.send, like any look. The Lab itself never writes."""
@@ -458,6 +528,8 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "idle hold": _canopy_idle_hold,
     "slot manager (commission)": _canopy_commission,
     "program runner (stepped look)": _program_runner,
+    "program runner (settle onto the best still tier)": _program_settle,
+    "idle breath (motion.idle)": _idle_breath,
     "stepped rehearsal (Gate R)": _stepped_rehearsal,
     "lab try-on (module level)": _lab_trial,
     "lab publish (slot repaint)": _lab_publish_repaint,
