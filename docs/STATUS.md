@@ -30,7 +30,8 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
 **Merge `claude/fin-visualizer`, `claude/motion-every-scene` and `claude/ipad-review-menu` first** (preset-options
 PRs A, B and C; their numbers once opened), then this one. Use merge commits, not squash. The branch is cut from
 `origin/main` (#37 merged as `3c3ad38`) with A, B and C merged in one at a time (`aaf2cbb`, `d67a3b5`, `6db9799`),
-each conflict settled as integration.json says. Not pushed, no PR yet. Plan `docs/plans/preset-options/README.md` §4
+each conflict settled as integration.json says. B was merged again after its review rounds 4–6 (`9291130`, B's tip
+`84aaf24`); A (`c13bfae`) and C (`f5df34d`) had not moved. Not pushed, no PR yet. Plan `docs/plans/preset-options/README.md` §4
 and "§4 as built"; decision D77.
 
 **What changed:**
@@ -68,9 +69,15 @@ and "§4 as built"; decision D77.
 - Lab exports made before D77 lands propose a reserved D-number; renumber by hand.
 
 **Verified (sim, macOS, this branch):**
-- `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` on the final code: **3162 passed, 6 skipped (the gated
-  round trip), 44 subtests in 912 s**, with the browser walk below running at the same time. After the A + B + C
-  merge, before the catalog: 2766 passed.
+- `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` after merging B's review rounds 4–6 (`9291130`):
+  **3180 passed, 6 skipped (the gated round trip), 44 subtests in 892 s**. Before that re-merge, on the final code:
+  3162 passed, with the browser walk below running at the same time. After the A + B + C merge, before the catalog:
+  2766 passed.
+- **The B re-merge (`9291130`)** changed no config. D's 18 modes load under B-R6-1 (a lagged breath whose nine
+  starts are equal is refused; none of D's breathe or shimmer rungs collapses), `regen_scene_pins.py --check` is up
+  to date, `ruff` is clean (259 files), `node --test tests/*.test.mjs` is 180/180, and `python -m conductor.soak`
+  (seed 0) to a scratch path gives the committed report line for line (only the generated time and wall time
+  differ). The browser walk and `make lab-roundtrip` were not rerun (no JS, config or Lab export code changed).
 - `make lab-roundtrip` (`LAB_ROUNDTRIP=1`, niced): **6 passed in 90 min**. The six cases are canonical, rename, add,
   remove, reorder and breathe. Each export, applied to a scratch copy of this tree, passes the whole suite there, so
   no approved value is pinned outside `_pins`.
