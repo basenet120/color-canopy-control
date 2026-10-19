@@ -850,6 +850,85 @@ def test_a_draft_carries_the_kind_of_motion_and_its_parameters_to_the_rung():
     assert "so the strands glow and soften on their own: " in moving and STEPPED_PACE in moving
 
 
+def test_a_colour_only_breath_says_its_next_colour_and_drifts():
+    """D75 (review B-R4-TS-3): a breath with a shift and no brightness_swing changes only colour, so its generated
+    sentence says each strand is sent "its next colour" and the palette (or the strands) "drift and settle" (the
+    colour family, schema.BREATHE_COLOUR_PHRASES); a level word there would be refused at save (validator #9)."""
+    names = ["Soft gold", "Peach", "Sunset pink", "Rose", "Lavender"]  # a shift of 0.3 reaches all five
+    colours = D.colour_phrase(names, invert=False, transform="linear")
+    expected = {
+        "breathe": D.BREATHE_TEMPLATE.format(
+            what="its next colour", verb="drifts and settles", lead="", colours=colours
+        ),
+        "shimmer": D.SHIMMER_TEMPLATE.format(
+            what="its next colour", verb="drift and settle", colours=colours
+        ),
+    }
+    for mode, extra in (("breathe", {}), ("shimmer", {"stepped.lag_steps": 2, "stepped.seed": 7})):
+        colour_only = {"stepped.mode": mode, "stepped.shift": 0.3, "stepped.brightness_swing": 0}
+        draft = edit("golden-hour", **colour_only, **extra)
+        assert [c.name for c in draft.palette] == names and draft.layout.transform == "linear"
+        assert not draft.layout.invert
+        copy = D.resolve_copy(TRIO, draft, CANOPY)["stepped"]
+        assert copy.chosen == "generated" and copy.sentence == expected[mode], (mode, copy.sentence)
+        # the show's own schema parses it
+        st = apply(draft).modes.mode("golden-hour").techniques.stepped
+        assert (st.mode, st.shift, st.brightness_swing) == (mode, 0.3, 0)
+        assert st.moving_feature == expected[mode]
+        assert "level" not in st.moving_feature and "brighter" not in st.moving_feature
+
+
+def breathing_trio() -> D.ConfigTrio:
+    """An approved trio whose stepped scenes already breathe (as every PR D seed will): Golden Hour shifts 0.3 and
+    swings 5 (reaching all five colours), Coastal Tides only swings 5 (its module level shows all four colours)."""
+    swing = {"stepped.mode": "breathe", "stepped.brightness_swing": 5}
+    return apply(
+        edit("golden-hour", **swing, **{"stepped.shift": 0.3}),
+        edit("coastal-tides", **swing),
+    )
+
+
+def edit_from(trio: D.ConfigTrio, scene_id: str, **stepped) -> D.SceneDraft:
+    data = D.seed_draft(trio, scene_id).model_dump()
+    data["stepped"].update(stepped)
+    return D.SceneDraft.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("scene_id", "change"),
+    [
+        ("golden-hour", {"brightness_swing": 0}),  # swing > 0 → 0: a colour-only breath
+        ("golden-hour", {"lag_steps": 2}),  # lag 0 → 2: the breath now starts at one edge
+        ("coastal-tides", {"shift": 0.3}),  # shift 0 → > 0: the colour now breathes too
+        ("coastal-tides", {"shift": 0.3, "brightness_swing": 0}),  # and both at once
+    ],
+)
+def test_on_a_breathing_seed_a_swing_shift_or_lag_change_is_a_change_of_motion(scene_id, change):
+    """D75 (review B-R4-TS-2): with an approved breath, changing only whether it swings, shifts or lags (the
+    colours it reaches unchanged) changes what its sentence must say, so the approved sentence gives way to the
+    generated one, which the save accepts. Kept, the approved "swells and softens" with no swing, or "its next
+    colour" with no shift, would be refused (validator #9)."""
+    trio = breathing_trio()
+    approved = trio.modes.mode(scene_id).techniques.stepped.moving_feature
+    seed = D.seed_draft(trio, scene_id)
+    # the control: the seed keeps its approved sentence
+    assert D.resolve_copy(trio, seed, CANOPY)["stepped"].chosen == "approved"
+    draft = edit_from(trio, scene_id, **change)
+    # only the kind of motion moved: the breath reaches the same colours
+    assert D._breath_colours(draft, CANOPY) == D._breath_colours(seed, CANOPY)
+    copy = D.resolve_copy(trio, draft, CANOPY)["stepped"]
+    assert (copy.chosen, copy.why) == ("generated", "the kind of motion changed")
+    assert copy.sentence != approved
+    patched = D.apply_drafts(trio, {scene_id: draft}, canopy=CANOPY, settings=SETTINGS)
+    st = patched.modes.mode(scene_id).techniques.stepped
+    assert st.moving_feature == copy.sentence
+    assert (st.shift, st.brightness_swing, st.lag_steps) == (
+        draft.stepped.shift,
+        draft.stepped.brightness_swing,
+        draft.stepped.lag_steps,
+    )
+
+
 def test_a_breaths_copy_names_only_the_colours_it_reaches():
     """Golden Hour's module level never shows soft gold or lavender (its T3 sentence leaves them out): a breath
     without a shift keeps every strand's colour, so its sentence doesn't name them either; a shift of 0.5 carries
