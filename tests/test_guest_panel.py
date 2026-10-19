@@ -448,7 +448,7 @@ def _lit_settled(c, timeout: float = 15.0, want=("lit",), driven=None) -> dict:
 
 def _no_device_names(body: dict) -> None:
     text = json.dumps({"canopy": body["canopy"], "lit": body["state"]["lit"]})
-    for word in ("canopy-r", "sim-", "Module ", "reason", "Hubspace", "label"):
+    for word in ("canopy-r", "sim-", "Module ", "reason", "Hubspace", "label", "VWBD", "A-20-1", "drawing"):
         assert word not in text, word
 
 
@@ -462,6 +462,10 @@ def test_the_engine_panel_serves_the_canopy_and_the_lit_state_of_the_installed_p
     assert [m["pos"] for m in canopy["modules"]] == [f"r{r}c{col}" for r in range(3) for col in range(3)]
     assert sum(len(m["heads"]) for m in canopy["modules"]) == 270
     assert canopy["view"] == {"mirror_x": False, "rotate_deg": 0, "dim_floor": 0.35}
+    # the fins under the lights and the apron's outline (D74); state.lit below is as it always was
+    assert len(canopy["fins"]) == 650 and canopy["apron_in"] == 6.0 and canopy["fin_width_in"] == 5.0
+    assert canopy["outline"] == {"x": [-6.0, 231.0], "y": [-6.0, 126.0]}
+    assert set(canopy["fins"][0]) == {"x", "y", "angle_deg", "drop_in"}
     plan = engine.current_plan()
     cfg = load_canopy(str(_services(c).config_dir))
     by_position = {e.module: e for e in _services(c).registry.canopy_modules()}

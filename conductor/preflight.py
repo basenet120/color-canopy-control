@@ -19,6 +19,8 @@ What it does — offline (no Hubspace, no network), binds no port, writes nothin
 - the saved enrollments and sessions (`<data>/roles/*.json`), loaded by the real `RoleStore` from a temporary copy
   (so nothing is set aside), naming any record of a removed role it skips. A file this code would set aside as
   corrupt is a failure: after the restart the guest iPad would need a new link;
+- `config/canopy.yaml` and `config/fins.json` through the canopy loader (`geometry.load_canopy_config`, D74), on the
+  way to the published looks: a file this code can't load is a failure (the start would refuse it);
 - the published looks (`<data>/overrides/show-looks.yaml`, D68), read only: a file the new code can't use is named
   (the show would start on the approved looks with an /ops alert), not a failure.
 
@@ -137,7 +139,7 @@ def _roles(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
 def _looks(env: Mapping[str, str], config_dir: Path, data: Path) -> list[str]:
     # Read-only (D68): never the equals-git rewrite the show's own start may make. A file the new code can't use is
     # not a failure — the show would start on the approved (git) looks with an /ops alert — so it is named, not fatal.
-    # A broken git modes/scenes/recipes config raises here, as it would refuse the start.
+    # A broken git modes/scenes/recipes config, canopy.yaml or fins.json (D74) raises here, as it would refuse the start.
     from conductor.looks.live import LOOKS_PATH, preflight_line
 
     problem = preflight_line(config_dir, data, load_settings(config_dir))

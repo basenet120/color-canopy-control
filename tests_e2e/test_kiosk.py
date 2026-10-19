@@ -6,8 +6,9 @@ Two groups:
   be driven and photographed: ready, changing, cooldown, a refusal, power off, paused, resting, a lost connection and
   the solid-colour fallback. The plain stub (`canopy: null`, as before the first look) draws the 30-light
   serpentine; the canopy stub (`canopy=True`) serves
-  the real canopy geometry and a `state.lit`, and the page draws its 270 lights (full and partial canopy, a tap's
-  pulse, power off, a turned view). Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes.
+  the real canopy geometry and a `state.lit`, and the page draws its 270 lights and the 650 fins under them (full and
+  partial canopy, a tap's pulse, power off, unknown panels' dashed fins, a turned view, no rebuild per poll).
+  Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes (the canopy pictures are not tracked).
   The review stub (`review=True`, D76) serves the 18-scene review fixture (tests/review_fixture.py: fixture data only,
   07 §9) with the server's own menu rule (`ipad_menu.menu`, `hide` = kiosk.hidden_scenes) and thumbnails
   (`ipad_menu.catalog_thumbs`): grouped rows, the scrolling scene list under a pinned side, painted card pictures, a
@@ -21,6 +22,7 @@ Two groups:
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.error
 
@@ -42,6 +44,7 @@ COOLDOWN_S = 8.0
 RINGS = [["r1c1"], ["r0c1", "r1c0", "r1c2", "r2c1"], ["r0c0", "r0c2", "r2c0", "r2c2"]]  # centre out
 FEATURE = "Every light set individually as a Hubspace custom pattern on both strands."
 SOLID_FEATURE = "Each Hubspace strand set to one colour from the scene."
+POLL_MS = 2000  # web/kiosk/panel-model.mjs POLL_MS: the panel reads its state at least this often
 
 
 def _wait(predicate, timeout=20.0, interval=0.2):
@@ -78,6 +81,7 @@ class StubPanel:
         ripple_s: float | None = None,
         review: bool = False,
         hide: frozenset[str] = frozenset(),
+        unknown: set[str] | None = None,
     ) -> None:
         catalog = review_scenes(load_scenes()) if review else load_scenes()
         kiosk = load_settings().kiosk.model_copy(update={"hidden_scenes": sorted(hide)})
@@ -98,6 +102,9 @@ class StubPanel:
         # the canopy target: the real geometry, and a picture per position (`driven`: a partial canopy)
         self.canopy = canopy_geometry(load_canopy(str(CONFIG_DIR)), view) if canopy else None
         self.driven = driven
+        self.unknown = (
+            unknown or set()
+        )  # positions lit_state can't vouch for (locked, stuck): no colour claim
         self.ripple_s = ripple_s  # a scene lands ring by ring from the centre, this far apart (lit.motion)
         self.ripple_t0: float | None = None
         self.scene = scene
@@ -138,14 +145,17 @@ class StubPanel:
 
     def lit(self, changing: bool) -> dict | None:
         """The canopy's picture, as conductor/canopy_view.py serves it: each head the scene's palette colour across
-        the canopy's width (a stand-in design), a driven position lit or changing, the rest dark; all off when off."""
+        the canopy's width (a stand-in design), a driven position lit or changing, the rest dark; all off when off.
+        An `unknown` position reads unknown whatever else holds (canopy_view's first rule: locked or stuck)."""
         if self.canopy is None or self.scene is None:
             return None
         palette = next(s for s in self.all_scenes if s["id"] == self.scene)["palette"]
         modules = []
         for m in self.canopy["modules"]:
             item = {"pos": m["pos"], "state": "off", "color": None, "colors": None}
-            if self.power is False:
+            if m["pos"] in self.unknown:
+                item["state"] = "unknown"
+            elif self.power is False:
                 pass
             elif self.driven is not None and m["pos"] not in self.driven:
                 item["state"] = "dark"
@@ -382,8 +392,9 @@ def _dots(page) -> list[dict]:
     )
 
 
-def _picture(stub: StubPanel) -> list[str]:
-    """The fill of every dot as the page should draw it, in the page's own order (geometry modules × heads)."""
+def _picture(stub: StubPanel) -> list[str | None]:
+    """The fill of every dot as the page should draw it, in the page's own order (geometry modules × heads); None for
+    an unknown panel's dots (an outline, no colour claim)."""
     lit = {m["pos"]: m for m in stub.state()["lit"]["modules"]}
     fills = []
     for m in stub.canopy["modules"]:
@@ -391,9 +402,77 @@ def _picture(stub: StubPanel) -> list[str]:
         for k in range(len(m["heads"])):
             if item["state"] in ("off", "dark"):
                 fills.append(UNLIT)
+            elif item["state"] == "unknown":
+                fills.append(None)
             else:
                 fills.append(item["colors"][k] if item["colors"] else item["color"])
     return fills
+
+
+# ---- the fins (D74): the page's rule, re-done here from the payload ----------------------------------------------
+def _fin_near(stub: StubPanel) -> list[list[tuple[int, float]]]:
+    """Each fin's 4 nearest dots (page order) by canopy-inch distance, ties to the lower index, w = exp(−(d/6)²)."""
+    heads = [(x, y) for m in stub.canopy["modules"] for x, y in m["heads"]]
+    out = []
+    for f in stub.canopy["fins"]:
+        ranked = sorted(
+            range(len(heads)), key=lambda i: (math.hypot(heads[i][0] - f["x"], heads[i][1] - f["y"]), i)
+        )
+        out.append(
+            [
+                (i, math.exp(-((math.hypot(heads[i][0] - f["x"], heads[i][1] - f["y"]) / 6) ** 2)))
+                for i in ranked[:4]
+            ]
+        )
+    return out
+
+
+def _dot_positions(stub: StubPanel) -> list[str]:
+    return [m["pos"] for m in stub.canopy["modules"] for _ in m["heads"]]
+
+
+def _fin_mix(near: list[tuple[int, float]], fills: list[str | None]) -> str:
+    """A fin's stroke from its lit dots' colours: the weighted mean per channel, rounded half up."""
+    lit = [(i, w) for i, w in near if fills[i] not in (None, UNLIT)]
+    total = sum(w for _i, w in lit)
+    channels = [
+        math.floor(sum(w * int(fills[i][1 + 2 * c : 3 + 2 * c], 16) for i, w in lit) / total + 0.5)
+        for c in range(3)
+    ]
+    return "#" + "".join(f"{v:02X}" for v in channels)
+
+
+def _fins(page) -> list[dict]:
+    return page.eval_on_selector_all(
+        "#canopy-preview line.fin",
+        "els => els.map((e) => ({stroke: e.getAttribute('stroke'), cls: e.getAttribute('class'),"
+        " opacity: e.getAttribute('stroke-opacity')}))",
+    )
+
+
+def _still_for(page, ms: int) -> dict:
+    """Tag the first fin, watch the picture for `ms`: is the tagged node still there, and did anything rebuild the
+    picture or touch a fin?"""
+    return page.evaluate(
+        """async (ms) => {
+          const svg = document.querySelector('#canopy-preview');
+          const first = svg.querySelector('line.fin');
+          first.setAttribute('data-mark', '1');
+          const seen = [];
+          const watcher = new MutationObserver((records) => seen.push(...records));
+          watcher.observe(svg, { attributes: true, childList: true, subtree: true });
+          await new Promise((done) => setTimeout(done, ms));
+          watcher.disconnect();
+          seen.push(...watcher.takeRecords());
+          return {
+            connected: first.isConnected && svg.querySelector('[data-mark]') === first,
+            fin: seen.filter((r) => r.target instanceof SVGLineElement).length,
+            rebuilt: seen.filter((r) => r.type === 'childList').length,
+            all: seen.length,
+          };
+        }""",
+        ms,
+    )
 
 
 @pytest.mark.parametrize(
@@ -416,8 +495,22 @@ def test_panel_draws_the_canopy_of_270_lights(design_context_factory, screenshot
     assert len({d["fill"] for d in dots}) > 1
     assert {d["opacity"] for d in dots} == {"0.805"}  # level 70 over the 0.35 floor
     assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: 9 of 9 panels lit"
+    # the fins under the lights and the apron's outline (D74)
+    assert page.get_attribute("#canopy-preview", "viewBox") == "0 0 237 132"
+    assert page.eval_on_selector_all("#canopy-preview rect.outline", "els => els.length") == 1
+    fins = _fins(page)
+    assert len(fins) == 650
+    assert not [f for f in fins if "is-unknown" in f["cls"] or "changing" in f["cls"].split()]
+    near, fills = _fin_near(stub), _picture(stub)
+    inner = [j for j, f in enumerate(stub.canopy["fins"]) if 20 <= f["x"] <= 205 and 10 <= f["y"] <= 110][:5]
+    assert len(inner) == 5
+    for j in inner:
+        assert fins[j]["cls"] == "fin is-lit" and fins[j]["stroke"] == _fin_mix(near[j], fills), (j, fins[j])
     _no_overflow(page, viewport)
     page.screenshot(path=str(screenshots / name))
+    # steady: over 2.5 polls nothing rebuilds the picture or touches a fin (no layout or repaint per poll)
+    still = _still_for(page, int(2.5 * POLL_MS))
+    assert still["connected"] and still["fin"] == 0 and still["rebuilt"] == 0, still
     assert errors == []
 
 
@@ -426,13 +519,19 @@ def test_panel_canopy_pulses_while_changing_then_settles(design_context_factory,
     _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
     _ready(page)
     page.tap(".scene[data-scene='coastal-tides']")
-    page.wait_for_function("document.querySelectorAll('#canopy-preview circle.changing').length === 270")
+    page.wait_for_function(
+        "document.querySelectorAll('#canopy-preview circle.changing').length === 270"
+        " && document.querySelectorAll('#canopy-preview line.fin.changing').length === 650"
+    )  # a changing panel's fins pulse with its dots: not confirmed yet
     assert page.text_content("#hdr-sub-text") == "Changing the light…"
     page.screenshot(path=str(screenshots / "kiosk-canopy-changing.png"))
     page.wait_for_function(
         "document.querySelectorAll('#canopy-preview circle.changing').length === 0", timeout=10000
     )
     assert [d["fill"] for d in _dots(page)] == _picture(stub)
+    fins = _fins(page)
+    assert not [f for f in fins if "changing" in f["cls"].split() or "is-changing" in f["cls"]]
+    assert {f["cls"] for f in fins} == {"fin is-lit"}
     assert errors == []
 
 
@@ -472,6 +571,14 @@ def test_panel_canopy_partial_and_off(design_context_factory, screenshots):
     assert fills == _picture(stub)
     assert fills.count(UNLIT) == 7 * 30  # left out: unlit, never a colour
     assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: 2 of 9 panels lit"
+    # a fin whose four nearest lights are all on the dark panels is unlit grey, never a colour
+    positions, fins = _dot_positions(stub), _fins(page)
+    dark_fins = [
+        j for j, near in enumerate(_fin_near(stub)) if all(positions[i] not in stub.driven for i, _w in near)
+    ]
+    assert dark_fins and all(
+        fins[j]["cls"] == "fin is-unlit" and fins[j]["stroke"] == UNLIT for j in dark_fins
+    )
     page.screenshot(path=str(screenshots / "kiosk-canopy-partial.png"))
 
     page.tap("#power")
@@ -481,6 +588,34 @@ def test_panel_canopy_partial_and_off(design_context_factory, screenshots):
         f"{json.dumps(UNLIT)})"
     )
     assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: the canopy is off"
+    assert {f["cls"] for f in _fins(page)} == {"fin is-unlit"}
+    assert errors == []
+
+
+def test_panel_canopy_unknown_panels_draw_dashed_fins(design_context_factory, screenshots):
+    """As the live flagged kits read since D73 (stuck → unknown after a confirmed scene): their dots are outlines and
+    the fins over them are dashed grey lines with no colour claim, distinct from a solid unlit or lit fin."""
+    stub = StubPanel(scene="golden-hour", canopy=True, unknown={"r0c0", "r0c1"})
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    positions = _dot_positions(stub)
+    dots = _dots(page)
+    there = [d for d, pos in zip(dots, positions, strict=True) if pos in stub.unknown]
+    assert len(there) == 60 and {d["cls"] for d in there} == {"dot is-unknown"}
+    near = _fin_near(stub)
+    dashes = page.eval_on_selector_all(
+        "#canopy-preview line.fin",
+        "els => els.map((e) => [e.getAttribute('class'), getComputedStyle(e).strokeDasharray])",
+    )
+    inside = [j for j, n in enumerate(near) if all(positions[i] in stub.unknown for i, _w in n)]
+    assert inside
+    for j in inside:
+        cls, dash = dashes[j]
+        assert cls == "fin is-unknown" and dash not in ("none", ""), (j, cls, dash)
+    solid = [(cls, dash) for cls, dash in dashes if cls in ("fin is-lit", "fin is-unlit")]
+    assert solid and all(dash == "none" for _cls, dash in solid), solid[:5]
+    assert page.get_attribute("#canopy-preview", "aria-label").endswith(", 2 not shown")
+    page.screenshot(path=str(screenshots / "kiosk-canopy-unknown.png"))
     assert errors == []
 
 
@@ -490,7 +625,7 @@ def test_panel_canopy_turned_view_fits(design_context_factory, viewport):
     stub = StubPanel(scene="golden-hour", canopy=True, view=PreviewSettings(rotate_deg=90, mirror_x=True))
     _ctx, page, errors = _open(design_context_factory, viewport, stub)
     _ready(page)
-    assert page.get_attribute("#canopy-preview", "viewBox") == "0 0 120 225"
+    assert page.get_attribute("#canopy-preview", "viewBox") == "0 0 132 237"  # the canopy plus its 6 in apron
     assert len(_dots(page)) == 270
     _no_overflow(page, viewport)
     assert errors == []
@@ -730,7 +865,7 @@ def test_review_cards_draw_their_own_design(design_context_factory):
     assert by_id["golden-hour-2"]["thumb"]["basis"] == "modules"  # an option: its nine module colours
     got = page.evaluate(
         """async (scenes) => {
-          const P = await import('/kiosk/canopy-preview.mjs?v=review-1');
+          const P = await import('/kiosk/canopy-preview.mjs?v=review-2');
           const panel = await (await fetch('/api/kiosk/panel')).json();
           const out = {};
           for (const s of scenes) {
@@ -795,7 +930,7 @@ def test_a_whole_strand_review_card_draws_its_one_colour_and_a_card_with_none_ke
     )
     got = page.evaluate(
         """async (scene) => {
-          const P = await import('/kiosk/canopy-preview.mjs?v=review-1');
+          const P = await import('/kiosk/canopy-preview.mjs?v=review-2');
           const panel = await (await fetch('/api/kiosk/panel')).json();
           const card = document.querySelector(`.scene[data-scene="${scene.id}"]`);
           const other = document.querySelector('.scene[data-scene="coastal-tides-2"]');
@@ -838,7 +973,7 @@ def test_review_thumbnails_follow_a_quarter_turned_view(design_context_factory):
     _ready(page)
     outside = page.evaluate(
         """async () => {
-          const P = await import('/kiosk/canopy-preview.mjs?v=review-1');
+          const P = await import('/kiosk/canopy-preview.mjs?v=review-2');
           const panel = await (await fetch('/api/kiosk/panel')).json();
           const bad = [];
           for (const canvas of document.querySelectorAll('#grid canvas.thumb')) {

@@ -747,8 +747,14 @@ def test_the_flow_writers_read_back_as_what_they_wrote():
         {"kind": "linear", "angle_deg": 30.0, "transform": "mirror", "invert": True, "cycles": 1},
         {"kind": "radial", "centre_in": [0.0, 60.0], "metric": "canopy", "radius_in": 90.5, "cycles": 1},
         {"kind": "sweep", "centre_in": [12.5, 60.0], "start_deg": 90.0},
+        {"kind": "fins", "invert": True},
     ):
-        spec = {"linear": F.LinearField, "radial": F.RadialField, "sweep": F.SweepField}[field["kind"]]
+        spec = {
+            "linear": F.LinearField,
+            "radial": F.RadialField,
+            "sweep": F.SweepField,
+            "fins": F.FinsField,
+        }[field["kind"]]
         model = spec.model_validate(field)
         line = X.field_flow(model.model_dump(mode="json"))
         assert line.startswith(f"{{kind: {field['kind']}") and ".0," not in line and ".0]" not in line
@@ -758,6 +764,19 @@ def test_the_flow_writers_read_back_as_what_they_wrote():
         "   # and a comment",
     )
     assert X.split_comment("look: {kind: rgb}") == ("look: {kind: rgb}", "")
+    assert (
+        X.field_flow(F.FinsField(kind="fins", invert=True).model_dump(mode="json"))
+        == "{kind: fins, invert: true}"
+    )
+    assert X.field_flow(F.FinsField(kind="fins").model_dump(mode="json")) == "{kind: fins}"
+
+
+def test_describe_field_names_the_fin_rings():
+    assert X.describe_field(F.FinsField(kind="fins")) == "fin rings (the drawing's drops, deep centre first)"
+    assert (
+        X.describe_field(F.FinsField(kind="fins", invert=True))
+        == "fin rings (the drawing's drops, deep centre first), inverted"
+    )
 
 
 def test_export_never_mutates_its_inputs_or_the_cached_catalog():
@@ -876,3 +895,23 @@ def test_regen_scene_pins_matches_the_committed_fixture(tmp_path, capsys):
         (tmp_path / path).write_text(texts[path], encoding="utf-8")
     assert regen.main(["--config", str(config), "--out", str(out)]) == 0
     assert out.read_text(encoding="utf-8") == texts[X.FIXTURE_FILE]
+
+
+# ---- the fins' rings (D74) ----------------------------------------------------------------------------------------
+def test_a_fins_layout_exports_rereads_and_pins(tmp_path):
+    """A Lab draft on the fins kind exports as `field: {kind: fins}`, applies with git apply, re-reads through the
+    real loaders over the fin-mapped canopy, and pins the drawing's rings (r0c1 and r2c1 are one ring)."""
+    from conductor.config import ConductorSettings
+    from conductor.design_lab.draft import apply_drafts, seed_draft
+
+    draft = seed_draft(APPROVED, "golden-hour").model_copy(update={"layout": F.FinsField(kind="fins")})
+    patched = apply_drafts(APPROVED, {"golden-hour": draft}, canopy=CANOPY, settings=ConductorSettings())
+    result = export(patched)
+    assert result.problem == ""
+    assert [ln for ln in result.patch.splitlines() if ln.startswith("+") and "field: {kind: fins}" in ln]
+    after = after_texts(result, tmp_path)
+    assert X.reread(after, CANOPY).dump() == patched.dump()
+    pin = json.loads(after[X.FIXTURE_FILE])["_pins"]["golden-hour"]
+    assert pin["layout"] == {"kind": "fins", "transform": "linear", "invert": False, "cycles": 1}
+    assert pin["layout_words"] == "from the centre out"
+    assert pin["t3"]["r0c1"] == pin["t3"]["r2c1"]

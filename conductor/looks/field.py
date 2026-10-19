@@ -18,6 +18,11 @@ Rules implemented:
     counts as width / height inches, so a ring is an ellipse that fills the canopy and `radius_in` is along the width).
   - `sweep{centre_in, start_deg}`: the angle around a centre, clockwise in the reflected-ceiling view from
     `start_deg` (0 = towards +x). Exactly at the centre it has no direction, so it reads as `start_deg`.
+  - `fins` (no parameters, D74): the fins' drop, t = (deepest − D) / (deepest − shallowest) of the drawing's fins
+    (24.5 and 14 in), with D the exp(−(d / 6)²)-weighted mean drop of the fins within 12 in (`conductor/fins.py`),
+    clamped: 0 on the deep centre, 1 on the rim. Defined at every canopy point (beyond every fin's reach it reads 1,
+    the rim). It needs the canopy's fin map (canopy.yaml → canopy → fins). `transform: mirror` is refused
+    (FINS_NO_MIRROR); its layout words are always "from the centre out"; `bands` rounds it to 2 decimals.
 - **Common fields.** `cycles` (1–6) repeats the design (rings for a radial field, a sawtooth for the others);
   `transform: mirror` folds it (t → 1 − |2t − 1|, the scenes' `mirror`); `invert` reverses it. Order: repeat, then
   mirror, then invert.
@@ -141,8 +146,40 @@ class SweepField(_FieldBase):
         return _angle(v, "start_deg")
 
 
-FieldSpec = Annotated[LinearField | RadialField | SweepField, Field(discriminator="kind")]
-FIELD_KINDS = ("linear", "radial", "sweep")
+FINS_NO_MIRROR = (
+    "a fins design can't be mirrored: its rings already run from the deep centre to the rim, mirror would put the "
+    "first colour on the rim too, and module level never reaches the rim (the corner panels read about two-thirds "
+    "of the way out), so no copy could be true; leave transform: linear (invert swaps the ends)"
+)
+NO_FIN_MAP = (
+    "a fins design needs the canopy's fin map, and this canopy has none: config/canopy.yaml → canopy → fins "
+    "(file: fins.json, apron_in: 6, fin_width_in: 5)"
+)
+FIN_BAND_DECIMALS = 2  # bands round a fins t this far, so the drawing's three symmetric rings stay whole
+
+
+class FinsField(_FieldBase):
+    """The fins' rings (D74): t from the drawing's fin drops, deep centre 0, rim 1. No parameters; `invert` swaps the
+    ends and `cycles` repeats like every kind (scenes keep 1, D63). Mirror is refused: value() folds t → 1 − |2t − 1|,
+    so the rim would read the first colour too while no module reaches it, and the copy could not be true."""
+
+    kind: Literal["fins"]
+
+    @field_validator("transform")
+    @classmethod
+    def _no_mirror(cls, v: str) -> str:
+        if v == "mirror":
+            raise ValueError(FINS_NO_MIRROR)
+        return v
+
+
+FieldSpec = Annotated[LinearField | RadialField | SweepField | FinsField, Field(discriminator="kind")]
+FIELD_KINDS = ("linear", "radial", "sweep", "fins")
+
+
+def has_fins(canopy: Mapping[str, Any]) -> bool:
+    """Whether this canopy mapping carries a fin map (config/canopy.yaml's fins section, loaded)."""
+    return canopy.get("fin_map") is not None
 
 
 # ---- evaluation --------------------------------------------------------------------------------------------------
@@ -231,6 +268,11 @@ def _raw(spec: Any, x: float, y: float, canopy: Mapping[str, Any]) -> float:
             math.atan2(y - cy, x - cx)
         )  # y runs down the canopy, so this is clockwise seen from below
         return ((deg - spec.start_deg) % 360.0) / 360.0
+    if isinstance(spec, FinsField):
+        fin_map = canopy.get("fin_map")
+        if fin_map is None:
+            raise ValueError(NO_FIN_MAP)
+        return fin_map.t_at(x, y)  # already clamped, so a phase never wraps the deep centre to the rim
     raise ValueError(
         f"unknown field kind {getattr(spec, 'kind', spec)!r}; use one of {', '.join(FIELD_KINDS)}"
     )
@@ -272,12 +314,16 @@ def bands(
     spec: Any, canopy: Mapping[str, Any], positions: Sequence[str], max_bands: int = 3
 ) -> list[list[str]]:
     """The modules grouped by the field at their centres: `max_bands` equal-width bins of t over [0, 1], lowest t
-    first, empty bins dropped, positions in the order given within a bin."""
+    first, empty bins dropped, positions in the order given within a bin. A fins design's t is rounded to
+    FIN_BAND_DECIMALS first, so the drawing's three symmetric rings stay whole."""
     if max_bands < 1:
         raise ValueError("max_bands must be at least 1")
     bins: list[list[str]] = [[] for _ in range(max_bands)]
     for pos, (x, y) in module_centres(canopy, positions).items():
         t = value(spec, x, y, canopy)
+        if isinstance(spec, FinsField):
+            # extraction noise (r0c2 reads 0.66663, r2c0 0.66667) mustn't split a ring across a bin edge
+            t = round(t, FIN_BAND_DECIMALS)
         bins[min(max_bands - 1, int(t * max_bands + BAND_EPSILON))].append(pos)
     return [b for b in bins if b]
 
@@ -319,7 +365,8 @@ def _place(point: Point, canopy: Mapping[str, Any]) -> str:
 def layout_words(spec: Any, canopy: Mapping[str, Any]) -> str:
     """How copy must describe this field's layout over this canopy: the words module-level copy has to contain (one
     of `LAYOUT_PHRASES`). A radial or sweep design names where its centre is: only one centred on the canopy is
-    "from the centre out" / "around the centre"; several radial centres are "from {n} points"."""
+    "from the centre out" / "around the centre"; several radial centres are "from {n} points". A fins design is
+    always "from the centre out"."""
     if isinstance(spec, LinearField):
         if spec.angle_deg in (0.0, 180.0):
             return "column by column"
@@ -334,6 +381,8 @@ def layout_words(spec: Any, canopy: Mapping[str, Any]) -> str:
         return "from the centre out" if place == "the centre" else f"from {place}"
     if isinstance(spec, SweepField):
         return f"around {_place(spec.centre_in, canopy)}"
+    if isinstance(spec, FinsField):
+        return "from the centre out"  # the drawing's rings, deep at the centre, whatever the canopy
     raise ValueError(
         f"unknown field kind {getattr(spec, 'kind', spec)!r}; use one of {', '.join(FIELD_KINDS)}"
     )

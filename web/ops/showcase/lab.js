@@ -1244,7 +1244,7 @@ function rebuildEditor() {
   const kinds = h(
     "div",
     { class: "lab-seg", role: "group", "aria-label": "Layout kind" },
-    ["linear", "radial", "sweep"].map((k) =>
+    M.LAYOUT_KINDS.map((k) =>
       h("button", { type: "button", class: "lab-seg-btn", dataset: { kind: k }, onclick: () => edit((x) => M.setLayoutKind(x, k)), text: k[0].toUpperCase() + k.slice(1) }),
     ),
   );
@@ -1344,6 +1344,7 @@ function renderLayoutControls(d, locked) {
       parts.push(h("p", { class: "lab-muted", text: "Radius: auto (to the farthest corner)." }));
     }
     if (c.start) parts.push(pair("lab-start", "Start angle (°)", c.start, 1, (v) => edit((x) => M.setLayout(x, { start_deg: v }), { coalesce: true })));
+    if (c.note) parts.push(h("p", { class: "lab-muted", text: c.note }));
     box.replaceChildren(...parts);
   }
   const setPair = (id, v) => {
@@ -1370,7 +1371,7 @@ function renderLayoutControls(d, locked) {
   }
   $("#lab-mirror").checked = L0.transform === "mirror";
   $("#lab-invert").checked = L0.invert === true;
-  $("#lab-mirror").disabled = locked;
+  $("#lab-mirror").disabled = locked || !c.transform; // fins: no Mirror (the server refuses it, D74)
   $("#lab-invert").disabled = locked;
 }
 

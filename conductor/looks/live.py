@@ -777,7 +777,9 @@ def preflight_line(config_dir: Path, data: Path | None, settings: Any) -> str | 
     the equals-git rewrite is left to the show's own start."""
     if data is None:
         return None
-    # the show's own load (read only: no equals-git rewrite, no log line), so the two can never disagree
+    # the show's own load (read only: no equals-git rewrite, no log line), so the two can never disagree.
+    # _canopy_of runs outside load_live_looks' tolerance on purpose: a canopy.yaml or fins.json this code can't load
+    # is a failure (the start would refuse it), not a published-looks problem (D74)
     looks = load_live_looks(
         config_dir, data, settings=settings, canopy=_canopy_of(config_dir), read_only=True
     )

@@ -1,5 +1,6 @@
 # The Color Canopy — geometry (reflected-ceiling view: looking up, origin at the canopy's top-left).
-# Source: VWBD "Color Canopy" deck, reflected ceiling plan. See docs/context/02-color-canopy-design.md.
+# Source: VWBD "Color Canopy" deck, reflected ceiling plan. See docs/context/02-color-canopy-design.md;
+# the fins, the apron and the panel numbers: VWBD drawing A-20-1, Oct 18 (docs/plans/preset-options/).
 canopy:
   name: The Color Canopy
   width_in: 225
@@ -17,8 +18,9 @@ canopy:
       - {y: 35, x0: 7.5, count: 7}
 
   # Module B = module A rotated 180°. Grids are listed top row first, left to right.
-  # The deck contradicts itself (p.14 vs the p.18 appendix); only p14 keeps the 10" pitch across seams.
-  # VWBD to confirm which one is being fabricated.
+  # p14 is what is built: VWBD's drawing A-20-1 (Oct 18) puts all 270 lights on this lattice under p14; under p18
+  # only 150 do (r0c1, r1c0, r1c2 and r2c1 would be the other way round). D74, doc 02. p18 stays only for
+  # /api/canopy/layout?scheme=p18.
   orientation_scheme: p14
   orientations:
     p14:
@@ -31,9 +33,30 @@ canopy:
       - [A, A, A]
 
   # Wire order of the heads in the panel's own frame. serpentine_rows (row by row, alternating direction)
-  # is a placeholder until VWBD's real routing is calibrated; a calibrated order goes in wire_order as
+  # is what drawing A-20-1 shows (run 1 → 2 → 3 → 4 along each module's 75 in side; which end is head 0, and
+  # the B-module flip, are still unverified until calibration); a calibrated order goes in wire_order as
   # [x, y] pairs. Consecutive heads can't be further apart than the cable between pucks (19.7", less once
   # the cable passes up and back down through the panel): row neighbours are 10" apart and diagonals
   # 11.2", but same-x heads in this staggered lattice are 20" apart, so they can never be consecutive.
   cable_path: serpentine_rows
   puck_spacing_in: 19.7
+
+  # The 650 Mylar fins under the lights (VWBD drawing A-20-1, D74): fins.json next to this file, validated at load.
+  # apron_in: the fins hang this far beyond the canopy's edge on every side. fin_width_in: a fin's length in plan.
+  fins:
+    file: fins.json
+    apron_in: 6
+    fin_width_in: 5
+
+  # VWBD's panel numbers per canopy position (drawing A-20-1). VWBD numbers row by row on their sheet, across our short
+  # axis, so P-0n is not Module n: record which kit hangs on which panel at install (plan §9).
+  vwbd_panels:
+    r0c0: P-03
+    r0c1: P-06
+    r0c2: P-09
+    r1c0: P-02
+    r1c1: P-05
+    r1c2: P-08
+    r2c0: P-01
+    r2c1: P-04
+    r2c2: P-07

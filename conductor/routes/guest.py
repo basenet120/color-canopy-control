@@ -37,9 +37,13 @@ and the panel then draws its 30-light serpentine instead). A fixed contract:
 
     canopy    = null | {width_in, height_in, module_w_in, module_h_in,
                         view: {mirror_x, rotate_deg: 0|90|180|270, dim_floor},          (kiosk.preview, set at install)
-                        modules: [{pos: "r0c0"…"r2c2", row, col, heads: [[x, y] × 30]} × 9]}
+                        modules: [{pos: "r0c0"…"r2c2", row, col, heads: [[x, y] × 30]} × 9],
+                        apron_in, outline: {x: [lo, hi], y: [lo, hi]}, fin_width_in,
+                        fins: [{x, y, angle_deg, drop_in}]}
                 (canopy inches, reflected-ceiling view, origin top-left; each module's heads top to bottom, then left
-                to right: its lattice order, never its wiring)
+                to right: its lattice order, never its wiring. The fins (D74): 650 from config/fins.json, each a
+                centre, a plan axis (0 = +x, 90 = +y) and a drop; the outline is the canopy plus its 6 in apron.
+                Without a fin map: fins [], apron_in 0, fin_width_in 0, the outline the canopy itself)
     state.lit = null (no look yet, or an older server)
               | {level: 1–100 | null (off),
                  modules: [{pos, state: off|dark|unknown|lit|changing,

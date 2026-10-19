@@ -347,6 +347,47 @@ test("withLayoutKind linear defaults to 45 and sweep never sits on a module cent
   assert.equal(M.MODULE_CENTRES.length, 9);
 });
 
+test("fins in the layout picker: no parameters, no Mirror, and a note true for every palette (D74)", () => {
+  assert.deepEqual([...M.LAYOUT_KINDS], ["linear", "radial", "sweep", "fins"]);
+  assert.ok(Object.isFrozen(M.LAYOUT_KINDS));
+  // switching to fins keeps invert and cycles, drops every other kind's parameters and forces transform linear
+  const radial = { kind: "radial", transform: "mirror", invert: true, cycles: 1, centre_in: [112.5, 60] };
+  assert.deepEqual(M.withLayoutKind(radial, "fins"), { kind: "fins", transform: "linear", invert: true, cycles: 1 });
+  assert.deepEqual(M.withLayoutKind({ kind: "linear", angle_deg: 78, transform: "mirror" }, "fins"), { kind: "fins", transform: "linear", invert: false, cycles: 1 });
+  assert.equal(M.withLayoutKind({ kind: "fins", invert: true }, "linear").angle_deg, 45);
+  assert.equal(M.withLayoutKind({ kind: "fins", invert: true }, "linear").invert, true);
+  assert.equal(M.withLayoutKind({ kind: "fins" }, "radial").centre_in.length, 2, "radial opens on the middle");
+  assert.equal(M.setLayoutKind(golden(), "fins").layout.kind, "fins");
+  const fins = M.controlsFor({ kind: "fins" });
+  assert.equal(fins.angle, null);
+  assert.equal(fins.centre, null);
+  assert.equal(fins.start, null);
+  assert.equal(fins.radius, null);
+  assert.equal(fins.metric, false);
+  assert.equal(fins.transform, false, "Mirror is off for fins");
+  assert.equal(fins.invert, true);
+  assert.equal(fins.note, M.FINS_NOTE);
+  assert.match(fins.locked.cycles, /locked, D63/);
+  for (const layout of [{ kind: "linear", angle_deg: 45 }, golden().layout, { kind: "sweep", centre_in: [75, 60] }]) {
+    const c = M.controlsFor(layout);
+    assert.equal(c.note, null, layout.kind);
+    assert.equal(c.transform, true, layout.kind);
+  }
+  // the note is true plain or inverted, at any palette size: the rim's colour never fills a strand, so the note never
+  // promises "the last colour" anywhere
+  for (const words of ["Invert swaps them", "Mirror is off", "two-thirds", "light by light"]) assert.ok(M.FINS_NOTE.includes(words), words);
+  assert.ok(!M.FINS_NOTE.includes("last colour"));
+  // a fins layout normalises to its four keys: no centre, angle, radius, metric or start
+  const norm = M.normaliseDraft({ ...golden(), layout: { kind: "fins", centre_in: [1, 2] } }).layout;
+  assert.deepEqual(norm, { transform: "linear", invert: false, cycles: 1, kind: "fins" });
+  assert.deepEqual(Object.keys(norm).sort(), ["cycles", "invert", "kind", "transform"]);
+  // a stray centre on a linear layout goes too (the server's linear field has none); radial and sweep keep theirs
+  assert.ok(!("centre_in" in M.normaliseDraft({ ...golden(), layout: { kind: "linear", angle_deg: 45, centre_in: [1, 2] } }).layout));
+  assert.deepEqual(M.normaliseDraft({ ...golden(), layout: { kind: "sweep", centre_in: [75, 60] } }).layout.centre_in, [75, 60]);
+  assert.deepEqual(M.normaliseDraft(golden()).layout.centre_in, golden().layout.centre_in);
+  assert.ok(M.draftEquals({ ...golden(), layout: { kind: "fins" } }, { ...golden(), layout: { kind: "fins", transform: "linear", invert: false, cycles: 1 } }));
+});
+
 // ---- server answers -----------------------------------------------------------------------------------------------------
 
 const PROBLEMS = [
