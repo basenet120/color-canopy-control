@@ -768,6 +768,90 @@ def test_an_export_of_applied_drafts_rereads_as_the_patched_trio(tmp_path):
     assert X.reread(after_texts(result, tmp_path), CANOPY).dump() == patched.dump()
 
 
+def _breathe_golden(trio: ConfigTrio) -> ConfigTrio:
+    """Golden Hour → breathe (swing 5, lag 2) through S1's apply_drafts, copy auto (the generated breath sentence)."""
+    from conductor.config import ConductorSettings
+    from conductor.design_lab.draft import SceneDraft, apply_drafts, seed_draft
+
+    data = seed_draft(trio, "golden-hour").model_dump()
+    data["stepped"].update(mode="breathe", brightness_swing=5, lag_steps=2)
+    draft = SceneDraft.model_validate(data)
+    return apply_drafts(trio, {"golden-hour": draft}, canopy=CANOPY, settings=ConductorSettings())
+
+
+def test_a_change_of_motion_kind_exports_inserted_lines_that_re_read_equal(tmp_path):
+    """D75: the baseline's stepped block has no mode / brightness_swing / lag_steps lines (travel never needs them), so
+    the export adds them under techniques → stepped, at its children's indent, and the re-read trio is the patched
+    one. Going back to travel then rewrites those lines in place (explicit zeros load on a travel rung, C6)."""
+    patched = _breathe_golden(APPROVED)
+    result = export(patched, version=_version())
+    assert result.problem == ""
+    added = [x[1:] for x in result.patch.splitlines() if x.startswith("+") and not x.startswith("+++")]
+    for line in ("        mode: breathe", "        brightness_swing: 5", "        lag_steps: 2"):
+        assert line in added
+    after = after_texts(result, tmp_path)
+    assert X.reread(after, CANOPY).dump() == patched.dump()
+    lines = after[X.MODES_FILE].splitlines()
+    block = [lines[i] for i in _block(lines, "golden-hour")]
+    stepped = block[block.index("      stepped:") :]
+    assert stepped[1:9] == [
+        "        canvas: *golden-design",
+        "        direction: forward",  # the old "outwards from the sun" no longer describes the run
+        "        steps_per_cycle: 6",
+        stepped[4],  # step_s and its pace comment, unchanged
+        "        run_s: 90",
+        "        brightness: 95",
+        f"        moving_feature: {json.dumps(patched.modes.mode('golden-hour').techniques.stepped.moving_feature)}",
+        "        mode: breathe",
+    ]
+    assert stepped[9:11] == ["        brightness_swing: 5", "        lag_steps: 2"]
+    assert stepped[4].startswith("        step_s: 6")
+    assert any("Golden Hour: stepped run mode travel → breathe" in c for c in result.stepped_changes)
+    assert "mode travel → breathe, brightness_swing 0 → 5, lag_steps 0 → 2" in result.decision
+    # and back: the lines are there now, so they are rewritten where they stand
+    root = tmp_path / "breathing"
+    shutil.copytree(ROOT, root)
+    for path, text in after.items():
+        (root / path).write_text(text, encoding="utf-8")
+    breathing = X.reread(after, CANOPY)
+    travel = X.export_patch(breathing, APPROVED, root=root, canopy=CANOPY, version=None, now=NOW)
+    assert travel.problem == "", travel.problem
+    back = applied(scratch_repo_of(root, tmp_path / "back"), travel.patch)
+    assert X.reread(back, CANOPY).dump() == APPROVED.dump()
+    block = back[X.MODES_FILE].splitlines()
+    for line in ("        mode: travel", "        brightness_swing: 0", "        lag_steps: 0"):
+        assert line in block
+
+
+def scratch_repo_of(root: Path, repo: Path) -> Path:
+    """A git repo holding `root`'s config/ and fixture, committed."""
+    shutil.copytree(root / "config", repo / "config")
+    (repo / "tests").mkdir()
+    shutil.copy(root / X.FIXTURE_FILE, repo / X.FIXTURE_FILE)
+    assert _git(repo, "init", "-q").returncode == 0
+    assert _git(repo, "add", "-A").returncode == 0
+    commit = _git(repo, "-c", "user.name=lab", "-c", "user.email=lab@localhost", "commit", "-qm", "base")
+    assert commit.returncode == 0, commit.stderr
+    return repo
+
+
+def test_a_stepped_rung_written_as_a_flow_mapping_offers_no_patch_for_new_keys():
+    """The breathe keys need a line each under techniques → stepped; a flow-mapped stepped rung has no place for
+    them, so the export refuses rather than guessing (LocateError → no patch)."""
+    lines = ["    techniques:", "      stepped: {canvas: *golden-design, direction: forward}"]
+    walked = list(X._walk(lines, 0, len(lines)))
+    travel = {"mode": "travel", "shift": 0.0, "brightness_swing": 0, "lag_steps": 0, "seed": None}
+    before = {"techniques": {"stepped": travel}}
+    after = {"techniques": {"stepped": {**travel, "mode": "breathe", "brightness_swing": 5}}}
+    with pytest.raises(
+        X.LocateError, match="isn't a block mapping, so mode, brightness_swing can't be added"
+    ):
+        X._add_stepped_keys(lines, walked, {}, before, after, "golden-hour")
+    edits: dict[int, list[str]] = {}
+    X._add_stepped_keys(lines, walked, edits, before, before, "golden-hour")  # nothing new: nothing to place
+    assert edits == {}
+
+
 # ---- make scene-pins ----------------------------------------------------------------------------------------------------
 def _regen_script():
     spec = importlib.util.spec_from_file_location(

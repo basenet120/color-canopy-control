@@ -2,8 +2,9 @@
 
 A `SceneDraft` is keyed by an existing scene id and holds only what the client may change: the client copy (name,
 mood, description), 2–6 named palette colours, the 2-D layout, the module sample point, the brightness, the solid
-colour and (for scenes with a stepped rung) the stepped timing. Ids, ladders and slots are not fields, so a draft
-can't create a scene, rename an id, add or drop a rung or move a slot.
+colour and (for scenes with a stepped rung) the stepped timing and the kind of motion (D75: travel, breathe or
+shimmer, with a breath's shift, brightness_swing, lag_steps and seed). Ids, ladders and slots are not fields, so a
+draft can't create a scene, rename an id, add or drop a rung or move a slot.
 
 `apply_drafts` is pure (no I/O, no clock, no engine) and follows the purity rule (§3.0): it never assigns into a trio
 object; every output is built by `Model.model_validate(<edited dict from model_dump()>)` and re-validated through the
@@ -18,7 +19,7 @@ from __future__ import annotations
 import math
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -28,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 from conductor.config import ConductorSettings, ConfigError, RecipesFile, _explain, load_recipes
 from conductor.looks import field as F
 from conductor.looks import scene_rules
+from conductor.looks.compile import breath_wave
 from conductor.looks.live import ConfigTrio
 from conductor.looks.schema import (
     MOTION_PHRASES,
@@ -37,6 +39,7 @@ from conductor.looks.schema import (
     Mode,
     ModesFile,
     ModuleSample,
+    StepMode,
     _colour_refs,
     load_modes,
     motion_words,
@@ -95,12 +98,19 @@ def on_step_increment(v: float) -> bool:
 
 
 class DraftStepped(_Strict):  # = SteppedTechnique's bounds (schema.py), exactly
-    direction: Literal["forward", "reverse"]
-    steps_per_cycle: int = Field(ge=3, le=12)
+    direction: Literal["forward", "reverse"]  # breathe/shimmer: the sign of the colour offset
+    steps_per_cycle: int = Field(ge=3, le=12)  # breathe/shimmer: the steps in one module's breath
     # any value SteppedTechnique takes, so an approved modes.yaml always seeds; an EDIT moves in STEP_S_INCREMENT
     # steps (`_lock_problems`)
     step_s: float = Field(ge=4.0, le=12.0)
     run_s: float = Field(gt=0, le=180.0)  # ≥ step_s here; ≤ kiosk.idle_return_s in apply (`_check_stepped`)
+    # D75: the kind of motion and a breath's parameters, with SteppedTechnique's defaults so a version saved before
+    # D75 still parses (and equals its seed). Which combinations are true is the schema's call (`_mode_fields`).
+    mode: StepMode = "travel"
+    shift: float = Field(0.0, ge=0.0, le=0.5)
+    brightness_swing: int = Field(0, ge=0, le=20)
+    lag_steps: int = Field(0, ge=0, le=6)
+    seed: int | None = Field(None, ge=0, le=2_147_483_647)
 
     @field_validator("run_s")
     @classmethod
@@ -279,6 +289,11 @@ def seed_draft(trio: ConfigTrio, scene_id: str) -> SceneDraft:
                     "steps_per_cycle": stepped.steps_per_cycle,
                     "step_s": stepped.step_s,
                     "run_s": stepped.run_s,
+                    "mode": stepped.mode,
+                    "shift": stepped.shift,
+                    "brightness_swing": stepped.brightness_swing,
+                    "lag_steps": stepped.lag_steps,
+                    "seed": stepped.seed,
                 }
                 if stepped is not None
                 else None
@@ -323,6 +338,17 @@ STEPPED_TEMPLATE = (
     "sent its next colour every few seconds, so the palette's colours move {flow} across the "
     "canopy: {colours}."
 )
+# D75: a breath keeps the design in place, so its sentence says what each strand is sent (`what`: its next colour, a
+# brighter or softer level, or both), how it breathes (`verb`, from schema.BREATHE_LEVEL_PHRASES with a swing, else
+# BREATHE_COLOUR_PHRASES), where a lagged breath starts (`lead`), and only the colours the breath reaches.
+BREATHE_TEMPLATE = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and "
+    "sent {what} every few seconds, so the palette {verb}{lead}: {colours}."
+)
+SHIMMER_TEMPLATE = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and "
+    "sent {what} every few seconds, so the strands {verb} on their own: {colours}."
+)
 STRAND_TEMPLATE = "Colour and dimming: all nine Hubspace strands set to {solid}."
 APPROVED_WHY = "approved wording: the design and its colour names are as approved"
 
@@ -360,24 +386,79 @@ def _canvas_of(layout: F.FieldSpec, keys: list[str] | None = None) -> FieldCanva
     )
 
 
-def reached_stops(layout: F.FieldSpec, n: int, canopy: dict) -> list[int]:
+def reached_stops(layout: F.FieldSpec, n: int, canopy: dict, offsets: Sequence[float] = (0.0,)) -> list[int]:
     """The palette stops (n of them, at i / (n − 1)) the module level actually shows: stop i is reached when the
     design's t at some module centre (D63: every sample at: centre) is within half a stop spacing of it. In stop
     order; never empty. A sweep centred on an edge or a corner covers only part of the circle, and a line misses the
-    far ends, so a colour no strand shows is never named in the T3 sentence."""
+    far ends, so a colour no strand shows is never named in the T3 sentence.
+
+    `offsets` (D75, a breath's colour offsets, `breath_offsets`): each module centre's own t before mirror and
+    invert, moved by each offset and clamped, then mirrored and inverted, as `composer.evaluate` moves a breath's
+    colour. With (0.0,) it is the still design's t, so the result is the T3 sentence's stops."""
     if n < 2:
         return list(range(n))
     centres = F.module_centres(canopy, GRID)
-    ts = [F.value(layout, x, y, canopy) for x, y in centres.values()]
+    plain = layout.model_copy(update={"transform": "linear", "invert": False})
+    us = [F.value(plain, x, y, canopy) for x, y in centres.values()]
+    ts = []
+    for offset in offsets:
+        for u in us:
+            t = min(1.0, max(0.0, u + offset))
+            if layout.transform == "mirror":
+                t = 1.0 - abs(2.0 * t - 1.0)
+            if layout.invert:
+                t = 1.0 - t
+            ts.append(t)
     half = 0.5 / (n - 1)
     return [i for i in range(n) if any(abs(t - i / (n - 1)) <= half + 1e-9 for t in ts)]
 
 
+def breath_offsets(stepped: DraftStepped) -> list[float]:
+    """The colour offsets a breath sends any module over one breath (D75: ±shift · `compile.breath_wave`, both signs,
+    so it holds whichever way `direction` points); [0.0] without a shift (travel, or a level-only breath)."""
+    spc = stepped.steps_per_cycle
+    # + 0.0 turns the −0.0 of a zero shift into 0.0
+    return sorted({s * stepped.shift * breath_wave(k, spc) + 0.0 for k in range(spc) for s in (-1.0, 1.0)})
+
+
+def _breath_colours(draft: SceneDraft, canopy: dict) -> list[str]:
+    """The colour names a breath of the draft reaches, in stop order (`reached_stops` at its `breath_offsets`)."""
+    assert draft.stepped is not None
+    names = [c.name for c in draft.palette]
+    stops = reached_stops(draft.layout, len(names), canopy, offsets=breath_offsets(draft.stepped))
+    return [names[i] for i in stops]
+
+
+def _motion_kind(stepped: DraftStepped) -> tuple:
+    """What a moving sentence says about the motion: its kind, and whether it shifts, swings and lags."""
+    return (stepped.mode, stepped.shift > 0, stepped.brightness_swing > 0, stepped.lag_steps > 0)
+
+
+def _breath_sentence(draft: SceneDraft, canopy: dict) -> str:
+    """BREATHE_TEMPLATE / SHIMMER_TEMPLATE of the draft: what each strand is sent, how the canopy breathes, where a
+    lagged breath starts (the layout's forward words: the design's start leads), and the colours it reaches."""
+    stepped, layout = draft.stepped, draft.layout
+    assert stepped is not None and stepped.mode != "travel"
+    shift, swing = stepped.shift > 0, stepped.brightness_swing > 0
+    level = "a brighter or softer level"
+    what = f"its next colour and {level}" if shift and swing else ("its next colour" if shift else level)
+    colours = colour_phrase(_breath_colours(draft, canopy), invert=layout.invert, transform=layout.transform)
+    if stepped.mode == "shimmer":
+        verb = "glow and soften" if swing else "drift and settle"
+        return SHIMMER_TEMPLATE.format(what=what, verb=verb, colours=colours)
+    verb = "swells and softens" if swing else "drifts and settles"
+    lead = ""
+    if stepped.lag_steps > 0:
+        start = motion_words(_canvas_of(layout), canopy, "forward")
+        lead = f" {start}" if start else ""
+    return BREATHE_TEMPLATE.format(what=what, verb=verb, lead=lead, colours=colours)
+
+
 def generated_copy(mode: Mode, draft: SceneDraft, canopy: dict) -> dict[str, str]:
-    """{"modules": T3_TEMPLATE(...), "strand": STRAND_TEMPLATE(...), "stepped": STEPPED_TEMPLATE(...)} — the stepped
+    """{"modules": T3_TEMPLATE(...), "strand": STRAND_TEMPLATE(...), "stepped": the moving sentence} — the stepped
     sentence only when the mode has a stepped rung and the draft its timing. The T3 sentence names only the colours
-    the module level reaches (`reached_stops`); over a run every strand steps through the whole palette, so the moving
-    sentence names them all."""
+    the module level reaches (`reached_stops`). A travel run steps every strand through the whole palette, so its
+    sentence (STEPPED_TEMPLATE) names them all; a breath (D75) names only the colours its offsets reach."""
     layout = draft.layout
     names = [c.name for c in draft.palette]
     shown = [names[i] for i in reached_stops(layout, len(names), canopy)]
@@ -388,8 +469,11 @@ def generated_copy(mode: Mode, draft: SceneDraft, canopy: dict) -> dict[str, str
         "strand": STRAND_TEMPLATE.format(solid=draft.palette[draft.solid].name.lower()),
     }
     if mode.techniques.stepped is not None and draft.stepped is not None:
-        flow = motion_words(_canvas_of(layout), canopy, draft.stepped.direction)
-        out["stepped"] = STEPPED_TEMPLATE.format(flow=flow, colours=colours)
+        if draft.stepped.mode == "travel":
+            flow = motion_words(_canvas_of(layout), canopy, draft.stepped.direction)
+            out["stepped"] = STEPPED_TEMPLATE.format(flow=flow, colours=colours)
+        else:
+            out["stepped"] = _breath_sentence(draft, canopy)
     return out
 
 
@@ -421,7 +505,9 @@ def _choose(asked: str, approved: str, generated: str, reasons: list[str]) -> Co
 def resolve_copy(approved: ConfigTrio, draft: SceneDraft, canopy: dict) -> dict[str, CopyChoice | None]:
     """{"modules", "stepped" (None without a stepped rung), "strand"}: each rung's sentence by the rules of §3.3. T3
     keeps the approved sentence only while the layout is model-equal and the colour names and their order are
-    unchanged; stepped also needs the direction unchanged; strand only needs the solid colour's name unchanged."""
+    unchanged; stepped also needs the direction and the kind of motion unchanged (D75: the mode, and whether it
+    shifts, swings and lags) and, for a breath, the same colours reached; strand only needs the solid colour's name
+    unchanged."""
     seed = seed_draft(approved, draft.scene_id)
     mode = approved.modes.mode(draft.scene_id)
     generated = generated_copy(mode, draft, canopy)
@@ -441,6 +527,13 @@ def resolve_copy(approved: ConfigTrio, draft: SceneDraft, canopy: dict) -> dict[
         moving = list(reasons)
         if seed.stepped is None or draft.stepped is None or draft.stepped.direction != seed.stepped.direction:
             moving.append("the stepped direction changed")
+        if seed.stepped is not None and draft.stepped is not None:
+            if _motion_kind(draft.stepped) != _motion_kind(seed.stepped):
+                moving.append("the kind of motion changed")
+            if draft.stepped.mode != "travel" and [n.casefold() for n in _breath_colours(draft, canopy)] != [
+                n.casefold() for n in _breath_colours(seed, canopy)
+            ]:
+                moving.append("the colours the breath reaches changed")
         out["stepped"] = _choose(
             draft.copy.stepped, tech.stepped.moving_feature, generated["stepped"], moving
         )
@@ -599,16 +692,16 @@ def _recipe(colour: DraftColour) -> dict:
 
 
 # ---- the patch (S1) --------------------------------------------------------------------------------------------------
-IDLE_NEVER_STEPS = (
-    "{label} is the idle look (kiosk.idle_mode), and the idle look never steps (D65): it has no stepped rung to "
-    "edit"
+IDLE_NO_RUNG = (
+    "{label} is the idle look (kiosk.idle_mode) and has no stepped rung to edit; adding one is a modes.yaml change "
+    "(D75)"
 )
 
 
 def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list[Problem]:
     """The D63 locks and the stepped rung's presence: a draft can't repeat the design, sample at the mean, or add or
-    drop a stepped rung (the idle look, `idle`, says why it has none); an edited step_s moves in half seconds (an
-    approved one off the increment, which SteppedTechnique allows, is kept)."""
+    drop a stepped rung (the idle look, `idle`, says adding one is a modes.yaml change); an edited step_s moves in
+    half seconds (an approved one off the increment, which SteppedTechnique allows, is kept)."""
     sid = draft.scene_id
     out = []
     if draft.layout.cycles != 1:
@@ -621,8 +714,8 @@ def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list
             Problem(
                 f"the draft of {sid} → stepped",
                 "stepped",
-                f"{mode.label} has a stepped rung, so its draft needs the stepped timing (direction, "
-                "steps_per_cycle, step_s, run_s)",
+                f"{mode.label} has a stepped rung, so its draft needs the stepped timing (mode, direction, "
+                "steps_per_cycle, step_s, run_s and the breathe parameters)",
             )
         )
     if has and draft.stepped is not None:
@@ -641,7 +734,7 @@ def _lock_problems(mode: Mode, draft: SceneDraft, *, idle: bool = False) -> list
             Problem(
                 f"the draft of {sid} → stepped",
                 "stepped",
-                IDLE_NEVER_STEPS.format(label=mode.label)
+                IDLE_NO_RUNG.format(label=mode.label)
                 if idle
                 else f"{mode.label} has no stepped rung, and a draft can't add one",
             )
@@ -674,6 +767,11 @@ def _patched_mode(
             steps_per_cycle=draft.stepped.steps_per_cycle,
             step_s=draft.stepped.step_s,
             run_s=draft.stepped.run_s,
+            mode=draft.stepped.mode,
+            shift=draft.stepped.shift,
+            brightness_swing=draft.stepped.brightness_swing,
+            lag_steps=draft.stepped.lag_steps,
+            seed=draft.stepped.seed,
             brightness=b,
             moving_feature=moving.sentence,
         )
@@ -916,6 +1014,11 @@ def draft_changes(approved: ConfigTrio, draft: SceneDraft, *, canopy: dict) -> d
 
 
 # ---- ConfigError text → problems (§3.2.3) ----------------------------------------------------------------------------
+# The stepped rung's own fields (D75 adds the kind of motion and a breath's parameters). Matched before "brightness",
+# so "→ stepped → brightness_swing" names stepped.brightness_swing, not the scene's brightness.
+_STEPPED_FIELDS = (
+    r"→ stepped → (direction|steps_per_cycle|step_s|run_s|mode|shift|brightness_swing|lag_steps|seed)\b"
+)
 # Ordered: the first pattern the path matches names the draft field.
 FIELD_FOR: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"→ label\b|scenes → \[?\d+\]? → name\b"), "name"),
@@ -924,14 +1027,14 @@ FIELD_FOR: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"→ preview\b|→ stops\b|palette|recipes"), "palette"),  # palette.<i> when an index is known
     (re.compile(r"→ field\b"), "layout"),  # any depth
     (re.compile(r"→ sample → at\b"), "sample_at"),
+    (re.compile(_STEPPED_FIELDS), "stepped"),  # stepped.<that>
     (re.compile(r"brightness"), "brightness"),
     (re.compile(r"→ modules → feature\b"), "copy.modules"),
     (re.compile(r"→ stepped → moving_feature\b"), "copy.stepped"),
-    (re.compile(r"→ stepped → (direction|steps_per_cycle|step_s|run_s)\b"), "stepped"),  # stepped.<that>
     (re.compile(r"→ strand\b"), "solid"),
 )
 _PALETTE_INDEX = re.compile(r"→ (?:palette|stops|preview) → \[?(\d+)\]?(?: → (name|hex)\b)?")
-_STEPPED_FIELD = re.compile(r"→ stepped → (direction|steps_per_cycle|step_s|run_s)\b")
+_STEPPED_FIELD = re.compile(_STEPPED_FIELDS)
 _LAYOUT_FIELD = re.compile(r"→ field → ([a-z_]+)\s*$")
 _BULLET = re.compile(r"^\s*•\s*(.*\S)\s*$")
 # Paths FIELD_FOR leaves at "draft" that do name a field: the sampled design itself (one colour at every module, a
@@ -975,13 +1078,15 @@ def problems_from_config_error(text: str) -> list[Problem]:
 
 
 __all__ = [
+    "BREATHE_TEMPLATE",
     "FIELD_FOR",
     "GRID",
-    "IDLE_NEVER_STEPS",
+    "IDLE_NO_RUNG",
     "MODULE_PAGE",
     "NUMBER_NAMES",
     "PALETTE_MAX",
     "PALETTE_MIN",
+    "SHIMMER_TEMPLATE",
     "STEPPED_TEMPLATE",
     "STEP_S_INCREMENT",
     "STRAND_TEMPLATE",
@@ -996,6 +1101,7 @@ __all__ = [
     "SceneDraft",
     "apply_draft",
     "apply_drafts",
+    "breath_offsets",
     "colour_phrase",
     "description_notes",
     "draft_changes",
