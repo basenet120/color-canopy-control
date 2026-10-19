@@ -1753,9 +1753,17 @@ async def overlay_download(request: Request, _ops: Ops, part: str = "all") -> Pl
     )
     if diff and not diff.endswith("\n"):
         diff += "\n"  # the conductor.yaml hunk below starts on its own line
-    # The iPad's scene menu (D76): only ids that hide a scene, never ignored ones.
-    hidden = ipad_menu.live_menu(services).hidden
-    fold = ipad_menu.conductor_yaml_diff(Path(services.config_dir), hidden)
+    # The iPad's scene menu (D76): only ids that hide a scene, never ignored ones. The registry download never fails
+    # over it: a catalog that can't be read is a "No diff" line.
+    try:
+        hidden = ipad_menu.live_menu(services).hidden
+        fold = ipad_menu.conductor_yaml_diff(Path(services.config_dir), hidden)
+    except (OSError, ValueError) as exc:
+        log.exception("The overlay download couldn't read the iPad's scene menu.")
+        hidden = ()
+        fold = ipad_menu.ConductorYamlDiff(
+            "", None, f"the live scene catalog couldn't be read ({type(exc).__name__})"
+        )
     if part == "yaml":
         body, name, media = overlay, f"registry-overlay-{stamp}.yaml", "application/x-yaml"
     elif part == "diff":

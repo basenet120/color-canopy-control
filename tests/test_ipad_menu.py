@@ -1243,6 +1243,17 @@ def test_the_overlay_download_says_why_it_cant_fold(app_client, tmp_path, monkey
     assert "--- a/config/conductor.yaml" not in text
 
 
+def test_the_overlay_download_never_fails_over_the_ipad_menu(app_client, monkeypatch):
+    def broken(_services):
+        raise ConfigError("scenes.yaml is broken")
+
+    monkeypatch.setattr(IM, "live_menu", broken)
+    r = app_client.get("/api/ops/overlay")
+    assert r.status_code == 200
+    assert "   No diff: the live scene catalog couldn't be read (ConfigError)." in r.text
+    assert "kiosk.hidden_scenes: none." in r.text
+
+
 def test_grid_max_is_one_number_on_every_side():
     """More than GRID_MAX visible is the review menu: the server, the kiosk and /ops all use one number."""
     found = {}
