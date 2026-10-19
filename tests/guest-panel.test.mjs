@@ -295,6 +295,20 @@ test("attract cycles one scene per group in the review menu, every scene otherwi
   assert.deepEqual(attractScenes(undefined), []);
 });
 
+test("attract cycles every scene of six or fewer, even when some share a group", () => {
+  // six visible is the 3 × 2 grid, which shows every card: the attract screen cycles all six, a-2 too, never one per
+  // group (that is the review menu's rule, more than six)
+  const shared = [scene("a", { group: "a" }), scene("a-2", { option_of: "a", group: "a" }), ...["b", "c", "d", "e"].map((id) => scene(id, { group: id }))];
+  assert.equal(cardLayout(shared).review, false);
+  assert.deepEqual(attractScenes(shared).map((s) => s.id), ["a", "a-2", "b", "c", "d", "e"]);
+  assert.deepEqual(attractScenes(shared), shared, "the same scenes, in input order");
+  const three = [scene("b-2", { option_of: "b", group: "b" }), scene("b", { group: "b" }), scene("b-3", { option_of: "b", group: "b" })];
+  assert.deepEqual(attractScenes(three).map((s) => s.id), ["b-2", "b", "b-3"], "one group of three: all three, as listed");
+  // one more and it is the review menu: one per group again
+  const seven = [...shared, scene("e-2", { option_of: "e", group: "e" })];
+  assert.deepEqual(attractScenes(seven).map((s) => s.id), ["a", "b", "c", "d", "e"]);
+});
+
 test("thumbDots: each head the design's colour, no colour where none is known", () => {
   const dots = ["r0c0", "r0c1"].flatMap((pos) => [0, 1, 2].map((k) => ({ pos, k, cx: 10 * k, cy: pos === "r0c0" ? 1 : 2, r: 1.5 })));
   const perHead = { sig: "thumb-a", basis: "heads", modules: [{ pos: "r0c0", color: null, colors: ["#aa0000", "#00bb00", "#0000cc"] }, { pos: "r0c1", color: "#123abc", colors: null }] };
