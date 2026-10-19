@@ -2,7 +2,7 @@
 
 _Last updated: 2026-10-18 night (preset-options PR B `claude/motion-every-scene`: motion on every scene — breathe and
 shimmer beside travel, a guest's choice runs first then settles on the best still tier, the idle breath off — D75;
-built and verified in sim, review rounds 1–4 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
+built and verified in sim, review rounds 1–5 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
 flagged note no longer holds the panel at "changing", D73, merged as #37 `3c3ad38`; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -108,9 +108,27 @@ exports made before D77 lands propose a reserved D-number; renumber by hand.
     "drifts and settles" / "drift and settle", and apply. Kills each colour-only branch of `_breath_sentence`.
   - **B-R4-TS-6:** the soak report's technique words are pinned in full from the test fixture (D65's "6 s steps
     designed, 90 s runs", and a breathe and a shimmer line), not from config, so `make lab-roundtrip` still holds.
+- **Review round 5 (Oct 19): every confirmed finding fixed.** All four were test gaps over code that was already
+  right, so no code changed; each new test was mutation-checked (the line it pins reverted, the test failing,
+  `git checkout --` and `git status` showing only the test changes):
+  - **B-R5-TS-2:** a guest's run that ends on its own, then a Lab publish with a longer run (150 s) as the very first
+    re-pick: it only holds, no step. Kills `finish` without `note_run_over` (that re-pick restarted the steps). The
+    older test always re-picked through the reconciler first, and `_install` marked the choice itself.
+  - **B-R5-TS-3:** the 07 §6 settle test was vacuous: a run ends on its last step (step 14 = cycle step 2), not on
+    the hold, so the two "unchanged" modules weren't. Their T1 rows now come from the step sent last, which the test
+    checks before the settle, and a second test runs the deferred settle (`_settle_later`, a run the budget ended)
+    onto a motion plan. Kills either `if still.motion:` (7 settles instead of 9).
+  - **B-R5-TS-4:** a guest's Golden Hour that ran before commissioning held at module level, then lifts to the sun
+    once commissioning's re-pick fires (one write per module, no step), under the show's own T1 rule; and a guest's
+    Golden Hour chosen during a cool-off shows the sun at once. Each kills one of the two lift paths on its own
+    (`_repick_best`'s lift, `_install`'s swap); before, nothing caught removing both.
+  - **B-R5-TS-5:** a static test pins that `motionPaint` plays `M.paceSteps(st, tl.pace)` with `levels:
+    step.levels`, and that `paintStage` passes a per-head level function through. Kills each of the three reverts,
+    including the one that brought back B-R1-3.
 - **Verified (sim, macOS), how** (final tree, after the review fixes):
-  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 4): **2596 passed, 6
-    skipped, 44 subtests** (11.5 min; 2589 after round 3, 2583 after round 2, 2577 after round 1).
+  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 5): **2601 passed, 6
+    skipped, 44 subtests** (11.5 min; 2596 after round 4, 2589 after round 3, 2583 after round 2, 2577 after
+    round 1).
   - `node --test tests/*.test.mjs`: 157/157 pass. `ruff check .` and `ruff format --check .`: clean (251 files).
   - After rounds 2, 3 and 4, `python -m conductor.soak` (seed 0) to a scratch path gives the
     committed report line for line (only the generated time and wall time differ), so
