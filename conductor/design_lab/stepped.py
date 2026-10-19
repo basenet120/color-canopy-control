@@ -218,6 +218,11 @@ def _compile(patched: ConfigTrio, scene_id: str, canopy: dict, **kw: Any) -> Mod
     return compile_mode(scene_id, Tier.STEPPED, _design_context(patched, canopy, **kw))
 
 
+def _sentence(text: str) -> str:
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
 def stepped_preview(
     patched: ConfigTrio,
     scene_id: str,
@@ -228,7 +233,13 @@ def stepped_preview(
     """SteppedPreviewJSON for a scene with a stepped rung, else None. `steps` are the compiled program's steps exactly
     (step 0 is the still design, the hold); `pace.nine` / `pace.today` the seconds a step really takes on the full
     canopy and on `today_positions` (the show box's driven kits); `moving_feature` the schema-checked moving copy
-    the full canopy would show while a run moves (`today_moving_feature`: the partial canopy's, D62)."""
+    the full canopy would show while a run moves (`today_moving_feature`: the partial canopy's, D62).
+
+    The show box compiles its own program over the modules it drives (D75: a breath's lags count over them, so its
+    cycle and rhythm differ from the nine's), so `today_steps` are that program's steps, which the Lab plays at the
+    `today` pace. When that compile refuses (a breath that would rest on every driven strand for a step),
+    `today_error` says why, `today_steps` is None and `runs.today.still` carries the reason: the show box holds the
+    still look, and the Lab says so instead of playing the nine-module steps."""
     mode = patched.modes.mode(scene_id)
     tech = mode.techniques.stepped
     if tech is None or "stepped" not in mode.ladder:
@@ -251,6 +262,8 @@ def stepped_preview(
         "feature": None,
         "moving_feature": None,
         "today_moving_feature": None,
+        "today_steps": None,  # the show box's own program (its driven modules), played at the `today` pace
+        "today_error": None,  # why that program won't compile (the show box then holds the still look)
         "pace": None,
         "runs": None,
         "live_enabled": live,
@@ -281,11 +294,19 @@ def stepped_preview(
                 canopy,
                 addresses={f"design-{p}": (f"design-{p}" if p in today else None) for p in GRID},
             )
-            out["today_moving_feature"] = partial.program.moving_feature if partial.program else None
-        except PlanError:
-            pass
+        except PlanError as exc:
+            out["today_error"] = _sentence(str(exc))
+        else:
+            if partial.program is not None:
+                out["today_moving_feature"] = partial.program.moving_feature
+                out["today_steps"] = [
+                    {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)}
+                    for s in partial.program.steps
+                ]
     nine = canopy_pace(patched, scene_id, canopy, settings, GRID)
     here = canopy_pace(patched, scene_id, canopy, settings, today)
+    if here is not None and out["today_error"] is not None:  # the show box holds the still look (B-R1-3)
+        here = {**here, "hold_at": 0, "moves_s": 0.0, "still": out["today_error"]}
     assert nine is not None
     out["runs"] = {"nine": nine, "today": here}
     out["pace"] = {

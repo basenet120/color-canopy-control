@@ -876,6 +876,35 @@ test("the step counter, and the moving sentence only while it plays", () => {
   assert.match(M.MOTION_COPY.fast, /faster than the lights would step — not the real pace/);
 });
 
+test("B-R1-3: the show box's pace plays the show box's own program, or says it holds still (D75)", () => {
+  // the show box compiles over the two kits it drives, so a breath's lags, cycle and levels there are its own
+  const kits = [0, 1, 2, 3].map((n) => ({ index: n, colours: { r0c0: "#6FB5D5", r0c1: "#73BDD4" }, levels: { r0c0: 85 + [0, 6, 0, -6][n], r0c1: 85 } }));
+  const st = M.steppedOf(preview({ stepped: steppedJSON({ today_steps: [...kits].reverse(), today_moving_feature: "… both Hubspace strands …" }) }));
+  assert.deepEqual(st.todaySteps.map((s) => s.index), [0, 1, 2, 3], "in index order");
+  assert.equal(M.paceSteps(st, "today"), st.todaySteps);
+  assert.equal(M.paceSteps(st, "nine"), st.steps);
+  const today = M.stepTimeline(st, "today");
+  assert.deepEqual([today.cycle, M.stepTimeline(st, "nine").cycle], [4, 6], "each pace plays its own cycle");
+  const at = M.stepAt(today, 6 * 5 + 1); // step 5 at 6 s: index 5 mod 4
+  assert.equal(at.index, 1);
+  assert.deepEqual(M.paceSteps(st, "today")[at.index].levels, { r0c0: 91, r0c1: 85 });
+  assert.equal(M.movingLine(st, "playing", at, "today"), "… both Hubspace strands …");
+  // an older server sends no today_steps: the nine-module steps, as before
+  const older = M.steppedOf(preview({ stepped: steppedJSON() }));
+  assert.equal(older.todaySteps, null);
+  assert.equal(M.paceSteps(older, "today"), older.steps);
+  assert.equal(M.stepTimeline(older, "today").cycle, 6);
+  // the show box's compile refuses it: its pace says so (the server's sentence) and nothing plays or moves
+  const why = "Coastal Tides (stepped) can't run on the 2 strand(s) it drives: step 4 would send none of them anything (the breath rests there), so its moving copy wouldn't be true; it holds its still look.";
+  const refused = M.steppedOf(preview({ stepped: steppedJSON({ today_error: why, runs: { nine: { still: null }, today: { still: why } } }) }));
+  const tl = M.stepTimeline(refused, "today");
+  assert.deepEqual([tl.pace, tl.error], ["today", why]);
+  assert.equal(M.stepAt(tl, 10), null);
+  assert.equal(M.movingLine(refused, "playing", M.stepAt(tl, 10), "today"), "");
+  assert.ok(!M.stepTimeline(refused, "nine").error, "the nine modules still step");
+  assert.match(M.steppedRunLine({ run_s: 90, step_s: 6 }, refused), /Show box today \(two modules, 6 s\): holds still/);
+});
+
 test("steppedOf degrades readably: no stepped (an older server), the catalog's first paint, broken steps", () => {
   assert.equal(M.steppedOf(preview()).error, M.MOTION_COPY.noSteps, "Slice B servers send stepped: null");
   assert.equal(M.steppedOf(preview({ stepped: undefined })).error, M.MOTION_COPY.noSteps);

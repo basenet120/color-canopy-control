@@ -1740,10 +1740,12 @@ function motionPaint(preview, view) {
   if (tl.error) return { view, paint: {}, notes: [tl.error], label: "", moving: "" };
   const at = M.stepAt(tl, motionElapsed());
   const where = M.stepPositions(preview, tl.pace);
+  // the pace's own steps: at `today` the show box's program over its driven modules (D75: lags count over them)
+  const step = M.paceSteps(st, tl.pace)[at.index];
   return {
     view: "stepped",
     // D75: a breath's step carries each module's level, drawn as its brightness
-    paint: { step: { colours: st.steps[at.index].colours, positions: where.positions, levels: st.steps[at.index].levels || null } },
+    paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } },
     notes: [m.fast ? `${M.MOTION_COPY.fast}.` : "", where.note],
     label: M.stepCounter(tl, at, { state: m.state, fast: m.fast }),
     moving: M.movingLine(st, m.state, at, tl.pace),

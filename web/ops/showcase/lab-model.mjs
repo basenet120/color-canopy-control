@@ -1222,9 +1222,11 @@ export function steppedOf(preview) {
   if (!preview || typeof preview !== "object") return { error: MOTION_COPY.waiting };
   const s = preview.stepped;
   if (!s || typeof s !== "object") return { error: preview.fromCatalog ? MOTION_COPY.waiting : MOTION_COPY.noSteps };
-  let steps = (Array.isArray(s.steps) ? s.steps : []).filter((st) => st && st.colours && typeof st.colours === "object");
+  const steps = stepsOf(s.steps);
   if (!steps.length) return { error: MOTION_COPY.noSteps };
-  if (steps.every((st) => Number.isFinite(Number(st.index)))) steps = [...steps].sort((a, b) => Number(a.index) - Number(b.index));
+  // D75 (B-R1-3): the show box compiles its own program over the modules it drives (a breath's lags count over
+  // them), so the `today` pace plays those steps, or says why the show box holds still (`today_error`)
+  const todaySteps = stepsOf(s.today_steps);
   const pace = s.pace && typeof s.pace === "object" ? s.pace : {};
   const runs = s.runs && typeof s.runs === "object" ? s.runs : {};
   const stillOf = (k) => (runs[k] && typeof runs[k].still === "string" && runs[k].still ? runs[k].still : null);
@@ -1240,6 +1242,8 @@ export function steppedOf(preview) {
     moving: typeof s.moving_feature === "string" && s.moving_feature ? s.moving_feature : null,
     // the partial canopy's moving copy (D62: counts rewritten for the show box's driven kits)
     todayMoving: typeof s.today_moving_feature === "string" && s.today_moving_feature ? s.today_moving_feature : null,
+    todaySteps: todaySteps.length ? todaySteps : null,
+    todayError: typeof s.today_error === "string" && s.today_error ? s.today_error : null,
     pace: { nine: positive(pace.nine), today: positive(pace.today), todayModules: positive(pace.today_modules) },
     // the server's own reason a pace holds still (ProgramRunner: a step past max_step_s, or a run shorter than a step)
     still: { nine: stillOf("nine"), today: stillOf("today") },
@@ -1250,6 +1254,20 @@ export function steppedOf(preview) {
     // scene whose first rung is stepped)
     stepsWhen: typeof s.steps_when === "string" && s.steps_when ? s.steps_when : null,
   };
+}
+
+/** A server's steps, checked: those with colours, in index order. */
+function stepsOf(list) {
+  let steps = (Array.isArray(list) ? list : []).filter((st) => st && st.colours && typeof st.colours === "object");
+  if (steps.every((st) => Number.isFinite(Number(st.index)))) steps = [...steps].sort((a, b) => Number(a.index) - Number(b.index));
+  return steps;
+}
+
+/** The steps a pace plays: the show box's own program at `today` (its driven modules' lags, D75), when the server
+ * sent it, else the nine-module program's. */
+export function paceSteps(st, paceKey) {
+  if (!st || st.error) return [];
+  return paceKey === "today" && st.todaySteps ? st.todaySteps : st.steps;
 }
 
 /** The pace toggle: "Nine modules (7.5 s)" and "Show box today (two modules, 6 s)", from the server's numbers only. */
@@ -1273,6 +1291,8 @@ export function stepTimeline(st, paceKey) {
   const opt = options.find((o) => o.key === paceKey) || options[0];
   if (!opt) return { error: "The server sent no pace for these steps, so they can't be played at the real pace." };
   if (!st.runS) return { pace: opt.key, error: "The server sent no run length for these steps, so they can't be played." };
+  // the show box's own compile refuses the rung (a breath resting on every strand it drives): it holds still
+  if (opt.key === "today" && st.todayError) return { pace: opt.key, error: st.todayError };
   const still = st.still && st.still[opt.key];
   if (still) return { pace: opt.key, error: `${capital(still)}: the still design holds instead.` };
   const count = Math.floor(st.runS / opt.stepS + EPS);
@@ -1283,7 +1303,8 @@ export function stepTimeline(st, paceKey) {
     // step 0 IS the still design (the mode change sends it as the hold); the runner sends steps 1 … count − 1 only
     return { pace: opt.key, error: `Its run (${fmtS(st.runS)} s) fits only the first step, which is the still design (${fmtS(opt.stepS)} s steps), so no colour would change.` };
   }
-  return { pace: opt.key, label: opt.label, stepS: opt.stepS, count, cycle: st.cycle, runS: st.runS, totalS: count * opt.stepS };
+  const cycle = paceSteps(st, opt.key).length || st.cycle;
+  return { pace: opt.key, label: opt.label, stepS: opt.stepS, count, cycle, runS: st.runS, totalS: count * opt.stepS };
 }
 
 /** Where the run is `elapsedS` seconds in (the lights' seconds): {n, index (into steps), done, nextAtS}; after the

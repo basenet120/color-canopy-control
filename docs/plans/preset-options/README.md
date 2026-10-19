@@ -300,6 +300,9 @@ Checks to run while building:
   `motion.idle` is on. The idle soak is `motion.stepped.live_enabled` on, then `motion.idle` on, watched on /ops for
   30 minutes, `null` to revert.
 - Item 5: the Lab try-on stays still at module level (D66).
+- Item 6: the Lab's "Show box today" pace plays the show box's own program (a breath's lags counted over its two
+  kits, so its cycle differs from the nine's) and says when that program holds still (a breath that would rest on
+  both kits for a step).
 
 ### 5.3 Gates, in this order
 1. **Snap or fade, 5 minutes, Module 1 (Kingston) from the show box at the venue.** Send coral → blush → coral at

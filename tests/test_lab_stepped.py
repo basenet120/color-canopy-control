@@ -355,6 +355,60 @@ def test_a_breathe_preview_plays_the_compilers_steps_with_their_levels():
     }
 
 
+def _kits_plan(patched: D.ConfigTrio, scene_id: str):
+    """The show box's own compile: the rung over the two kits it drives (D62), as the engine compiles it there."""
+    context = P._design_context(
+        patched, CANOPY, addresses={f"design-{p}": (f"design-{p}" if p in KITS else None) for p in D.GRID}
+    )
+    return compile_mode(scene_id, Tier.STEPPED, context)
+
+
+def test_the_show_box_pace_plays_the_show_boxs_own_program_or_says_it_holds_still():
+    """B-R1-3 (D75): the show box compiles its rung over the modules it drives, so a breath's lags, cycle and rhythm
+    there differ from the nine's. The Lab's `today` pace plays that program's steps (`today_steps`); when that compile
+    refuses (a breath resting on both kits for a step), the preview says the show box holds still instead of playing
+    the nine-module steps under the nine-module sentence."""
+    from conductor.engine_api import PlanError
+
+    draft = edit(
+        "coastal-tides", **{"stepped.mode": "breathe", "stepped.brightness_swing": 6, "stepped.lag_steps": 2}
+    )
+    shown = P.preview(make_lab(), draft)["stepped"]
+    kits = _kits_plan(patched_of(draft), "coastal-tides")
+    assert shown["pace"]["today_positions"] == KITS and shown["today_error"] is None
+    assert shown["today_steps"] == [
+        {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)} for s in kits.program.steps
+    ]
+    assert len(shown["today_steps"]) == 6 < len(shown["steps"]) == 8  # lags over the two kits, not over nine
+    assert shown["today_moving_feature"] == kits.program.moving_feature
+    assert shown["runs"]["today"]["still"] is None and shown["runs"]["today"]["hold_at"] > 1
+    # a shimmer the nine modules can run but whose two kits would both rest for a whole step
+    for seed in range(200):
+        refused = edit(
+            "coastal-tides",
+            **{
+                "stepped.mode": "shimmer",
+                "stepped.brightness_swing": 6,
+                "stepped.steps_per_cycle": 3,
+                "stepped.lag_steps": 6,
+                "stepped.seed": seed,
+            },
+        )
+        try:
+            _kits_plan(patched_of(refused), "coastal-tides")
+        except PlanError as exc:
+            why = str(exc)
+            break
+    else:
+        pytest.fail("no seed in 0–199 rests both kits")
+    shown = P.preview(make_lab(), refused)["stepped"]
+    assert shown["error"] is None and len(shown["steps"]) > 3  # the nine modules step
+    assert "would send none of them anything" in why
+    assert shown["today_error"] == f"{why}." and shown["today_steps"] is None
+    assert shown["today_moving_feature"] is None
+    assert shown["runs"]["today"]["still"] == shown["today_error"] and shown["runs"]["today"]["hold_at"] == 0
+
+
 @pytest.mark.parametrize("scene_id", STILL)
 def test_scenes_without_a_stepped_rung_have_no_stepped_preview_and_refuse_stepped_edits(scene_id):
     seed = D.seed_draft(TRIO, scene_id)
