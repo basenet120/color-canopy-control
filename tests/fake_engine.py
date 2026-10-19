@@ -13,6 +13,8 @@ Test-only: the real engine is conductor/canopy.py (P1). This file never runs in 
 from __future__ import annotations
 
 import asyncio
+import copy
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +29,24 @@ from conductor.looks import CompileContext, load_modes, module_look
 from conductor.render import head_colors
 
 MODES_PATH = Path(__file__).resolve().parent.parent / "config" / "modes.yaml"
+RECIPES_PATH = MODES_PATH.with_name("recipes.yaml")
 CALM = "lowcountry-calm"
+_PARSED: dict[str, tuple[tuple[int, int], Any]] = {}
+
+
+def _parsed(key: str, load: Callable[[], Any]) -> Any:
+    """One parse per content of config/modes.yaml and recipes.yaml (their mtimes), not one per canopy position: a
+    mode change compiles nine positions, and with D77's 18 modes a parse each made one change take about a second,
+    longer than the 7 am test's window in a test that shortens it."""
+    stamp = (MODES_PATH.stat().st_mtime_ns, RECIPES_PATH.stat().st_mtime_ns)
+    hit = _PARSED.get(key)
+    if hit is None or hit[0] != stamp:
+        hit = _PARSED[key] = (stamp, load())
+    return hit[1]
 
 
 def _modes() -> dict:
-    return yaml.safe_load(MODES_PATH.read_text())["modes"]
+    return copy.deepcopy(_parsed("raw", lambda: yaml.safe_load(MODES_PATH.read_text())))["modes"]
 
 
 def _look(d: dict, presets: list[str] | None = None) -> R.Look:
@@ -50,7 +65,8 @@ def _look(d: dict, presets: list[str] | None = None) -> R.Look:
 
 def _sampled_look(mode_id: str, module: str) -> R.Look:
     entry = DeviceEntry(id=f"fake-{module}", role="canopy_module", account="fake", module=module)
-    spec = module_look(load_modes().mode(mode_id), entry, CompileContext(registry=[], capabilities={}))
+    modes = _parsed("modes", load_modes)  # read only: module_look never changes the mode
+    spec = module_look(modes.mode(mode_id), entry, CompileContext(registry=[], capabilities={}))
     return R.Look("rgb", brightness=spec.brightness, rgb=tuple(spec.rgb))
 
 
