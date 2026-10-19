@@ -209,7 +209,8 @@ def test_make_this_the_scene_is_a_working_draft_never_a_request():
     assert "M.draftEquals(draft, L.working[base])" in promote  # nothing to make: say so, change nothing
     assert promote.index("window.confirm(") < promote.index("L.working[base] = draft")
     # the confirm and the done notice say when the option's stepped timing replaces the base's (C-R2-4)
-    assert 'M.PROMOTE_COPY.question(optionName, baseName, { motion: notes.includes("took-motion") })' in promote
+    took = 'notes.includes("took-motion")'
+    assert f"M.PROMOTE_COPY.question(optionName, baseName, {{ motion: {took} }})" in promote
     assert "M.promoteNotes(notes, optionName, baseName)" in promote
     assert "text: M.PROMOTE" in js and "scene.option_of ?" in js
     editor = _function(js, "rebuildEditor")
