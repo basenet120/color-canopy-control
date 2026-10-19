@@ -134,7 +134,8 @@ def test_the_t1_lock_is_a_409_naming_the_field(app_client, monkeypatch):
     r = post(app_client, "golden-hour", draft_json("golden-hour", **{"palette.2.hex": NEW_PINK}))
     assert r.status_code == 409
     assert r.json() == {
-        "detail": "Golden Hour's slot is hand-painted in the Hubspace app on 1 module (Module 1); publishing a new "
+        "detail": f"{TRIO.scenes.get('golden-hour').name}'s slot is hand-painted in the Hubspace app on 1 module "
+        "(Module 1); publishing a new "
         "design would make the iPad describe colours the lights don't show. Repaint it in the app and record it on "
         "the module page's Slots tab first, or publish only its brightness, copy or timing.",
         "field": "palette",

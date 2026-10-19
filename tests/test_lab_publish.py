@@ -35,6 +35,7 @@ from live_lab import (
     save,
     show,
 )
+from live_path import refuse_stepped
 
 from conductor import rows as R
 from conductor.canopy import LOOKS_SOURCE, ONE_BURST_SOURCES, RECOMPILE_SOURCES
@@ -49,6 +50,8 @@ from conductor.looks import live as L
 
 SLOT = "custom-3"
 GOODNIGHT = "goodnight-glow"
+# git's names (D77: "Golden Hour #1"; PR E renames in one place)
+NAME = {s.id: s.name for s in GIT.scenes.scenes}
 
 
 @pytest.fixture
@@ -183,7 +186,7 @@ def _checklist(mp) -> dict[str, tuple[bool, Any]]:
                 (plan.label, plan.tier),
             )
             out["7"] = (engine.trial is None, engine.trial)
-            out["8"] = (C._default_modes(str(CONFIG_DIR)).mode(GOLDEN).label == "Golden Hour", None)
+            out["8"] = (C._default_modes(str(CONFIG_DIR)).mode(GOLDEN).label == NAME[GOLDEN], None)
             panel = (await c.get("/api/kiosk/panel")).json()
             golden = next(s for s in panel["scenes"] if s["id"] == GOLDEN)
             out["9"] = (golden["name"] == PINKER and golden["palette"][2]["hex"] == NEW_PINK, golden["name"])
@@ -195,7 +198,7 @@ def _checklist(mp) -> dict[str, tuple[bool, Any]]:
                 golden_mode["label"] == PINKER
                 and golden_mode["module_colours"] is not None
                 and PINKER in patterns
-                and "Golden Hour" not in patterns,
+                and NAME[GOLDEN] not in patterns,
                 (golden_mode["label"], sorted(patterns)),
             )
             state = (await c.get("/api/canopy/state")).json()
@@ -227,7 +230,7 @@ def _checklist(mp) -> dict[str, tuple[bool, Any]]:
             out["16"] = (
                 scene["live_look"]["name"] == PINKER
                 and scene["live_source"] == "published"
-                and scene["approved"]["name"] == "Golden Hour"
+                and scene["approved"]["name"] == NAME[GOLDEN]
                 and T.show_trio(lab).scenes.get(GOLDEN).name == PINKER
                 and all(k[0] == looks.generation for k in lab._live_seeds),
                 (scene["live_look"]["name"], scene["live_source"]),
@@ -366,7 +369,10 @@ def test_the_repick_is_one_burst_that_keeps_the_guests_brightness(no_threads, st
 
     async def main():
         w = await show(settings=settings)
-        await w.engine.request_mode(GOODNIGHT, source="ops")  # a still look (a stepped one sends its steps)
+        # a still look (a stepped one sends its steps): D77 gives every scene a stepped rung, so the live path's
+        # refusal of it (live hardware until Gate R) keeps The Goodnight Glow at its still module level
+        refuse_stepped(w.engine, GOODNIGHT)
+        await w.engine.request_mode(GOODNIGHT, source="ops")
         await w.engine.wait_idle()
         await w.engine.set_guest_brightness(40, source="ops")
         await w.engine.wait_idle()
@@ -541,7 +547,7 @@ def test_after_a_restart_the_show_compiles_the_published_trio_with_no_slot_write
         return out
 
     source, compiled_ok, slots, alerts, label, _stale = run_virtual(main)
-    assert source == "published" and compiled_ok and label == "Coastal Tides"
+    assert source == "published" and compiled_ok and label == NAME[TIDES]
     assert slots == [] and alerts == []
 
 
@@ -579,7 +585,7 @@ def test_a_painted_design_change_over_a_hand_painted_slot_is_refused(no_threads)
     assert slot_writes(writes) == []
     assert status == 409 and body["field"].startswith(f"{GOLDEN}.")
     assert body["detail"].startswith(
-        "Golden Hour's slot is hand-painted in the Hubspace app on 1 module (Module 1)"
+        f"{NAME[GOLDEN]}'s slot is hand-painted in the Hubspace app on 1 module (Module 1)"
     )
     assert live == "p0001"  # the brightness publish stands; the design one wrote nothing
 
@@ -900,7 +906,7 @@ def test_revert_to_approved_follows_git_after_a_restart(no_threads):
         return asked.json()["confirm"], back.status_code, current, again
 
     sentence, status, current, again = run_virtual(main)
-    assert sentence.startswith("Revert this simulator to the approved looks: Coastal Tides changes back.")
+    assert sentence.startswith(f"Revert this simulator to the approved looks: {NAME[TIDES]} changes back.")
     assert status == 200 and current.kind == "approved" and current.trio is None
     assert again.source == "approved" and L.trio_sha(again.trio) == L.trio_sha(GIT)
 

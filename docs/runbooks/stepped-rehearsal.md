@@ -31,31 +31,34 @@ presses **Rehearse** in the confirm dialog on `/ops`.
 ## Run it
 
 1. `/ops` → **Controls** → **Stepped rehearsal (Gate R)**.
-2. Choose the look: **Golden Hour** or **Coastal Tides** (the two scenes that step today, D65): each rehearses its own
-   stepped rung in `config/modes.yaml`, with the copy guests would see. Any look can be rehearsed, the idle look
-   (Lowcountry Calm) included (D75): the rehearsal checks that look's own rung for up to 10 minutes. It is not
-   `motion.idle`'s 30-minute soak, which Alon runs separately with `live_enabled` on. If a look has no stepped design
-   of its own in `config/modes.yaml`, its module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s
-   steps, forward. To watch level steps on the nine show kits (bench item 6: does a step read as a breath or a
-   blink?), prefer a **breathe** look once one is in `config/modes.yaml` (PR D). When Gate R should carry the full
-   write rate, use a breathe with `lag_steps: 0` or a travel look: those change every module every step, while a
-   lagged breath (or a shimmer) leaves its resting modules unwritten for several steps, so it writes less. On the nine
-   show kits the runner stretches the step to 7.5 s: at the full rate it paces all nine modules on one account at 72
-   writes a minute, the account's cap of 90 less a 20% reserve for 429 retries and re-sends
-   (`motion.stepped.budget_reserve`).
+2. Choose the look. Every scene and option steps since D77 (eleven travel, five breathe, two shimmer), and each
+   rehearses its own stepped rung in `config/modes.yaml`, with the copy guests would see. Any look can be rehearsed,
+   the idle look (Lowcountry Calm #1) included (D75): the rehearsal checks that look's own rung for up to 10 minutes.
+   It is not `motion.idle`'s 30-minute soak, which Alon runs separately with `live_enabled` on. If a look has no
+   stepped design of its own in `config/modes.yaml` (none since D77, but a Lab edit can take one off), its
+   module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s steps, forward. To watch level steps on
+   the nine show kits (bench item 6: does a step read as a breath or a blink?), rehearse a level breath such as
+   **The Goodnight Glow #1** or **Lowcountry Calm #2**. When Gate R should carry the full write rate, use a breathe
+   with `lag_steps: 0` (The Goodnight Glow #1) or a travel look (Golden Hour #1, for one): those change every module
+   every step, while a lagged breath (or a shimmer) leaves its resting modules unwritten for several steps, so it
+   writes less. On the nine show kits the runner stretches the step to 7.5 s: at the full rate it paces all nine
+   modules on one account at 72 writes a minute, the account's cap of 90 less a 20% reserve for 429 retries and
+   re-sends (`motion.stepped.budget_reserve`).
 3. Minutes: **10** for Gate R (1–10 are allowed; use 2 to try the page out).
 4. Press **Rehearse…**. The dialog names every module it will write to, the account, the minutes and the write
    rate (paced at up to 72 a minute; a step that would leave the account less than one write per module of room
    under 90 in a minute is held back, D75). Read it.
    If a module is missing, cancel and fix that first. Press **Rehearse**.
 5. The canopy card shows "Stepped look: step n of N · every 7.5 s · writes/min on account … (cap 90)". The line
-   under the controls says when it ends. The kiosk's feature line says what the canopy is doing. For Golden Hour or
-   Coastal Tides it is that scene's own moving copy, the one guests would see: "Colour and dimming through the
-   Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so …".
-   A breathe or shimmer rung (D75) says what it sends instead: "Colour and dimming through the Hubspace cloud: each
-   Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so …", or "Colour
-   and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour and
-   a brighter or softer level every few seconds, so …".
+   under the controls says when it ends. The kiosk's feature line says what the canopy is doing. For every scene
+   (Lowcountry Calm, Rainbow Row Sunset, Garden Gathering, Coastal Tides, Golden Hour and The Goodnight Glow, each
+   with its #2 and #3, D77) it is that look's own moving copy, the one guests would see. A travel look, or a breath
+   that drifts its colours (Lowcountry Calm #1, Coastal Tides #1), says "Colour and dimming through the Hubspace
+   cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so …".
+   A level breath or a shimmer (D75) says what it sends instead: "Colour and dimming through the Hubspace cloud: each
+   Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so …", and a breath
+   that does both says "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour
+   and sent its next colour and a brighter or softer level every few seconds, so …".
    Only a look without a stepped rung of its own shows "Staff are testing the canopy: each Hubspace strand is sent
    its next colour every few seconds, so …".
 

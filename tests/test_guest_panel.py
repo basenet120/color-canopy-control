@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from live_path import refuse_stepped
 from partial_canopy import LIVE, partial_show, showing
 
 from conductor.engine_api import CanopyPhase
@@ -122,7 +123,8 @@ def test_the_target_is_the_canopy_engine_even_with_conductor_env_workshop(monkey
     assert "studio-gradients" not in json.dumps(debug)
 
 
-def test_the_panel_lists_the_six_approved_scenes(app_client):
+def test_the_panel_lists_the_catalogs_scenes(app_client):
+    """The six scenes and their 12 review options (D77), in catalog order: nothing is hidden by default."""
     body = _panel(app_client)
     assert [s["id"] for s in body["scenes"]] == [s.id for s in SCENES.scenes]
     for got, scene in zip(body["scenes"], SCENES.scenes):
@@ -153,7 +155,7 @@ def test_writes_are_json_and_same_site_only(app_client):
 
 # ---- the engine target (venue, staging, local) ----------------------------------------------------------------------
 def _engine(client, cls=None, **kw):
-    """tests/test_kiosk_routes.py's FakeEngine: it knows the modes.yaml ids (the six scenes, D59)."""
+    """tests/test_kiosk_routes.py's FakeEngine: it knows the modes.yaml ids (the scenes, D59; 18 since D77)."""
     from test_kiosk_routes import FakeEngine
 
     services = _services(client)
@@ -490,8 +492,10 @@ def test_a_mood_landing_ring_by_ring_is_the_pictures_ripple_until_the_last_ring_
     engine = showing(c)
     _lit_settled(c)
     _services(c).settings.kiosk.ripple_stagger_s = 1.2
-    # (Coastal Tides steps in sim since D65: its picture carries steps, not a ripple)
+    # every scene steps in sim since D77 (its picture carries steps, not a ripple): the live path, where the stepped
+    # rung is refused until Gate R, keeps the ripple this test is about
     scene = next(s for s in ("garden-gathering", "goodnight-glow") if s != engine.current_plan().mode_id)
+    refuse_stepped(engine, scene)
     r = c.post("/api/kiosk/scene", json={"scene": scene})
     assert r.status_code == 200, r.text
     body = _panel(c)
