@@ -945,6 +945,37 @@ def test_a_breaths_copy_names_only_the_colours_it_reaches():
     assert D.breath_offsets(D.seed_draft(TRIO, "golden-hour").stepped) == [0.0]  # travel: the still design
 
 
+def test_a_breath_near_an_end_of_the_design_names_only_what_the_clamp_reaches():
+    """Review B-R6-TS-2: a breath's colour offset is clamped at the ends of the design, never wrapped
+    (`composer._offset_t`), so `reached_stops` clamps too. A sun at (37.5, 20) in sits on r0c0's centre (t 0): a
+    forward shift of 0.05 holds it at soft gold, where a wrap would carry it to t 0.95, lavender, which no strand is
+    ever sent. The colours named are exactly the stops nearest the t's the composer itself gives the nine module
+    centres over the breath's offsets, so the Lab's copy and the strands can't drift apart."""
+    from conductor.looks import composer
+
+    near_end = {
+        "stepped.mode": "breathe",
+        "stepped.shift": 0.05,
+        "stepped.brightness_swing": 0,
+        "layout": {"kind": "radial", "centre_in": [37.5, 20.0]},
+    }
+    draft = edit("golden-hour", **near_end)
+    patched = apply(draft)
+    st = patched.modes.mode("golden-hour").techniques.stepped
+    assert st.moving_feature.endswith("drifts and settles: soft gold, then peach, sunset pink and rose.")
+    assert "lavender" not in st.moving_feature.lower()
+    # the composer's own t at every module centre, over every offset the breath sends (both signs)
+    ev = composer._Evaluator(st.canvas, CANOPY, patched.recipes)
+    offsets = D.breath_offsets(draft.stepped)
+    assert offsets == [-0.05, -0.025, 0.0, 0.025, 0.05]
+    ts = [ev._offset_t(x, y, o) for x, y in F.module_centres(CANOPY, D.GRID).values() for o in offsets]
+    assert min(ts) == 0.0  # r0c0 is held at the start of the design, never wrapped round to its end
+    names = [c.name for c in draft.palette]
+    half = 0.5 / (len(names) - 1)
+    sent = [n for i, n in enumerate(names) if any(abs(t - i / (len(names) - 1)) <= half + 1e-9 for t in ts)]
+    assert D._breath_colours(draft, CANOPY) == sent == ["Soft gold", "Peach", "Sunset pink", "Rose"]
+
+
 def test_breathe_problems_land_on_the_stepped_fields(app_client):
     # the schema's own checks of the kind of motion name the stepped rung
     [nothing] = problems(edit("golden-hour", **{"stepped.mode": "breathe"}))  # no shift, no swing
