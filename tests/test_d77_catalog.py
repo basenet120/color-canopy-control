@@ -688,36 +688,87 @@ def test_hash_names_are_quoted_in_the_yaml():
         assert len(hashed) == 18
 
 
-@pytest.mark.parametrize("scene_id", CATALOG)
-def test_named_colours_are_on_the_strands(scene_id):
-    """Module-level copy names a colour only where some strand shows at least about a third of it (the weight of stop
-    i at t is max(0, 1 − |t − i/(n−1)|·(n−1))), and hedges one under half ("a touch of", "a hint of", "toward"):
-    integration C28, recorded in D77. The moving copy names only colours some strand is nearest to at some step.
-    D77's hand copy, so pinned while drafted: the Lab's generated copy names only the colours module level reaches."""
-    skip_unless_drafted(scene_id)
-    scene, mode = SCENES.get(scene_id), MODES.mode(scene_id)
+def _stop_weights(scene, mode) -> dict[str, float]:
+    """Each palette colour's largest share of some strand's mix at module level: the weight of stop i at t is
+    max(0, 1 − |t − i/(n−1)|·(n−1)), t the design's value at each module centre (the stops are evenly spaced: a
+    blocking scene rule)."""
     names = [c.name for c in scene.palette]
     n = len(names)
-    t = _t(scene_id)
-    weight = {
-        name: max(max(0.0, 1 - abs(v - i / (n - 1)) * (n - 1)) for v in t.values())
-        for i, name in enumerate(names)
+    field = mode.techniques.modules.sample.canvas.field
+    ts = [F.value(field, x, y, CANOPY) for x, y in F.module_centres(CANOPY, GRID).values()]
+    return {
+        name: max(max(0.0, 1 - abs(t - i / (n - 1)) * (n - 1)) for t in ts) for i, name in enumerate(names)
     }
+
+
+def _untrue_colour_names(scene, mode, ctx: CompileContext) -> list[tuple]:
+    """What the copy names that the strands don't show (CLAUDE.md: kiosk copy must be true): a colour named in the
+    module-level sentence that no strand shows at least a third of (`_stop_weights`), and one named in the moving
+    sentence that no strand is nearest to (ΔE76, among the palette) at any step of the compiled run. Empty when true."""
+    names = [c.name for c in scene.palette]
+    weight = _stop_weights(scene, mode)
+    tech = mode.techniques
+    wrong: list[tuple] = [
+        ("modules", name, round(weight[name], 3))
+        for name in _named(tech.modules.feature, names)
+        if weight[name] < 0.3
+    ]
+    if tech.stepped is not None:
+        steps = compile_mode(scene.id, Tier.STEPPED, ctx).program.steps
+        nearest = {
+            min(scene.palette, key=lambda c: R.delta_e76(c.rgb, _rgb(hex_))).name
+            for step in steps
+            for hex_ in step.colours.values()
+        }
+        wrong += [
+            ("stepped", name) for name in _named(tech.stepped.moving_feature, names) if name not in nearest
+        ]
+    return wrong
+
+
+@pytest.mark.parametrize("scene_id", CATALOG)
+def test_named_colours_are_on_the_strands(scene_id):
+    """Invariant, whatever a Lab export or a hand edit changed: module-level copy names a colour only where some
+    strand shows at least about a third of it, and the moving copy only colours some strand is nearest to at some
+    step (`_untrue_colour_names`). Hand copy stays only while the layout and the colour names do (§3.3), so an edit
+    under it that moves a colour off the strands fails here (review TS-1: Golden Hour #2's stops put back in their old
+    order leave "Home Depot orange" named at a 0.024 mix).
+    D77's hand style, pinned while drafted: a named colour under half a strand's mix sits in a hedged clause ("a touch
+    of", "a hint of", "toward"; integration C28, recorded in D77). The Lab's generated copy names only the stops module
+    level reaches, so it needs no hedge (the next test)."""
+    scene, mode = SCENES.get(scene_id), MODES.mode(scene_id)
+    assert _untrue_colour_names(scene, mode, _ctx()) == []
+    if not drafted(scene_id):
+        return
+    weight = _stop_weights(scene, mode)
     feature = mode.techniques.modules.feature
     clauses = re.split(r"[,:]", feature.lower())
-    for name in _named(feature, names):
-        assert weight[name] >= 0.3, (name, round(weight[name], 3))
+    for name in _named(feature, [c.name for c in scene.palette]):
         if weight[name] < 0.49:
             (clause,) = [c for c in clauses if name.lower() in c]
             assert any(h in clause for h in HEDGES), (name, clause)
-    steps = _stepped_plan(scene_id).program.steps
-    nearest = {
-        min(scene.palette, key=lambda c: R.delta_e76(c.rgb, _rgb(hex_))).name
-        for step in steps
-        for hex_ in step.colours.values()
-    }
-    moving = _named(mode.techniques.stepped.moving_feature, names)
-    assert set(moving) <= nearest, sorted(set(moving) - nearest)
+
+
+@pytest.mark.parametrize("scene_id", CATALOG)
+def test_the_labs_generated_copy_names_only_colours_on_the_strands(scene_id):
+    """The same truth on the copy a Lab export regenerates (both sentences "generated"), so the invariant above holds
+    for any scene the session redesigns: `make lab-roundtrip` stays green."""
+    git = D.load_trio(CONFIG_DIR)
+    data = D.seed_draft(git, scene_id).model_dump(mode="json")
+    data["copy"] = {"modules": "generated", "stepped": "generated"}
+    trio = D.apply_drafts(
+        git, {scene_id: D.SceneDraft.model_validate(data)}, canopy=CANOPY, settings=SETTINGS
+    )
+    mode = trio.modes.mode(scene_id)
+    assert mode.techniques.modules.feature != MODES.mode(scene_id).techniques.modules.feature  # regenerated
+    ctx = CompileContext(
+        registry=REGISTRY,
+        capabilities={m.id: CAPS for m in MODULES},
+        modes=trio.modes,
+        recipes=trio.recipes,
+        canopy=CANOPY,
+    )
+    assert _untrue_colour_names(trio.scenes.get(scene_id), mode, ctx) == []
 
 
 # ---- what the strands are sent ---------------------------------------------------------------------------------------
