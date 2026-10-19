@@ -117,6 +117,7 @@ def test_the_ops_page_draws_the_ipad_card_from_the_served_model(app_client):
         'id="ipad-card"',
         'id="ipad-scenes"',
         'id="ipad-summary"',
+        'id="ipad-error"',  # a load that failed (cleared by the next fresh answer); ipad-result is a switch's own
         'id="ipad-notes"',
         'id="ipad-result"',
     ):

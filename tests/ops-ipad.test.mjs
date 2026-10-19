@@ -70,6 +70,99 @@ test("the card's key changes on one flip and only then", () => {
   assert.equal(ipadKey(noted), before); // the summary and notes redraw on their own; the rows don't need to
 });
 
+// ops.js's own card functions (note, drawIpad, loadIpad, flipIpad), lifted from the served source and run over stub
+// elements: ops.js is a page script (it wires the DOM at load), so it can't be imported under node.
+function opsSource(js, name) {
+  const at = js.indexOf(`function ${name}(`);
+  assert.ok(at >= 0, `ops.js has no function ${name}`);
+  const start = js.slice(Math.max(0, at - 6), at) === "async " ? at - 6 : at;
+  const open = js.indexOf("{", js.indexOf(")", at));
+  let depth = 0;
+  for (let i = open; i < js.length; i += 1) {
+    if (js[i] === "{") depth += 1;
+    else if (js[i] === "}" && (depth -= 1) === 0) return js.slice(start, i + 1);
+  }
+  throw new Error(`unbalanced ${name}`);
+}
+
+async function ipadCard() {
+  const js = readFileSync(new URL("../web/ops/ops.js", import.meta.url), "utf8");
+  const { show } = await import("../web/ops/dom.js"); // show() touches only the element it is given
+  const els = {};
+  const $ = (id) => (els[id] ||= { id, textContent: "", hidden: true, className: "notice", children: [] });
+  const answers = [];
+  const api = async (path, init) => {
+    const next = answers.shift();
+    assert.ok(next, `no answer queued for ${path}`);
+    if (next instanceof Error) throw next;
+    return typeof next === "function" ? next(path, init) : next;
+  };
+  const stubs = {
+    $,
+    api,
+    show,
+    fill: (el, kids) => (el.children = kids),
+    h: (tag, attrs, ...children) => ({ tag, attrs, children }),
+    ipadKey,
+    ipadRows,
+    ipadSummary,
+    loadState: () => {},
+  };
+  const names = ["note", "drawIpad", "loadIpad", "flipIpad"];
+  const src = `let ipadDrawn = "";\n${names.map((n) => opsSource(js, n)).join("\n")}\nreturn { ${names.join(", ")} };`;
+  const card = new Function(...Object.keys(stubs), src)(...Object.values(stubs));
+  return { ...card, $, answers };
+}
+
+test("a failed load says so on the card, and the next load that works takes it away", async () => {
+  const { loadIpad, flipIpad, $, answers } = await ipadCard();
+  const LOST = "Can't reach the Conductor. Check the connection and try again.";
+  answers.push(new Error(LOST)); // e.g. the Conductor restarting during a deploy
+  await loadIpad();
+  assert.equal($("ipad-error").hidden, false);
+  assert.equal($("ipad-error").textContent, LOST);
+  assert.equal($("ipad-error").className, "error");
+  assert.equal($("ipad-result").hidden, true, "a load never writes the switch's line");
+
+  answers.push(structuredClone(BODY)); // the next 10 s poll gets through
+  await loadIpad();
+  assert.equal($("ipad-error").hidden, true, "the stale error goes with the first fresh answer");
+  assert.equal($("ipad-error").textContent, "");
+  assert.equal($("ipad-summary").textContent, ipadSummary(BODY));
+  assert.equal($("ipad-scenes").children.length, BODY.scenes.length);
+
+  // a switch's own answer stays until the next switch, through a failed poll and the one after it
+  const row = ipadRows(BODY)[3];
+  const flipped = (_path, init) => {
+    assert.deepEqual(init.body, { scene: row.id, show: true });
+    return { ...structuredClone(BODY), message: "Golden Hour #3 is on the iPad." };
+  };
+  answers.push(flipped);
+  await flipIpad({ disabled: false }, row);
+  assert.equal($("ipad-result").textContent, "Golden Hour #3 is on the iPad.");
+  assert.equal($("ipad-result").className, "banner-ok");
+  answers.push(new Error(LOST));
+  await loadIpad();
+  assert.equal($("ipad-error").hidden, false);
+  answers.push(structuredClone(BODY));
+  await loadIpad();
+  assert.equal($("ipad-error").hidden, true);
+  assert.equal($("ipad-result").hidden, false);
+  assert.equal($("ipad-result").textContent, "Golden Hour #3 is on the iPad.");
+
+  // a switch that fails says so on its own line, re-enables, and a later good poll leaves its answer alone
+  const button = { disabled: false };
+  answers.push(new Error("The iPad's menu couldn't be saved."));
+  await flipIpad(button, row);
+  assert.equal($("ipad-result").className, "error");
+  assert.equal(button.disabled, row.disabled);
+  answers.push(structuredClone(BODY));
+  await loadIpad();
+  assert.equal($("ipad-result").textContent, "The iPad's menu couldn't be saved.");
+  assert.equal($("ipad-error").hidden, true);
+  assert.equal(answers.length, 0);
+});
+
 test("the model names no count it can't know and fetches nothing", () => {
   const src = readFileSync(new URL("../web/ops/ipad-model.mjs", import.meta.url), "utf8");
   assert.ok(!/nine/i.test(src));

@@ -211,7 +211,10 @@ function drawModes(modes, current) {
 }
 
 // ---- On the iPad (D76; conductor/ipad_menu.py): which scenes guests can choose ------------------------------------
+// Two message lines: #ipad-error says the card couldn't be refreshed and goes as soon as a fresh answer is drawn (as
+// renderState clears #engine-error); #ipad-result is a switch's own answer and stays until the next switch.
 function drawIpad(body) {
+  show($("ipad-error"), ""); // a fresh answer: the card is current again
   show($("ipad-summary"), ipadSummary(body));
   show($("ipad-notes"), (body.notes || []).join(" "));
   const key = ipadKey(body);
@@ -247,7 +250,7 @@ async function loadIpad() {
   try {
     drawIpad(await api("/api/ops/ipad-scenes"));
   } catch (err) {
-    note($("ipad-result"), err.message, "error");
+    note($("ipad-error"), err.message, "error"); // the rows on screen stay; this line says they may be stale
   }
 }
 
