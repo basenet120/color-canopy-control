@@ -42,8 +42,8 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   desired rows of every module now differ from those sent (the brightness row), so that step sends each one with
   the new level (one PUT each, no extra burst). Never into a step the cap would hold back (review B-R3-1): the
   change then goes out at once as its own burst, the room the cap keeps. A step held after all (the window filled
-  in the moments between) still sends the folded change then, on the step last sent, so the panel never draws a
-  level the lights weren't sent.
+  in the moments between) still sends the folded change then, on the step last sent: a level the panel draws is
+  never more than `fold_guest_within_s` ahead of what was sent.
 - **The end.** At the last step boundary within the design's run_s the run ends on the mode's best still tier
   (D75, `engine.settle_after_run`: its canvas or slot where that can run, one write per module that changes), else
   the hold is sent once (to the modules not already showing it), and the runner stops. The plan's `feature` (the
@@ -117,7 +117,7 @@ class ProgramRunner:
         self.steps_sent = 0
         self.skipped = 0
         self.budget_holds = 0  # steps held back because they would have taken an account past the cap
-        self.held_steps = 0  # budget holds in a row (a step that writes resets it); HELD_STEPS_END end the run
+        self.held_steps = 0  # budget holds in a row (a step that writes resets it); HELD_STEPS_END end it
         # the source of a guest brightness change folded into the next step, until a step carries it (fold_guest)
         self._folded: str | None = None
         # the governor's window: (when, account, throttled) per write attempt to the run's modules

@@ -2,7 +2,7 @@
 
 _Last updated: 2026-10-18 night (preset-options PR B `claude/motion-every-scene`: motion on every scene — breathe and
 shimmer beside travel, a guest's choice runs first then settles on the best still tier, the idle breath off — D75;
-built and verified in sim, review rounds 1 and 2 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
+built and verified in sim, review rounds 1–3 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
 flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -73,12 +73,31 @@ exports made before D77 lands propose a reserved D-number; renumber by hand.
   - **B-R2-TS-1 / TS-2 / TS-5:** tests that a run ended by held steps settles one cap window (60 s) later, that the
     idle return with `motion.idle` on is one `breathe_run_s` breath, that a guest choosing the idle look mid-breath
     gets the full run, and that a folded, inverted, repeated breathe takes its lags from the plain design.
+- **Review round 3 (Oct 19): every confirmed finding fixed**, each with a test and a mutation check (the fixed line
+  reverted, its test failing, the fix restored and `git status` showing only the intended changes):
+  - **B-R3-1:** a guest's brightness was folded into the next step even when the cap would hold that step back, so
+    it waited for the run's end (8.2 s in the reviewer's probe) while the panel drew it. `fold_guest` now checks the
+    account's room: a change the cap would hold back goes out at once as its own burst (the room the cap keeps), and a
+    step held after all (the window filled in the moments between) sends the folded change then, on the step last
+    sent. Tests: the reviewer's probe (out at once, the panel never draws a level the lights weren't sent) and a
+    fold the cap then holds (sent at that step, on step 1's colours). With every guest level reaching the lights, a
+    breath's step after a held one could have nothing to write and counted as sent, so the guest-mash breath ran on
+    under moving copy with every changing step held: **only a step that writes now resets the held count** (D75
+    updated; test: a breath whose every changing step is held ends after two).
+  - **B-R3-2:** the Lab's Motion hints follow the kind of motion: travel moves the layout; a breathe or shimmer keeps
+    it in place (each module's resting colour); a shimmer's lag is the seed's spread, not the design's far end
+    (`steppedControls` `designHow` / `lagHow`, swapped by `syncMotionEditor`). Node and static tests.
+  - **B-R3-TS-1:** a guest's Coastal Tides run downgraded mid-run and lifted inside `run_s` stays on the modules rung
+    with nothing stepping; the finished-run re-pick test now downgrades before its upgrade, so that step can fail.
+  - **B-R3-TS-5:** a runner test with sends landing 5 ms after each boundary (as on hardware) and one 429 retry in
+    the window: no step held; counting the full 60 s held step 8 (73 + 9 + 9 = 91).
 - **Verified (sim, macOS), how** (final tree, after the review fixes):
-  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 2): **2583 passed, 6
-    skipped, 44 subtests** (11.5 min; 2577 after round 1).
-  - `node --test tests/*.test.mjs`: 156/156 pass. `ruff check .` and `ruff format --check .`: clean (251 files).
-  - After round 2, `python -m conductor.soak` (seed 0) to a scratch path gives the committed report line for line
-    (only the generated time and wall time differ), so `docs/reports/sim-acceptance.md` stands as committed.
+  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 3): **2589 passed, 6
+    skipped, 44 subtests** (11.5 min; 2583 after round 2, 2577 after round 1).
+  - `node --test tests/*.test.mjs`: 157/157 pass. `ruff check .` and `ruff format --check .`: clean (251 files).
+  - After round 2, and again after round 3, `python -m conductor.soak` (seed 0) to a scratch path gives the
+    committed report line for line (only the generated time and wall time differ), so
+    `docs/reports/sim-acceptance.md` stands as committed.
   - `make scene-pins` / `regen_scene_pins.py --check`: up to date (only the two stepped `_pins` gained the new keys).
   - `LAB_ROUNDTRIP=1 pytest tests/test_lab_roundtrip.py`, **all six cases** (canonical, rename, add, remove, reorder,
     breathe: each export applied to a copy of the tree): the whole suite passes on every exported tree (~13 min
@@ -111,7 +130,11 @@ exports made before D77 lands propose a reserved D-number; renumber by hand.
   failure), so the test pins the moved centre's 14, 18, 14, 10; B-R1-2 classifies fault-carried steps rather than
   pinning the short soak to fixture modes (it also keeps `make soak`'s landing row from failing on an unlucky
   seed); B-R1-4 has no pytest (the repo has no line-ending policy; a `.gitattributes` is a repo-wide call for
-  Alon): `git diff --stat` equals `--stat -w` for both files.
+  Alon): `git diff --stat` equals `--stat -w` for both files. B-R3-1 also suggested folding only when no step was
+  held just before (`held_steps == 0`); the build checks the account's room alone, the exact test the step will
+  make, since after one hold a fold can still carry the level in the step that goes out where a burst of its own
+  would likely hold that step and end the run. B-R3-1 brought the held-count rule (a step with nothing to write
+  resets nothing), which the guest-mash test needed once folded levels stopped waiting.
 - **For Alon's review:** the three 07 edits (§1's writer paths gain the stepped runner, its settle and the idle
   breath; §6's re-trigger line is for on-device motion looks only, `Mode.motion` stays false; §6's kiosk constants:
   an idle return never starts a run unless `motion.idle` is on). `motion.idle` writes on a timer once on (07 §9's
