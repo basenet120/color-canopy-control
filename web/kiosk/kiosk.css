@@ -418,13 +418,20 @@ body[data-view="loading"] .app { visibility: hidden; }
 .snake { display: block; width: 100%; height: auto; margin-top: 18px; }
 .snake rect, .snake path { transition: fill 600ms ease-out; }
 /* the canopy's 270 lights on its nine panels (canopy-preview.mjs), drawn in canopy inches: dots fade to their colour
-   over 600 ms, a changing panel pulses softly, an unknown one is an outline with no colour claim */
+   over 600 ms, a changing panel pulses softly, an unknown one is an outline with no colour claim. With the fins
+   (D74): the canopy plus its 6 in apron inside a dashed outline, and 650 fin strokes over the dots, each the mix of
+   its four nearest heads. A fin fades like the dots and pulses with a changing panel; an unknown fin is a dashed
+   grey line (no colour claim), never the solid pale stroke of an unlit one */
 .canopy-preview { display: block; width: 100%; height: auto; max-height: 240px; margin-top: 18px; }
 .canopy-preview .panel { fill: none; stroke: var(--hairline); stroke-width: .6; }
 .canopy-preview .dot { transition: fill 600ms ease-out, fill-opacity 600ms ease-out; }
 .canopy-preview .dot.is-unknown { stroke: var(--slider-rest); stroke-width: .7; }
 .canopy-preview .dot.changing { animation: dot-pulse 1.2s ease-in-out infinite; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.canopy-preview .outline { fill: none; stroke: var(--hairline); stroke-width: .6; stroke-dasharray: 2 2; }
+.canopy-preview .fin { stroke-linecap: round; transition: stroke 600ms ease-out, stroke-opacity 600ms ease-out; }
+.canopy-preview .fin.changing { animation: dot-pulse 1.2s ease-in-out infinite; }
+.canopy-preview .fin.is-unknown { stroke: var(--slider-rest); stroke-opacity: 1; stroke-width: .5; stroke-dasharray: 1 1; stroke-linecap: butt; }
 
 .bright { padding: 4px 0 0; }
 /* landscape: the Now-showing card takes the column's spare height (snake centred in it), so the slider sits level
@@ -726,6 +733,7 @@ body[data-lost="true"] .power { opacity: .45; }
   .scene.is-pressed, .slider.is-dragging .slider-knob { transform: none; }
   .hdr-tint, .attract-tint, .snake rect, .snake path { transition: opacity 120ms ease-out !important; }
   .canopy-preview .dot { transition: opacity 120ms ease-out !important; animation: none !important; }
+  .canopy-preview .fin { transition: opacity 120ms ease-out !important; animation: none !important; }
   .scene[data-state="pending"] { outline-color: var(--brand); }
   .spinner { animation: none; border: 0; width: auto; height: auto; }
   .spinner::before { content: "•••"; letter-spacing: .1em; }

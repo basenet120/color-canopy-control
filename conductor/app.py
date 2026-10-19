@@ -134,8 +134,15 @@ def canopy_layout(scheme: str | None = None) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     module = cfg["module"]
+    panels = cfg.get("vwbd_panels") or {}  # VWBD's panel number per position (D74): the same under any scheme
     modules = {
-        (h.row, h.col): {"id": h.module, "row": h.row, "col": h.col, "orientation": h.orientation}
+        (h.row, h.col): {
+            "id": h.module,
+            "row": h.row,
+            "col": h.col,
+            "orientation": h.orientation,
+            "vwbd_panel": panels.get(h.module),
+        }
         for h in heads
     }
     return {

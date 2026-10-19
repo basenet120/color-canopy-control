@@ -11,8 +11,9 @@ import yaml
 
 from conductor.config import CONFIG_DIR, ConfigError, load_recipes
 from conductor.geometry import load_canopy_config
+from conductor.looks import field as F
 from conductor.looks import load_modes, parse_modes
-from conductor.looks.schema import MOTION_WORDS, FieldCanvas
+from conductor.looks.schema import MOTION_WORDS, FieldCanvas, motion_words
 
 SHIPPED = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
 
@@ -85,7 +86,12 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
 
 
 def test_load_modes_reads_a_config_dir(tmp_path):
-    for name in ("modes.yaml", "recipes.yaml", "canopy.yaml"):
+    for name in (
+        "modes.yaml",
+        "recipes.yaml",
+        "canopy.yaml",
+        "fins.json",
+    ):  # fins.json sits next to canopy.yaml
         shutil.copy(CONFIG_DIR / name, tmp_path / name)
     assert len(load_modes(tmp_path).modes) == 6
     (tmp_path / "modes.yaml").unlink()
@@ -185,7 +191,7 @@ def test_module_level_rows_must_match_the_canopy_grid():
 
 
 def test_invalid_yaml_is_a_config_error(tmp_path):
-    for name in ("recipes.yaml", "canopy.yaml"):
+    for name in ("recipes.yaml", "canopy.yaml", "fins.json"):
         shutil.copy(CONFIG_DIR / name, tmp_path / name)
     Path(tmp_path / "modes.yaml").write_text("modes:\n  calm: [unclosed\n")
     with pytest.raises(ConfigError, match="not valid YAML"):
@@ -266,6 +272,12 @@ def test_a_wave_in_sampled_static_copy_is_still_refused():
         ({**RADIAL, "radius_in": -10}, "sample → canvas → field → radius_in", "greater than 0"),
         ({**RADIAL, "radius_in": True}, "sample → canvas → field → radius_in", "greater than 0"),
         ({**RADIAL, "radius_in": float("inf")}, "sample → canvas → field → radius_in", "and finite"),
+        (
+            {"kind": "fins", "angle_deg": 32},
+            "sample → canvas → field → angle_deg",
+            "Extra inputs are not permitted",
+        ),
+        ({"kind": "fins", "transform": "mirror"}, "sample → canvas → field → transform", "can't be mirrored"),
     ],
 )
 def test_bad_field_specs_name_the_mode_and_field_plainly(field, where, message):
@@ -628,3 +640,86 @@ def test_a_stepped_canvas_names_known_colours():
 
     msg = _bad(unknown)
     assert "techniques → stepped → canvas → stops → [0] → color: unknown colour 'salmon'" in msg
+
+
+# ---- the fins' rings (D74) ----------------------------------------------------------------------------------------
+BASELINE_CANOPY = load_canopy_config(
+    Path(__file__).resolve().parent / "fixtures_lab_baseline" / "canopy.yaml"
+)
+FINS = {"kind": "fins"}
+
+
+def test_a_fins_design_loads_and_its_copy_reads_from_the_centre_out():
+    data = copy.deepcopy(RAW)
+    _sampled(FINS)(data)
+    canvas = _parse(data).mode("coastal-tides").techniques.modules.sample.canvas
+    assert isinstance(canvas.field, F.FinsField)
+    msg = _bad(
+        _sampled(FINS, feature="Each strand set to one colour, so the palette steps column by column.")
+    )
+    assert "laid out 'from the centre out'" in msg
+    assert motion_words(canvas, None, "reverse") == "toward the centre"  # the words never need the canopy
+    assert motion_words(canvas, None, "forward") == "from the centre out"
+
+
+def _golden_fins(where: str):
+    """Golden Hour (a T1 canvas, a modules sample and a stepped rung, one YAML anchor) with only `where`'s canvas
+    on the fins' rings. The stepped rung must step its modules sample, so it comes off the ladder unless both
+    change."""
+
+    def mutate(d):
+        golden = d["modes"]["golden-hour"]
+        tech = golden["techniques"]
+        fins = {**copy.deepcopy(tech["canvas"]["canvas"]), "field": dict(FINS)}
+        if where == "techniques → canvas → canvas":
+            tech["canvas"]["canvas"] = fins
+            return
+        golden["ladder"] = [t for t in golden["ladder"] if t != "stepped"]
+        if where == "techniques → modules → sample → canvas":
+            tech["modules"]["sample"] = {**tech["modules"]["sample"], "canvas": fins}
+        else:
+            tech["stepped"] = {**tech["stepped"], "canvas": fins}
+
+    return mutate
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "techniques → canvas → canvas",
+        "techniques → modules → sample → canvas",
+        "techniques → stepped → canvas",
+    ],
+)
+def test_a_fins_design_over_a_canopy_without_fins_is_a_plain_config_error(where):
+    data = copy.deepcopy(SHIPPED)
+    _golden_fins(where)(data)
+    assert "fin_map" not in BASELINE_CANOPY
+    with pytest.raises(ConfigError) as e:  # never a bare ValueError from evaluating the field
+        parse_modes(data, recipes=RECIPES, canopy=BASELINE_CANOPY, path="config/modes.yaml")
+    msg = str(e.value)
+    assert f"mode 'golden-hour' → {where} → field: a fins design needs the canopy's fin map" in msg
+    assert msg.count("needs the canopy's fin map") == 1
+
+
+def test_a_fins_design_without_a_fin_map_keeps_the_canopy_grid_checks():
+    def mutate(d):
+        _golden_fins("techniques → canvas → canvas")(d)
+        golden = d["modes"]["golden-hour"]
+        golden["ladder"] = [t for t in golden["ladder"] if t != "stepped"]
+        golden["techniques"].pop("stepped")
+        level = golden["techniques"]["modules"].pop("sample")["brightness"]
+        golden["techniques"]["modules"]["rows"] = [
+            {"kind": "rgb", "rgb": [255, 155, 196], "brightness": level}
+        ] * 2
+
+    data = copy.deepcopy(SHIPPED)
+    mutate(data)
+    with pytest.raises(ConfigError) as e:
+        parse_modes(data, recipes=RECIPES, canopy=BASELINE_CANOPY, path="config/modes.yaml")
+    msg = str(e.value)
+    assert (
+        "mode 'golden-hour' → techniques → canvas → canvas → field: a fins design needs the canopy's fin map"
+        in msg
+    )
+    assert "lists 2 looks but the canopy has 3 module rows" in msg

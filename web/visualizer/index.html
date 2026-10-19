@@ -293,8 +293,11 @@ function draw() {
     const dot = s && hd.engine ? 12 : 0;
     // On a narrow screen the label shortens to fit its module (the dot still carries the status colour).
     const room = c.module_width_in * scale - 8 - 10 - dot;
-    const full = `${m.id} · ${m.orientation}` + (s && hd.engine ? ` · ${st ? st[1] : "Unknown"}` : "");
-    const text = [full, `${m.id} · ${m.orientation}`, m.id].find((t) => ctx.measureText(t).width <= room) || m.id;
+    // VWBD's panel number (P-01 … P-09, D74) follows the orientation, for labelling kits at install.
+    const full = `${m.id} · ${m.orientation}` + (m.vwbd_panel ? ` · ${m.vwbd_panel}` : "")
+      + (s && hd.engine ? ` · ${st ? st[1] : "Unknown"}` : "");
+    const text = [full, `${m.id} · ${m.vwbd_panel || m.orientation}`, m.id]
+      .find((t) => ctx.measureText(t).width <= room) || m.id;
     const x = X(m.col * c.module_width_in) + 4, y = Y(m.row * c.module_height_in) + 4;
     ctx.fillStyle = css("--ground"); ctx.fillRect(x, y, ctx.measureText(text).width + 10 + dot, 18);
     if (dot) {

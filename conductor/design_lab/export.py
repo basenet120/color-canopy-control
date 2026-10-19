@@ -800,6 +800,8 @@ def describe_field(field: Any) -> str:
             text += f", radius {_num(field.radius_in)} in"
     elif isinstance(field, F.SweepField):
         text = f"sweep around ({_num(field.centre_in[0])}, {_num(field.centre_in[1])}) from {_num(field.start_deg)}°"
+    elif isinstance(field, F.FinsField):
+        text = "fin rings (the drawing's drops, deep centre first)"
     else:
         text = str(field)
     if field.transform == "mirror":
