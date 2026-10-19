@@ -21,13 +21,14 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from conductor.config import CONFIG_DIR, RecipesFile
 from conductor.design_lab import export as X
-from conductor.design_lab.draft import ConfigTrio, load_trio
+from conductor.design_lab.draft import ConfigTrio, DraftStepped, generated_copy, load_trio
 from conductor.design_lab.store import Version
 from conductor.geometry import load_canopy_config
 from conductor.looks import field as F
@@ -88,6 +89,21 @@ def _phrase(names: list[str]) -> str:
     return f"{low[0]}, then {rest}"
 
 
+def _breath_copy(trio: ConfigTrio, scene_id: str, canvas: FieldCanvas, scene: dict, stepped: dict) -> str:
+    """The moving sentence the Lab generates for an edited breathe/shimmer rung (`draft.generated_copy`, D75): what
+    each strand is sent, the breath's verb and only the colours it reaches. A stand-in draft carries just what that
+    sentence reads (the layout, the colour names and the rung's motion values)."""
+    draft = SimpleNamespace(
+        layout=canvas.field,
+        palette=[SimpleNamespace(name=c["name"]) for c in scene["palette"]],
+        solid=scene["default_solid"],
+        stepped=DraftStepped.model_validate(
+            {k: stepped[k] for k in DraftStepped.model_fields if k in stepped}
+        ),
+    )
+    return generated_copy(trio.modes.mode(scene_id), draft, CANOPY)["stepped"]
+
+
 def edit_scene(
     trio: ConfigTrio,
     scene_id: str,
@@ -104,7 +120,9 @@ def edit_scene(
 ) -> ConfigTrio:
     """`trio` with one scene edited across every rung in lockstep (a stand-in for apply_drafts): palette (with its
     recipe keys; the old keys it no longer names are removed), layout, brightness, solid, client copy, stepped timing.
-    The module-level and moving copy are regenerated when the layout or the colour names change."""
+    The module-level and moving copy are regenerated when the layout or the colour names change: a travel rung gets
+    the travel sentence, a breathe or shimmer rung (D75, D77) the Lab's own generated breath sentence
+    (`draft.generated_copy`), since the schema refuses travel copy on a breath."""
     scenes = trio.scenes.model_dump(mode="json")
     modes = trio.modes.model_dump(mode="json")
     recipes = trio.recipes.model_dump(mode="json")
@@ -161,7 +179,9 @@ def edit_scene(
             "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out "
             f"{words}: {_phrase(names)}."
         )
-        if t.get("stepped") is not None:
+        if t.get("stepped") is not None and t["stepped"].get("mode", "travel") != "travel":
+            t["stepped"]["moving_feature"] = _breath_copy(trio, scene_id, canvas, scene, t["stepped"])
+        elif t.get("stepped") is not None:
             flow = motion_words(canvas, CANOPY, t["stepped"]["direction"])
             t["stepped"]["moving_feature"] = (
                 "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and "
