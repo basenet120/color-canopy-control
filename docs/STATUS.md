@@ -2,7 +2,7 @@
 
 _Last updated: 2026-10-18 night (preset-options PR B `claude/motion-every-scene`: motion on every scene — breathe and
 shimmer beside travel, a guest's choice runs first then settles on the best still tier, the idle breath off — D75;
-built and verified in sim, review rounds 1–5 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
+built and verified in sim, review rounds 1–6 fixed Oct 19, not pushed; see its block). Before that, evening (PR G `claude/flagged-not-changing`: a
 flagged note no longer holds the panel at "changing", D73, merged as #37 `3c3ad38`; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -125,12 +125,30 @@ exports made before D77 lands propose a reserved D-number; renumber by hand.
   - **B-R5-TS-5:** a static test pins that `motionPaint` plays `M.paceSteps(st, tl.pace)` with `levels:
     step.levels`, and that `paintStage` passes a per-head level function through. Kills each of the three reverts,
     including the one that brought back B-R1-3.
+- **Review round 6 (Oct 19): every confirmed finding fixed**, each with a test and a mutation check (the fixed or
+  pinned line reverted, the test failing, restored, `git status` showing only the intended changes):
+  - **B-R6-1:** a lagged breath whose nine starts all came out equal (a shimmer's seed, 183 at lag 1 among 10 of
+    seeds 0–1999; or a design whose t rounds to one step at every module centre, a 600 in sun at lag 1) breathed as
+    one under "on their own" or "from one edge", and passed the schema, the blocking rules and the Lab's apply. The
+    schema now refuses it wherever there is a canopy (`_lag_problems`, through `_stepped_problems`: the load, the
+    scene rules, the Lab's apply), on `stepped.seed` or `stepped.lag_steps`; D75 and doc 04 say so. Tests: schema,
+    a scene-rules MUTATIONS case, the Lab's apply. **PR D:** a hand-picked seed or lagged design that collapses is
+    now refused at load, so `make scene-pins` and the suite catch it.
+  - **B-R6-TS-2:** a colour-only breath (shift 0.05) on a sun at r0c0's centre names soft gold to rose, never
+    lavender, and the names equal the stops nearest `composer._offset_t` at the nine centres. Kills a wrap in
+    `reached_stops`.
+  - **B-R6-TS-4:** a guest's 90 s run of the idle look with `motion.idle` every 60 s: one runner to the end, no idle
+    breath until it ends on its own, then the breath. Kills removing both run guards (reconciler and engine).
+  - **B-R6-TS-5:** a try-on of breathe-level (rung first) cleared by a pause comes back at module level, no runner,
+    no program command through the pause and after the resume. Kills `_restore_approved` without `| STILL_ONLY`.
+  - Not rerun after round 6 (no JS and no step changed): `LAB_ROUNDTRIP=1` (its breathe case's export was checked to
+    apply and load, lags 0, 1, 2) and the browser checks.
 - **Verified (sim, macOS), how** (final tree, after the review fixes):
-  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 5): **2601 passed, 6
-    skipped, 44 subtests** (11.5 min; 2596 after round 4, 2589 after round 3, 2583 after round 2, 2577 after
-    round 1).
+  - `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` (full suite, after round 6): **2607 passed, 6
+    skipped, 44 subtests** (11.6 min; 2601 after round 5, 2596 after round 4, 2589 after round 3, 2583 after
+    round 2, 2577 after round 1).
   - `node --test tests/*.test.mjs`: 157/157 pass. `ruff check .` and `ruff format --check .`: clean (251 files).
-  - After rounds 2, 3 and 4, `python -m conductor.soak` (seed 0) to a scratch path gives the
+  - After rounds 2, 3, 4 and 6, `python -m conductor.soak` (seed 0) to a scratch path gives the
     committed report line for line (only the generated time and wall time differ), so
     `docs/reports/sim-acceptance.md` stands as committed.
   - `make scene-pins` / `regen_scene_pins.py --check`: up to date (only the two stepped `_pins` gained the new keys).
