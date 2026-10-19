@@ -909,10 +909,11 @@ class CanopyEngine:
             source=source,
         )
         if plan is not None and self._outage is None:
-            # A stepped look whose next step is due within moments carries a new level itself, one PUT per module.
+            # A stepped look whose next step is due within moments carries a new level itself, one PUT per module,
+            # unless the cap would hold that step back: then it goes now (B-R3-1, `ProgramRunner.fold_guest`).
             # (Back on: the runner kept its step current while the canopy was off, so this sends that step.)
             runner = self._runner
-            folded = runner is not None and action == "brightness" and runner.fold_guest()
+            folded = runner is not None and action == "brightness" and runner.fold_guest(source)
             if not folded:
                 self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
                 self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")

@@ -452,6 +452,50 @@ def test_two_held_steps_apart_never_end_a_run_a_sent_step_resets_the_count():
     assert holds == 2 and ended == "the run is over"
 
 
+def test_a_breath_whose_every_changing_step_is_held_ends_a_step_with_nothing_to_write_resets_nothing():
+    """Review round 3 (D75, B4): a step with nothing to write isn't a sent step. breathe-level comes back to its hold's
+    level every other step (28, 32, 28, 24), so on an account with no room for any step that writes, step 1 is
+    held, step 2 has nothing to write (it is what the canopy shows), and step 3 is held: two holds in a row, and the
+    run ends on its still copy. Counted as sent, step 2 reset the count, and the breath ran on to its end under
+    "swells and softens" without a single level change on the lights."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        runner, plan = w.engine.runner, w.engine.current_plan()
+        real = runner._over_cap
+
+        def full(wanted):  # the account has no room for any step that writes
+            if wanted:
+                return {"account": "canopy", "writes_60s": 90, "counted": 90, "step_writes": 9, "room": 9}
+            return real(wanted)
+
+        runner._over_cap = full
+        await w.run_for(1.0)  # the mode's burst (step 0) is out
+        n = len(w.writes)
+        seen = []
+        for _ in range(3):  # steps 1–3
+            await w.run_for(runner.next_step_in() + 0.5)
+            seen.append((runner.index, runner.shown, runner.held_steps, runner.running))
+        out = (plan, seen, runner.ended, w.writes[n:], w.engine.state())
+        await w.close()
+        return out
+
+    plan, seen, ended, writes, state = run_virtual(main)
+    assert (
+        step_rows(plan, 2) == step_rows(plan, 0) != step_rows(plan, 1)
+    )  # the breath is back at its hold's level
+    assert seen == [
+        (1, 0, 1, True),  # held
+        (2, 2, 1, True),  # nothing to write: shown, the count kept
+        (3, None, 2, False),  # held again: two in a row end the run
+    ]
+    assert ended == "the account's write budget held back 2 steps in a row"
+    assert writes == []  # the lights never left the hold's level, and the end's hold was already showing
+    assert state.program is None and state.feature == plan.feature  # the still copy
+
+
 def shows_rows_equal(plan) -> bool:
     return all(plan.modules[d].rows == plan.program.steps[0].rows[d] for d in plan.modules)
 
@@ -700,6 +744,108 @@ def test_a_guest_brightness_change_mid_step_is_sent_at_once():
 
     burst = run_virtual(main)
     assert len(burst) == 9 and all(R.brightness(40) in rows for _, _, rows in burst)
+
+
+def test_a_guest_brightness_change_the_cap_would_hold_back_goes_out_at_once_never_folded():
+    """Review B-R3-1 (D75): a guest's level is never folded into a step the account's cap will hold back. A guest
+    moving the brightness every ~2 s (D72's pace on nine) through a guest's run at 7.5 s steps fills the window, so
+    the step after the last change is held. Folded into it, that change waited for the run's end (8 s here) while
+    the panel drew it on lights still at the old level. It goes out at once instead, as its own burst (the room the
+    cap keeps is for it), and the level the panel draws is always the one the lights were sent."""
+
+    async def main():
+        w = stepped_world(shipped=True)  # the shipped budget: 7.5 s steps on nine
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="kiosk")
+        runner = w.engine.runner
+        await w.run_for(5 * runner.step_s + 0.5)  # step 5 is out
+        refused = []
+        for level in (50, 60, 40):  # each goes out at once: step 6 is more than fold_guest_within_s away
+            refused.append((await w.engine.set_guest_brightness(level, source="kiosk")).refused)
+            await w.run_for(2.1)
+        due = runner.t0 + 6 * runner.step_s
+        wait = due - w.clock.monotonic()  # 0.7 s: close enough to step 6 to fold into it
+        refused.append((await w.engine.set_guest_brightness(30, source="kiosk")).refused)
+        at = w.clock.monotonic()
+        drawn_not_sent = []
+        while w.clock.monotonic() < at + 3 * runner.step_s:
+            program = w.engine.state().program
+            if program is not None:
+                drawn = {v for v in program["levels"][program["step"]] if v is not None}
+                sent = {level_of(w.engine.sent_rows[d]) for d in runner.plan.modules}
+                if drawn != sent:
+                    drawn_not_sent.append((round(w.clock.monotonic() - at, 2), drawn, sent))
+            await w.run_for(0.1)
+        holds = [e["step"] for e in w.events("program") if e.get("action") == "budget_hold"]
+        first = min((t for t, _, rows in w.writes if t >= at and level_of(rows) == 30), default=None)
+        out = (refused, wait, at, due, first, drawn_not_sent, holds, runner.ended)
+        await w.close()
+        return out
+
+    refused, wait, at, due, first, drawn_not_sent, holds, ended = run_virtual(main)
+    assert refused == [False] * 4 and 0 < wait <= 2.0
+    assert holds[:1] == [6]  # the step it would have folded into was held back
+    assert first is not None and first < due and first - at < 0.5  # out at once, not with a held step
+    assert drawn_not_sent == []  # the panel never drew a level the lights weren't sent
+    assert ended == "the account's write budget held back 2 steps in a row"
+
+
+def test_a_guest_level_folded_into_a_step_the_cap_then_holds_back_goes_out_at_that_step():
+    """Review B-R3-1: there was room when the guest's level was folded into the next step, but writes from
+    elsewhere filled the window in the moments before it, so the step is held. The level goes out then, on the step
+    last sent (one PUT per module), not a step or a run later: the lights, the frozen frame and the level the panel
+    draws agree, and the next step carries it on."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner, plan = w.engine.runner, w.engine.current_plan()
+        await w.run_for(runner.next_step_in() + 0.5)  # step 1 is out
+        await w.run_for(runner.next_step_in() - 1.5)  # 1.5 s before step 2
+        n, at = len(w.writes), w.clock.monotonic()
+        await w.engine.set_guest_brightness(40, source="ops")
+        await w.run_for(1.0)
+        before = w.writes[n:]  # folded: nothing of its own yet
+        account_writes, crowd = w.executor.account_writes, {"extra": 75}
+
+        def crowded(address, **kw):  # others fill the account's window just before step 2
+            return account_writes(address, **kw) + crowd["extra"]
+
+        w.executor.account_writes = crowded
+        await w.run_for(1.0)  # step 2 came due 0.5 s ago: held
+        burst = w.writes[n:]
+        held = (runner.index, runner.shown, runner.budget_holds, runner.running)
+        program = w.engine.state().program
+        await w.run_for(2.0)  # the burst has landed
+        lights = {level_of(w.sim.device_view(w.address(d))) for d in plan.modules}
+        crowd["extra"] = 0
+        m = len(w.writes)
+        await w.run_for(runner.next_step_in() + 0.5)  # step 3: room again
+        step_3 = (runner.shown, w.writes[m:])
+        labels = {
+            c["label"] for c in w.events("command") if c["source"] == "ops" and c["t"] >= w.clock.epoch + at
+        }
+        await w.close()
+        return plan, at, before, burst, held, program, lights, step_3, labels
+
+    plan, at, before, burst, held, program, lights, (shown_3, writes_3), labels = run_virtual(main)
+    assert before == []
+    assert held == (2, 1, 1, True)  # step 2 held: step 1 is still the step shown
+    # the guest's level went out when step 2 was held: one PUT per module, on step 1's colours, within the fold window
+    assert sorted(d for _, d, _ in burst) == sorted(plan.modules)
+    assert all(t - at <= 2.0 for t, _, _ in burst)
+    step_1 = step_rows(plan, 1)
+    for _, d, rows in burst:
+        assert level_of(rows) == 40
+        assert [r for r in rows if r.key != ("brightness", None)] == [
+            r for r in step_1[d] if r.key != ("brightness", None)
+        ]
+    assert labels == {"guest brightness: linear-columns"}
+    # the frozen frame is drawn at the level sent, and the lights read it
+    assert program["frames"][2] == program["frames"][1]
+    assert {v for v in program["levels"][2] if v is not None} == {40} == lights
+    assert shown_3 == 3 and len(writes_3) == 9 and all(level_of(rows) == 40 for _, _, rows in writes_3)
 
 
 def test_a_lock_release_sends_the_one_module():

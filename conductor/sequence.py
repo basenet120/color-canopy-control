@@ -25,7 +25,9 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   can't hold back — a guest's burst, 429 retries, re-asserts — lands in the rest of the reserve. A held step sends
   nothing, the step shown stays the last one sent — and is what the state draws (`to_state` repeats it: a held step
   is never drawn) — and the next step tries again (`budget_holds`). `HELD_STEPS_END` holds in a row end the run
-  (D75): the look then holds still, with its still copy, rather than claim motion the account can't pay for.
+  (D75): the look then holds still, with its still copy, rather than claim motion the account can't pay for. Only a
+  step that writes something resets the count: one with nothing to write (a breath's step after a held one, back at
+  the level shown) is neither a hold nor a send.
 - **A step** clears the engine's early re-assert counts and sends each driven module whose rows changed (its colour,
   its level, or a guest brightness folded into the step), plus the modules the reconciler deferred to it: one
   full-state PUT per module, never a slot object, through `engine.send(…, source="program")`. A breathe or shimmer
@@ -38,7 +40,10 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
   canopy back on, the current step is what goes out.
 - **Folding.** A guest brightness change within `fold_guest_within_s` of the next step isn't sent on its own: the
   desired rows of every module now differ from those sent (the brightness row), so that step sends each one with
-  the new level (one PUT each, no extra burst).
+  the new level (one PUT each, no extra burst). Never into a step the cap would hold back (review B-R3-1): the
+  change then goes out at once as its own burst, the room the cap keeps. A step held after all (the window filled
+  in the moments between) still sends the folded change then, on the step last sent, so the panel never draws a
+  level the lights weren't sent.
 - **The end.** At the last step boundary within the design's run_s the run ends on the mode's best still tier
   (D75, `engine.settle_after_run`: its canvas or slot where that can run, one write per module that changes), else
   the hold is sent once (to the modules not already showing it), and the runner stops. The plan's `feature` (the
@@ -112,7 +117,9 @@ class ProgramRunner:
         self.steps_sent = 0
         self.skipped = 0
         self.budget_holds = 0  # steps held back because they would have taken an account past the cap
-        self.held_steps = 0  # budget holds in a row (a sent step resets it); HELD_STEPS_END end the run
+        self.held_steps = 0  # budget holds in a row (a step that writes resets it); HELD_STEPS_END end the run
+        # the source of a guest brightness change folded into the next step, until a step carries it (fold_guest)
+        self._folded: str | None = None
         # the governor's window: (when, account, throttled) per write attempt to the run's modules
         self.attempts: deque[tuple[float, str, bool]] = deque()
         self._pending: dict[str, float] = {}  # device id → when the oldest write not yet verified was sent
@@ -281,11 +288,17 @@ class ProgramRunner:
                 cap=self.settings.account_writes_per_min,
             )
             self.engine._publish_soon()  # the panel draws the step last sent, frozen (to_state)
-            if self.held_steps >= HELD_STEPS_END:
+            if self.held_steps >= HELD_STEPS_END:  # the still look it ends on carries a guest level folded in
                 self.finish(f"the account's write budget held back {HELD_STEPS_END} steps in a row")
+            else:
+                self._send_folded()  # a guest's level folded into this step still goes out now (B-R3-1)
             return
-        self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})")
-        self.held_steps = 0
+        if self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})"):
+            self.held_steps = 0
+        # A step with nothing to write (its rows are what the canopy shows: in a breath, the step after a held one
+        # that comes back to the same level) neither holds nor resets the count. Otherwise a breath whose every
+        # changing step is held would never end, claiming motion the lights don't show.
+        self._folded = None  # the step carried it (or there was nothing left to carry)
 
     def _wanted(self) -> list[str]:
         """The modules a send now writes: those whose desired rows differ from the rows sent, plus the deferred."""
@@ -496,11 +509,37 @@ class ProgramRunner:
         n = min(self.index + 1, self.count)
         return max(0.0, self.t0 + n * self.step_s - self.clock.monotonic())
 
-    def fold_guest(self) -> bool:
-        """A guest brightness change: True when the next step is close enough to carry it (sent with it)."""
-        # The step's rows then differ from those sent (the brightness row), so every module goes with it.
+    def fold_guest(self, source: str) -> bool:
+        """A guest brightness change (from `source`): True when the next step is close enough to carry it (sent with
+        it) and will go out. The step's rows then differ from those sent (the brightness row), so every module goes
+        with it.
+
+        Never into a step the account's cap would hold back (review B-R3-1): the change would wait a step or more,
+        the run's end even, while the panel drew it. It goes out at once instead, as its own burst: the room the cap
+        keeps is for it. (The hold at the run's end is never held back, so it can always carry a change.) Should the
+        step be held after all (the window filled in the moments between), the change goes out then (`_send_folded`)."""
         wait = self.next_step_in()
-        return wait is not None and self.moving and wait <= self.settings.fold_guest_within_s
+        if wait is None or not self.moving or wait > self.settings.fold_guest_within_s:
+            return False
+        if self.index + 1 < self.count and self._over_cap(list(self.plan.modules)) is not None:
+            return False
+        self._folded = source
+        return True
+
+    def _send_folded(self) -> None:
+        """A guest brightness change folded into a step the cap then held back after all (B-R3-1): it goes out now on
+        its own, on the step last sent, to the modules whose rows it changed (the burst the fold saved, a moment
+        later), so the lights, the frames frozen at that step and the levels the panel draws agree."""
+        source, self._folded = self._folded, None
+        if source is None:
+            return
+        engine = self.engine
+        wanted = [d for d in self.plan.modules if engine.desired_rows(d) != engine.sent_rows.get(d)]
+        if not wanted:
+            return
+        engine._early_counts.clear()  # a silent drop of this change gets its early re-sends too
+        sent = engine.send(wanted, source=source, label=f"guest brightness: {self.plan.mode_id}")
+        self.deferred.difference_update(sent)  # what the reconciler deferred to a step went with it
 
     def defer(self, device_id: str) -> None:
         self.deferred.add(device_id)

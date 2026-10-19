@@ -169,7 +169,8 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
   the breath swings around it, never below `kiosk.guest_brightness_min`. The copy says what changes: "swells and
   softens" / "glow and soften" with a swing, "drifts and settles" without one, never "next colour" with no shift.
 - **Held steps (D75).** A step held back by the cap is drawn as the step last sent (the panel's frames and levels
-  freeze there), and two held steps in a row end the run on the still look and copy (`HELD_STEPS_END`).
+  freeze there), and two held steps in a row end the run on the still look and copy (`HELD_STEPS_END`). Only a step
+  that writes something resets the count: a breath's step after a held one, back at the level shown, writes nothing.
 - **The idle breath (`motion.idle`, off).** With `{breathe_run_s, every_s}` set, the idle look (if it has a rung)
   breathes once for `breathe_run_s` every `every_s` while it holds with nothing else in force, and an idle return
   lands as one breath. It never moves the idle clocks or the guest settings, yields at once to any guest input, and
@@ -177,7 +178,8 @@ Code: `conductor/sequence.py` (the runner), `Tier.STEPPED` in `conductor/looks/c
   live soak.
 - **Held, not queued.** During an outage, commissioning, a guest-input pause or while a guest has the canopy off,
   the step index advances but nothing is sent; a step that comes due late is skipped. A guest brightness change
-  close to the next step goes out with that step (`fold_guest_within_s`).
+  close to the next step goes out with that step (`fold_guest_within_s`), unless the cap would hold that step back:
+  then it goes out at once, as its own burst (review B-R3-1), and a step held after all still sends it then.
 - **Throttle governor.** Per account, over 60 s: at ≥ 8 write attempts answered 429/403 that are ≥ 25% of the
   run's attempts, the run stops, the still look goes out, and stepped looks on that account hold still for 5 min
   (`governor_cooloff_s`). It never rotates accounts or IPs.

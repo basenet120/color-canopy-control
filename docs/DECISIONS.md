@@ -1093,7 +1093,9 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   pacing back on the budget rule the run already kept, and its 120 s after a 90 s run landed past the 180 s idle
   return, so under the soak's pinned 5% throttling Golden Hour never reached its per-head sun.
 - **Held steps.** A budget-held step is drawn as the step last sent (frames and levels frozen), and two held steps in
-  a row (`HELD_STEPS_END`) end the run on the still look and the still copy; a sent step resets the count.
+  a row (`HELD_STEPS_END`) end the run on the still look and the still copy; a sent step resets the count. (Review
+  round 3: only a step that writes something resets it. A breath's step after a held one, back at the level shown,
+  writes nothing; counted as sent it let a breath whose every changing step was held run on under moving copy.)
 - **A step keeps a guest's room** (review B-R1-1). A guest's mood chosen mid-run now runs too, so a 60 s window could
   hold the old run's steps, the mood's burst and the new run's steps: nine sends, 81 writes before any retry, and the
   old check (the window plus the step within the cap) admitted the new run's first step at exactly 90. A step is now
