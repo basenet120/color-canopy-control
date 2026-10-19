@@ -178,7 +178,13 @@ def test_the_catalog_and_live_say_which_scenes_are_on_the_ipad(app_client):
         None,
         GOLDEN,
     )
-    assert all(s["on_ipad"] is True and s["group"] == sid for sid, s in scenes.items() if sid != GOLDEN)
+    # D77's options group under their base (option_of), every other scene is its own group
+    assert all(
+        s["on_ipad"] is True and s["group"] == (s["option_of"] or sid)
+        for sid, s in scenes.items()
+        if sid != GOLDEN
+    )
+    assert scenes["golden-hour-2"]["option_of"] == scenes["golden-hour-2"]["group"] == GOLDEN
     live = app_client.get("/api/lab/live")
     assert live.status_code == 200, live.text
     on = {s["id"]: s["on_ipad"] for s in live.json()["scenes"]}

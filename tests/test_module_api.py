@@ -328,7 +328,9 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
 
     lease, state = _open(app_client)
     card = {c["id"]: c for c in state["cards"]}["lowcountry-preview"]
-    assert not card.get("placeholder") and len(card["options"]["modes"]) == 6
+    assert (
+        not card.get("placeholder") and len(card["options"]["modes"]) == 18
+    )  # D77: the scenes and their options
     assert [[p["id"] for p in row] for row in card["options"]["positions"]][1] == ["r1c0", "r1c1", "r1c2"]
     modes, canopy = load_modes(), load_canopy_config()
     bench = _services(app_client).registry.get(BENCH)

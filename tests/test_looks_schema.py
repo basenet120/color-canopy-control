@@ -27,18 +27,20 @@ from conductor.looks.schema import (
 SHIPPED = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text())
 
 
-def _still_tides(raw: dict) -> dict:
-    """The shipped file with Coastal Tides still (no stepped rung, as before D65): the module-level checks below
-    mutate its sampled design, which its stepped rung would otherwise have to follow (the hold rule). The stepped
-    tests add their own rung; the shipped stepped rungs are tested in tests/test_d65_modes.py."""
+def _still(raw: dict) -> dict:
+    """The shipped file with every mode still (no stepped rung, as before D65): the module-level checks below mutate
+    sampled designs, which a stepped rung would otherwise have to follow (the hold rule), and since D77 every mode
+    has one. The stepped tests add Coastal Tides' rung back on its own design (the fin rings since D77); the shipped
+    stepped rungs are tested in tests/test_d65_modes.py and tests/test_d77_catalog.py."""
     out = copy.deepcopy(raw)
-    tides = out["modes"]["coastal-tides"]
-    tides["ladder"] = [t for t in tides["ladder"] if t != "stepped"]
-    tides["techniques"].pop("stepped", None)
+    for mode in out["modes"].values():
+        mode["ladder"] = [t for t in mode["ladder"] if t != "stepped"]
+        mode["techniques"].pop("stepped", None)
+        mode.pop("motion", None)
     return out
 
 
-RAW = _still_tides(SHIPPED)
+RAW = _still(SHIPPED)
 RECIPES = load_recipes()
 CANOPY = load_canopy_config()
 
@@ -55,16 +57,12 @@ def _bad(mutate) -> str:
     return str(e.value)
 
 
-def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
+def test_the_real_modes_file_loads_the_catalogs_eighteen_modes_and_unique_slots():
     modes = load_modes()
-    assert list(modes.modes) == [
-        "lowcountry-calm",
-        "rainbow-row-sunset",
-        "garden-gathering",
-        "coastal-tides",
-        "golden-hour",
-        "goodnight-glow",
-    ]
+    bases = ["lowcountry-calm", "rainbow-row-sunset", "garden-gathering", "coastal-tides", "golden-hour"]
+    bases.append("goodnight-glow")
+    catalog = [x for base in bases for x in (base, f"{base}-2", f"{base}-3")]  # D77: three options per scene
+    assert list(modes.modes) == catalog
     slots = [m.slot for m in modes.modes.values() if m.slot]
     assert sorted(slots) == ["custom-1", "custom-2", "custom-3"]
     assert modes.kiosk.title == "The Color Canopy"
@@ -77,8 +75,8 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
     labels = [RECIPES.colors[s.color].label for s in sunset.techniques.canvas.canvas.stops]
     assert labels == [c.name for c in load_scenes().get("rainbow-row-sunset").palette]
     assert sunset.techniques.modules.sample.canvas == sunset.techniques.canvas.canvas  # one design, two tiers
-    # no scene has on-device motion (D59), and no still copy claims movement; only the two stepped rungs' moving
-    # copy may (D65: Coastal Tides and Golden Hour)
+    # no scene has on-device motion (D59), and no still copy claims movement; only the stepped rungs' moving copy
+    # may (D65, D77: every mode has one)
     for mode in modes.modes.values():
         assert mode.motion is False
         if mode.techniques.canvas is not None:
@@ -88,10 +86,7 @@ def test_the_real_modes_file_loads_with_six_modes_and_unique_slots():
         for name in mode.ladder:
             if name != "stepped":
                 assert not MOTION_WORDS.search(getattr(mode.techniques, name).feature)
-    assert [m for m, mode in modes.modes.items() if "stepped" in mode.ladder] == [
-        "coastal-tides",
-        "golden-hour",
-    ]
+    assert [m for m, mode in modes.modes.items() if "stepped" in mode.ladder] == catalog
 
 
 def test_load_modes_reads_a_config_dir(tmp_path):
@@ -102,7 +97,7 @@ def test_load_modes_reads_a_config_dir(tmp_path):
         "fins.json",
     ):  # fins.json sits next to canopy.yaml
         shutil.copy(CONFIG_DIR / name, tmp_path / name)
-    assert len(load_modes(tmp_path).modes) == 6
+    assert len(load_modes(tmp_path).modes) == 18
     (tmp_path / "modes.yaml").unlink()
     with pytest.raises(ConfigError, match="modes.yaml is missing"):
         load_modes(tmp_path)
@@ -451,9 +446,16 @@ def test_without_a_canopy_only_the_layouts_that_dont_need_one_are_checked():
 
 
 # ---- stepped (D65; these build Coastal Tides' rung from RAW, the shipped one is in tests/test_d65_modes.py) ---------
+# Coastal Tides' own design flows 'from the centre out' (the fin rings, D77) unless a Lab export moved it: the copy
+# follows it, so `make lab-roundtrip` stays green
+TIDES_FLOW = motion_words(
+    FieldCanvas.model_validate(RAW["modes"]["coastal-tides"]["techniques"]["modules"]["sample"]["canvas"]),
+    CANOPY,
+    "forward",
+)
 TIDES_MOVING = (
     "Colour and dimming through the Hubspace cloud: each of the nine Hubspace strands shows one colour and is sent "
-    "its next colour every few seconds, so the palette moves diagonally like a tide."
+    f"its next colour every few seconds, so the palette moves {TIDES_FLOW} like a tide."
 )
 
 
@@ -570,7 +572,7 @@ def test_the_reviewers_false_sentences_are_refused(copy_):
 
 
 def test_moving_copy_must_say_the_strands_change_every_few_seconds():
-    msg = _bad(_stepped(moving_feature="Each strand shows one colour, so the palette moves diagonally."))
+    msg = _bad(_stepped(moving_feature=f"Each strand shows one colour, so the palette moves {TIDES_FLOW}."))
     assert "moving_feature must say the strands change 'every few seconds'" in msg
     assert _stepped_ok(_stepped()).moving_feature == TIDES_MOVING  # says it
 
@@ -581,7 +583,7 @@ def test_moving_copy_may_say_moves_but_static_copy_still_may_not():
     def static_moves(d):
         _stepped()(d)
         d["modes"]["coastal-tides"]["techniques"]["modules"]["feature"] = (
-            "Each strand one colour, so the palette moves diagonally."
+            f"Each strand one colour, so the palette moves {TIDES_FLOW}."
         )
 
     assert "techniques → modules → feature mentions movement ('moves')" in _bad(static_moves)
@@ -594,7 +596,7 @@ def test_a_stepped_rung_needs_a_later_modules_rung_with_the_same_design():
 
     def other_canvas(d):
         _stepped()(d)
-        d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["field"]["angle_deg"] = 80
+        d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["field"]["invert"] = True
 
     assert "stepped → canvas must be the modules sample's canvas" in _bad(other_canvas)
     assert "brightness (50) must be the modules sample's (85)" in _bad(_stepped(brightness=50))
@@ -617,7 +619,7 @@ def test_a_stepped_rung_needs_a_later_modules_rung_with_the_same_design():
 def test_moving_copy_names_the_flow_and_no_other():
     silent = _bad(_stepped(moving_feature="Each strand is sent its next colour every few seconds."))
     assert (
-        "stepped → moving_feature: the design flows 'diagonally' (forward), so the copy must say 'diagonally'"
+        f"stepped → moving_feature: the design flows '{TIDES_FLOW}' (forward), so the copy must say '{TIDES_FLOW}'"
         in silent
     )
     other = _bad(_stepped(moving_feature=f"{TIDES_MOVING} It moves column by column."))
@@ -708,7 +710,9 @@ def test_a_fins_design_over_a_canopy_without_fins_is_a_plain_config_error(where)
         parse_modes(data, recipes=RECIPES, canopy=BASELINE_CANOPY, path="config/modes.yaml")
     msg = str(e.value)
     assert f"mode 'golden-hour' → {where} → field: a fins design needs the canopy's fin map" in msg
-    assert msg.count("needs the canopy's fin map") == 1
+    # once for Golden Hour (D77's own fin-ring designs are refused on this canopy too, each once)
+    golden = [line for line in msg.splitlines() if "mode 'golden-hour'" in line]
+    assert len(golden) == 1 and "needs the canopy's fin map" in golden[0]
 
 
 def test_a_fins_design_without_a_fin_map_keeps_the_canopy_grid_checks():

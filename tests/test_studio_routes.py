@@ -13,6 +13,8 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from conductor.scenes import load_scenes
+
 OPS = ("crew", "canopy")
 
 
@@ -89,14 +91,9 @@ def test_the_studio_is_ops_only(monkeypatch, tmp_path):
 
 
 # ---- the canopy illustration paints the show's design (GET /api/canopy/design, P12) --------------------------------
-SCENE_IDS = (
-    "lowcountry-calm",
-    "rainbow-row-sunset",
-    "garden-gathering",
-    "coastal-tides",
-    "golden-hour",
-    "goodnight-glow",
-)
+SCENE_IDS = tuple(
+    s.id for s in load_scenes().scenes
+)  # D77: the six scenes and their 12 options (eight new fins)
 
 
 def _point(x: float, y: float) -> tuple[int, int]:

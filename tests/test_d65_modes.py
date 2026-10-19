@@ -1,10 +1,12 @@
-"""D65 in the shipped config: Coastal Tides and Golden Hour step through the cloud (sim-first, live off).
+"""D65 in the shipped config, extended to every scene and option by D77: each steps through the cloud (sim-first,
+live off).
 
-Coastal Tides starts stepped ([stepped, modules, strand]); Golden Hour steps where its per-head sun isn't available
-([canvas, slot, stepped, modules, strand]). Each stepped rung moves the scene's own design (the hold is its modules
-rung), says so only while it moves, and stays true on a partial canopy. Lowcountry Calm (idle), The Goodnight Glow,
-Rainbow Row Sunset and Garden Gathering stay still. On live hardware the show's own tier_allowed refuses the stepped
-rung until Gate R (motion.stepped.live_enabled), so the ladder lands on the next rung and nothing steps."""
+A scene without a canvas starts stepped ([stepped, modules, strand]); a painted scene (Rainbow Row Sunset, Garden
+Gathering, Golden Hour) steps where its per-head design isn't available ([canvas, slot, stepped, modules, strand]).
+Each stepped rung moves (or breathes) the scene's own design (the hold is its modules rung), says so only while it
+moves, and stays true on a partial canopy. On live hardware the show's own tier_allowed refuses the stepped rung
+until Gate R (motion.stepped.live_enabled), so the ladder lands on the next rung and nothing steps. D77's own
+catalog checks: tests/test_d77_catalog.py."""
 
 from __future__ import annotations
 
@@ -38,12 +40,16 @@ MODULES = REGISTRY.canopy_modules()
 CAPS = detect(*profile_parts("sqhdk03-sim"))
 GRID = [f"r{r}c{c}" for r in range(3) for c in range(3)]
 # The approved values live in the pinned fixture, which the Design Lab's export and `make scene-pins` regenerate
-# (Design Lab PLAN §3.7). D65's: Coastal Tides flows "diagonally", Golden Hour "from one edge"; forward, 6 steps of
-# 6 s a cycle, 90 s runs.
+# (Design Lab PLAN §3.7). D77's: Golden Hour #1 flows "from one edge"; Coastal Tides #1 drifts and settles on the
+# fin rings; the rest as tests/test_d77_catalog.py's DRAFT says.
 PINS = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
 PIN_CHANGED = "approved value changed: run make scene-pins and review the fixture diff"
 STEPPING = {m: p["flow_words"] for m, p in PINS.items() if "stepped" in p}  # mode → the flow its copy names
-D63_SUN = F.RadialField.model_validate({"kind": "radial", "centre_in": (0, 60), "metric": "canopy"})
+# D77's sun (Golden Hour #1, stretched so the deep centre is sunset pink): the rays test is skipped once the Lab
+# redesigns it
+GOLDEN_SUN = F.RadialField.model_validate(
+    {"kind": "radial", "centre_in": (0, 60), "metric": "canopy", "radius_in": 225}
+)
 
 
 def _ctx(**kw) -> CompileContext:
@@ -58,19 +64,17 @@ def _ctx(**kw) -> CompileContext:
 
 
 # ---- what moves ----------------------------------------------------------------------------------------------------
-def test_coastal_tides_and_golden_hour_step_their_own_designs_and_the_rest_stay_still():
+def test_every_option_steps_its_own_design():
     assert MODES.mode("coastal-tides").ladder == ["stepped", "modules", "strand"]
     assert MODES.mode("golden-hour").ladder == ["canvas", "slot", "stepped", "modules", "strand"]
+    assert list(STEPPING) == list(MODES.modes)  # D77: every scene and option has a stepped rung
     for mode_id, mode in MODES.modes.items():
         stepped = mode.techniques.stepped
-        if mode_id not in STEPPING:  # idle, Goodnight Glow, Rainbow Row Sunset, Garden Gathering
-            assert stepped is None and "stepped" not in mode.ladder, mode_id
-            continue
         sample = mode.techniques.modules.sample
         assert stepped.canvas == sample.canvas and stepped.brightness == sample.brightness  # the hold is T3
-        if mode.techniques.canvas is not None:  # Golden Hour: the same sun as its per-head canvas
+        if mode.techniques.canvas is not None:  # a painted scene: the same design as its per-head canvas
             assert stepped.canvas == mode.techniques.canvas.canvas
-        # the lead's D65 defaults: 6 s design steps, 6 a cycle, bounded 90 s runs, flowing the way the copy reads
+        # the pinned timing (D65's 6 s steps, 6 a cycle, 90 s runs for most; D77's breaths and longer runs their own)
         pinned = PINS[mode_id]["stepped"]
         assert (stepped.direction, stepped.steps_per_cycle, stepped.step_s, stepped.run_s) == (
             pinned["direction"],
@@ -118,7 +122,7 @@ def test_a_stepped_rung_moves_the_design_with_copy_true_to_it(mode_id):
 
 
 def test_golden_hours_rays_move_out_from_the_middle_of_the_left_edge():
-    if PINS["golden-hour"]["layout"] != D63_SUN.model_dump(mode="json"):  # any other kind or place
+    if PINS["golden-hour"]["layout"] != GOLDEN_SUN.model_dump(mode="json"):  # any other kind or place
         pytest.skip("Golden Hour's sun was redesigned in the Design Lab; see DECISIONS")
     steps = compile_mode("golden-hour", Tier.STEPPED, _ctx()).program.steps
     for (

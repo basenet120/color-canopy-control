@@ -98,7 +98,7 @@ def test_the_seed_of_every_scene_applies_to_the_approved_trio_exactly(scene_id):
     assert patched.recipes.model_dump() == TRIO.recipes.model_dump()
 
 
-def test_all_six_seeds_at_once_reproduce_the_approved_trio_and_the_shows_own_loaders():
+def test_every_seed_at_once_reproduces_the_approved_trio_and_the_shows_own_loaders():
     patched = apply(*(D.seed_draft(TRIO, s) for s in IDS))
     assert patched.dump() == TRIO.dump()
     # the live config too, which is exactly what the show compiles (load_trio reads through the show's own loaders)

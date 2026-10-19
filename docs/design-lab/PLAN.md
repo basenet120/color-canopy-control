@@ -476,7 +476,7 @@ What moves out of `tests/test_modes_match_scenes.py` (the invariants; each rule 
 | brightness | `test_every_tier_uses_the_scenes_brightness_and_nothing_moves` (levels) | canvas/slot/modules/stepped/strand brightness == `brightness_draft` |
 | static | same test (motion part) | no `motion_effect`/`motion_feature`, slot `speed == 0`, `mode.motion is False`, design `cycles == 1` |
 | ladder-end | `test_every_ladder_ends_on_the_solid_colour` | ladder ends `[modules, strand]`; strand rgb == solid; no `fallback_look`; feature ends `set to <solid lower>.` |
-| slots | `test_three_modes_are_painted_one_per_slot_and_the_rest_start_at_module_level` | with `approved`: same mode ids, same ladder, same slot per mode; canvas technique ⇔ slot |
+| slots | `test_three_modes_are_painted_one_per_slot_and_every_mode_steps_before_module_level` | with `approved`: same mode ids, same ladder, same slot per mode; canvas technique ⇔ slot |
 | one-design | `test_each_scene_is_one_design_whose_stops_are_its_palette` (not its layout pin) | `FieldCanvas`, `rgb_only`, `at == "centre"`, stops at i/(n−1), stop recipes' hex/label == palette, canvas == sample design |
 | recipes | `test_every_design_recipe_is_rgb_only_with_no_white` | each design key: `rgb_only` == hex at 100, no white; `blend == rgb_only`; `strand.rgb` == hex; one key per palette colour |
 | two-d | `test_module_level_is_the_design_at_each_modules_centre` (count), `test_the_module_level_copy_names_the_designs_layout` (uniform rows/cols), `test_no_scene_reads_as_three_columns_at_module_level` | 4–9 distinct T3 colours; no uniform rows/columns; max column ΔE76 ≥ max row ΔE76 / 3 |
@@ -695,7 +695,7 @@ builds its palettes from the fixture YAML's own `preview` hexes instead of `load
 
 S3 converts, reading `_pins` (or the scene catalog / `RECIPES`, or the live mode, where the value is just a palette
 colour, a recipe or plumbing):
-- `test_modes_match_scenes.py`: `LAYOUTS`; the words dict in `test_the_d63_layouts_name_where_each_design_sits`;
+- `test_modes_match_scenes.py`: `LAYOUTS`; the words dict in `test_the_layouts_name_where_each_design_sits`;
   Calm's `(209, 234, 227)` and Goodnight's `(196, 214, 243)`; `test_golden_hours_sun_shows_at_module_level` runs
   only while `_pins["golden-hour"]["layout"]` is D63's sun, else `pytest.skip("Golden Hour's sun was redesigned in
   the Design Lab; see DECISIONS")`.

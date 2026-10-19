@@ -65,6 +65,8 @@ from tests.review_fixture import APPROVED, OPTION_IDS, REVIEW_IDS, install_revie
 ROOT = Path(__file__).resolve().parent.parent
 CALM = "lowcountry-calm"
 GOLDEN = "golden-hour"
+# D77: "Golden Hour #1"; PR E renames in one place
+NAMES = {s.id: s.name for s in load_scenes(CONFIG_DIR).scenes}
 
 
 def _kiosk(**kw) -> KioskSettings:
@@ -351,8 +353,8 @@ def test_the_menu_hides_listed_scenes_keeps_the_idle_one_and_names_what_hides_no
     assert [s.id for s in m.visible.scenes] == [x for x in REVIEW_IDS if x != "golden-hour-2"]
     assert [s.id for s in m.catalog.scenes] == REVIEW_IDS
     assert m.review is True and IM.GRID_MAX == 6
-    git = IM.menu(load_scenes(), load_settings().kiosk)
-    assert [s.id for s in git.visible.scenes] == APPROVED and git.hidden == () and git.review is False
+    git = IM.menu(load_scenes(), load_settings().kiosk)  # D77: git's catalog is the 18 review options itself
+    assert [s.id for s in git.visible.scenes] == REVIEW_IDS and git.hidden == () and git.review is True
 
 
 def test_a_visible_option_of_a_hidden_base_keeps_its_group():
@@ -383,7 +385,7 @@ def test_the_idle_scene_settings_name_themselves():
 def test_the_live_menu_follows_the_installed_looks(tmp_path):
     services = _services(tmp_path)
     git = IM.live_menu(services)
-    assert [s.id for s in git.catalog.scenes] == APPROVED and git.trio is not None
+    assert [s.id for s in git.catalog.scenes] == REVIEW_IDS and git.trio is not None  # D77's catalog
     trio = install_review(services, hide=["golden-hour-3"])
     m = IM.live_menu(services)
     assert [s.id for s in m.catalog.scenes] == REVIEW_IDS and m.hidden == ("golden-hour-3",)
@@ -450,7 +452,7 @@ def test_the_switch_hides_and_shows_a_scene_and_says_so(tmp_path):
     assert back == IM.MenuChange(True, "Golden Hour #2 is back on the iPad.")
     assert kiosk.hidden_scenes == [] and yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": []}}
     assert IM.set_on_ipad(services, GOLDEN, True) == IM.MenuChange(
-        False, "Golden Hour is already on the iPad."
+        False, f"{NAMES[GOLDEN]} is already on the iPad."
     )
 
 
@@ -489,7 +491,7 @@ def test_the_idle_scene_cant_be_hidden_and_an_unknown_one_is_404(tmp_path):
     assert idle.value.status == 409
     assert (
         idle.value.message
-        == "Lowcountry Calm is the idle scene (kiosk.idle_mode), so the iPad always offers it."
+        == f"{NAMES[CALM]} is the idle scene (kiosk.idle_mode), so the iPad always offers it."
     )
     services.settings.kiosk.idle_scene = "goodnight-glow"
     with pytest.raises(IM.MenuRefused) as reset:
@@ -536,7 +538,7 @@ def test_an_unusable_overlay_is_a_live_ops_line_and_the_next_switch_writes_it_ag
     services = _services(tmp_path, "kiosk: {hidden_scenes: [golden-hour]\n")
     path = Path(services.data) / SETTINGS_OVERLAY_PATH
     before = path.read_bytes()
-    assert services.settings.kiosk.hidden_scenes == [] and len(IM.live_menu(services).visible.scenes) == 6
+    assert services.settings.kiosk.hidden_scenes == [] and len(IM.live_menu(services).visible.scenes) == 18
     lines = IM.problem_lines(services)
     assert lines == [
         (
@@ -931,7 +933,8 @@ def test_a_scene_eased_down_to_its_strand_rung_draws_its_whole_strand_look():
     )
     showing = ModePlan(CALM, "Lowcountry Calm", Tier.STRAND, "", False, {})  # the idle scene, eased down
     engine.current_plan = lambda: showing
-    assert [str(trio.modes.modes[s].ladder[0]) for s in (CALM, "coastal-tides")] == ["modules", "stepped"]
+    # D77: every scene is stepped-first now, the idle one included
+    assert [str(trio.modes.modes[s].ladder[0]) for s in (CALM, "coastal-tides")] == ["stepped", "stepped"]
     basis = GP.thumb_basis(engine, trio.modes, REVIEW_IDS)
     assert basis[CALM] == "strand" and basis["coastal-tides"] == "strand"
     assert CALM not in engine.compiled  # the plan showing now answers for its own scene
@@ -1202,7 +1205,10 @@ def test_six_or_fewer_visible_compute_and_send_no_thumbnail(app_client, monkeypa
         return real(*a, **kw)
 
     monkeypatch.setattr(GP, "thumb_plans", counted_basis)
-    for _ in range(3):  # the git config: six scenes
+    _svc(app_client).settings.kiosk.hidden_scenes = list(
+        OPTION_IDS
+    )  # D77's 12 options off the iPad, in place
+    for _ in range(3):  # the git config with every option hidden: the six #1s
         body = _panel(app_client)
         assert len(body["scenes"]) == 6 and all(s["thumb"] is None for s in body["scenes"])
         assert all(s["group"] == s["id"] and s["option_of"] is None for s in body["scenes"])
@@ -1308,7 +1314,7 @@ def test_an_unusable_overlay_is_an_ops_summary_line_and_every_scene_stays_on(mon
     with _client(monkeypatch, tmp_path, "kiosk: {hidden_scenes: [golden-hour]\n") as client:
         path = tmp_path / "data" / SETTINGS_OVERLAY_PATH
         before = path.read_bytes()
-        assert [s["id"] for s in _panel(client)["scenes"]] == APPROVED
+        assert [s["id"] for s in _panel(client)["scenes"]] == REVIEW_IDS  # every scene of D77's catalog
         lines = [m for m in _attention(client) if m.startswith("The iPad's scene list")]
         assert lines == [
             (
@@ -1377,7 +1383,7 @@ def test_the_ipad_switch_refuses_the_idle_scene_and_an_unknown_one(app_client):
     assert r.status_code == 409
     assert (
         r.json()["detail"]
-        == "Lowcountry Calm is the idle scene (kiosk.idle_mode), so the iPad always offers it."
+        == f"{NAMES[CALM]} is the idle scene (kiosk.idle_mode), so the iPad always offers it."
     )
     services.settings.kiosk.idle_scene = "goodnight-glow"
     r = app_client.post("/api/ops/ipad-scenes", json={"scene": "goodnight-glow", "show": False})

@@ -113,7 +113,9 @@ def test_every_mode_compiles_at_every_tier_of_its_ladder(mode_id, tier):
 def test_ladder_is_read_from_the_modes_file():
     assert ladder("golden-hour") == [Tier.T1, Tier.T2, Tier.STEPPED, Tier.T3, Tier.STRAND]  # D65
     assert ladder("coastal-tides") == [Tier.STEPPED, Tier.T3, Tier.STRAND]
-    assert ladder("lowcountry-calm") == [Tier.T3, Tier.STRAND]
+    assert ladder("lowcountry-calm") == [Tier.STEPPED, Tier.T3, Tier.STRAND]  # D77: every scene steps
+    for painted in ("rainbow-row-sunset", "garden-gathering"):
+        assert ladder(painted) == [Tier.T1, Tier.T2, Tier.STEPPED, Tier.T3, Tier.STRAND]
     assert ladder("lowcountry-calm", TM) == [Tier.STRAND]
     with pytest.raises(PlanError, match="no mode 'disco'"):
         ladder("disco")
@@ -343,10 +345,12 @@ def test_bench_flags_gate_t1_and_t2_on_live_hardware():
         compile_mode("rainbow-row-sunset", Tier.T2, _ctx(flags=unproven, **_painted()))
     proven = {m.id: DeviceFlags(t1_frames=True, t2_select=True) for m in MODULES}
     assert compile_mode("rainbow-row-sunset", Tier.T1, _ctx(flags=proven)).tier is Tier.T1
-    # live before the bench: the ladder lands on T3 and says why
-    plan = compile_first("rainbow-row-sunset", _ctx(flags=unproven))
+    # live before the bench: the ladder lands on T3 and says why (the stepped rung skipped, as the show's
+    # tier_allowed refuses it on live hardware until Gate R)
+    plan = compile_first("rainbow-row-sunset", _ctx(flags=unproven), skip=[Tier.STEPPED])
     assert plan.tier is Tier.T3 and any("Gate C" in n for n in plan.notes)
-    assert available_tiers("rainbow-row-sunset", _ctx(flags=unproven)) == [Tier.T3, Tier.STRAND]
+    available = [Tier.STEPPED, Tier.T3, Tier.STRAND]  # D77: the compiler doesn't gate the stepped tier
+    assert available_tiers("rainbow-row-sunset", _ctx(flags=unproven)) == available
     # the compiler doesn't gate the stepped tier (the show's tier_allowed does, tests/test_d65_modes.py)
     assert compile_first("golden-hour", _ctx(), skip=[Tier.T1]).tier is Tier.STEPPED
     assert compile_first("golden-hour", _ctx(), skip=[Tier.T1, Tier.STEPPED]).tier is Tier.T3
@@ -356,7 +360,7 @@ def test_a_wrong_head_count_refuses_t1_but_t3_still_compiles():
     short = _caps(framebuffer_lengths={"custom-1": 12, "custom-2": 12, "custom-3": 12})
     with pytest.raises(PlanError, match="reports 12 heads but this module should have 30"):
         compile_mode("rainbow-row-sunset", Tier.T1, _ctx(short))
-    assert compile_first("rainbow-row-sunset", _ctx(short)).tier is Tier.T3
+    assert compile_first("rainbow-row-sunset", _ctx(short), skip=[Tier.STEPPED]).tier is Tier.T3
 
 
 def test_a_device_without_capabilities_or_individual_mode_is_refused_plainly():
