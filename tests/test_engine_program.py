@@ -1071,6 +1071,52 @@ def test_a_guest_brightness_moves_the_breath_instead_of_flattening_it():
     assert running
 
 
+def test_the_state_carries_each_frames_levels():
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        await w.run_for(8)
+        state, plan = w.engine.state(), w.engine.current_plan()
+        lit = canopy_view.lit_state(CANOPY_CFG, w.registry, plan, state, now=w.clock.now())
+        await w.close()
+        # a partial canopy (two kits driven): undriven positions carry no level
+        w = stepped_world()
+        kits = {
+            e.id: (w.registry.address(e.id, "sim") if e.module in ("r0c0", "r0c1") else None)
+            for e in w.registry.canopy_modules()
+        }
+        ctx = CompileContext(
+            registry=w.registry,
+            capabilities={e.id: CAPS for e in w.registry.canopy_modules()},
+            modes=MODES,
+            recipes=RECIPES,
+            canopy=load_canopy_config(),
+            addresses=kits,
+        )
+        w.engine.deps.compile = lambda mode_id, tier: compile_mode(mode_id, tier, ctx)
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        await w.run_for(8)
+        partial = (w.engine.state(), w.engine.current_plan())
+        partial_lit = canopy_view.lit_state(CANOPY_CFG, w.registry, partial[1], partial[0], now=w.clock.now())
+        await w.close()
+        return state, lit, partial, partial_lit
+
+    state, lit, (partial, partial_plan), partial_lit = run_virtual(main)
+    levels = state.program["levels"]
+    assert len(levels) == len(state.program["frames"]) == 16  # 90 s at 6 s, and the hold
+    assert levels[:5] == [[28] * 9, [32] * 9, [28] * 9, [24] * 9, [28] * 9] and levels[-1] == [28] * 9
+    assert lit["motion"]["levels"] == levels  # every position lit
+    assert state.to_json()["program"]["levels"] == levels
+    driven = {GRID.index("r0c0"), GRID.index("r0c1")}
+    assert len(partial_plan.modules) == 2
+    for row in partial.program["levels"]:
+        assert all((v is not None) == (i in driven) for i, v in enumerate(row))
+    for row in partial_lit["motion"]["levels"]:
+        assert all((v is not None) == (i in driven) for i, v in enumerate(row))
+
+
 def test_start_up_and_the_idle_return_never_start_a_run_on_an_idle_look_with_a_rung():
     async def main():
         w = stepped_world(kiosk={"idle_mode": "breathe-level"})
