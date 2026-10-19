@@ -23,6 +23,7 @@ from conductor.config import RecipesFile, load_recipes, load_registry
 from conductor.engine_api import PlanError, Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, ladder, parse_modes
+from conductor.looks import field as F
 from conductor.looks.compile import (
     _hex,
     _sampled_rgb,
@@ -231,6 +232,35 @@ def test_the_design_start_leads_and_the_cycle_grows_by_the_largest_lag():
         "Stepped, breathing: 4 steps a breath of 6 s (up to 3 steps apart), a cycle of 7" in n
         for n in plan.notes
     )
+
+
+def test_a_lagged_breaths_starts_count_on_the_design_before_repeat_mirror_and_invert():
+    """D75 (review B-R2-TS-5): lags come from the design's own t before repeat, mirror and invert (`module_lags`).
+    That is what lets a lagged breathe's copy name its forward start words (schema._stepped_problems): a design
+    repeated twice, mirrored and inverted still starts its breath from one edge, column by column. Lags read off the
+    folded t would start both outer columns together and the middle last."""
+    folded = {"kind": "linear", "angle_deg": 0, "transform": "mirror", "invert": True, "cycles": 2}
+    tech = _tech("breathe-level").model_copy(update={"lag_steps": 4, "canvas": _linear(**folded)})
+    column = {pos: int(pos[-1]) for pos in GRID}
+    lags = module_lags(tech, GRID, CANOPY)
+    assert lags == column  # t = 1/6, 1/2, 5/6: 4t half-up is 1, 2, 3, less the first
+    plain = tech.model_copy(update={"canvas": _linear()})
+    assert lags == module_lags(plain, GRID, CANOPY)  # the plain design's
+    centres = F.module_centres(CANOPY, GRID)
+    raw = {p: math.floor(4 * F.value(tech.canvas.field, x, y, CANOPY) + 0.5) for p, (x, y) in centres.items()}
+    on_folded = {p: v - min(raw.values()) for p, v in raw.items()}
+    assert on_folded == {p: 3 if c == 1 else 0 for p, c in column.items()} != lags  # folded t: 1/3, 1, 1/3
+    # compiled, with the copy the schema allows: each column starts one step after the one before, from c0
+    raw_modes = copy.deepcopy(RAW)
+    techniques = raw_modes["modes"]["breathe-level"]["techniques"]
+    canvas = {**techniques["stepped"]["canvas"], "field": folded}
+    techniques["stepped"].update(canvas=canvas, lag_steps=4)
+    techniques["modules"]["sample"]["canvas"] = canvas
+    modes = parse_modes(raw_modes, recipes=RECIPES, canopy=CANOPY, path=PATH)
+    steps = compile_mode("breathe-level", Tier.STEPPED, _ctx(modes)).program.steps
+    ids = {p: BY_POSITION[p].id for p in GRID}
+    first = {p: next(n for n, s in enumerate(steps) if s.rows[d] != steps[0].rows[d]) for p, d in ids.items()}
+    assert first == {p: 1 + c for p, c in column.items()}
 
 
 def _shimmer_lags(seed: int, lag: int, positions) -> dict[str, int]:

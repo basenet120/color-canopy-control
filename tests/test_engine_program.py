@@ -1359,6 +1359,59 @@ def test_motion_idle_breathes_every_every_s_and_never_moves_the_idle_clocks():
     assert [e["run_s"] for e in events if e.get("action") == "idle_breath"] == [30.0] * len(started)
 
 
+def test_with_motion_idle_on_the_idle_return_from_another_look_lands_as_one_breath():
+    """D75 (review B-R2-TS-2): with motion.idle on, the idle return from a guest's look is one breath of
+    breathe_run_s, not the rung's 90 s run, and it counts as the period's breath (`last_breath_mono`), as the Lab's
+    staff copy says (IDLE_RUNS_ON)."""
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        chosen = w.clock.monotonic()
+        await w.until(lambda: w.engine.current_plan().mode_id == "breathe-level", timeout=200, step=0.5)
+        returned = w.clock.monotonic()
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        back = (plan.tier, runner.running, runner.program.run_s, runner.count, w.engine.breathing)
+        breath_at = w.engine.last_breath_mono
+        await w.run_for(60)
+        program = [
+            c["timings"]["queued_at"] - w.clock.epoch - returned
+            for c in program_since(w, w.clock.epoch + returned)
+        ]
+        out = (returned - chosen, back, breath_at - returned, program, runner.ended)
+        await w.close()
+        return out
+
+    after, back, breath_at, program, ended = run_virtual(main)
+    assert 180.0 <= after <= 182.0  # the idle hold (kiosk.idle_return_s)
+    assert back == (Tier.STEPPED, True, 30.0, 5, True)  # one breath: 30 s of 6 s steps
+    assert abs(breath_at) <= 0.5  # the period's breath starts here
+    assert program and max(program) <= 30.0 + 1e-3  # it stepped, and stopped once its 30 s were up
+    assert ended == "the run is over"
+
+
+def test_a_guest_choosing_the_idle_look_mid_breath_gets_the_full_run():
+    """D75 (review B-R2-TS-2): a guest's choice of the idle look during its idle breath is a choice, so it runs the
+    rung in full (90 s), never the breath's leftover breathe_run_s."""
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.idle_breath()
+        breath = (w.engine.breathing, w.engine.runner.program.run_s)
+        await w.run_for(8)  # mid-breath
+        await w.engine.request_mode("breathe-level", source="kiosk")
+        runner = w.engine.runner
+        out = (breath, runner.running, runner.program.run_s, runner.count, w.engine.breathing)
+        await w.close()
+        return out
+
+    breath, running, run_s, count, breathing = run_virtual(main)
+    assert breath == (True, 30.0)
+    assert running and run_s == 90.0 and count == 15 and not breathing
+
+
 def test_an_idle_breath_that_couldnt_run_when_it_landed_never_starts_on_a_re_pick():
     """D75 (review B-R2-1): with motion.idle on, an idle return that lands while the account cools off holds still
     (breathe-level has no canvas or slot, so its plan stays stepped). The breath counts as spent: once the cool-off

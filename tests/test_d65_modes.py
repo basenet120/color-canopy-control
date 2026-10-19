@@ -500,6 +500,45 @@ def test_a_governor_trip_holds_module_level_and_lifts_after_the_cool_off():
     assert state.program is None and hold.modules  # (the hold was the module-level design)
 
 
+def test_a_run_ended_by_held_steps_holds_module_level_and_settles_one_cap_window_later():
+    """D75 (review B-R2-TS-1): a run the account's write budget ended (HELD_STEPS_END holds in a row) sends its hold
+    at once and waits one cap window (60 s) before the settle's nine slot selects, so that burst never lands on an
+    account that has just twice failed to find room for a step."""
+
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        runner = w.engine.runner
+        await w.run_for(20)  # steps 1 and 2 are out
+        sent = runner.steps_sent
+        real = w.executor.account_writes
+        w.executor.account_writes = lambda address, **kw: real(address, **kw) + 90  # the 60 s window is full
+        while runner.running:
+            await w.run_for(0.5)
+        end = w.clock.monotonic()
+        w.executor.account_writes = real
+        ended = (runner.ended, runner.budget_holds, w.engine.current_plan().tier)
+        await w.run_for(2)
+        hold_sent = _queued_since(w, end - 1, "program")
+        await w.run_for(end + 59 - w.clock.monotonic())
+        before = (w.engine.current_plan().tier, _queued_since(w, end - 1, "settle"))
+        await w.run_for(11)
+        settles = _queued_since(w, end - 1, "settle")
+        at = sorted(c["timings"]["queued_at"] - w.clock.epoch - end for c in settles)  # seconds after the end
+        out = (sent, ended, hold_sent, before, settles, at, w.engine.current_plan().tier, w.engine.runner)
+        await w.close()
+        return out
+
+    sent, ended, hold_sent, before, settles, at, tier, runner = run_virtual(main)
+    assert sent >= 2
+    assert ended == ("the account's write budget held back 2 steps in a row", 2, Tier.STEPPED)
+    assert hold_sent and {c["label"].split(":")[0] for c in hold_sent} == {"hold"}  # the hold, at once
+    assert before == (Tier.STEPPED, [])  # nothing selects a slot inside the cap window
+    assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: golden-hour"}
+    assert 60.0 - 1e-3 <= at[0] <= at[-1] <= 61.0  # one cap window after the run's end
+    assert tier is Tier.T1 and runner is None
+
+
 def test_a_run_that_ends_inside_an_outage_settles_at_recovery():
     async def main():
         w = await _golden_world()
