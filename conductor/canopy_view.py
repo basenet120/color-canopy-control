@@ -201,6 +201,41 @@ def _runs_its_own(target: ModuleTarget) -> bool:
     return sequence_preview(target.rows) is not None
 
 
+def _claim(
+    cfg: Mapping[str, Any], entry: Any, target: ModuleTarget
+) -> tuple[str | None, list[str] | None] | None:
+    """The colours a planned position claims, as `(color, colors)`: one "#RRGGBB" when every head is the same, else
+    the heads in lattice order. None when there is no known colour (a T2 slot whose content isn't known) or the
+    strand plays the look on its own (a preset or program: its preview is a guess)."""
+    if not target.colors or _runs_its_own(target):
+        return None
+    colours = module_colours(cfg, entry, target.colors)
+    if len(set(colours)) == 1:
+        return colours[0], None
+    return None, colours
+
+
+def plan_picture(cfg: Mapping[str, Any], registry: Any, plan: ModePlan) -> list[dict] | None:
+    """The still picture `plan` puts on the canopy, as Now Showing draws it once every position is lit:
+    `[{pos, color, colors}] × 9` in grid order, a position the plan doesn't drive dark (both None). The same colour
+    claim `lit_state` makes (`_claim`), without the engine's readback states. None when a driven position makes no
+    colour claim: there is then no truthful still picture of the look. The iPad's review card draws this for a
+    whole-strand plan (guest_panel.thumb_plans, D76)."""
+    by_position = {e.module: e for e in registry.canopy_modules()}
+    out: list[dict] = []
+    for pos, _row, _col, _heads in _modules(_key(cfg)):
+        entry = by_position.get(pos)
+        target = plan.modules.get(entry.id) if entry is not None else None
+        item: dict[str, Any] = {"pos": pos, "color": None, "colors": None}
+        if target is not None:
+            claim = _claim(cfg, entry, target)
+            if claim is None:
+                return None
+            item["color"], item["colors"] = claim
+        out.append(item)
+    return out
+
+
 def lit_state(
     cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, state: Any, now: float | None = None
 ) -> dict | None:
@@ -230,15 +265,11 @@ def lit_state(
                 item["state"] = UNKNOWN
         elif target is None:
             item["state"] = DARK
-        elif not target.colors or _runs_its_own(target):
+        elif (claim := _claim(cfg, entry, target)) is None:
             item["state"] = UNKNOWN
         else:
             item["state"] = LIT if record.get("status") == "ready" else CHANGING
-            colours = module_colours(cfg, entry, target.colors)
-            if len(set(colours)) == 1:
-                item["color"] = colours[0]
-            else:
-                item["colors"] = colours
+            item["color"], item["colors"] = claim
         modules.append(item)
     return {
         "level": getattr(state, "brightness", None) if on else None,

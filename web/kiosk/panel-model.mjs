@@ -261,7 +261,8 @@ export function sceneLabel(scene) {
 export const rgb = (c) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 
 /** A CSS hard-stop gradient of the scene's 30 colours in order: the card's palette strip (six or fewer scenes; the
- * review menu draws the thumbnail), never the canopy's picture. */
+ * review menu draws the thumbnail, and the strip only on a card with none: a look the strand plays on its own), never
+ * the canopy's picture. */
 export function stripGradient(frame) {
   if (!Array.isArray(frame) || !frame.length) return "none";
   const n = frame.length;

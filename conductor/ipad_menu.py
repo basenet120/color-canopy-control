@@ -13,12 +13,14 @@ attention" lines, the conductor.yaml fold for the overlay download, and the revi
   hides nothing. `services.settings` is changed in place and never rebound (the engine keeps the object).
 - **The fold** (`conductor_yaml_diff`): the list in force as a `git apply` hunk for config/conductor.yaml's one-line
   `hidden_scenes: [...]`, appended to the /ops overlay download (07 §8: "downloadable as a diff to commit back").
-- **Card thumbnails** (`design_thumb`, `catalog_thumbs`, `mask_thumb`): a still picture of each scene for the review
-  menu's cards, from `routes.design.mode_design` on the basis the caller chose: `"heads"` (the design at every
-  light, for a scene the engine would show per light) or `"modules"` (its nine module colours). The caller
-  (guest_panel.thumb_plans) picks the basis from the tier the engine would use now, because a picture is copy too,
-  and masks each card to the positions that plan drives (`mask_thumb`): on a partial canopy a card lights only the
-  panels Now Showing lights (D62), never all nine.
+- **Card thumbnails** (`design_thumb`, `catalog_thumbs`, `plan_thumb`, `mask_thumb`): a still picture of each scene
+  for the review menu's cards, on the basis the caller chose: `"heads"` (the design at every light, for a scene the
+  engine would show per light) or `"modules"` (its nine module colours), both from `routes.design.mode_design`; or
+  `"strand"` (a whole-strand plan: the colour it puts on each panel it drives, from the plan itself through
+  `canopy_view.plan_picture`, the claim Now Showing makes). The caller (guest_panel.thumb_plans) picks the basis
+  from the tier the engine would use now, because a picture is copy too, and masks each card to the positions that
+  plan drives (`mask_thumb`): on a partial canopy a card lights only the panels Now Showing lights (D62), never all
+  nine.
 
 Imports: conductor.config and conductor.scenes only at module level; looks.live and routes.design inside functions.
 Never guest_panel or routes.kiosk: routes.kiosk imports this module, and guest_panel imports routes.kiosk.
@@ -60,7 +62,7 @@ GRID_MAX = (
 IDLE_ALWAYS = "{name} is the idle scene ({key}), so the iPad always offers it."
 CONDUCTOR_YAML = "config/conductor.yaml"
 HIDDEN_LINE = re.compile(r"^(?P<i>[ ]+)hidden_scenes:[ ]*\[[^\]]*\][ ]*$")
-Basis = Literal["heads", "modules"]
+Basis = Literal["heads", "modules", "strand"]
 _THUMB_LOGGED: set[tuple[str, str]] = set()
 _THUMB_LOGGED_MAX = 256
 
@@ -287,7 +289,8 @@ def design_thumb(design: Mapping[str, Any], basis: Basis | None) -> dict | None:
 
     - basis "heads": each module's 30 head colours (`colors`), or one `color` when all 30 are equal;
     - basis "modules": each module's one module-level colour (`color`), `colors` None;
-    - None when the basis is None or the design has no such data (e.g. a whole-strand look).
+    - None when the basis is None, "strand" (a whole-strand card comes from its plan: `plan_thumb`) or the design has
+      no such data.
     `sig` is sha256[:12] of the compact JSON of basis and modules: the kiosk redraws a card only when it changes."""
     items: list[dict[str, Any]]
     if basis == "heads" and design.get("heads"):
@@ -326,6 +329,21 @@ def mask_thumb(thumb: Mapping[str, Any] | None, driven: Collection[str]) -> dict
     return _signed(thumb["basis"], items)
 
 
+def plan_thumb(scene_id: str, canopy: Mapping[str, Any], registry: Any, plan: Any) -> dict | None:
+    """A whole-strand card's picture (basis "strand"): what `plan` puts on each canopy position, the colour claim Now
+    Showing makes for it (`canopy_view.plan_picture`: one flat colour per driven panel for a colour or white look,
+    the panels it doesn't drive dark). None when the strand plays the look on its own (a preset or program) or its
+    colours aren't known: no still picture is true then, so the card keeps its palette strip. Never raises."""
+    from conductor import canopy_view
+
+    try:
+        picture = canopy_view.plan_picture(canopy, registry, plan)
+    except Exception as exc:  # noqa: BLE001 - a card without a picture, never a failed panel
+        _log_thumb_failure(scene_id, exc)
+        return None
+    return _signed("strand", picture) if picture is not None else None
+
+
 def _log_thumb_failure(scene_id: str, exc: BaseException) -> None:
     reason = f"{type(exc).__name__}: {exc}"[:200]
     if (scene_id, reason) in _THUMB_LOGGED:
@@ -333,7 +351,11 @@ def _log_thumb_failure(scene_id: str, exc: BaseException) -> None:
     if len(_THUMB_LOGGED) >= _THUMB_LOGGED_MAX:
         _THUMB_LOGGED.clear()
     _THUMB_LOGGED.add((scene_id, reason))
-    log.warning("iPad card for %s can't draw its picture (%s); the card shows none", scene_id, reason)
+    log.warning(
+        "iPad card for %s can't draw its picture (%s); the card shows its palette strip instead",
+        scene_id,
+        reason,
+    )
 
 
 def catalog_thumbs(

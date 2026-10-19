@@ -10,8 +10,9 @@ Two groups:
   pulse, power off, a turned view). Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes.
   The review stub (`review=True`, D76) serves the 18-scene review fixture (tests/review_fixture.py: fixture data only,
   07 §9) with the server's own menu rule (`ipad_menu.menu`, `hide` = kiosk.hidden_scenes) and thumbnails
-  (`ipad_menu.catalog_thumbs`): grouped rows, the scrolling scene list under a pinned side, painted card pictures and
-  the six-option grid. Its screenshots (kiosk-review-*.png, kiosk-six-options-1180x820.png) are left untracked: PR D
+  (`ipad_menu.catalog_thumbs`): grouped rows, the scrolling scene list under a pinned side, painted card pictures, a
+  whole-strand card's one colour (`ipad_menu.plan_thumb`) beside a card with none (the strip) and the six-option
+  grid. Its screenshots (kiosk-review-*.png, kiosk-six-options-1180x820.png) are left untracked: PR D
   takes them from the real catalog.
 - **Against the real engine** (skips until GET /api/kiosk/panel serves a non-resting canopy): tap a scene, the state
   goes changing then steady, the feature line shows the server's sentence and the 270 dots show the server's picture.
@@ -27,7 +28,8 @@ import pytest
 
 from conductor import ipad_menu
 from conductor.canopy_view import canopy_geometry, load_canopy
-from conductor.config import CONFIG_DIR, PreviewSettings, load_settings
+from conductor.config import CONFIG_DIR, PreviewSettings, load_registry, load_settings
+from conductor.engine_api import ModePlan, ModuleTarget, Tier
 from conductor.guest_panel import scene_json
 from conductor.looks.live import git_trio
 from conductor.scenes import load_scenes
@@ -762,6 +764,66 @@ def test_review_cards_draw_their_own_design(design_context_factory):
             assert abs(pick["rgba"][3] - got[sid]["alpha"]) <= 8, (sid, pick, got[sid]["alpha"])
     urls = got["urls"]
     assert len(set(urls)) == 3, "the three designs of one scene draw three different pictures"
+    assert errors == []
+
+
+def test_a_whole_strand_review_card_draws_its_one_colour_and_a_card_with_none_keeps_the_strip(
+    design_context_factory,
+):
+    """C1 at the strand tier (D76): a scene the engine would run as one whole-strand look gets a "strand" thumbnail,
+    built by the server's own `ipad_menu.plan_thumb` from that plan (here aqua on the two kits it drives), and its
+    card paints it on the canvas like any other card: the one colour on the driven panels, nothing on the others,
+    never the palette strip's gradient. A card with no thumbnail (a preset the strand plays on its own makes no colour
+    claim) keeps the palette strip."""
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True)
+    by_id = {s["id"]: s for s in stub.scenes}
+    registry = load_registry()
+    ids = {e.module: e.id for e in registry.canopy_modules()}
+    aqua = {"r": 121, "g": 206, "b": 212}
+    targets = {
+        ids[p]: ModuleTarget(ids[p], [], [], colors=[dict(aqua) for _ in range(30)]) for p in ("r0c0", "r0c1")
+    }
+    plan = ModePlan("coastal-tides", "Coastal Tides", Tier.STRAND, "", False, targets)
+    strand = ipad_menu.plan_thumb("coastal-tides", load_canopy(str(CONFIG_DIR)), registry, plan)
+    assert strand is not None and strand["basis"] == "strand"
+    by_id["coastal-tides"]["thumb"] = strand
+    by_id["coastal-tides-2"]["thumb"] = None  # e.g. a preset strand look: no thumbnail
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub, device_scale_factor=2)
+    _ready(page)
+    page.wait_for_function(
+        "[...document.querySelectorAll('#grid canvas.thumb')].every((c) => c.dataset.thumb)", timeout=5000
+    )
+    got = page.evaluate(
+        """async (scene) => {
+          const P = await import('/kiosk/canopy-preview.mjs?v=review-1');
+          const panel = await (await fetch('/api/kiosk/panel')).json();
+          const card = document.querySelector(`.scene[data-scene="${scene.id}"]`);
+          const other = document.querySelector('.scene[data-scene="coastal-tides-2"]');
+          const canvas = card.querySelector('canvas.thumb');
+          if (!canvas) return { sig: null, strips: card.querySelectorAll('.strip').length };
+          const dots = P.layout(panel.canopy, { width: canvas.clientWidth, height: canvas.clientHeight }).dots;
+          const ctx = canvas.getContext('2d');
+          const at = (d) => [...ctx.getImageData(Math.round(d.cx * 2), Math.round(d.cy * 2), 1, 1).data];
+          const first = (pos) => dots.find((d) => d.pos === pos);
+          return {
+            sig: canvas.dataset.thumb,
+            strips: card.querySelectorAll('.strip').length,
+            picks: Object.fromEntries(['r0c0', 'r0c1', 'r1c1', 'r2c2'].map((p) => [p, at(first(p))])),
+            alpha: Math.round(P.levelOpacity(scene.brightness_draft, (panel.canopy.view || {}).dim_floor) * 255),
+            other: { canvases: other.querySelectorAll('canvas.thumb').length,
+                     strip: (other.querySelector('.strip') || {}).style?.background || '' },
+          };
+        }""",
+        by_id["coastal-tides"],
+    )
+    assert got["sig"] == strand["sig"] and got["strips"] == 0, got
+    for pos in ("r0c0", "r0c1"):  # the driven panels: the strand look's one colour, at the card's opacity
+        rgba = got["picks"][pos]
+        assert all(abs(a - b) <= 6 for a, b in zip(rgba[:3], (121, 206, 212), strict=True)), (pos, rgba)
+        assert abs(rgba[3] - got["alpha"]) <= 8, (pos, rgba, got["alpha"])
+    for pos in ("r1c1", "r2c2"):  # not driven: no dot drawn
+        assert got["picks"][pos][3] == 0, (pos, got["picks"][pos])
+    assert got["other"]["canvases"] == 0 and "gradient" in got["other"]["strip"], got["other"]
     assert errors == []
 
 

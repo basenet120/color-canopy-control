@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from test_kiosk_routes import FakeEngine
 
+from conductor import canopy_view
 from conductor import guest_panel as GP
 from conductor import ipad_menu as IM
 from conductor.canopy_view import canopy_geometry, load_canopy
@@ -52,7 +53,8 @@ from conductor.config import (
     load_settings_overlay,
     save_settings_overlay,
 )
-from conductor.engine_api import ModePlan, ModuleTarget, Tier
+from conductor.drivers.base import StateRow
+from conductor.engine_api import CanopyPhase, ModePlan, ModuleTarget, Tier
 from conductor.looks import CompileContext
 from conductor.looks.live import git_trio, install_looks
 from conductor.routes import kiosk as K
@@ -129,15 +131,23 @@ def _targets(device_ids) -> dict[str, ModuleTarget]:
     return {d: ModuleTarget(d, [], []) for d in device_ids}
 
 
+def _flat(device_ids, rgb, rows=()) -> dict[str, ModuleTarget]:
+    """Targets whose 30 heads all show `rgb` at full strength (`colors`), as compile gives a colour strand look;
+    `rows` are the show-time rows (a preset's make the strand play the look on its own)."""
+    head = dict(zip("rgb", rgb, strict=True))
+    return {d: ModuleTarget(d, list(rows), [], colors=[dict(head) for _ in range(30)]) for d in device_ids}
+
+
 class TierEngine(ReviewEngine):
     """A ReviewEngine whose `compile_best` answers the tier in `tiers` (T3 by default; an Exception raises) over the
-    modules in `driven` (device ids; all nine by default, as on the full sim canopy), and records every id it was
-    asked to compile."""
+    modules in `driven` (device ids; all nine by default, as on the full sim canopy), with the targets in
+    `targets[mode id]` when set (else targets with no colours), and records every id it was asked to compile."""
 
     def __init__(self, clock, trio, tiers=None, driven=CANOPY_IDS, **kw) -> None:
         super().__init__(clock, trio, **kw)
         self.tiers: dict = dict(tiers or {})
         self.driven = list(driven)
+        self.targets: dict[str, dict[str, ModuleTarget]] = {}
         self.compiled: list[str] = []
 
     def compile_best(self, mode_id: str):
@@ -146,7 +156,8 @@ class TierEngine(ReviewEngine):
         if isinstance(tier, Exception):
             raise tier
         label = self.trio.modes.modes[mode_id].label
-        return ModePlan(mode_id, label, tier, "", False, _targets(self.driven)), ""
+        targets = self.targets.get(mode_id) or _targets(self.driven)
+        return ModePlan(mode_id, label, tier, "", False, targets), ""
 
 
 def counted(monkeypatch) -> list[tuple[str, bool]]:
@@ -895,7 +906,8 @@ def test_the_thumb_basis_follows_the_tier_the_engine_would_use():
     # every scene asks the engine, whatever its first rung (the rule /api/kiosk/modes uses for every listed mode)
     assert engine.compiled == REVIEW_IDS
     engine.tiers[GOLDEN] = Tier.STRAND
-    assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: None}  # one whole-strand look: no picture
+    # one whole-strand look: the colour that plan puts on each panel (never the palette strip, never a design)
+    assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: "strand"}
     engine.tiers[GOLDEN] = RuntimeError("no plan")
     assert GP.thumb_basis(engine, trio.modes, [GOLDEN]) == {GOLDEN: "modules"}
     assert GP.thumb_basis(engine, trio.modes, ["disco-inferno"]) == {"disco-inferno": None}
@@ -908,11 +920,11 @@ def test_the_thumb_basis_follows_the_tier_the_engine_would_use():
     assert GP.thumb_basis(engine, SimpleNamespace(modes={"x": strand}), ["x"]) == {"x": None}
 
 
-def test_a_scene_eased_down_to_its_strand_rung_draws_no_module_picture():
+def test_a_scene_eased_down_to_its_strand_rung_draws_its_whole_strand_look():
     """C1, a picture is copy too: the reconciler can drop a modules- or stepped-first scene to its strand rung (a
-    hysteresis floor, canopy.py downgrade). Its card then draws no module colours, because the ceiling shows one
-    whole-strand look. Whether the scene is showing now (the current plan wins, no compile) or would be picked now
-    (compile_best honours the floor), the basis is what /api/kiosk/modes' `_likely_plan` says."""
+    hysteresis floor, canopy.py downgrade). Its card then draws no module colours but the one whole-strand look the
+    ceiling shows ("strand"). Whether the scene is showing now (the current plan wins, no compile) or would be picked
+    now (compile_best honours the floor), the basis is what /api/kiosk/modes' `_likely_plan` says."""
     trio = review_trio(git_trio(CONFIG_DIR))
     engine = TierEngine(
         SimpleNamespace(now=lambda: 0.0), trio, {CALM: Tier.STRAND, "coastal-tides": Tier.STRAND}
@@ -921,13 +933,13 @@ def test_a_scene_eased_down_to_its_strand_rung_draws_no_module_picture():
     engine.current_plan = lambda: showing
     assert [str(trio.modes.modes[s].ladder[0]) for s in (CALM, "coastal-tides")] == ["modules", "stepped"]
     basis = GP.thumb_basis(engine, trio.modes, REVIEW_IDS)
-    assert basis[CALM] is None and basis["coastal-tides"] is None
+    assert basis[CALM] == "strand" and basis["coastal-tides"] == "strand"
     assert CALM not in engine.compiled  # the plan showing now answers for its own scene
     assert "coastal-tides" in engine.compiled
     for sid in REVIEW_IDS:  # every card follows the kiosk's own rule
         plan = K._likely_plan(engine, sid, showing)
         tier = str(plan.tier) if plan is not None else None
-        want = "heads" if tier in GP.PER_LIGHT_TIERS else None if tier == str(Tier.STRAND) else "modules"
+        want = "heads" if tier in GP.PER_LIGHT_TIERS else "strand" if tier == str(Tier.STRAND) else "modules"
         assert basis[sid] == want, (sid, tier)
     # the floor lifted (canopy.py upgrade): module level again, so the nine module colours again
     engine.tiers.pop("coastal-tides")
@@ -972,17 +984,20 @@ def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_l
     assert ms < 100
 
 
-def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_takes_the_cards_picture_away(
+def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_draws_the_whole_strand_colour(
     app_client_show, monkeypatch
 ):
     """The real engine's compile_best honours a reconciler floor (canopy.py downgrade sets `floors`): a stepped-first
-    base and a modules-first option eased down to strand show one whole-strand look, so their cards carry no module
-    picture, and /api/kiosk/modes says strand for the same scenes. Lifting the floor brings the picture back."""
+    base and a modules-first option eased down to strand show one whole-strand look, and /api/kiosk/modes says strand
+    for the same scenes. Their cards then draw that look (C1): the strand look's one colour (config/modes.yaml) on
+    every panel, exactly the claim Now Showing makes for the same plan, never the module design nor the palette's
+    gradient. Lifting the floor brings the module picture back."""
     services = _svc(app_client_show)
     engine = services.extras.get("canopy")
     assert engine is not None, "the sim engine didn't start"
     monkeypatch.setattr(engine, "upgrade", lambda _reason: [])  # no reconciler tick lifts the floor mid-test
-    install_review(services)
+    trio = install_review(services)
+    before = {s["id"]: s for s in _panel(app_client_show)["scenes"]}
     eased = ("coastal-tides", "goodnight-glow-2")
     current = K._current_plan(engine)
     assert current is None or current.mode_id not in eased
@@ -993,9 +1008,18 @@ def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_takes_the_cards
     try:
         by_id = {s["id"]: s for s in _panel(app_client_show)["scenes"]}
         listed = {m["id"]: m for m in app_client_show.get("/api/kiosk/modes").json()}
+        cfg = load_canopy(str(services.config_dir))
         for sid in eased:
             assert listed[sid]["tier"] == "strand", sid
-            assert by_id[sid]["thumb"] is None, sid
+            thumb = by_id[sid]["thumb"]
+            assert thumb is not None and thumb["basis"] == "strand" and HEX12.match(thumb["sig"]), sid
+            look = trio.modes.modes[sid].techniques.strand.look
+            assert look.kind == "rgb", sid
+            want = "#" + "".join(f"{v:02X}" for v in look.rgb)
+            assert [(m["color"], m["colors"]) for m in thumb["modules"]] == [(want, None)] * 9, sid
+            plan = K._likely_plan(engine, sid, K._current_plan(engine))
+            assert thumb["modules"] == canopy_view.plan_picture(cfg, services.registry, plan), sid
+            assert thumb["sig"] != before[sid]["thumb"]["sig"], sid  # not its module design
     finally:
         for sid in eased:
             engine.floors.pop(sid, None)
@@ -1097,6 +1121,75 @@ def test_on_the_partial_live_canopy_the_cards_light_the_two_panels_now_showing_l
         for s in body["scenes"]:
             assert s["thumb"] is not None and s["thumb"]["basis"] == "modules", s["id"]
             assert _lit(s["thumb"]) == ["r0c0", "r0c1"], s["id"]
+
+
+AQUA = (121, 206, 212)  # coastal-tides' whole-strand look in git (config/modes.yaml)
+
+
+def _lit_claims(services, plan, driven) -> list[tuple]:
+    """Now Showing's (pos, color, colors) for `plan` once every driven module reads back (canopy_view.lit_state)."""
+    state = SimpleNamespace(
+        phase=CanopyPhase.READY,
+        guest_power=True,
+        brightness=70,
+        modules={d: {"status": "ready"} for d in driven},
+    )
+    lit = canopy_view.lit_state(load_canopy(str(services.config_dir)), services.registry, plan, state)
+    return [(m["pos"], m["color"], m["colors"]) for m in lit["modules"]]
+
+
+def test_a_whole_strand_card_draws_the_colour_its_plan_puts_on_each_panel_it_drives(app_client, monkeypatch):
+    """C1 at the strand tier: a scene the engine would show as one whole-strand look draws that look — its one
+    colour on each panel the plan drives, the others dark (D62) — which is exactly what Now Showing claims for the
+    same plan once it is lit. It is read from the plan, never from the module design (no mode_design call), and its
+    sig follows the plan's colour, so the kiosk repaints the card when the look changes."""
+    services = _svc(app_client)
+    trio = install_review(services)
+    engine = _engine(app_client, trio, TierEngine, tiers={"coastal-tides": Tier.STRAND}, driven=TWO_KITS)
+    engine.targets["coastal-tides"] = _flat(TWO_KITS, AQUA)
+    calls = counted(monkeypatch)
+    by_id = {s["id"]: s for s in _panel(app_client)["scenes"]}
+    thumb = by_id["coastal-tides"]["thumb"]
+    assert thumb["basis"] == "strand" and HEX12.match(thumb["sig"])
+    order = [m["pos"] for m in canopy_geometry(load_canopy(str(CONFIG_DIR)))["modules"]]
+    assert [m["pos"] for m in thumb["modules"]] == order
+    assert {m["pos"]: m["color"] for m in thumb["modules"] if m["color"]} == {
+        "r0c0": "#79CED4",
+        "r0c1": "#79CED4",
+    }
+    assert all(m["colors"] is None for m in thumb["modules"])
+    plan = K._likely_plan(engine, "coastal-tides", None)
+    assert [(m["pos"], m["color"], m["colors"]) for m in thumb["modules"]] == _lit_claims(
+        services, plan, TWO_KITS
+    )
+    assert all(sid != "coastal-tides" for sid, _heads in calls)  # never its module design
+    assert by_id["coastal-tides-2"]["thumb"]["basis"] == "modules"  # its options at T3: their module design
+    # another strand colour: another picture and another sig (the card key moves with it)
+    engine.targets["coastal-tides"] = _flat(TWO_KITS, (139, 139, 209))
+    again = next(s for s in _panel(app_client)["scenes"] if s["id"] == "coastal-tides")["thumb"]
+    assert {m["color"] for m in again["modules"]} == {"#8B8BD1", None} and again["sig"] != thumb["sig"]
+    assert all(sid != "coastal-tides" for sid, _heads in calls)
+
+
+def test_a_whole_strand_look_the_strand_plays_on_its_own_gets_no_thumbnail(app_client):
+    """A preset (or program) strand look: the strand's controller plays it, so Now Showing makes no colour claim for
+    it (`unknown`), and neither does the card: no thumbnail (the kiosk keeps the palette strip). The same with no
+    colours known at all."""
+    services = _svc(app_client)
+    trio = install_review(services)
+    engine = _engine(app_client, trio, TierEngine, tiers={"coastal-tides": Tier.STRAND, CALM: Tier.STRAND})
+    preset = [StateRow("color-mode", None, "sequence"), StateRow("color-sequence", "preset", "rainbow-road")]
+    engine.targets["coastal-tides"] = _flat(CANOPY_IDS, AQUA, rows=preset)
+    by_id = {s["id"]: s for s in _panel(app_client)["scenes"]}
+    assert by_id["coastal-tides"]["thumb"] is None
+    plan = K._likely_plan(engine, "coastal-tides", None)
+    state = SimpleNamespace(phase=CanopyPhase.READY, guest_power=True, modules={})
+    lit = canopy_view.lit_state(load_canopy(str(CONFIG_DIR)), services.registry, plan, state)
+    assert {m["state"] for m in lit["modules"]} == {"unknown"} and canopy_view.plan_picture(
+        load_canopy(str(CONFIG_DIR)), services.registry, plan
+    ) is None
+    assert by_id[CALM]["thumb"] is None  # TierEngine's targets carry no colours: nothing to claim
+    assert by_id["coastal-tides-2"]["thumb"]["basis"] == "modules"
 
 
 def test_six_or_fewer_visible_compute_and_send_no_thumbnail(app_client, monkeypatch):
