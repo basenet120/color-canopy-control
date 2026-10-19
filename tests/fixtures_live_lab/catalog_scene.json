@@ -5,7 +5,10 @@
     "live_look": {"scene_id": "golden-hour", "name": "Golden Hour"},
     "live_source": "approved",
     "repaint": {"slot": "custom-3", "available": true, "sentence": "…"},
-    "t1_lock": {"locked": false, "simulated": true, "slot": "custom-3", "positions": [], "sentence": null, "repaint": {}}
+    "t1_lock": {"locked": false, "simulated": true, "slot": "custom-3", "positions": [], "sentence": null, "repaint": {}},
+    "option_of": null,
+    "group": "golden-hour",
+    "on_ipad": true
   },
   "show_looks": {"id": "approved", "source": "approved", "name": "the approved looks"},
   "state_show_looks": {"id": "approved", "source": "approved", "generation": 0, "fallback": false, "repainting": false}

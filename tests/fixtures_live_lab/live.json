@@ -23,7 +23,8 @@
       "source": "published",
       "palette": [{"name": "Peach", "hex": "#FFB38A"}],
       "mood": "Let the evening glow",
-      "held": false
+      "held": false,
+      "on_ipad": true
     }
   ],
   "history": [

@@ -176,6 +176,35 @@ def test_ops_mode_picker_and_enrollment(page_at, call):
     ]
 
 
+def test_ops_ipad_switch_takes_a_card_off_the_kiosk(page_at, call):
+    """D76: the "On the iPad" card's switch takes a scene's card off the guest panel; ops can still choose it."""
+    page = page_at(TABLET)
+    _open_ops(page)
+    page.wait_for_selector("#ipad-scenes li.ipad-row >> nth=5")
+    rows = page.eval_on_selector_all(
+        "#ipad-scenes li.ipad-row button",
+        "els => els.map((b) => ({id: b.dataset.scene, on: b.getAttribute('aria-checked'), disabled: b.disabled}))",
+    )
+    assert len(rows) == 6 and all(r["on"] == "true" for r in rows), rows
+    assert next(r for r in rows if r["id"] == "lowcountry-calm")["disabled"] is True  # the idle scene
+    assert page.text_content("#ipad-summary").startswith("6 of 6 scenes are on the iPad.")
+    switch = 'button[data-scene="garden-gathering"]'
+    try:
+        page.click(switch)
+        page.wait_for_function(
+            f"document.querySelector({json.dumps(switch)}).getAttribute('aria-checked') === 'false'"
+        )
+        assert "Garden Gathering is off the iPad" in page.text_content("#ipad-result")
+        assert "garden-gathering" not in [s["id"] for s in call("/api/kiosk/panel")["scenes"]]
+        page.wait_for_function(
+            "document.querySelector(\"#mode-select option[value='garden-gathering']\").textContent"
+            ".endsWith('(off the iPad)')"
+        )
+    finally:
+        call("/api/ops/ipad-scenes", "POST", {"scene": "garden-gathering", "show": True})
+    assert "garden-gathering" in [s["id"] for s in call("/api/kiosk/panel")["scenes"]]
+
+
 def test_ops_tablet_shows_a_held_module(page_at, held_module, screenshots):
     page = page_at(TABLET)
     _open_ops(page)

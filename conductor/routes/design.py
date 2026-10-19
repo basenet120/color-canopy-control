@@ -26,6 +26,11 @@ are 2-D designs now (D63), so it asks the Conductor for the design instead and p
 
 It reads config only: no engine, no device, no registry (a position draws the design whether or not a device is
 registered there). Ops only: the auth middleware already keeps kiosk and tester out of /api/canopy/*.
+
+`mode_design(mode_id, ctx, heads=False)` skips the 270 heads (`heads` is None; `modules` is unchanged): the iPad's
+review cards (D76, conductor/ipad_menu.py) draw a module-level scene from its nine module colours, about 1 ms for six
+modes against 22 ms for their heads. `/api/canopy/design` keeps the default. The cards, unlike the Studio, then leave
+dark every position the engine doesn't drive (`ipad_menu.mask_thumb`, D62): they are copy for guests.
 """
 
 from __future__ import annotations
@@ -108,8 +113,9 @@ def _modules(mode: Any, ctx: CompileContext) -> list[dict] | None:
     return out
 
 
-def mode_design(mode_id: str, ctx: CompileContext) -> dict:
-    """One mode's design (see the module docstring), from `ctx`'s modes, recipes and canopy."""
+def mode_design(mode_id: str, ctx: CompileContext, *, heads: bool = True) -> dict:
+    """One mode's design (see the module docstring), from `ctx`'s modes, recipes and canopy. `heads=False` leaves
+    the 270 heads out (None) and evaluates none of them."""
     assert ctx.modes is not None
     mode = ctx.modes.modes[mode_id]
     canvas, source = _design_canvas(mode)
@@ -119,7 +125,7 @@ def mode_design(mode_id: str, ctx: CompileContext) -> dict:
         "label": mode.label,
         "ladder": [str(t) for t in mode.ladder],
         "design": source,
-        "heads": _heads(canvas, ctx) if canvas is not None else None,
+        "heads": _heads(canvas, ctx) if heads and canvas is not None else None,
         "modules": _modules(mode, ctx),
         "sample_at": sample.at if sample is not None else None,
     }

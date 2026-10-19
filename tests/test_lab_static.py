@@ -67,14 +67,14 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-10">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-11">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
     assert '<script type="module" src="./studio.js?v=screen-3"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-10"')
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-11"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
-    assert 'from "./lab-model.mjs?v=lab-10"' in _text("lab.js")
+    assert 'from "./lab-model.mjs?v=lab-11"' in _text("lab.js")
     # ... and of demo-model: the Studio and the Lab import it at one tag (D75 bumped it with paintCanopy's levels)
     assert f"from '{DEMO_MODEL_URL}'" in _text("studio.js")
 
@@ -215,6 +215,33 @@ def test_the_lab_offers_every_field_kind():
     controls = _function(js, "renderLayoutControls")
     assert '$("#lab-mirror").disabled = locked || !c.transform;' in controls
     assert 'if (c.note) parts.push(h("p", { class: "lab-muted", text: c.note }));' in controls
+
+
+def test_make_this_the_scene_is_a_working_draft_never_a_request():
+    """D76: "Make this the scene" swaps the base's working draft for the option's design, in the browser (Undo brings
+    it back); the base's Publish saves and publishes it. No new route, no new switch."""
+    js = _code(_text("lab.js"))
+    promote = _function(js, "promoteToBase")
+    for needle in ("M.promoteDraft(", "persist(base)", "M.undoPush(L.undo[base]", "window.confirm("):
+        assert needle in promote, needle
+    assert "api(" not in promote
+    assert "M.draftEquals(draft, L.working[base])" in promote  # nothing to make: say so, change nothing
+    assert promote.index("window.confirm(") < promote.index("L.working[base] = draft")
+    # the confirm and the done notice say when the option's stepped timing replaces the base's (C-R2-4)
+    took = 'notes.includes("took-motion")'
+    assert f"M.PROMOTE_COPY.question(optionName, baseName, {{ motion: {took} }})" in promote
+    assert "M.promoteNotes(notes, optionName, baseName)" in promote
+    assert "text: M.PROMOTE" in js and "scene.option_of ?" in js
+    editor = _function(js, "rebuildEditor")
+    assert "M.promoteTakesMotion(d, { baseStepped: !!(baseScene && baseScene.stepped) })" in editor
+    assert "M.PROMOTE_COPY.title(d.name, sceneName(scene.option_of), { motion: promoteMotion })" in editor
+    assert "onclick: promoteToBase" in js
+    # an option sits under its base in the list, and a scene /ops took off the iPad says so
+    scenes = _function(js, "renderSceneList")
+    assert '" is-option"' in scenes and "on_ipad === false" in scenes and '"lab-badge off-ipad"' in scenes
+    css = _code(_text("lab.css"))
+    assert ".lab-scene.is-option {" in css and ".lab-badge.off-ipad {" in css
+    assert "export const PROMOTE = " in _text("lab-model.mjs")
 
 
 def test_the_motion_lines_come_from_the_page_model():

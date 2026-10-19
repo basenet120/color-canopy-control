@@ -791,7 +791,10 @@ Response shapes (field names are the contract; S4 builds against them):
              "design": DesignJSON,                   // mode_design() of the approved mode (routes/design.py:98 shape)
              "copy": {"canvas": "...", "slot": "...", "modules": "...", "stepped": "...", "strand": "..."},
              "state": "approved" | "draft" | "in try-on",   // vs the current version
-             "t1_lock": T1LockJSON}]}
+             "t1_lock": T1LockJSON,
+             "option_of": "golden-hour" | null,      // D76: the base scene this one is an option of (git's)
+             "group": "golden-hour",                 // its base's id, or its own
+             "on_ipad": true}]}                      // D76: false = /ops took its card off the iPad (read only here)
 // StateJSON
 {"store": {"ok": true, "error": null, "set_aside": null, "read_only": false, "versions": 7, "unreadable": 0},
  "current": "v0007",
@@ -940,7 +943,27 @@ export function undoPush(stack, state) / undoPop(stack)   // ≤ 50 working stat
 export function alertFor(err | state)            // the #lab-alert sentence for store errors, field-`draft` problems,
                                                  //   the T1 lock, status 0 ("Can't reach the Conductor — showing the
                                                  //   last valid draft") and 5xx
+export const PROMOTE = 'Make this the scene';    // D76: the editor's button on an option (scene.option_of set)
+export const PROMOTE_COPY                        // {title, question, done, tookMotion, noRung, keptMotion, same}
+                                                 //   (option, base names); title and question take {motion}: then
+                                                 //   they list the motion (stepped direction, steps, timing) too
+export function promoteTakesMotion(option, {baseStepped})  // the base has a stepped rung and the option has timing
+export function promoteNotes(notes, option, base)          // the done notice's line for each note, in order
+export function promoteDraft(base, option, {baseStepped})  // → {draft, notes}: the base's draft with the option's
+                                                 //   palette, layout, sample_at, brightness, solid, description; id,
+                                                 //   name, mood the base's; stepped (direction, steps per cycle,
+                                                 //   step_s, run_s) the option's only when the base has a stepped
+                                                 //   rung ("took-motion" when copied, else "no-rung" /
+                                                 //   "kept-motion"); copy auto.
+                                                 //   lab.js promoteToBase swaps the base's WORKING draft after a
+                                                 //   confirm (Undo brings it back); no request: Publish publishes it
+export function ipadCards(live, catalog)         // "On the iPad now": LiveJSON's scenes less on_ipad === false
 ```
+**The export's promotion line (D76, `export.promotions`):** a base scene in the export whose palette and module-level
+field equal one of its options' (and differ from its git design) gets "Made the scene on site (D76 “Make this the
+scene”): <Base> now has <Option #n>'s palette and layout (<option id> → <base id>). If the client chose it at the
+review, add who chose it and when before merging: that choice is the D59 sign-off for its colours." right after the
+D59 line. It never asserts the sign-off; a later tweak of the base drops the line.
 (No `defaultVersionName` — the UI shows "Saved as <name>" from the POST answer; no `copyChoice` — the server
 resolves copy, §3.3.)
 **Colour-reality hint rule (04: "orange, yellow and purple render weakly"):** HSV of the hex; hint when saturation

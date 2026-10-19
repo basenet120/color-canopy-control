@@ -1,4 +1,5 @@
-"""The guest panel: the iPad on the stand (/kiosk) choosing one of the six approved scenes, brightness and power.
+"""The guest panel: the iPad on the stand (/kiosk) choosing one of the scenes the iPad offers (kiosk.hidden_scenes
+left out, D76), brightness and power.
 
 One API (`conductor/routes/guest.py`, under /api/kiosk) over one target, the canopy engine (D67; the panel had a
 second target for the shop kits until the canopy-only change):
@@ -17,6 +18,19 @@ message say so) — it is never dropped after the panel was told 200, and guest 
 
 **The canopy picture.** `canopy()` is the 270-light geometry and `state()["lit"]` what each canopy position truthfully
 shows (`conductor/canopy_view.py`: off, dark, unknown, lit or changing, with full-strength colours and the level).
+
+**The menu and the review cards (D76).** `GuestPanel.menu()` is `conductor/ipad_menu.live_menu`: the live catalog
+less `kiosk.hidden_scenes`. While more than six scenes are visible (the review menu) each card carries a still
+thumbnail of its scene at the tier the engine would show it at now (`thumb_plans`, every visible scene's likely plan
+as /api/kiosk/modes reads it): per light only when that plan is canvas or slot (T1/T2: a hand-painted slot copies
+the canvas picture), its nine module colours at module level and the stepped hold, and for a whole-strand look the
+colour that plan puts on each driven panel (`ipad_menu.plan_thumb`, the claim Now showing makes), including a scene
+the reconciler has eased down to its strand rung — a picture is copy too. A look the strand plays on its own (a
+preset or program) makes no colour claim, so its card has no thumbnail and keeps the palette strip. A card lights
+only the positions that plan drives (`driven_positions`: on a partial canopy, the registered ones, D62), as Now
+showing does. Design thumbnails are cached per scene, per live-looks generation and basis (a whole-strand one is
+read from the plan on each poll), and computed synchronously: a thread under the virtual clock would let virtual
+time jump while it ran.
 """
 
 from __future__ import annotations
@@ -28,15 +42,18 @@ import logging
 import math
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
-from conductor import canopy_view
+from conductor import canopy_view, ipad_menu
 from conductor.clock import Clock
-from conductor.engine_api import CanopyPhase, CanopyState, ModeRefused, PlanError
+from conductor.engine_api import CanopyPhase, CanopyState, ModePlan, ModeRefused, PlanError, Tier
 from conductor.gate import Purpose
 from conductor.routes import kiosk as K
 from conductor.scenes import Scene, SceneCatalog
 from conductor.show import registered_canopy_ids
+
+if TYPE_CHECKING:
+    from conductor.looks.schema import ModesFile
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +230,9 @@ def _ms(start: float, end: float) -> int:
     return round((end - start) * 1000)
 
 
-def scene_json(scene: Scene) -> dict:
+def scene_json(scene: Scene, thumb: dict | None = None) -> dict:
+    """One scene as the panel sends it. `group` is its base's id (or its own); `thumb` is its review card's picture
+    (`ipad_menu.design_thumb`: `{sig, basis, modules}`), sent only while the review menu shows, else None."""
     return {
         "id": scene.id,
         "name": scene.name,
@@ -223,7 +242,84 @@ def scene_json(scene: Scene) -> dict:
         "frame": [list(rgb) for rgb in scene.frame(HEADS)],
         "solid": scene.solid.hex,
         "brightness_draft": scene.brightness_draft,
+        "option_of": scene.option_of,
+        "group": scene.group,
+        "thumb": thumb,
     }
+
+
+# ---- the review cards' basis (D76) ----------------------------------------------------------------------------------
+# The tiers that light a scene per light: a canvas (T1) and a hand-painted slot (T2, which copies the canvas picture).
+PER_LIGHT_TIERS = (str(Tier.T1), str(Tier.T2))
+Basis = Literal["heads", "modules", "strand"]
+
+
+class ThumbPlan(NamedTuple):
+    """How one review card draws its scene: the `basis` (`thumb_basis`) and the likely plan it came from (None when
+    the engine has none for it, or there is no engine). The plan's modules are the positions the card lights."""
+
+    basis: Basis | None
+    plan: ModePlan | None
+
+
+def thumb_basis(engine: Any, modes: ModesFile | None, scene_ids: Iterable[str]) -> dict[str, Basis | None]:
+    """Each scene's card basis (`thumb_plans`' basis alone)."""
+    return {sid: p.basis for sid, p in thumb_plans(engine, modes, scene_ids).items()}
+
+
+def thumb_plans(engine: Any, modes: ModesFile | None, scene_ids: Iterable[str]) -> dict[str, ThumbPlan]:
+    """How each scene's review card draws it: the tier the engine would show it at now (a picture is copy too).
+
+    Every scene with a mode asks the engine for its likely plan (`routes.kiosk._likely_plan`, the rule
+    /api/kiosk/modes uses for every listed mode): the plan showing now when it is that scene's, else `compile_best`,
+    which honours the reconciler's hysteresis floor. So a modules- or stepped-first scene the reconciler has eased
+    down to its strand rung draws as the one whole-strand look the ceiling shows, never as nine module colours. Then:
+
+    - canvas or slot (T1/T2) → "heads";
+    - strand → "strand": the plan's own colour on each panel it drives (`ipad_menu.plan_thumb`, Now showing's claim);
+    - module level, or stepped (its hold) → "modules" when it has a modules rung, else None;
+    - no mode → None; no engine, or no plan from it → its first rung's design: strand-first → None (no plan, so no
+      colour to claim), else "modules" when it has a modules rung.
+
+    On the show box that is module level until per-light is commissioned (07 §6, D73), and a Lab try-on's scene runs
+    module level while it stands (TRIAL_SKIP). One compile per visible scene per poll is what /api/kiosk/modes already
+    pays (tests/test_ipad_menu.py times it on the sim engine). The plan is kept beside the basis: the card lights
+    only the positions it drives (`driven_positions`, D62)."""
+    out: dict[str, ThumbPlan] = {}
+    current: Any = None
+    current_read = False
+    for sid in scene_ids:
+        mode = modes.modes.get(sid) if modes is not None else None
+        if mode is None:
+            out[sid] = ThumbPlan(None, None)
+            continue
+        fallback: Basis | None = "modules" if mode.techniques.modules is not None else None
+        plan = None
+        if engine is not None:
+            if not current_read:
+                current, current_read = K._current_plan(engine), True
+            plan = K._likely_plan(engine, sid, current)
+        if plan is None:
+            out[sid] = ThumbPlan(None if str(mode.ladder[0]) == str(Tier.STRAND) else fallback, None)
+            continue
+        tier = str(plan.tier)
+        if tier in PER_LIGHT_TIERS:
+            out[sid] = ThumbPlan("heads", plan)
+        elif tier == str(Tier.STRAND):
+            out[sid] = ThumbPlan("strand", plan)
+        else:
+            out[sid] = ThumbPlan(fallback, plan)
+    return out
+
+
+def driven_positions(services: Any, plan: ModePlan | None) -> frozenset[str]:
+    """The canopy positions (r0c0 … r2c2) a review card lights: the ones `plan` drives, as Now Showing reads them
+    (`canopy_view.lit_state`: a registry module whose id isn't in the plan is dark), or with no plan the positions
+    with a device registered on the engine's driver (`show.registered_canopy_ids`). A position with no device is
+    left out of every look (D62), so a card on a partial canopy never lights all nine."""
+    entries = services.registry.canopy_modules()
+    ids = set(plan.modules) if plan is not None else registered_canopy_ids(services)
+    return frozenset(e.module for e in entries if e.module and e.id in ids)
 
 
 def guest_level(level: int) -> int:
@@ -565,6 +661,9 @@ class GuestPanel:
         self.log = CommandLog(services.clock)
         self.engine_target = EngineTarget(services, self.log)
         self.last_state: dict | None = None
+        # the review cards' thumbnails: (scene id, basis) → thumb, for one (live-looks generation, trio)
+        self._thumbs: dict[tuple[str, str | None], dict | None] = {}
+        self._thumbs_for: tuple[int, int] | None = None
 
     @classmethod
     def of(cls, services: Any) -> GuestPanel:
@@ -573,10 +672,56 @@ class GuestPanel:
             panel = services.extras[PANEL_KEY] = cls(services)
         return panel
 
-    def scenes(self) -> SceneCatalog:
-        from conductor.looks.live import live_trio  # the live catalog (D68): approved or published
+    def menu(self) -> ipad_menu.Menu:
+        """The iPad's menu over the live catalog (D68: approved or published) with kiosk.hidden_scenes in force."""
+        return ipad_menu.live_menu(self.services)
 
-        return live_trio(self.services).scenes
+    def scenes(self) -> SceneCatalog:
+        """The scenes the iPad offers (kiosk.hidden_scenes left out, D76)."""
+        return self.menu().visible
+
+    def thumbs(self, menu: ipad_menu.Menu) -> dict[str, dict | None]:
+        """Each visible scene's review-card thumbnail, only while the review menu shows (else {} and nothing is
+        computed). Cached per (scene, basis) for one published look: a basis flip (a Lab try-on, a commissioned
+        slot) recomputes only that scene. A whole-strand card ("strand") is read from its plan instead, which is
+        cheap and follows the plan. Each card lights only the positions its likely plan drives (`driven_positions`,
+        D62). Synchronous on purpose (see the module docstring)."""
+        if not menu.review or menu.trio is None:
+            return {}
+        ids = [s.id for s in menu.visible.scenes]
+        plans = thumb_plans(self.engine_target.engine(), menu.trio.modes, ids)
+        basis = {sid: plans[sid].basis for sid in ids}
+        stamp = (menu.generation, id(menu.trio))
+        if stamp != self._thumbs_for:
+            self._thumbs = {}
+            self._thumbs_for = stamp
+        missing = {
+            sid: basis[sid] for sid in ids if basis[sid] != "strand" and (sid, basis[sid]) not in self._thumbs
+        }
+        if missing:
+            got = ipad_menu.catalog_thumbs(
+                menu.trio, self.engine_target._canopy_cfg(), self.services.config_dir, missing
+            )
+            for sid, b in missing.items():
+                self._thumbs[(sid, b)] = got.get(sid)
+        # the cache holds all nine positions; each card is masked to what its plan drives now (D62), so a module
+        # registered or left out never recomputes a design
+        registered: frozenset[str] | None = None  # read once, for the scenes with no plan
+        canopy: dict | None = None  # read once, for the whole-strand cards
+        out: dict[str, dict | None] = {}
+        for sid in ids:
+            plan = plans[sid].plan
+            if plan is None and registered is None:
+                registered = driven_positions(self.services, None)
+            driven = registered if plan is None else driven_positions(self.services, plan)
+            if basis[sid] == "strand" and plan is not None:
+                if canopy is None:
+                    canopy = self.engine_target._canopy_cfg()
+                thumb = ipad_menu.plan_thumb(sid, canopy, self.services.registry, plan)
+            else:
+                thumb = self._thumbs[(sid, basis[sid])]
+            out[sid] = ipad_menu.mask_thumb(thumb, driven or frozenset())
+        return out
 
     async def target(self) -> EngineTarget:
         """The one target: the canopy engine, on every runtime (D67)."""

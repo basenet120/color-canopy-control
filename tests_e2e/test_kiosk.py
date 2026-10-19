@@ -9,6 +9,12 @@ Two groups:
   the real canopy geometry and a `state.lit`, and the page draws its 270 lights and the 650 fins under them (full and
   partial canopy, a tap's pulse, power off, unknown panels' dashed fins, a turned view, no rebuild per poll).
   Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes (the canopy pictures are not tracked).
+  The review stub (`review=True`, D76) serves the 18-scene review fixture (tests/review_fixture.py: fixture data only,
+  07 §9) with the server's own menu rule (`ipad_menu.menu`, `hide` = kiosk.hidden_scenes) and thumbnails
+  (`ipad_menu.catalog_thumbs`): grouped rows, the scrolling scene list under a pinned side, painted card pictures, a
+  whole-strand card's one colour (`ipad_menu.plan_thumb`) beside a card with none (the strip) and the six-option
+  grid. Its screenshots (kiosk-review-*.png, kiosk-six-options-1180x820.png) are left untracked: PR D
+  takes them from the real catalog.
 - **Against the real engine** (skips until GET /api/kiosk/panel serves a non-resting canopy): tap a scene, the state
   goes changing then steady, the feature line shows the server's sentence and the 270 dots show the server's picture.
 """
@@ -22,10 +28,14 @@ import urllib.error
 
 import pytest
 
+from conductor import ipad_menu
 from conductor.canopy_view import canopy_geometry, load_canopy
-from conductor.config import CONFIG_DIR, PreviewSettings
+from conductor.config import CONFIG_DIR, PreviewSettings, load_registry, load_settings
+from conductor.engine_api import ModePlan, ModuleTarget, Tier
 from conductor.guest_panel import scene_json
+from conductor.looks.live import git_trio
 from conductor.scenes import load_scenes
+from tests.review_fixture import review_scenes, review_trio
 
 LANDSCAPE = {"width": 1180, "height": 820}
 OLDER = {"width": 1024, "height": 768}
@@ -48,8 +58,17 @@ def _wait(predicate, timeout=20.0, interval=0.2):
 
 
 # ---- a stub panel for the design group --------------------------------------------------------------------------
+UNKNOWN_SCENE = "That scene isn't one of the panel's choices."
+PER_LIGHT = ("canvas", "slot")
+
+
 class StubPanel:
-    """Answers /api/kiosk/panel and the three writes like the guest panel backend would, on wall time."""
+    """Answers /api/kiosk/panel and the three writes like the guest panel backend would, on wall time.
+
+    `review=True` serves the 18-scene review fixture; `hide` is kiosk.hidden_scenes. Which scenes are visible comes
+    from the server's own rule (`ipad_menu.menu`, idle scene included), so the stub can't drift from it. Thumbnails
+    are sent only while the review menu shows, on the basis the sim engine gives at T1: per light for a canvas- or
+    slot-first scene, else its nine module colours."""
 
     def __init__(
         self,
@@ -62,8 +81,25 @@ class StubPanel:
         ripple_s: float | None = None,
         unknown: set[str] | None = None,
         steps: dict | None = None,
+        review: bool = False,
+        hide: frozenset[str] = frozenset(),
     ) -> None:
-        self.scenes = [scene_json(s) for s in load_scenes().scenes]
+        catalog = review_scenes(load_scenes()) if review else load_scenes()
+        kiosk = load_settings().kiosk.model_copy(update={"hidden_scenes": sorted(hide)})
+        self.menu = ipad_menu.menu(catalog, kiosk)
+        thumbs: dict[str, dict | None] = {}
+        if self.menu.review:
+            trio = review_trio(git_trio(CONFIG_DIR)) if review else git_trio(CONFIG_DIR)
+            basis = {
+                s.id: "heads" if str(trio.modes.modes[s.id].ladder[0]) in PER_LIGHT else "modules"
+                for s in self.menu.visible.scenes
+            }
+            thumbs = ipad_menu.catalog_thumbs(trio, load_canopy(str(CONFIG_DIR)), CONFIG_DIR, basis)
+        visible = {s.id for s in self.menu.visible.scenes}
+        # every scene (state.scene and Now Showing use the whole catalog), and the cards (the visible ones; the
+        # same dicts, so an edit to one shows in both)
+        self.all_scenes = [scene_json(s, thumbs.get(s.id)) for s in catalog.scenes]
+        self.scenes = [s for s in self.all_scenes if s["id"] in visible]
         # the canopy target: the real geometry, and a picture per position (`driven`: a partial canopy)
         self.canopy = canopy_geometry(load_canopy(str(CONFIG_DIR)), view) if canopy else None
         self.driven = driven
@@ -118,7 +154,7 @@ class StubPanel:
         An `unknown` position reads unknown whatever else holds (canopy_view's first rule: locked or stuck)."""
         if self.canopy is None or self.scene is None:
             return None
-        palette = next(s for s in self.scenes if s["id"] == self.scene)["palette"]
+        palette = next(s for s in self.all_scenes if s["id"] == self.scene)["palette"]
         modules = []
         for m in self.canopy["modules"]:
             item = {"pos": m["pos"], "state": "off", "color": None, "colors": None}
@@ -158,12 +194,17 @@ class StubPanel:
         }
 
     def panel(self) -> dict:
+        visible = {s["id"] for s in self.scenes}
+        showing = next(
+            (s for s in self.all_scenes if s["id"] == self.scene and s["id"] not in visible), None
+        )  # a hidden scene that is showing: Now Showing still names it
         return {
             "target": "canopy",  # the only target (D67); the serpentine case is `canopy: null`
             "target_label": "The Color Canopy",
             "simulated": True,
             "viewer": "ops",
             "scenes": self.scenes,
+            "showing": showing,
             "capabilities": {"scene": True, "brightness": True, "power": True},
             "brightness_range": [10, 100],
             "canopy": self.canopy,
@@ -183,6 +224,8 @@ class StubPanel:
         if kind == "scene":
             if self.refuse is not None:
                 return self.refuse
+            if body.get("scene") not in {s["id"] for s in self.scenes}:  # unknown, or hidden on the iPad
+                return 404, {"detail": UNKNOWN_SCENE}
             if now < self.cooldown_until:
                 left = self.cooldown_until - now
                 return 429, {"detail": "You can choose a new scene in a moment.", "retry_after_s": left}
@@ -213,8 +256,8 @@ class StubPanel:
             page.route(f"**/api/kiosk/{kind}", writer(kind))
 
 
-def _open(context_factory, viewport, stub: StubPanel | None = None, path: str = "/kiosk/"):
-    ctx = context_factory(viewport, has_touch=True)
+def _open(context_factory, viewport, stub: StubPanel | None = None, path: str = "/kiosk/", **kw):
+    ctx = context_factory(viewport, has_touch=True, **kw)
     page = ctx.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -224,9 +267,9 @@ def _open(context_factory, viewport, stub: StubPanel | None = None, path: str = 
     return ctx, page, errors
 
 
-def _ready(page):
+def _ready(page, scene: str = "golden-hour"):
     page.wait_for_selector("body[data-view='panel']", state="attached")
-    page.wait_for_selector(".scene[data-scene='golden-hour']")
+    page.wait_for_selector(f".scene[data-scene='{scene}']")
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(700)  # the header tint's crossfade
 
@@ -705,6 +748,355 @@ def test_debug_drawer_is_for_ops_only(design_context_factory, screenshots):
     _ready(page2)
     assert page2.locator(".dbg-btn").count() == 0  # a kiosk device gets the plain panel
     assert errors == [] and errors2 == []
+
+
+# ---- the review menu (D76): more than six scenes visible --------------------------------------------------------
+REVIEW_SIZES = [
+    (LANDSCAPE, "kiosk-review-1180x820.png"),
+    (OLDER, "kiosk-review-1024x768.png"),
+    (PORTRAIT, "kiosk-review-820x1180.png"),
+]
+BASES = [
+    "lowcountry-calm",
+    "rainbow-row-sunset",
+    "garden-gathering",
+    "coastal-tides",
+    "golden-hour",
+    "goodnight-glow",
+]
+
+
+def _cards(page) -> list[dict]:
+    return page.eval_on_selector_all(
+        "#grid .scene",
+        "els => els.map((c) => { const r = c.getBoundingClientRect(); return {id: c.dataset.scene, x: r.x, y: r.y,"
+        " w: r.width, h: r.height, bottom: r.bottom, rowStart: c.classList.contains('row-start')}; })",
+    )
+
+
+def _box(page, sel: str) -> dict:
+    return page.evaluate(f"document.querySelector({json.dumps(sel)}).getBoundingClientRect().toJSON()")
+
+
+def _doc_scroll(page) -> list[float]:
+    return page.evaluate(
+        "[document.documentElement.scrollWidth - innerWidth, document.documentElement.scrollHeight - innerHeight]"
+    )
+
+
+def _label(scene: dict) -> str:  # = panel-model.mjs sceneLabel
+    return f"{scene['name']}. {scene['mood']}. Colors: {', '.join(p['name'] for p in scene['palette'])}."
+
+
+@pytest.mark.parametrize(("viewport", "name"), REVIEW_SIZES)
+def test_review_menu_groups_each_scenes_options_in_one_row(
+    design_context_factory, screenshots, viewport, name
+):
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True)
+    _ctx, page, errors = _open(design_context_factory, viewport, stub)
+    _ready(page)
+    assert page.get_attribute("#app", "data-review") == "true"
+    cards = _cards(page)
+    assert [c["id"] for c in cards] == [s["id"] for s in stub.scenes] and len(cards) == 18
+    row = page.evaluate(
+        "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--review-row'))"
+    )
+    for i in range(6):
+        group = cards[3 * i : 3 * i + 3]
+        assert max(c["y"] for c in group) - min(c["y"] for c in group) <= 1, group  # one row per scene
+        assert group[0]["x"] < group[1]["x"] < group[2]["x"], group
+        assert abs(group[0]["x"] - cards[0]["x"]) <= 1 and group[0]["rowStart"], (
+            group
+        )  # each starts at the left
+    for c in cards:
+        assert c["w"] >= 64 and c["h"] >= 64, c
+        assert c["h"] <= row + 1, (c, row)  # two-line names fit the row instead of growing it
+    page.screenshot(path=str(screenshots / name))
+    assert errors == []
+
+
+@pytest.mark.parametrize("viewport", [LANDSCAPE, PORTRAIT])
+def test_review_menu_scrolls_the_scene_list_under_a_pinned_side(
+    design_context_factory, screenshots, viewport
+):
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True)
+    _ctx, page, errors = _open(design_context_factory, viewport, stub)
+    _ready(page)
+    doc = _doc_scroll(page)
+    assert doc[0] <= 0 and doc[1] <= 0, doc  # the page itself never scrolls
+    sheet = page.evaluate(
+        "(() => { const b = document.querySelector('#sheet-body'); return b.scrollHeight - b.clientHeight; })()"
+    )
+    assert sheet <= 1
+    grid = page.evaluate(
+        "(() => { const g = document.querySelector('#grid'); return [g.scrollHeight, g.clientHeight,"
+        " g.scrollWidth - g.clientWidth]; })()"
+    )
+    assert grid[0] > grid[1] and grid[2] <= 1, grid  # only the scene list scrolls, and only up and down
+    side = (_box(page, "#now-name"), _box(page, "#slider"))
+
+    # a finger drag on a card scrolls the list and chooses nothing (the card cancels the press)
+    first = _box(page, "#grid .scene")
+    cdp = page.context.new_cdp_session(page)
+    cdp.send(
+        "Input.synthesizeScrollGesture",
+        {
+            "x": first["x"] + first["width"] / 2,
+            "y": first["y"] + first["height"] / 2,
+            "yDistance": -400,
+            "gestureSourceType": "touch",
+        },
+    )
+    page.wait_for_timeout(300)
+    assert page.evaluate("document.querySelector('#grid').scrollTop") > 0
+    assert not [w for w in stub.writes if w[0] == "scene"], stub.writes
+
+    page.evaluate("document.querySelector('#grid').scrollTop = 1e6")
+    page.wait_for_timeout(100)
+    assert (_box(page, "#now-name"), _box(page, "#slider")) == side  # Now Showing and brightness stay put
+    grid_box = _box(page, "#grid")
+    last = _cards(page)[-1]
+    assert last["y"] >= grid_box["top"] - 1 and last["bottom"] <= grid_box["bottom"] + 1, (last, grid_box)
+    if viewport == LANDSCAPE:
+        page.screenshot(path=str(screenshots / "kiosk-review-scrolled-1180x820.png"))
+    page.tap('.scene[data-scene="goodnight-glow-3"]')
+    page.wait_for_timeout(300)
+    assert stub.writes[-1] == ("scene", {"scene": "goodnight-glow-3"})
+    assert errors == []
+
+
+def test_review_scroll_survives_a_rebuild(design_context_factory):
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True)
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    page.evaluate("document.querySelector('#grid').scrollTop = 300")
+    page.wait_for_timeout(100)
+    before = page.evaluate("document.querySelector('#grid').scrollTop")
+    assert before > 0
+    renamed = "Garden Gathering #2 (b)"
+    next(s for s in stub.all_scenes if s["id"] == "garden-gathering-2")["name"] = renamed  # a cardsKey change
+    page.wait_for_function(
+        "document.querySelector(\".scene[data-scene='garden-gathering-2'] .scene-name\").textContent === "
+        + json.dumps(renamed),
+        timeout=4000,
+    )
+    assert abs(page.evaluate("document.querySelector('#grid').scrollTop") - before) <= 1
+    assert errors == []
+
+
+def test_review_rows_start_each_scene_at_the_left(design_context_factory):
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True, hide=frozenset({"rainbow-row-sunset-2"}))
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    cards = {c["id"]: c for c in _cards(page)}
+    assert len(cards) == 17 and "rainbow-row-sunset-2" not in cards
+    assert abs(cards["garden-gathering"]["x"] - cards["lowcountry-calm"]["x"]) <= 1
+    assert (
+        cards["garden-gathering"]["y"] > cards["rainbow-row-sunset-3"]["y"]
+    )  # a short row never pulls the next up
+    assert errors == []
+
+
+def test_review_cards_draw_their_own_design(design_context_factory):
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True)
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub, device_scale_factor=2)
+    _ready(page)
+    page.wait_for_function(
+        "[...document.querySelectorAll('#grid canvas.thumb')].every((c) => c.dataset.thumb)", timeout=5000
+    )
+    by_id = {s["id"]: s for s in stub.scenes}
+    cards = page.eval_on_selector_all(
+        "#grid .scene",
+        "els => els.map((c) => ({id: c.dataset.scene, label: c.getAttribute('aria-label'),"
+        " canvases: [...c.querySelectorAll('canvas.thumb')].map((x) => ({hidden: x.getAttribute('aria-hidden'),"
+        " sig: x.dataset.thumb})), strips: c.querySelectorAll('.strip').length}))",
+    )
+    for c in cards:
+        scene = by_id[c["id"]]
+        assert c["canvases"] == [{"hidden": "true", "sig": scene["thumb"]["sig"]}], c
+        assert c["strips"] == 0 and c["label"] == _label(scene), c
+    assert by_id["golden-hour"]["thumb"]["basis"] == "heads"  # painted: per light at T1
+    assert by_id["golden-hour-2"]["thumb"]["basis"] == "modules"  # an option: its nine module colours
+    got = page.evaluate(
+        """async (scenes) => {
+          const P = await import('/kiosk/canopy-preview.mjs?v=catalog-1');
+          const panel = await (await fetch('/api/kiosk/panel')).json();
+          const out = {};
+          for (const s of scenes) {
+            const canvas = document.querySelector(`.scene[data-scene="${s.id}"] canvas.thumb`);
+            const dots = P.layout(panel.canopy, { width: canvas.clientWidth, height: canvas.clientHeight }).dots;
+            const ctx = canvas.getContext('2d');
+            const picks = [dots[0], dots[100], dots[269]].map((d) => ({
+              pos: d.pos, k: d.k,
+              rgba: [...ctx.getImageData(Math.round(d.cx * 2), Math.round(d.cy * 2), 1, 1).data],
+            }));
+            const view = panel.canopy.view || {};
+            out[s.id] = { picks, alpha: Math.round(P.levelOpacity(s.brightness_draft, view.dim_floor) * 255) };
+          }
+          out.urls = ['golden-hour', 'golden-hour-2', 'golden-hour-3'].map(
+            (id) => document.querySelector(`.scene[data-scene="${id}"] canvas.thumb`).toDataURL());
+          return out;
+        }""",
+        [by_id["golden-hour"], by_id["golden-hour-2"]],
+    )
+    for sid in ("golden-hour", "golden-hour-2"):
+        modules = {m["pos"]: m for m in by_id[sid]["thumb"]["modules"]}
+        for pick in got[sid]["picks"]:
+            m = modules[pick["pos"]]
+            hex_ = m["colors"][pick["k"]] if m["colors"] else m["color"]
+            want = [int(hex_[i : i + 2], 16) for i in (1, 3, 5)]
+            assert all(abs(a - b) <= 6 for a, b in zip(pick["rgba"][:3], want, strict=True)), (
+                sid,
+                pick,
+                want,
+            )
+            assert abs(pick["rgba"][3] - got[sid]["alpha"]) <= 8, (sid, pick, got[sid]["alpha"])
+    urls = got["urls"]
+    assert len(set(urls)) == 3, "the three designs of one scene draw three different pictures"
+    assert errors == []
+
+
+def test_a_whole_strand_review_card_draws_its_one_colour_and_a_card_with_none_keeps_the_strip(
+    design_context_factory,
+):
+    """C1 at the strand tier (D76): a scene the engine would run as one whole-strand look gets a "strand" thumbnail,
+    built by the server's own `ipad_menu.plan_thumb` from that plan (here aqua on the two kits it drives), and its
+    card paints it on the canvas like any other card: the one colour on the driven panels, nothing on the others,
+    never the palette strip's gradient. A card with no thumbnail (a preset the strand plays on its own makes no colour
+    claim) keeps the palette strip."""
+    stub = StubPanel(scene="golden-hour", review=True, canopy=True)
+    by_id = {s["id"]: s for s in stub.scenes}
+    registry = load_registry()
+    ids = {e.module: e.id for e in registry.canopy_modules()}
+    aqua = {"r": 121, "g": 206, "b": 212}
+    targets = {
+        ids[p]: ModuleTarget(ids[p], [], [], colors=[dict(aqua) for _ in range(30)]) for p in ("r0c0", "r0c1")
+    }
+    plan = ModePlan("coastal-tides", "Coastal Tides", Tier.STRAND, "", False, targets)
+    strand = ipad_menu.plan_thumb("coastal-tides", load_canopy(str(CONFIG_DIR)), registry, plan)
+    assert strand is not None and strand["basis"] == "strand"
+    by_id["coastal-tides"]["thumb"] = strand
+    by_id["coastal-tides-2"]["thumb"] = None  # e.g. a preset strand look: no thumbnail
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub, device_scale_factor=2)
+    _ready(page)
+    page.wait_for_function(
+        "[...document.querySelectorAll('#grid canvas.thumb')].every((c) => c.dataset.thumb)", timeout=5000
+    )
+    got = page.evaluate(
+        """async (scene) => {
+          const P = await import('/kiosk/canopy-preview.mjs?v=catalog-1');
+          const panel = await (await fetch('/api/kiosk/panel')).json();
+          const card = document.querySelector(`.scene[data-scene="${scene.id}"]`);
+          const other = document.querySelector('.scene[data-scene="coastal-tides-2"]');
+          const canvas = card.querySelector('canvas.thumb');
+          if (!canvas) return { sig: null, strips: card.querySelectorAll('.strip').length };
+          const dots = P.layout(panel.canopy, { width: canvas.clientWidth, height: canvas.clientHeight }).dots;
+          const ctx = canvas.getContext('2d');
+          const at = (d) => [...ctx.getImageData(Math.round(d.cx * 2), Math.round(d.cy * 2), 1, 1).data];
+          const first = (pos) => dots.find((d) => d.pos === pos);
+          return {
+            sig: canvas.dataset.thumb,
+            strips: card.querySelectorAll('.strip').length,
+            picks: Object.fromEntries(['r0c0', 'r0c1', 'r1c1', 'r2c2'].map((p) => [p, at(first(p))])),
+            alpha: Math.round(P.levelOpacity(scene.brightness_draft, (panel.canopy.view || {}).dim_floor) * 255),
+            other: { canvases: other.querySelectorAll('canvas.thumb').length,
+                     strip: (other.querySelector('.strip') || {}).style?.background || '' },
+          };
+        }""",
+        by_id["coastal-tides"],
+    )
+    assert got["sig"] == strand["sig"] and got["strips"] == 0, got
+    for pos in ("r0c0", "r0c1"):  # the driven panels: the strand look's one colour, at the card's opacity
+        rgba = got["picks"][pos]
+        assert all(abs(a - b) <= 6 for a, b in zip(rgba[:3], (121, 206, 212), strict=True)), (pos, rgba)
+        assert abs(rgba[3] - got["alpha"]) <= 8, (pos, rgba, got["alpha"])
+    for pos in ("r1c1", "r2c2"):  # not driven: no dot drawn
+        assert got["picks"][pos][3] == 0, (pos, got["picks"][pos])
+    assert got["other"]["canvases"] == 0 and "gradient" in got["other"]["strip"], got["other"]
+    assert errors == []
+
+
+def test_review_thumbnails_follow_a_quarter_turned_view(design_context_factory):
+    stub = StubPanel(
+        scene="golden-hour",
+        review=True,
+        canopy=True,
+        view=PreviewSettings(rotate_deg=90, mirror_x=True),
+    )
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    outside = page.evaluate(
+        """async () => {
+          const P = await import('/kiosk/canopy-preview.mjs?v=catalog-1');
+          const panel = await (await fetch('/api/kiosk/panel')).json();
+          const bad = [];
+          for (const canvas of document.querySelectorAll('#grid canvas.thumb')) {
+            const w = canvas.clientWidth, h = canvas.clientHeight;
+            for (const d of P.layout(panel.canopy, { width: w, height: h }).dots)
+              if (d.cx < 0 || d.cy < 0 || d.cx > w || d.cy > h) bad.push([canvas.closest('.scene').dataset.scene, d.cx, d.cy, w, h]);
+          }
+          return [document.querySelectorAll('#grid canvas.thumb').length, bad.slice(0, 5)];
+        }"""
+    )
+    assert outside[0] == 18 and outside[1] == [], outside
+    doc = _doc_scroll(page)
+    assert doc[0] <= 0 and doc[1] <= 0, doc
+    assert errors == []
+
+
+# five '#2' options and the idle scene (which can't be hidden): six visible, so the usual grid
+SIX_OPTIONS = frozenset(
+    {b for b in BASES if b != "lowcountry-calm"} | {f"{b}-3" for b in BASES} | {"lowcountry-calm-2"}
+)
+
+
+@pytest.mark.parametrize("viewport", [LANDSCAPE, OLDER, PORTRAIT])
+def test_six_visible_options_keep_the_3x2_grid(design_context_factory, screenshots, viewport):
+    stub = StubPanel(scene="lowcountry-calm", review=True, canopy=True, hide=SIX_OPTIONS)
+    assert [s["id"] for s in stub.scenes] == ["lowcountry-calm"] + [f"{b}-2" for b in BASES[1:]]
+    _ctx, page, errors = _open(design_context_factory, viewport, stub)
+    _ready(page, scene="lowcountry-calm")
+    assert page.get_attribute("#app", "data-review") == "false"
+    assert page.locator("#grid .scene").count() == 6
+    assert page.locator("#grid canvas.thumb").count() == 0 and page.locator("#grid .strip").count() == 6
+    _no_overflow(page, viewport)
+    cards = _cards(page)
+    assert all(c["bottom"] <= viewport["height"] for c in cards), cards
+    rows = sorted({round(c["y"]) for c in cards})
+    assert len(rows) == 2 and all(sum(round(c["y"]) == y for c in cards) == 3 for y in rows), cards
+    if viewport == LANDSCAPE:
+        page.screenshot(path=str(screenshots / "kiosk-six-options-1180x820.png"))
+    assert errors == []
+
+
+def test_a_hidden_scene_that_is_showing_is_named_in_now_showing(design_context_factory):
+    stub = StubPanel(scene="golden-hour-3", review=True, canopy=True, hide=frozenset({"golden-hour-3"}))
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    assert page.text_content("#now-name") == "Golden Hour #3"
+    assert page.locator(".scene[data-scene='golden-hour-3']").count() == 0
+    assert page.locator(".scene[data-state='selected']").count() == 0
+    assert len(_dots(page)) == 270
+    assert errors == []
+
+
+def test_the_review_attract_cycles_one_strip_per_scene(design_context_factory):
+    stub = StubPanel(scene="golden-hour", review=True)
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub, path="/kiosk/?debug=1")
+    _ready(page)
+    page.evaluate("document.querySelector('#grid').scrollTop = 1e6")
+    assert page.evaluate("document.querySelector('#grid').scrollTop") > 0
+    page.tap(".dbg-btn")
+    page.wait_for_selector(".dbg")
+    page.click("text=Show attract now")
+    page.wait_for_selector("#attract:not([hidden])")
+    assert page.locator("#attract-strips span").count() == 6  # one per scene group, never 18
+    assert page.text_content("#attract-mood").strip()
+    page.wait_for_timeout(700)  # past the debug button's swallow window
+    page.mouse.click(LANDSCAPE["width"] / 2, LANDSCAPE["height"] / 2)
+    page.wait_for_selector("#attract", state="hidden", timeout=3000)
+    assert page.evaluate("document.querySelector('#grid').scrollTop") == 0  # the next guest starts at the top
+    assert errors == []
 
 
 # ---- against the real engine ------------------------------------------------------------------------------------

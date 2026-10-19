@@ -18,6 +18,7 @@ Event kinds (field `kind`), all with `t` (wall epoch s) and usually `device_id`:
 - `tier`           mode, from, to, reason
 - `alert`          level (info/warn/error), message
 - `bench`          job, step, detail
+- `ops`            action (ipad_scenes), scene, show, hidden — an /ops "Show on the iPad" switch (D76)
 """
 
 from __future__ import annotations

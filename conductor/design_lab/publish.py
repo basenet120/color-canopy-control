@@ -55,6 +55,7 @@ from conductor.config import ConfigError
 from conductor.design_lab import draft as D
 from conductor.design_lab import preview as P
 from conductor.design_lab import store as S
+from conductor.ipad_menu import live_menu
 from conductor.looks import scene_rules
 from conductor.looks.live import (
     ALERT_PREFIX,
@@ -627,10 +628,12 @@ def confirm_body(lab: LabService, plan: PublishPlan, sentence: str, *, show: boo
 
 # ---- the answers ----------------------------------------------------------------------------------------------------------
 def live_json(lab: LabService) -> dict:
-    """LiveJSON (§2.11): what the show runs, where it came from, the Undo target, the six scenes as the iPad shows
-    them, the history, and the canopy's power/brightness for the "the canopy is off" note."""
+    """LiveJSON (§2.11): what the show runs, where it came from, the Undo target, the scenes as the iPad shows them
+    (and whether it offers each, D76: `on_ipad`), the history, and the canopy's power/brightness for the "the canopy
+    is off" note."""
     services = lab.services
     looks = live_looks(services)
+    hidden = set(live_menu(services).hidden)  # /ops's switches (D76); the Lab only reads them
     engine = lab.engine()
     versions = {v.id for v in lab.store.file().versions}
     current = looks.file.current
@@ -649,6 +652,7 @@ def live_json(lab: LabService) -> dict:
                 "palette": [{"name": c.name, "hex": c.hex} for c in scene.palette],
                 "mood": scene.mood,
                 "held": scene.id in held,
+                "on_ipad": scene.id not in hidden,
             }
         )
     canopy = {"power": True, "brightness": None, "designed_brightness": None}

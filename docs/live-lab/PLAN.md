@@ -719,7 +719,8 @@ confirm whose `show` differs from its ask's is a new 409 `confirm_required`; tog
  "previous": {"id": "p0002", "name": "...", "published_at": 1792690000.0, "by": "ops"} | null,   // Undo target
  "scenes": [{"id": "golden-hour", "name": "Golden Hour", "source": "approved" | "published",
              "palette": [{"name": "Peach", "hex": "#FFB38A"}], "mood": "...",
-             "held": false}],                              // held = at module level until its slots hold the design
+             "held": false,                                // held = at module level until its slots hold the design
+             "on_ipad": true}],                            // D76: false = /ops took its card off the iPad (the Lab only reads it)
  "history": [{"id": "p0003", "kind": "version", "version": "v0007", "name": "...", "published_at": 1792700000.0,
               "by": "Alon", "changed": ["golden-hour"], "repaint": {"golden-hour": {"slot": "custom-3", "applied": 9,
               "skipped": 0, "failed": 0}} | null, "outcome": "live" | "replaced" | "rolled back" | "in git",

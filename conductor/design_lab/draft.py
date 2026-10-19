@@ -801,7 +801,8 @@ def _patched_mode(
 
 
 def _patch_scene(scenes: dict, draft: SceneDraft) -> None:
-    """In the catalog dump (the Lab's own dict, never a model): the scene's client copy, palette, brightness, solid."""
+    """In the catalog dump (the Lab's own dict, never a model): the scene's client copy, palette, brightness, solid.
+    Everything else in the dump passes through untouched, `option_of` included (git's; the Lab never sets it)."""
     for scene in scenes["scenes"]:
         if scene["id"] == draft.scene_id:
             scene.update(
@@ -840,10 +841,14 @@ def problem_of(found: scene_rules.SceneProblem) -> Problem:
 
 
 def _shape_problems(approved: ConfigTrio, scenes: SceneCatalog, modes: ModesFile) -> list[Problem]:
-    """Belt and braces (§3.2.4): ids, ladders and slots never move."""
+    """Belt and braces (§3.2.4): ids, groups (option_of, D76), ladders and slots never move."""
     out = []
     if [s.id for s in scenes.scenes] != [s.id for s in approved.scenes.scenes]:
         out.append(Problem("scenes", "scene_id", "the draft would change the scene ids"))
+    elif [s.option_of for s in scenes.scenes] != [s.option_of for s in approved.scenes.scenes]:
+        out.append(
+            Problem("scenes", "scene_id", "the draft would regroup a scene (option_of); options never move")
+        )
     if list(modes.modes) != list(approved.modes.modes):
         out.append(Problem("modes", "scene_id", "the draft would change the mode ids"))
     for mode_id, mode in approved.modes.modes.items():
