@@ -36,13 +36,17 @@ presses **Rehearse** in the confirm dialog on `/ops`.
    (Lowcountry Calm) included (D75): the rehearsal checks that look's own rung for up to 10 minutes. It is not
    `motion.idle`'s 30-minute soak, which Alon runs separately with `live_enabled` on. If a look has no stepped design
    of its own in `config/modes.yaml`, its module-level design is stepped at the D65 defaults: 6 steps per cycle, 6 s
-   steps, forward. For Gate R on the nine show kits, prefer a **breathe** look once one is in `config/modes.yaml` (PR
-   D): every module changes level every step, so it is the heaviest steady write rate a scene asks for. On the nine show
-   kits the runner stretches the step to 7.5 s: it paces all nine modules on one account at 72 writes a minute,
-   the account's cap of 90 less a 20% reserve for 429 retries and re-sends (`motion.stepped.budget_reserve`).
+   steps, forward. To watch level steps on the nine show kits (bench item 6: does a step read as a breath or a
+   blink?), prefer a **breathe** look once one is in `config/modes.yaml` (PR D). When Gate R should carry the full
+   write rate, use a breathe with `lag_steps: 0` or a travel look: those change every module every step, while a
+   lagged breath (or a shimmer) leaves its resting modules unwritten for several steps, so it writes less. On the nine
+   show kits the runner stretches the step to 7.5 s: at the full rate it paces all nine modules on one account at 72
+   writes a minute, the account's cap of 90 less a 20% reserve for 429 retries and re-sends
+   (`motion.stepped.budget_reserve`).
 3. Minutes: **10** for Gate R (1–10 are allowed; use 2 to try the page out).
 4. Press **Rehearse…**. The dialog names every module it will write to, the account, the minutes and the write
-   rate (paced at up to 72 a minute; a step that would take the account past 90 in a minute is held back). Read it.
+   rate (paced at up to 72 a minute; a step that would leave the account less than one write per module of room
+   under 90 in a minute is held back, D75). Read it.
    If a module is missing, cancel and fix that first. Press **Rehearse**.
 5. The canopy card shows "Stepped look: step n of N · every 7.5 s · writes/min on account … (cap 90)". The line
    under the controls says when it ends. The kiosk's feature line says what the canopy is doing. For Golden Hour or
@@ -100,7 +104,8 @@ Also look at these. They don't decide pass or fail on their own:
 - `max_writes_60s` (also a pass criterion above): note the number for Alon. The runner plans its steps at 72 a
   minute, leaving 18 for retries and re-sends. In the simulator that was 72–81 with no faults and at most 82 with
   the pinned 429s and drops (12 seeds).
-- `steps.budget_holds`: steps held back because they would have taken the account past 90. Should be 0; anything
+- `steps.budget_holds`: steps held back because they would have left the account less than one write per module of
+  room under 90 (D75). Should be 0; anything
   else means something else was writing on the canopy account during the rehearsal.
 - `verification_s`: p50 and p95 from send to verified readback. The step can't usefully be shorter than p95 plus
   about a second.
