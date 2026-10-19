@@ -233,6 +233,28 @@ def test_the_motion_hints_follow_the_kind_of_motion():
     assert "if (lagHow) lagHow.textContent = c.lagHow;" in sync
 
 
+def test_the_breath_preview_plays_the_paces_own_steps_with_their_levels():
+    """D75 (review B-R5-TS-5): the page model's `paceSteps` and `viewPainter` are pinned in lab-model.test.mjs; this pins
+    that lab.js calls them. motionPaint plays the pace's own steps (at "Show box today" the show box's program over the
+    modules it drives, review B-R1-3, not the nine-module one) and hands each step's per-module levels to the painter;
+    paintStage passes a per-head level function through to paintCanopy as it is, else the one level."""
+    js = _code(_text("lab.js"))
+    motion = _function(js, "motionPaint")
+    assert "const step = M.paceSteps(st, tl.pace)[at.index];" in motion
+    assert "st.steps[" not in motion  # never the nine-module program whatever the pace
+    assert (
+        "paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } }"
+        in motion
+    )
+    stage = _function(js, "paintStage")
+    assert "const painter = M.viewPainter(preview, view, paint);" in stage
+    assert (
+        'const level = typeof p.level === "function" ? p.level : Number.isFinite(Number(p.level)) ? Number(p.level) : 100;'
+        in stage
+    )
+    assert "paintCanopy(st.view, p.head, p.spill, level);" in stage
+
+
 def test_the_tier_lists_moving_lines_show_only_while_the_steps_play():
     tiers = _function(_code(_text("lab.js")), "renderTiers")
     assert 'const playing = L.motion.state === "playing" && !L.present;' in tiers
