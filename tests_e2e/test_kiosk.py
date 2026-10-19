@@ -57,6 +57,7 @@ class StubPanel:
         driven: set[str] | None = None,
         view: PreviewSettings | None = None,
         ripple_s: float | None = None,
+        steps: dict | None = None,
     ) -> None:
         self.scenes = [scene_json(s) for s in load_scenes().scenes]
         # the canopy target: the real geometry, and a picture per position (`driven`: a partial canopy)
@@ -64,6 +65,10 @@ class StubPanel:
         self.driven = driven
         self.ripple_s = ripple_s  # a scene lands ring by ring from the centre, this far apart (lit.motion)
         self.ripple_t0: float | None = None
+        # a stepped run in progress (lit.motion "steps", D75): {frames, levels?, step_s}; it starts `lead_s` after the
+        # page's first request, so frame 0 is on screen before it switches
+        self.steps = steps
+        self.steps_t0: float | None = None
         self.scene = scene
         self.power: bool | None = True
         self.brightness = 70
@@ -123,6 +128,19 @@ class StubPanel:
         motion = None
         if self.ripple_t0 is not None and time.time() < self.ripple_t0 + 2 * self.ripple_s:
             motion = {"kind": "ripple", "t0": self.ripple_t0, "stagger_s": self.ripple_s, "rings": RINGS}
+        if self.steps is not None and self.power is not False:
+            if self.steps_t0 is None:
+                self.steps_t0 = time.time() + float(self.steps.get("lead_s", 3.0))
+            step_s, frames = float(self.steps["step_s"]), self.steps["frames"]
+            motion = {
+                "kind": "steps",
+                "t0": self.steps_t0,
+                "step_s": step_s,
+                "frames": frames,
+                "ends_at": self.steps_t0 + len(frames) * step_s,
+            }
+            if "levels" in self.steps:
+                motion["levels"] = self.steps["levels"]
         return {
             "level": None if self.power is False else self.brightness,
             "modules": modules,
@@ -438,6 +456,33 @@ def test_panel_canopy_partial_and_off(design_context_factory, screenshots):
         f"{json.dumps(UNLIT)})"
     )
     assert page.get_attribute("#canopy-preview", "aria-label") == "Preview: the canopy is off"
+    assert errors == []
+
+
+def test_a_breathing_run_draws_each_frames_level_as_opacity(design_context_factory):
+    """D75: a breath's frames carry each panel's level; the page draws it as that panel's dots' opacity over the dim
+    floor (70 → 0.805, 80 → 0.87), colours at full strength, and no layout work between frames (D69)."""
+    frame = ["#79CED4"] * 9
+    stub = StubPanel(
+        scene="coastal-tides",
+        canopy=True,
+        steps={"frames": [frame, list(frame)], "levels": [[70] * 9, [80] * 9], "step_s": 1.5, "lead_s": 3.0},
+    )
+    _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
+    _ready(page)
+    boxes = "els => els.map((e) => [e.getAttribute('cx'), e.getAttribute('cy'), e.getAttribute('r')])"
+    first = _dots(page)
+    first_boxes = page.eval_on_selector_all("#canopy-preview circle.dot", boxes)
+    assert len(first) == 270
+    assert {d["opacity"] for d in first} == {"0.805"} and {d["fill"] for d in first} == {"#79CED4"}
+    page.wait_for_function(
+        "[...document.querySelectorAll('#canopy-preview circle.dot')]"
+        ".every((e) => e.getAttribute('fill-opacity') === '0.87')",
+        timeout=10000,
+    )
+    second = _dots(page)
+    assert {d["opacity"] for d in second} == {"0.87"} and {d["fill"] for d in second} == {"#79CED4"}
+    assert page.eval_on_selector_all("#canopy-preview circle.dot", boxes) == first_boxes
     assert errors == []
 
 

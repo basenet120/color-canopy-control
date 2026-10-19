@@ -101,6 +101,12 @@ export function levelOpacity(level, floor = DIM_FLOOR) {
   return Math.round(v * 1000) / 1000;
 }
 
+/** A panel's dots' opacity: its own `level` when a breathing run's frame gives it one (D75), else the canopy's. */
+export function moduleOpacity(module, lit, floor = DIM_FLOOR) {
+  const own = module && typeof module.level === "number" ? module.level : undefined;
+  return levelOpacity(own !== undefined ? own : lit && lit.level, floor);
+}
+
 const byPos = (modules) => new Map((modules || []).map((m) => [m.pos, m]));
 
 /** True while `motion` still has a frame to come at `now` (server seconds): the page animates only then. */
@@ -119,9 +125,11 @@ export function motionActive(motion, now) {
  *
  * - ripple `{t0, stagger_s, rings: [[pos]]}`: ring j switches from the previous picture to `lit` at t0 + j·stagger_s
  *   (a panel without a previous picture reads unknown until its ring lands; a panel in no ring shows `lit` at once).
- * - steps `{t0, step_s, frames: [[hex | null] × 9 in grid order], ends_at}`: frame floor((now − t0)/step_s), clamped
- *   to the frames there are; after ends_at the frame showing then holds (the last one sent, so a run cut short holds
- *   where it stopped). A null entry is a dark panel; an off, dark or unknown panel keeps its own state.
+ * - steps `{t0, step_s, frames: [[hex | null] × 9 in grid order], ends_at, levels?}`: frame floor((now − t0)/step_s),
+ *   clamped to the frames there are; after ends_at the frame showing then holds (the last one sent, so a run cut short
+ *   holds where it stopped). A null entry is a dark panel; an off, dark or unknown panel keeps its own state. With
+ *   `levels` (D75: [[level | null] × 9] alongside frames, a breath's brightness per panel) a lit panel also gets that
+ *   frame's `level`, drawn as its opacity (`moduleOpacity`); its colour stays full strength.
  * - anything else, or no motion: `lit` as it is (the still frame).
  */
 export function motionColors(motion, prevLit, lit, now) {
@@ -145,12 +153,15 @@ export function motionColors(motion, prevLit, lit, now) {
     const raw = step > 0 ? Math.floor((t - Number(motion.t0)) / step) : last;
     const index = Math.min(last, Math.max(0, Number.isFinite(raw) ? raw : last));
     const frame = motion.frames[index] || [];
+    const levels = Array.isArray(motion.levels) ? motion.levels[index] || [] : null;
     return modules.map((m) => {
       if (!LIT.has(m.state)) return m;
       const i = GRID.indexOf(m.pos);
       const hex = i >= 0 ? frame[i] : null;
       if (typeof hex !== "string") return { pos: m.pos, state: "dark", color: null, colors: null };
-      return { pos: m.pos, state: m.state, color: hex, colors: null };
+      const item = { pos: m.pos, state: m.state, color: hex, colors: null };
+      if (levels && typeof levels[i] === "number" && Number.isFinite(levels[i])) item.level = levels[i];
+      return item;
     });
   }
   return modules;

@@ -10,6 +10,7 @@ import {
   geometryKey,
   layout,
   levelOpacity,
+  moduleOpacity,
   motionActive,
   motionColors,
   paintFor,
@@ -164,6 +165,36 @@ test("a stepped run shows frame floor((now − t0) / step_s) and holds the frame
   ];
   const mixed = litOf([...own, ...flat("lit", "#ABCDEF").slice(3)]);
   assert.deepEqual(motionColors(motion, null, mixed, 509.9).slice(0, 3), own);
+});
+
+test("a breathing run gives each lit panel its frame's level, drawn as opacity", () => {
+  // D75: frames carry each panel's level alongside its colour; the colour stays full strength
+  const frames = [0, 1, 2].map(() => GRID.map((pos) => (pos === "r2c2" ? null : "#79CED4")));
+  const levels = [28, 32, 24].map((lv) => GRID.map((pos) => (pos === "r2c2" ? null : lv)));
+  const motion = { kind: "steps", t0: 500, step_s: 4, frames, levels, ends_at: 512 };
+  const own = [
+    { pos: "r0c0", state: "unknown", color: null, colors: null },
+    { pos: "r0c1", state: "dark", color: null, colors: null },
+    { pos: "r0c2", state: "off", color: null, colors: null },
+  ];
+  const lit = litOf([...own, ...flat("lit", "#ABCDEF").slice(3)], { level: 28 });
+  const at = (now) => motionColors(motion, null, lit, now);
+  assert.deepEqual(at(505).slice(0, 3), own); // off, dark and unknown panels are as they were: no level
+  assert.deepEqual(at(505)[3], { pos: "r1c0", state: "lit", color: "#79CED4", colors: null, level: 32 });
+  assert.equal(at(509).find((m) => m.pos === "r1c1").level, 24);
+  assert.deepEqual(at(505)[8], { pos: "r2c2", state: "dark", color: null, colors: null }); // null frame: dark
+  // no levels in the motion: no level key (travel, an older server)
+  const travel = { ...motion, levels: undefined };
+  assert.equal("level" in motionColors(travel, null, lit, 505)[3], false);
+  // the opacity: the panel's own level when it has one, else the canopy's
+  assert.equal(moduleOpacity({ level: 24 }, { level: 28 }, 0.35), levelOpacity(24, 0.35));
+  assert.equal(moduleOpacity({ pos: "r0c0" }, { level: 28 }, 0.35), levelOpacity(28, 0.35));
+  assert.equal(moduleOpacity(undefined, { level: 70 }), levelOpacity(70));
+  assert.equal(moduleOpacity(undefined, null), 1);
+  // the page paints each dot with its own panel's opacity
+  const kiosk = readFileSync(new URL("../web/kiosk/kiosk.js", import.meta.url), "utf8");
+  assert.match(kiosk, /moduleOpacity\(byPos\.get\(dot\.pos\)/);
+  assert.doesNotMatch(kiosk, /levelOpacity\(lit\.level/);
 });
 
 test("no motion, or a kind this page doesn't know, is the still frame", () => {

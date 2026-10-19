@@ -16,7 +16,7 @@
 // Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
 // browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, connectLive, setSimBadge } from "/static/app.js?v=latency-1";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=breathe-1";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -56,8 +56,8 @@ import {
   stripGradient,
   switchView,
   waitToastOver,
-} from "/kiosk/panel-model.mjs?v=latency-1";
-import { ariaSummary, layout, levelOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs?v=latency-1";
+} from "/kiosk/panel-model.mjs?v=breathe-1";
+import { ariaSummary, layout, moduleOpacity, motionActive, motionColors, paintFor } from "/kiosk/canopy-preview.mjs?v=breathe-1";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -346,8 +346,8 @@ function paintCanopy(canopy, lit) {
   canopyView.shown = modules;
   const byPos = new Map(modules.map((m) => [m.pos, m]));
   const reduced = reducedMotion();
-  const opacity = levelOpacity(lit.level, canopy.view && canopy.view.dim_floor);
   for (const dot of canopyView.dots) {
+    const opacity = moduleOpacity(byPos.get(dot.pos), lit, canopy.view && canopy.view.dim_floor);
     const p = paintFor(byPos.get(dot.pos), dot.k, { reduced });
     const lightOn = p.kind === "lit" || p.kind === "changing";
     const paint = `${p.kind}|${p.fill}|${p.pulse}|${lightOn ? opacity : 1}`;
