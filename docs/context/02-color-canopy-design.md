@@ -91,8 +91,10 @@ VWBD numbers its panels row by row on its sheet, across our short axis, so P-0n 
 |---|---|---|---|---|---|---|---|---|---|
 | Canopy position | r2c0 | r1c0 | **r0c0** | r2c1 | r1c1 | **r0c1** | r2c2 | r1c2 | r0c2 |
 
-They are `canopy.yaml → canopy → vwbd_panels`, checked at load (all nine, each number once). At install, record
-each kit against the panel it hangs on (plan §9). Today's Modules 1–2 (r0c0, r0c1) belong on **P-03 and P-06**.
+They are `canopy.yaml → canopy → vwbd_panels`, checked at load (all nine, each number once). `/api/canopy/layout`
+gives each module its `vwbd_panel` (the same under `?scheme=p18`: it is per position), and the ops `/visualizer`
+labels read "r0c0 · A · P-03"; the kiosk payload never carries them. At install, record each kit against the panel
+it hangs on (plan §9). Today's Modules 1–2 (r0c0, r0c1) belong on **P-03 and P-06**.
 
 ## Lowcountry Modes (the six guest choices)
 | Mode | Brief |
