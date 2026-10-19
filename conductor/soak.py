@@ -47,11 +47,13 @@ settled on (`settled`; a settle goes out with the source `settle`, so it is neve
 idle return must not start a run. Correctness is program-aware (`_wanted`): while a run shows a step, a module is
 right when its lights show that step. Measured per step from the lights (every program command, grouped by step):
 each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's) and
-send → last module; steps superseded (a module sent the next step before it showed this one), failed, skipped by a
-late schedule or cut by a newer mood; the program commands per module per step (exactly one, and none missing for a
+send → last module; steps superseded (a module sent the next step before it showed this one — counted apart when a
+pinned fault hit that module's step write, 429 on every attempt or a silent drop, which the next step carries by
+design), failed, skipped by a late schedule or cut by a newer mood; the program commands per module per step (exactly one, and none missing for a
 module whose rows changed); the most program PUTs on one account in any 60 s and the most writes of any kind there
 (both ≤ `account_writes_per_min`: the runner paces its steps at the cap less `budget_reserve`, the room retries,
-re-sends and a mood chosen mid-run need, and holds back a step that would pass the cap); governor trips and
+re-sends and a mood chosen mid-run need, and holds back a step that would leave less than a guest's burst of that
+room, D75); governor trips and
 tier downgrades at 5% throttling (0); the still look after each run; and the idle return after the last choice
 (`idle_return_s` to `idle_return_s` + slack — a run never moves the idle clock). Its targets are proposals in
 soak.yaml: `config/sim/acceptance.yaml` is pinned and gains them only with Alon's sign-off.
@@ -96,9 +98,10 @@ import yaml
 from conductor import rows as R
 from conductor.clock import RealClock, VirtualClock, run_virtual
 from conductor.config import CONFIG_DIR, Registry, load_registry, load_settings
-from conductor.drivers.base import StateRow
+from conductor.drivers.base import Outcome, StateRow
 from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Tier
 from conductor.executor import CommandExecutor
+from conductor.executor_api import CommandStatus
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager
 from conductor.services import Target
@@ -1091,7 +1094,12 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         "step_spreads": [],  # per landed step: first to last of its modules showing it (s)
         "step_landings": [],  # per landed step: its send → the last of its modules showing it (s)
         "steps_landed": 0,
-        "steps_superseded": 0,  # a module was sent the next step before it showed this one
+        "steps_superseded": 0,  # a module was sent the next step before it showed this one, no pinned fault to blame
+        # ... because a pinned fault hit that module's step write: Hubspace answered 429/403 on every attempt (the
+        # executor gave up, or was still backing off), or the simulator silently dropped it (or its re-send). The next
+        # step then carries the module, by design (reconciler._resend_before_step)
+        "steps_superseded_faults": 0,
+        "step_writes_faulted": 0,  # (step, module) writes those faults hit: the bound on the above
         "steps_cut": 0,  # a newer mood replaced the look before the step landed (not a failure)
         "steps_failed": 0,  # never shown within WATCH_LIMIT_S
         "steps_skipped": 0,  # steps the runner's schedule skipped (it came due late)
@@ -1118,6 +1126,9 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
     # every program command, grouped by step: (runner, label) → the step's record
     groups: dict[tuple[int, str], dict] = {}
     latest: dict[str, dict] = {}  # device id → the group that last sent it a program command
+    # id(program command) → (the command, its group, device id)
+    submitted: dict[int, tuple[Any, dict, str]] = {}
+    superseded: list[dict] = []  # the groups a later step overtook, classified once every result is in
     watchers: set[asyncio.Task] = set()
 
     def on_submit(cmd: Any) -> None:
@@ -1136,6 +1147,7 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
                 "counts": Counter(),
                 "landed": {},
                 "superseded": False,
+                "faulted": set(),  # modules whose step write was refused on every attempt or silently dropped
             }
             task = asyncio.get_running_loop().create_task(watch_step(group))
             watchers.add(task)
@@ -1147,8 +1159,35 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         program_puts.setdefault(sim.account_of(cmd.device_id), []).append(clock.monotonic())
         group["rows"][device_id] = list(cmd.rows)
         group["counts"][device_id] += 1
+        submitted[id(cmd)] = (cmd, group, device_id)
 
+    def on_result(result: Any) -> None:
+        entry = submitted.pop(id(result.command), None)
+        if entry is None or entry[0] is not result.command:
+            return
+        _, group, device_id = entry
+        refused = (
+            result.status in (CommandStatus.FAILED, CommandStatus.SUPERSEDED)
+            and bool(result.attempts)
+            and all(a.outcome is Outcome.THROTTLED for a in result.attempts)
+        )
+        if refused:
+            group["faulted"].add(device_id)
+
+    original_accept = sim.cloud.accept_wire
+
+    def accept_wire(body: Any, *, silent_drop: bool = False):
+        # a silent drop (200, nothing stored) of a write to a module still to show its step: that step's or its re-send
+        if silent_drop and isinstance(body, dict):
+            device_id = by_address.get(str(body.get("metadeviceId")), str(body.get("metadeviceId")))
+            group = latest.get(device_id)
+            if group is not None and device_id not in group["landed"]:
+                group["faulted"].add(device_id)
+        return original_accept(body, silent_drop=silent_drop)
+
+    sim.cloud.accept_wire = accept_wire  # type: ignore[method-assign]
     world.executor.add_submit_listener(on_submit)
+    world.executor.add_listener(on_result)
 
     async def watch_step(group: dict) -> None:
         await asyncio.sleep(0)  # the step's other modules are submitted in the same call
@@ -1166,7 +1205,8 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
                 out["step_landings"].append(max(times))
                 return
             if group["superseded"]:
-                out["steps_superseded"] += 1
+                group["not_landed"] = set(group["rows"]) - set(group["landed"])
+                superseded.append(group)
                 return
             if engine.current_plan() is not group["plan"]:
                 out["steps_cut"] += 1
@@ -1255,6 +1295,15 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         await clock.sleep(POLL_S)
     for task in list(watchers):
         await task
+    await asyncio.sleep(0)  # a command a newer one overtook resolves SUPERSEDED in its own worker's turn
+    for group in superseded:
+        # every module that missed this step had its write hit by a pinned fault (refused on each attempt, or silently
+        # dropped): the faults' luck, which the next step carries; anything else is the runner sending too soon
+        if group["not_landed"] <= group["faulted"]:
+            out["steps_superseded_faults"] += 1
+        else:
+            out["steps_superseded"] += 1
+    out["step_writes_faulted"] = sum(len(group["faulted"]) for group in groups.values())
     out["max_account_writes_60s"] = max((_most_in_60s(times) for times in writes.values()), default=0)
     out["max_account_program_puts_60s"] = max((_most_in_60s(t) for t in program_puts.values()), default=0)
     for group in groups.values():
@@ -1450,6 +1499,7 @@ def _stepped_rows(stepped: dict) -> list[dict]:
     cap = stepped["cap"]
     idle = stepped.get("idle_return") or {}
     idle_limit = float(s["idle_return_slack_s"])
+    faulted = stepped.get("steps_superseded_faults", 0)
     tag = "Stepped, SIMULATED"
     runs = f"{stepped['runs']} runs of {', '.join(stepped['modes'])}"
     return [
@@ -1465,15 +1515,17 @@ def _stepped_rows(stepped: dict) -> list[dict]:
         },
         {
             "name": f"{tag}: each step shown on all its modules, send → last module ({stepped['steps_landed']} "
-            f"steps; {stepped['steps_superseded']} superseded, {stepped['steps_failed']} failed, "
-            f"{stepped['steps_skipped']} skipped)",
+            f"steps; {stepped['steps_superseded']} superseded, {faulted} carried by the next step after a pinned "
+            f"fault hit a module's write, {stepped['steps_failed']} failed, {stepped['steps_skipped']} skipped)",
             "p50": percentile(landings, 50),
             "p95": percentile(landings, 95),
             "max": max(landings) if landings else None,
             "target": f"every step on all its modules before the next is sent ({_fmt(step_s)} s steps): 0 "
-            "superseded, failed or skipped",
+            "superseded, failed or skipped; a module whose step write a pinned fault hit (429 on every attempt, or "
+            "a silent drop) is carried by the next step instead (by design), at most once per such write",
             "pass": bool(landings)
-            and stepped["steps_superseded"] == stepped["steps_failed"] == stepped["steps_skipped"] == 0,
+            and stepped["steps_superseded"] == stepped["steps_failed"] == stepped["steps_skipped"] == 0
+            and faulted <= stepped.get("step_writes_faulted", 0),
         },
         {
             "name": f"{tag}: PUTs per changed module per step ({len(puts)} module steps)",
@@ -1492,7 +1544,8 @@ def _stepped_rows(stepped: dict) -> list[dict]:
             "mood changes)",
             "max": stepped["max_account_writes_60s"],
             "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min: the steps are paced at the cap less "
-            "motion.stepped.budget_reserve, the room retries, re-sends and a mood chosen mid-run need)",
+            "motion.stepped.budget_reserve, the room retries, re-sends and a mood chosen mid-run need, and a step "
+            "waits rather than leave less than a guest's burst of it)",
             "pass": stepped["max_account_writes_60s"] <= cap,
         },
         {
@@ -1745,8 +1798,10 @@ def _stepped_line(stepped: dict) -> str:
         f"{stepped['interrupted']} cut short by another mood chosen mid-run (never the idle look); how runs ended: "
         f"{ended}; the look each finished run settled on, by tier: {settled}; the idle return showed the idle look "
         f"still{ran}. Steps: {stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "
-        f"{stepped['steps_superseded']} superseded, {stepped['steps_failed']} failed, {stepped['steps_skipped']} "
-        f"skipped; {stepped['missing']} changed modules a step didn't send. The 60 s account maximum counts every "
+        f"{stepped['steps_superseded']} superseded, {stepped.get('steps_superseded_faults', 0)} carried by the "
+        f"next step after a pinned fault hit a module's write (429 on every attempt, or a silent drop; of "
+        f"{stepped.get('step_writes_faulted', 0)} step writes hit that way), {stepped['steps_failed']} failed, "
+        f"{stepped['steps_skipped']} skipped; {stepped['missing']} changed modules a step didn't send. The 60 s account maximum counts every "
         f"write the simulator received on that account (steps, re-sends, retries) against the "
         f"{stepped['cap']:g}/min cap. Targets live in `config/sim/soak.yaml` until Alon signs them off "
         "(`config/sim/acceptance.yaml` is pinned)."

@@ -57,7 +57,11 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     # 7.5 s steps: the design's 6 s stretched to 9 modules at 72 a minute (the cap of 90 less the 20 % reserve)
     assert st["ended"] == {"the run is over": 3, "replaced": 1} and set(st["step_s"]) == {7.5}
     assert st["steps_landed"] >= 3 * 11 and st["step_spreads"] and st["step_landings"]  # the metrics exist
+    # B-R1-2: none superseded by the runner's own pacing. One a module missed because a pinned fault hit its write
+    # (429 on every attempt, or a silent drop; the next step carries it) is the faults' luck, whose random path moves
+    # with any config change (a Lab export): bounded by those faulted writes, not pinned at 0
     assert st["steps_superseded"] == st["steps_failed"] == st["steps_skipped"] == 0
+    assert st["steps_superseded_faults"] <= st["step_writes_faulted"]
     assert (
         set(st["puts_per_module_step"]) == {1} and st["missing"] == 0
     )  # one PUT per changed module per step
@@ -231,6 +235,8 @@ def _stepped(**kw) -> dict:
         "step_landings": [1.5, 2.0, 3.0, 4.0],
         "steps_landed": 4,
         "steps_superseded": 0,
+        "steps_superseded_faults": 0,
+        "step_writes_faulted": 0,
         "steps_cut": 0,
         "steps_failed": 0,
         "steps_skipped": 0,
@@ -270,11 +276,20 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
     assert {k: settings[k] for k in soak.STEPPED_DEFAULTS} == soak.STEPPED_DEFAULTS
     rows = soak._stepped_rows(_stepped())
     assert [r["pass"] for r in rows] == [True] * 9
+    # B-R1-2: a step a module missed because a pinned fault hit its write (429 on every attempt, or a silent drop) is
+    # the faults' luck (the next step carries that module, by design): counted apart, at most once per such write
+    lucky = soak._stepped_rows(_stepped(steps_superseded_faults=2, step_writes_faulted=3))
+    assert [r["pass"] for r in lucky] == [True] * 9
+    assert (
+        "0 superseded, 2 carried by the next step after a pinned fault hit a module's write"
+        in lucky[1]["name"]
+    )
     # the spread (05's target, per step) is reported, not gating; the account's writes of every kind gate (the cap)
     assert [r.get("gating", True) for r in rows] == [False, True, True, True, True, True, True, True, True]
     failing = [
         _stepped(step_spreads=[2.5] * 4),
         _stepped(steps_superseded=1),
+        _stepped(steps_superseded_faults=2, step_writes_faulted=1),  # more than the faulted writes explain
         _stepped(steps_failed=1),
         _stepped(steps_skipped=1),
         _stepped(step_landings=[]),
@@ -295,13 +310,19 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
         # D75: the idle return started a run (motion.idle is off: it shows the idle look still)
         _stepped(idle_return={"after_s": 180.3, "mode": "lowcountry-calm", "settled_s": 2.0, "ran": True}),
     ]
-    rows_failing = (0, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 7, 8, 8, 8, 8, 8)
+    rows_failing = (0, 1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 7, 8, 8, 8, 8, 8)
     for index, stepped in zip(rows_failing, failing, strict=True):
         rows = soak._stepped_rows(stepped)
         assert [i for i, r in enumerate(rows) if not r["pass"]] == [index], stepped
         assert soak.passed(rows) is (index == 0), stepped  # only the reported spread never fails it
-    line = soak._stepped_line(_stepped(steps_cut=2, interrupted=1))
+    line = soak._stepped_line(
+        _stepped(steps_cut=2, interrupted=1, steps_superseded_faults=1, step_writes_faulted=2)
+    )
     assert "2 cut by a newer mood" in line and "`config/sim/acceptance.yaml` is pinned" in line
+    assert (
+        "1 carried by the next step after a pinned fault hit a module's write (429 on every attempt, or a "
+        "silent drop; of 2 step writes hit that way)" in line
+    )
     assert "golden-hour: its own (config/modes.yaml), 6 steps a cycle" in line
     assert "coastal-tides: a SIMULATED one, 6 steps a cycle" in line
 
