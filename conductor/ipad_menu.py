@@ -22,7 +22,8 @@ attention" lines, the conductor.yaml fold for the overlay download, and the revi
   plan drives (`mask_thumb`): on a partial canopy a card lights only the panels Now Showing lights (D62), never all
   nine.
 
-Imports: conductor.config and conductor.scenes only at module level; looks.live and routes.design inside functions.
+Imports: conductor.config and conductor.scenes only at module level; looks.live, routes.design and canopy_view
+inside functions.
 Never guest_panel or routes.kiosk: routes.kiosk imports this module, and guest_panel imports routes.kiosk.
 """
 

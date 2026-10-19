@@ -1056,9 +1056,16 @@ fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the
 - **The cards draw each scene at the tier the engine would show it at now.** Every visible scene's likely plan, the
   rule /api/kiosk/modes already uses for every listed mode (`routes.kiosk._likely_plan`: the plan showing now when it
   is that scene's, else `compile_best`, which honours the reconciler's hysteresis floor). Per light only when that
-  plan is canvas or slot (T1/T2); otherwise its nine module colours (module level and the stepped hold); none for a
+  plan is canvas or slot (T1/T2); its nine module colours at module level and the stepped hold; and for a
   whole-strand look, including a modules- or stepped-first scene the reconciler has eased down to its strand rung
-  (the idle Lowcountry Calm among them). A card lights only the positions that plan drives, as Now Showing does
+  (the idle Lowcountry Calm among them), the one colour that plan puts on each panel it drives (`basis: "strand"`,
+  `ipad_menu.plan_thumb` over `canopy_view.plan_picture`, which shares `lit_state`'s colour rule, so the card is the
+  claim Now Showing makes for that plan; every strand look in git is one rgb colour). Review round 3 (C-R3-1) chose
+  this over keeping the palette strip there: the strip's 30-colour gradient in the box where the other cards show
+  the ceiling is a picture the ceiling never shows. A look the strand plays on its own (a preset or program; none in
+  git) makes no colour claim on Now Showing, so its card has no thumbnail and keeps the palette strip, the scene's
+  colours rather than a picture of the ceiling. This is part of question 1: a labelled design view would change it
+  too. A card lights only the positions that plan drives, as Now Showing does
   (`guest_panel.driven_positions`; with no plan, the positions with a device registered): a position with no device
   is left out of every look (D62), so on the two-kit show box every card shows two lit panels and seven dark ones,
   never nine. That is one compile per visible scene per poll, as /api/kiosk/modes pays (22–28 ms for 18 scenes on

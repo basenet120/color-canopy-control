@@ -11,9 +11,11 @@ same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
                                 brightness_draft, option_of: id | null, group: id, thumb}`: `group` is the scene's base
                                 (its `option_of`) or its own id; `thumb` is null, or — only while more than six scenes
                                 are visible (the review menu) — the card's still picture at the tier the engine would
-                                show it at now: `{sig: 12 hex, basis: "heads" | "modules", modules: [{pos, color:
-                                "#RRGGBB" | null, colors: ["#RRGGBB" × 30] | null} × 9]}` ("heads": per light, for a
-                                scene the engine would show as canvas or slot; "modules": its nine module colours).
+                                show it at now: `{sig: 12 hex, basis: "heads" | "modules" | "strand", modules: [{pos,
+                                color: "#RRGGBB" | null, colors: ["#RRGGBB" × 30] | null} × 9]}` ("heads": per light,
+                                for a scene the engine would show as canvas or slot; "modules": its nine module
+                                colours; "strand": a whole-strand plan's colour on each panel it drives; null for a
+                                look the strand plays on its own, so the card keeps its palette strip).
                                 `showing` is null, or the scene showing now when it is hidden (Now Showing still
                                 names it; `state.scene` is checked against the whole catalog). `state` is `{power,
                                 brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit,

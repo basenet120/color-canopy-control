@@ -1,7 +1,7 @@
 # Status
 
-_Last updated: 2026-10-18 night (preset-options PR C `claude/ipad-review-menu`: the iPad review menu, hide and
-promote, D76; review round 2 fixed; built on PR G's tip, sim only; see its block). Before that 2026-10-18 evening (PR G
+_Last updated: 2026-10-19 early (preset-options PR C `claude/ipad-review-menu`: the iPad review menu, hide and
+promote, D76; review round 3 fixed; built on PR G's tip, sim only; see its block). Before that 2026-10-18 evening (PR G
 `claude/flagged-not-changing`: a flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
@@ -41,7 +41,8 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
 - **Review fixes (round 1, Oct 18):** (a) the review cards are tier-true for every scene: `thumb_basis` asks the
   engine for each visible scene's likely plan (`_likely_plan`, as /api/kiosk/modes does), so a modules- or
   stepped-first scene the reconciler has eased down to its strand rung (the idle Lowcountry Calm among them) draws
-  no module picture while the ceiling shows one whole-strand look. The test that pinned "options and modules-first
+  no module picture while the ceiling shows one whole-strand look (round 3 makes it draw that look's colour, not
+  the palette strip). The test that pinned "options and modules-first
   are never compiled" now pins the opposite, beside a stub test (Calm showing at strand) and a sim-engine test (a
   hysteresis floor at strand). (b) `cardsKey` carries the scene's `brightness_draft` beside the thumbnail's `sig`,
   so a brightness-only publish repaints the card's opacity; a card with no thumbnail (the six-card strip) is keyed
@@ -62,23 +63,39 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
   Mutation-checked by hand, then restored: the panel without the mask, `driven_positions` ignoring the plan,
   `mask_thumb` as a no-op, promoteDraft without its note, the title without `{motion}`, lab.js's confirm without
   `{motion}`, and attractScenes without its `<= GRID_MAX` branch each fail at least one new test.
-- **Verified (sim, macOS, Oct 18, after review round 2):**
-  `nice -n 15 uv run --offline pytest -q -p no:cacheprovider` → 2564 passed, 5 skipped, 44 subtests (11 min)
-  (2560 after round 1; baseline at #37: 2473 passed, 5 skipped); `ruff check` / `ruff format --check` clean;
-  `node --test` on each of the ten `tests/*.test.mjs` → fail 0 (guest-panel 32, ops-ipad 4, lab-model 89);
-  `scripts/regen_scene_pins.py --check` exit 0 (no scene, mode or recipe changed);
-  `pytest tests_e2e --collect-only` → 54 collected (review_fixture imports conductor only). **Browser (local only;
-  CI runs no browser; run before review round 1 and not re-run since, so rounds 1 and 2 — the kiosk key, the /ops
-  error line, the partial-canopy mask and the promote motion copy — are proven by pytest, node and static tests
-  only):** the new e2e tests pass — 14 kiosk review
-  tests against the stubbed panel at 1180×820, 1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a
-  tap after scrolling, scroll kept across a rebuild, painted pixels and alpha at dpr 2, a quarter-turned view, six
-  options keep the 3 × 2, a hidden scene named in Now Showing, one attract strip per group), and the whole of
-  `tests_e2e/test_ops_visualizer.py` (11, with the new On the iPad switch test). Run with the system Chrome
-  (`channel="chrome"`, a scratch plugin: Playwright's own Chromium isn't downloaded on this Mac) on port 8303 only.
+- **Review fixes (round 3, Oct 19):** **a whole-strand card draws that look's one colour, not the palette strip**
+  (C-R3-1, C1). A scene whose likely plan is the strand rung (a modules- or stepped-first scene the reconciler's
+  floor has eased down) had `thumb: null`, so the kiosk drew the palette strip's 30-colour gradient in the box where
+  the other cards show the ceiling, while every strand look in git is one rgb colour; the docs said "none". Now
+  `thumb_plans` gives it the basis `"strand"`, and `GuestPanel.thumbs` reads that card from the plan itself
+  (`ipad_menu.plan_thumb` over the new `canopy_view.plan_picture`, which shares `lit_state`'s colour rule): the
+  strand colour on each driven panel and the others dark (D62), never cached, with no `mode_design` call. A look the
+  strand plays on its own (a preset or program; none in git) makes no colour claim, so its card has no thumbnail
+  and keeps the strip. D76 and guest-panel.md §2.5 and §4.5 say so. Tests: the basis tests now pin "strand"; a stub
+  test (aqua on the two kits equals `lit_state`'s claim, and the sig follows the colour); a preset test; the
+  sim-engine floor test (the modes.yaml strand colour on all nine panels, equal to `plan_picture`); and an e2e test
+  that the card paints aqua on r0c0/r0c1 and nothing on the undriven panels, while a card with no thumbnail keeps
+  the strip. Mutation-checked by hand, then restored: `thumb_plans` giving strand None (4 tests fail), the panel
+  ignoring the plan picture (2), `plan_picture` skipping a position with no claim (1), `_claim` ignoring a preset
+  (1), and kiosk.js drawing the strip for a strand thumbnail (the e2e test).
+- **Verified (sim, macOS, Oct 19, after review round 3):**
+  `nice -n 15 uv run --offline pytest -q -p no:cacheprovider tests` → 2566 passed, 5 skipped, 44 subtests (12 min)
+  (2564 after round 2, 2560 after round 1; baseline at #37: 2473 passed, 5 skipped); `ruff check` /
+  `ruff format --check` clean; `node --test` on each of the ten `tests/*.test.mjs` → fail 0 (guest-panel 32,
+  ops-ipad 4, lab-model 89, canopy-preview 10); `scripts/regen_scene_pins.py --check` exit 0 (no scene, mode or
+  recipe changed); `pytest tests_e2e --collect-only` → 55 collected (review_fixture imports conductor only).
+  **Browser (local only; CI runs no browser; the kiosk review group was re-run after round 3, while
+  `tests_e2e/test_ops_visualizer.py` was last run before round 1, so round 1's /ops error line and round 2's promote
+  motion copy are proven by pytest, node and static tests only):** 15 kiosk review tests pass against the stubbed panel at 1180×820,
+  1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a tap after scrolling, scroll kept across a
+  rebuild, painted pixels and alpha at dpr 2, a whole-strand card's one colour beside a card that keeps the strip,
+  a quarter-turned view, six options keep the 3 × 2, a hidden scene named in Now Showing, one attract strip per
+  group); before round 1, the whole of `tests_e2e/test_ops_visualizer.py` (11, with the new On the iPad switch
+  test). Run with the system Chrome (`channel="chrome"`, a scratch plugin: Playwright's own Chromium isn't
+  downloaded on this Mac) on port 8303 only.
   **Pre-existing, not PR C's:** `test_panel_ready_changing_cooldown` (`#hdr-spinner` not visible) and
   `test_debug_drawer_is_for_ops_only` fail the same way on the untouched #37 tree with that browser. **Soak** (before
-  review round 1, which changes no engine code): `python -m conductor.soak` → the same numbers as the committed
+  review round 1; rounds 1–3 change no engine code): `python -m conductor.soak` → the same numbers as the committed
   report (19 PASS; the gating settle row FAIL at p95 5.19 s, as since D72; the two reported spreads FAIL as before);
   the report was restored, not committed.
 - **Measured (for PR D):** `catalog_thumbs` over the 18 review scenes, warm: every card per head 72.2 ms / 55,837 B
@@ -97,10 +114,11 @@ D's options are in git. Built and tested over an in-memory 18-scene fixture (`te
 - **Decisions recorded in D76:** card thumbnails draw no fins and use a thumbnail dot radius (C12); the base keeps
   its "#1" until PR E or a Lab rename (C27).
 - **Questions for Alon:** (1) the review cards draw each scene at the tier the engine would use (per light only for a
-  painted scene shown as canvas or slot; none for one shown as a whole-strand look; module colours otherwise, which
-  on the show box is every other scene until per-light is commissioned), against plan §5.4's per-light design on the iPad: keep tier-true cards, or add a
-  labelled design view (new client copy)? (2) Once PR E brings the iPad back to six, should those six cards also get
-  tier-true thumbnails instead of palette strips?
+  painted scene shown as canvas or slot; the strand look's one colour for one shown as a whole-strand look, round 3;
+  module colours otherwise, which on the show box is every other scene until per-light is commissioned), against
+  plan §5.4's per-light design on the iPad: keep tier-true cards, or add a labelled design view (new client copy)?
+  (2) Once PR E brings the iPad back to six, should those six cards also get tier-true thumbnails instead of palette
+  strips?
 - **Next:** PR D on a merge of A + B + C. Its verification should include a hand walk-through of promote on
   `make lab-dev` with the 18 options (golden-hour-2 → golden-hour: the button, the swap, the notice, the recipe keys,
   Publish, the export's promotion line, and the motion line on a stepped base) and `catalog_thumbs` /
