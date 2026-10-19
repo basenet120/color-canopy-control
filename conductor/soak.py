@@ -33,14 +33,18 @@ redefine and the show runs one burst until then), the time until the last ring i
 + 5 s), the PUTs each module got for the change (exactly one, none before its ring is due) and tier downgrades (0 at
 5% throttling); those three are part of the verdict.
 
-**The stepped scenario (D65).** Coastal Tides and Golden Hour have a stepped rung in `config/modes.yaml` (the
-simulator steps them; `motion.stepped.live_enabled` stays false, so live hardware doesn't). The main run steps Coastal
-Tides whenever it is chosen (its rung is first); Golden Hour's rung comes after its painted canvas, which the simulator
-commissions, so it never steps there. So a third, separate run (`stepped:` in `config/sim/soak.yaml`, same pinned
-conditions) moves the stepped rung first in the candidate moods' ladders in the soak's config copy: the mode's own
-stepped technique (design, cadence and copy as the show has them), or for a candidate without one a SIMULATED rung
-made from its module-level design (so the still look it holds is that rung). It makes seeded kiosk runs of them, some
-cut short by a still mood, then leaves the canopy alone until the idle return. Correctness is program-aware (`_wanted`): while a run shows a step, a module is
+**The stepped scenario (D65, D75).** Coastal Tides and Golden Hour have a stepped rung in `config/modes.yaml` (the
+simulator steps them; `motion.stepped.live_enabled` stays false, so live hardware doesn't). Since D75 a guest's
+(kiosk) choice runs a mode's rung first and then settles onto its best still tier (Golden Hour's commissioned canvas),
+so the main run steps both whenever a guest chooses them. A third, separate run (`stepped:` in
+`config/sim/soak.yaml`, same pinned conditions) steps every scene with all three kinds of motion: a mode's own rung
+stays where modes.yaml puts it (design, cadence and copy as the show has them), and a mode without one gets a
+SIMULATED rung just before `modules`, made from its module-level design (so the still look it holds is that rung),
+with the scenario's `technique` and its per-mode `simulated:` overrides (a breathe, a shimmer) and copy that says what
+changes. It makes seeded kiosk runs of them, some cut short by another mood (never the idle look, so the idle return
+stays measurable), then leaves the canopy alone until the idle return. Each run's end is counted by the tier it
+settled on (`settled`; a settle goes out with the source `settle`, so it is never grouped with a run's steps), and the
+idle return must not start a run. Correctness is program-aware (`_wanted`): while a run shows a step, a module is
 right when its lights show that step. Measured per step from the lights (every program command, grouped by step):
 each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's) and
 send → last module; steps superseded (a module sent the next step before it showed this one), failed, skipped by a
@@ -404,8 +408,23 @@ def load_soak_ripple(path: Path = SOAK_SETTINGS) -> dict:
 
 
 STEPPED_DEFAULTS = {
-    "modes": ["golden-hour", "coastal-tides"],
+    # every scene; Golden Hour first, so the short soak's first run settles onto its canvas (D75)
+    "modes": [
+        "golden-hour",
+        "coastal-tides",
+        "lowcountry-calm",
+        "garden-gathering",
+        "rainbow-row-sunset",
+        "goodnight-glow",
+    ],
     "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0},
+    # per-mode overrides of `technique` for the SIMULATED rungs (D75): a breathe, a shimmer and a level-only breath;
+    # each swing fits its scene's brightness (75, 85, 28)
+    "simulated": {
+        "garden-gathering": {"mode": "breathe", "brightness_swing": 6, "lag_steps": 2},
+        "rainbow-row-sunset": {"mode": "shimmer", "brightness_swing": 6, "lag_steps": 3, "seed": 7},
+        "goodnight-glow": {"mode": "breathe", "brightness_swing": 4},
+    },
     "runs": 12,
     "hold_s": 20.0,
     "interrupt_every": 4,
@@ -416,55 +435,81 @@ STEPPED_DEFAULTS = {
 
 def load_soak_stepped(path: Path = SOAK_SETTINGS) -> dict:
     """The stepped scenario's settings (`stepped:` in config/sim/soak.yaml) over STEPPED_DEFAULTS (`technique` merged
-    key by key)."""
+    key by key, `simulated` mode by mode)."""
     stepped: dict = {}
     if path.exists():
         with open(path, encoding="utf-8") as f:
             stepped = (yaml.safe_load(f) or {}).get("stepped") or {}
     technique = {**STEPPED_DEFAULTS["technique"], **(stepped.get("technique") or {})}
-    return {**copy.deepcopy(STEPPED_DEFAULTS), **stepped, "technique": technique}
+    simulated = {**copy.deepcopy(STEPPED_DEFAULTS["simulated"]), **(stepped.get("simulated") or {})}
+    return {**copy.deepcopy(STEPPED_DEFAULTS), **stepped, "technique": technique, "simulated": simulated}
+
+
+SIMULATED_STEPPED = "SIMULATED stepped look (soak only; never shown to guests): each Hubspace strand is sent "
+
+
+def _simulated_copy(tech: dict, canvas: Any, canopy: dict) -> str:
+    """A SIMULATED rung's moving copy, true of what its steps change (the schema's rules, D65/D75): travel names the
+    design's flow (`motion_words`); a breath says what each strand is sent and how it breathes (a lagged breathe its
+    start too); a shimmer that the strands breathe on their own."""
+    from conductor.looks.schema import motion_words
+
+    kind = tech.get("mode", "travel")
+    if kind == "travel":
+        words = motion_words(canvas, canopy, tech.get("direction", "forward"))
+        if words is None:  # pragma: no cover - a stepped design always has a field canvas over a canopy here
+            raise ValueError("its design has no layout words to name the stepped flow")
+        return f"{SIMULATED_STEPPED}its next colour every few seconds, so the palette moves {words}."
+    shift, swing = float(tech.get("shift") or 0) > 0, int(tech.get("brightness_swing") or 0) > 0
+    level = "a brighter or softer level"
+    what = f"its next colour and {level}" if shift and swing else ("its next colour" if shift else level)
+    if kind == "shimmer":
+        verb = "glow and soften" if swing else "drift and settle"
+        return f"{SIMULATED_STEPPED}{what} every few seconds, so the strands {verb} on their own."
+    verb = "swells and softens" if swing else "drifts and settles"
+    lead = ""
+    if int(tech.get("lag_steps") or 0) > 0:
+        start = motion_words(canvas, canopy, "forward")
+        lead = f" {start}" if start else ""
+    return f"{SIMULATED_STEPPED}{what} every few seconds, so the palette {verb}{lead}."
 
 
 def _apply_stepped(config: Path, stepped: dict) -> None:
-    """Move the stepped rung first in each of `stepped["modes"]`' ladders, in the config copy. A mode with its own
-    stepped technique (config/modes.yaml, D65) keeps it as the show has it: its design, cadence and copy. A mode
-    without one gets a SIMULATED rung: its own module-level design (the `modules` sample's canvas and brightness, so
-    the hold is that rung exactly) with the scenario's `technique` fields, and moving copy that names the design's flow
-    (`motion_words`) and says SIMULATED."""
+    """Give each of `stepped["modes"]` a stepped rung, in the config copy. A mode with its own (config/modes.yaml)
+    keeps it where the show has it, design, cadence and copy (D75: a guest's choice runs it first wherever it sits).
+    A mode without one gets a SIMULATED rung just before `modules`: its own module-level design (the `modules`
+    sample's canvas and brightness, so the hold is that rung exactly) with the scenario's `technique` and the mode's
+    `simulated` overrides (its kind of motion), and moving copy that says SIMULATED and what changes."""
     from pydantic import TypeAdapter
 
     from conductor.geometry import load_canopy_config
-    from conductor.looks.schema import FieldCanvas, motion_words
+    from conductor.looks.schema import FieldCanvas
 
     modes_path = config / "modes.yaml"
     modes = yaml.safe_load(modes_path.read_text(encoding="utf-8"))
     canopy_path = config / "canopy.yaml"
     canopy = load_canopy_config(canopy_path) if canopy_path.exists() else load_canopy_config()
-    technique = dict(stepped["technique"])
+    simulated = stepped.get("simulated") or {}
     for mode_id in stepped["modes"]:
         mode = modes["modes"][mode_id]
-        if mode["techniques"].get("stepped") is None:
-            sample = mode["techniques"]["modules"]["sample"]
-            canvas = copy.deepcopy(sample["canvas"])
-            words = motion_words(
-                TypeAdapter(FieldCanvas).validate_python(canvas),
-                canopy,
-                technique.get("direction", "forward"),
-            )
-            if (
-                words is None
-            ):  # pragma: no cover - a stepped design always has a field canvas over a canopy here
-                raise ValueError(f"{mode_id}: its design has no layout words to name the stepped flow")
-            mode["techniques"]["stepped"] = {
-                "canvas": canvas,
-                "brightness": sample.get("brightness", 100),
-                **technique,
-                "moving_feature": (
-                    "SIMULATED stepped look (soak only; never shown to guests): each Hubspace strand is sent its "
-                    f"next colour every few seconds, so the palette moves {words}."
-                ),
-            }
-        mode["ladder"] = ["stepped", *(t for t in mode["ladder"] if t != "stepped")]
+        if mode["techniques"].get("stepped") is not None and "stepped" in mode["ladder"]:
+            continue  # its own rung, where the show has it
+        tech = {**stepped["technique"], **(simulated.get(mode_id) or {})}
+        sample = mode["techniques"]["modules"]["sample"]
+        canvas = copy.deepcopy(sample["canvas"])
+        try:
+            moving = _simulated_copy(tech, TypeAdapter(FieldCanvas).validate_python(canvas), canopy)
+        except ValueError as exc:  # pragma: no cover - see _simulated_copy
+            raise ValueError(f"{mode_id}: {exc}") from None
+        mode["techniques"]["stepped"] = {
+            "canvas": canvas,
+            "brightness": sample.get("brightness", 100),
+            **tech,
+            "moving_feature": moving,
+        }
+        ladder = [t for t in mode["ladder"] if t != "stepped"]
+        at = ladder.index("modules") if "modules" in ladder else len(ladder)
+        mode["ladder"] = [*ladder[:at], "stepped", *ladder[at:]]
     modes_path.write_text(yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
@@ -621,8 +666,10 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         "wiring": {
             "show_wiring": world.wiring is not None,
             "motion": world.motion,
-            "motion_plans": 0,  # accepted changes that installed a motion plan (all-or-none re-trigger)
+            # accepted changes and run-end settles that installed a motion plan (all-or-none re-trigger)
+            "motion_plans": 0,
             "tiers": {},  # accepted changes per tier
+            "settles": 0,  # D75: run ends that settled onto the mode's canvas or slot (not guest changes)
         },
     }
     tasks: set[asyncio.Task] = set()
@@ -684,6 +731,10 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
         if plan is None or source in ("reconciler", "recovery"):
             return
         results["wiring"]["motion_plans"] += int(bool(plan.motion))
+        # D75: a run's end onto the best still tier, not a guest change: nothing to time
+        if source == "settle":
+            results["wiring"]["settles"] += 1
+            return
         tiers = results["wiring"]["tiers"]
         tiers[str(plan.tier)] = tiers.get(str(plan.tier), 0) + 1
         now = clock.monotonic()
@@ -997,9 +1048,10 @@ async def _ripple_soak(cfg: SoakConfig) -> dict:
 
 
 async def _stepped_soak(cfg: SoakConfig) -> dict:
-    """The stepped scenario (D65): the show's own wiring with the stepped rung first on `stepped["modes"]` (their own,
-    or a SIMULATED one for a mode without), kiosk runs of them under the pinned conditions, each step measured from the
-    lights (see the module docstring)."""
+    """The stepped scenario (D65, D75): the show's own wiring with a stepped rung on every one of `stepped["modes"]`
+    (their own where the show has it, or a SIMULATED one just before `modules`), kiosk runs of them under the pinned
+    conditions, each step measured from the lights and each run's end by the tier it settled on (see the module
+    docstring)."""
     st = cfg.stepped
     world = await _build_show(cfg, stepped=st)
     engine, clock, sim = world.engine, world.clock, world.sim
@@ -1016,12 +1068,12 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
     show_modes = load_modes(CONFIG_DIR)  # the show's own modes.yaml: which candidates bring their own rung
     out: dict[str, Any] = {
         "modes": stepped_modes,
-        "techniques": {  # what each candidate steps with in this run
+        "techniques": {  # what each candidate steps with in this run (D75: its kind of motion too)
             m: {
                 "own": show_modes.modes[m].techniques.stepped is not None,
                 **{
                     k: getattr(world.wiring.modes_file.mode(m).techniques.stepped, k)
-                    for k in ("steps_per_cycle", "step_s", "run_s")
+                    for k in ("steps_per_cycle", "step_s", "run_s", "mode", "brightness_swing", "lag_steps")
                 },
             }
             for m in stepped_modes
@@ -1047,9 +1099,10 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         "missing": 0,  # modules whose rows changed from the step before but weren't sent
         "holds": [],  # per finished run: the still look sent → every module showing it (s)
         "holds_unsettled": 0,
+        "settled": {},  # D75: per finished run, the tier its look settled on (a canvas or slot, else its own hold)
         "max_account_writes_60s": 0,  # every write the simulator received on one account, any 60 s
         "max_account_program_puts_60s": 0,  # the stepped program's commands on one account, by send time, any 60 s
-        "idle_return": None,  # {after_s, mode, settled_s}
+        "idle_return": None,  # {after_s, mode, settled_s, ran}
         "idle_return_s": settings.kiosk.idle_return_s,
     }
     # every write the simulator receives, per account: the sliding 60 s maximum
@@ -1145,25 +1198,41 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         plan = engine.current_plan()
         run_s = runner.count * runner.step_s
         every = int(st.get("interrupt_every") or 0)
-        if every and (i + 1) % every == 0 and still:
-            # a guest chooses a still mood mid-run: the run stops there, its steps not yet landed are cut
-            await clock.sleep(
-                rng.uniform(2 * runner.step_s, max(2 * runner.step_s, run_s - 2 * runner.step_s))
-            )
-            state = await engine.request_mode(rng.choice(still), source="kiosk")
-            if not state.refused:
-                out["interrupted"] += 1
-                last_choice = clock.monotonic()
+        interrupting = None
+        if every and (i + 1) % every == 0:
+            mood = _interrupting_mood(rng, still, stepped_modes, mode_id, settings.kiosk.idle_mode)
+            if mood is not None:
+                # a guest chooses another mood mid-run: the run stops there, its steps not yet landed are cut
+                await clock.sleep(
+                    rng.uniform(2 * runner.step_s, max(2 * runner.step_s, run_s - 2 * runner.step_s))
+                )
+                state = await engine.request_mode(mood, source="kiosk")
+                if not state.refused:
+                    out["interrupted"] += 1
+                    last_choice = clock.monotonic()
+                    interrupting = engine.runner
         while runner.running and clock.monotonic() - last_choice < run_s + WATCH_LIMIT_S:
             await clock.sleep(POLL_S)
         out["ended"][runner.ended or "?"] = out["ended"].get(runner.ended or "?", 0) + 1
         out["steps_skipped"] += runner.skipped
-        if engine.current_plan() is plan and not runner.running:
+        # D75: every scene steps, so the mood that cut the run short runs too; the next guest comes `hold_s` after
+        # that run ends, as after any other (two choices around a full-pace run would crowd one 60 s window)
+        while (
+            interrupting is not None
+            and interrupting.running
+            and clock.monotonic() - last_choice < interrupting.count * interrupting.step_s + WATCH_LIMIT_S
+        ):
+            await clock.sleep(POLL_S)
+        current = engine.current_plan()
+        # D75: the run's end settles onto the mode's canvas or slot (a new plan of the same mode), else holds its own
+        if current is not None and current.mode_id == plan.mode_id and not runner.running:
             ended = clock.monotonic()  # the still look was sent when the run ended
-            while clock.monotonic() - ended < WATCH_LIMIT_S and not _all_correct(world, plan):
+            while clock.monotonic() - ended < WATCH_LIMIT_S and not _all_correct(world, current):
                 await clock.sleep(POLL_S)
-            if _all_correct(world, plan):
+            if _all_correct(world, current):
                 out["holds"].append(clock.monotonic() - ended)
+                tier = str(current.tier)
+                out["settled"][tier] = out["settled"].get(tier, 0) + 1
             else:
                 out["holds_unsettled"] += 1
     # no input after the last choice: the idle hold returns to the idle mode, the runs never moving its clock
@@ -1179,6 +1248,8 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
                 "after_s": back - last_choice,
                 "mode": idle_mode,
                 "settled_s": clock.monotonic() - back if _all_correct(world, plan) else None,
+                # D75: an idle return shows the idle look still (motion.idle is off), even with a rung of its own
+                "ran": engine.runner is not None and engine.runner.running,
             }
             break
         await clock.sleep(POLL_S)
@@ -1197,6 +1268,16 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
     await world.services.close()
     world.cleanup()
     return out
+
+
+def _interrupting_mood(
+    rng: random.Random, still: list[str], stepped_modes: list[str], mode_id: str, idle_mode: str
+) -> str | None:
+    """The mood a guest cuts a run short with: a still one, else (every scene steps, D75) another of the scenario's
+    modes — never the running one and never the idle look, so the idle return after the last choice stays
+    measurable. None when there is none."""
+    pool = still or [m for m in stepped_modes if m not in (mode_id, idle_mode)]
+    return rng.choice(pool) if pool else None
 
 
 def _most_in_60s(times: list[float]) -> int:
@@ -1438,10 +1519,12 @@ def _stepped_rows(stepped: dict) -> list[dict]:
             "name": f"{tag}: idle return after the last choice",
             "max": idle.get("after_s"),
             "target": f"{idle.get('mode') or 'the idle mode'} {stepped['idle_return_s']:g}–"
-            f"{stepped['idle_return_s'] + idle_limit:g} s after it (idle_return_s + {idle_limit:g}), then settles",
+            f"{stepped['idle_return_s'] + idle_limit:g} s after it (idle_return_s + {idle_limit:g}), still (no run: "
+            "motion.idle is off, D75), then settles",
             "pass": bool(idle)
             and stepped["idle_return_s"] - 1e-6 <= idle["after_s"] <= stepped["idle_return_s"] + idle_limit
-            and idle["settled_s"] is not None,
+            and idle["settled_s"] is not None
+            and not idle.get("ran"),
         },
     ]
 
@@ -1631,23 +1714,37 @@ def _ripple_line(ripple: dict) -> str:
     )
 
 
+def _technique_words(mode_id: str, t: dict) -> str:
+    """One candidate's rung as the report says it: travel by its cycle (D65's text), a breath by its kind, swing and
+    lag (D75)."""
+    timing = f"{t['step_s']:g} s steps designed, {t['run_s']:g} s runs"
+    kind = t.get("mode", "travel")
+    if kind == "travel":
+        whose = "its own (config/modes.yaml)" if t["own"] else "a SIMULATED one"
+        return f"{mode_id}: {whose}, {t['steps_per_cycle']} steps a cycle, {timing}"
+    whose = f"its own {kind} (config/modes.yaml)" if t["own"] else f"a SIMULATED {kind}"
+    params = f"swing {t.get('brightness_swing', 0)}, lag {t.get('lag_steps', 0)}"
+    return f"{mode_id}: {whose} ({params}), {t['steps_per_cycle']} steps a breath, {timing}"
+
+
 def _stepped_line(stepped: dict) -> str:
     tiers = ", ".join(f"{k} {n}" for k, n in sorted(stepped["tiers"].items())) or "none"
     ended = "; ".join(f"{why} {n}" for why, n in sorted(stepped["ended"].items())) or "none"
+    settled = ", ".join(f"{k} {n}" for k, n in sorted((stepped.get("settled") or {}).items())) or "none"
     steps = sorted(set(stepped["step_s"]))
-    used = "; ".join(
-        f"{m}: {'its own (config/modes.yaml)' if t['own'] else 'a SIMULATED one'}, {t['steps_per_cycle']} steps a "
-        f"cycle, {t['step_s']:g} s steps designed, {t['run_s']:g} s runs"
-        for m, t in stepped["techniques"].items()
-    )
+    used = "; ".join(_technique_words(m, t) for m, t in stepped["techniques"].items())
+    idle = stepped.get("idle_return") or {}
+    ran = " (it started a run)" if idle.get("ran") else ""
     return (
-        f"- Stepped scenario (D65, SIMULATED): a separate run of the show's own wiring with the stepped rung moved "
-        f"first on {', '.join(stepped['modes'])} in the soak's config copy ({used}; `motion.stepped.live_enabled` "
-        f"stays false, so live hardware never steps), under the same pinned conditions. {stepped['requests']} kiosk "
-        f"choices, {stepped['refused']} refused; by tier: {tiers}; {stepped['runs']} runs at "
+        f"- Stepped scenario (D65, D75, SIMULATED): a separate run of the show's own wiring with a stepped rung on "
+        f"{', '.join(stepped['modes'])} in the soak's config copy, a mode's own where config/modes.yaml puts it and "
+        f"a SIMULATED one just before `modules` otherwise ({used}; `motion.stepped.live_enabled` stays false, so "
+        f"live hardware never steps), under the same pinned conditions. {stepped['requests']} kiosk choices, "
+        f"{stepped['refused']} refused; by tier: {tiers}; {stepped['runs']} runs at "
         f"{', '.join(f'{x:g}' for x in steps) or '—'} s a step ({stepped['not_stepping']} held still instead), "
-        f"{stepped['interrupted']} cut short by a still mood chosen mid-run; how runs ended: {ended}. Steps: "
-        f"{stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "
+        f"{stepped['interrupted']} cut short by another mood chosen mid-run (never the idle look); how runs ended: "
+        f"{ended}; the look each finished run settled on, by tier: {settled}; the idle return showed the idle look "
+        f"still{ran}. Steps: {stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "
         f"{stepped['steps_superseded']} superseded, {stepped['steps_failed']} failed, {stepped['steps_skipped']} "
         f"skipped; {stepped['missing']} changed modules a step didn't send. The 60 s account maximum counts every "
         f"write the simulator received on that account (steps, re-sends, retries) against the "
@@ -1660,14 +1757,17 @@ def _motion_line(results: dict) -> str:
     wiring = results.get("wiring") or {}
     motion = wiring.get("motion")
     tiers = ", ".join(f"{k} {n}" for k, n in sorted((wiring.get("tiers") or {}).items())) or "none"
+    # D75: a guest's choice of a mode with a rung runs it first, then settles onto its canvas or slot
+    settles = wiring.get("settles", 0)
+    settled = f"; {settles} stepped runs then settled onto their canvas or slot (D75)" if settles else ""
     if not motion:
-        return f"- Motion: no motion code enabled; accepted changes by tier: {tiers}."
+        return f"- Motion: no motion code enabled; accepted changes by tier: {tiers}{settled}."
     return (
         f"- Motion: **SIMULATED** — `config/sim/soak.yaml` enables motionEffect {motion['motionEffect']} for "
         f"{motion['mode']} (soak only; on real hardware code 1 has only bounded bench runs on Kingston, one "
         "physically observed on Oct 2, and `effects.enabled` stays empty; the simulator doesn't animate). "
-        f"{wiring.get('motion_plans', 0)} accepted changes installed a motion plan (all-or-none re-trigger). "
-        f"Accepted changes by tier: {tiers}."
+        f"{wiring.get('motion_plans', 0)} accepted changes and run-end settles installed a motion plan (all-or-none "
+        f"re-trigger). Accepted changes by tier: {tiers}{settled}."
     )
 
 

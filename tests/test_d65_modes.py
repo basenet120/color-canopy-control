@@ -351,6 +351,33 @@ def test_a_guest_choice_of_golden_hour_runs_its_steps_then_holds_on_its_per_head
     assert correct and again == []  # the per-head sun holds, nothing re-sent
 
 
+def test_a_run_ending_under_the_fast_back_off_still_settles_at_once():
+    """D72's fast back-off puts guest pacing back on the budget rule, the pace the run already kept; it doesn't hold
+    the settle (its 120 s after a 90 s run would land past the 180 s idle return, so the per-head sun would never
+    show). 5% throttling on nine strands (the soak's pinned conditions) keeps the back-off on through most runs."""
+
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("golden-hour", source="kiosk")
+        end = _run_end(w)
+        await w.run_for(end - w.clock.monotonic() - 5)
+        account = w.engine._account_of(w.engine.target_of(MODULES[0].id).address)
+        w.engine._fast_backoff_until[account] = w.clock.monotonic() + 120.0  # as _note_throttle sets it
+        await w.run_for(10)
+        out = (
+            w.engine.fast_backoff(),
+            w.engine.current_plan().tier,
+            w.engine.runner,
+            _queued_since(w, end - 1e-6, "settle"),
+        )
+        await w.close()
+        return out, account
+
+    (backoff, tier, runner, settles), account = run_virtual(main)
+    assert backoff == [account]  # still backed off when the run ended
+    assert tier is Tier.T1 and runner is None and len(settles) == 9
+
+
 def test_an_ops_choice_keeps_the_ladder_order():
     async def main():
         w = await _golden_world()

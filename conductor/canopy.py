@@ -103,12 +103,14 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   `over` (DONE at once, whatever its run_s) and lifts it to the best still tier. **The settle:** at a run's end the
   look moves to the mode's best still tier when that is a canvas or slot (`settle_after_run`: installed with source
   `SETTLE_SOURCE`, one write per module that changes; a motion plan re-triggers all, 07 §6), else the runner sends
-  its hold. After a governor trip, held steps or a fast back-off the hold goes out now and the settle waits
-  (`_settle_later`: the cool-off, the back-off, or one cap window). A run that ended inside an outage settles at
-  recovery (the recovery burst carries it). **The idle breath (`motion.idle`, off as shipped):** while the idle look
-  holds with nothing else in force, `idle_breath()` runs its rung once for `breathe_run_s` (the reconciler asks every
-  `every_s`), without touching the idle clocks or the guest settings; any guest input ends it at once
-  (`ProgramRunner.yield_to_guest`) and the guest's own burst carries the still look.
+  its hold. After a governor trip or held steps the hold goes out now and the settle waits (`_settle_later`: the
+  cool-off, or one cap window). D72's fast back-off doesn't hold it: that only puts guest pacing back on the budget
+  rule the run was already paced at, and the settle is one burst like the hold it replaces (waiting the back-off's
+  120 s after a 90 s run would land past the 180 s idle return, so it would never show). A run that ended inside an
+  outage settles at recovery (the recovery burst carries it). **The idle breath (`motion.idle`, off as shipped):**
+  while the idle look holds with nothing else in force, `idle_breath()` runs its rung once for `breathe_run_s` (the
+  reconciler asks every `every_s`), without touching the idle clocks or the guest settings; any guest input ends it
+  at once (`ProgramRunner.yield_to_guest`) and the guest's own burst carries the still look.
 - **The stepped rehearsal (Gate R, conductor/rehearsal.py).** `rehearse(mode, minutes, source)` — operator-started
   only, from the ops route behind `rehearsal_preview`'s confirm sentence; any look, the idle look included (D75) —
   runs one stepped look of `mode` whose run lasts `minutes` (1–10; `_install` gives the program that run_s), from
@@ -1648,7 +1650,8 @@ class CanopyEngine:
         still tier when that is a canvas or slot — installed with SETTLE_SOURCE, one write per module that changes
         (all of them for a motion plan) — and return True. False when the runner should send its own hold instead:
         not the look showing, the rehearsal's (it settles after its report), no canvas or slot, or the account is
-        busy (a governor trip, held steps, a cool-off, a fast back-off), when the settle waits (`_settle_later`)."""
+        busy (a governor trip or its cool-off, held steps), when the settle waits (`_settle_later`). D72's fast
+        back-off isn't busy here: it paces guests at the budget rule, which the run already kept."""
         plan = self._plan
         if runner is not self._runner or plan is not runner.plan:
             return False
@@ -1666,8 +1669,6 @@ class CanopyEngine:
         delay = None
         if runner.tripped or cooling > now:
             delay = float(stepped.governor_cooloff_s)
-        elif self.fast_backoff(accounts):
-            delay = float(self.deps.settings.kiosk.fast_backoff_s)
         elif runner.held_steps >= HELD_STEPS_END:
             delay = 60.0  # one cap window
         if delay is not None:
