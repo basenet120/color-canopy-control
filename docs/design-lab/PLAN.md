@@ -280,7 +280,9 @@ class SceneDraft(_Strict):
     # (it is the blurb, shown at every tier: schema.py Mode._ladder).
 ```
 Ids, ladders and slots are **not** fields: a draft can't create a scene, rename an id, add/drop a rung or move a slot.
-`lowcountry-calm` can be drafted (colours, layout, brightness, copy) but its id never changes and it never steps.
+`lowcountry-calm` can be drafted (colours, layout, brightness, copy) but its id never changes. *(Superseded by
+D75/D77: "and it never steps". Calm #1 has a breathe rung, which the Lab edits like any other rung; the show never
+starts its run on its own while `motion.idle` is off.)*
 
 **Locked to D63 in v1** (carried in the draft, refused by the validator if changed, shown read-only in the UI with
 the reason): `layout.cycles` must be 1 and `sample_at` must be `centre` — `tests/test_modes_match_scenes.py` pins both
@@ -375,7 +377,9 @@ back — the purity rule of §3.0; its `ladder`, `slot` and `motion` are never t
    `_check_idle_scene(settings.kiosk.idle_scene, list(patched.modes.modes))` (show.py:77, :59; imported, not edited;
    **`.modes`** — `list()` of a `ModesFile` yields pydantic field tuples, so with any `idle_scene` set every draft
    would be refused; test with `settings_with(kiosk={"idle_scene": "golden-hour"})`): no run outlasts
-   `idle_return_s`, the idle mode never steps.
+   `idle_return_s`, the idle mode never steps. *(Superseded by D75/D77: the idle mode may carry a stepped rung, and
+   `_check_stepped` refuses `motion.idle` only when it has none; the engine never starts a run on start-up or an
+   idle return unless `motion.idle` is on.)*
 5. `scene_mode_problems(scenes, modes, recipes, canopy, approved=trio.modes, rules=BLOCKING)` (§3.4) → problems;
    then `rules=WARNINGS` → `warnings` (returned on a 200, never a 422; §3.4).
 6. Copy resolution (§3.3).
@@ -1316,7 +1320,8 @@ def ripple_rings(patched: ConfigTrio, scene_id: str, canopy: dict) -> list[list[
   counter; the moving sentence shows only while it plays. `effective_step_s` is pinned equal to a real
   `ProgramRunner.step_s` for 9 and 2 modules (`test_lab_stepped.py`).
 - **Live:** the Lab shows `STEPPED_LIVE_OFF` (show.py:70) + "Alon sets motion.stepped.live_enabled after Gate R"
-  and has no control for it. The idle scene has no stepped rung (no editor); a trial never steps (6.2).
+  and has no control for it. A trial never steps (6.2). *(Superseded by D75/D77: "The idle scene has no stepped
+  rung (no editor)". Calm #1's breathe rung has the stepped editor like every other option.)*
 - **Ripple (D64):** screen-only animation of `ripple_rings` at a stagger slider 0–1.2 s
   (`RIPPLE_SPAN_MAX_S / (RIPPLE_MAX_WAVES − 1)`), labelled "Screen preview only — the canopy's ripple is off
   (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)". Never sent anywhere.

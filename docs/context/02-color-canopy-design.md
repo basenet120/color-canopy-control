@@ -131,7 +131,8 @@ palettes, at the scene's brightness, at every tier.
   module-level colour every few seconds, in 90 s runs, and then holds the still design. This replaces D59's "no scene
   moves" for these two scenes only. Lowcountry Calm (the idle look) and The Goodnight Glow stay still. It runs in the
   simulator only. On real lights it stays **off until the stepped rehearsal (Gate R)** passes and Alon sets
-  `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still.
+  `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still. (Since D77 every option moves,
+  Calm and Goodnight included: see below.)
 - **D75 (Oct 18): any scene may move.** A scene may carry one stepped rung of three kinds: travel (D65's: the design
   moves), breathe (the design stays put and each strand's colour and/or level swells and softens in place, the
   design's start leading) and shimmer (each strand breathes on its own rhythm). A guest's choice runs it first and
@@ -166,7 +167,7 @@ palettes, at the scene's brightness, at every tier.
   | `garden-gathering-2` | Garden Gathering #2 | fin rings | travel, from the centre out |
   | `garden-gathering-3` | Garden Gathering #3 | fin rings | shimmer: the level |
   | `coastal-tides` | Coastal Tides #1 | fin rings | breathe: the ocean blue drifts and settles |
-  | `coastal-tides-2` | Coastal Tides #2 | a channel across the current (linear 140°, mirrored, inverted) | travel |
+  | `coastal-tides-2` | Coastal Tides #2 | a channel along the current (linear 140°, mirrored, inverted: the gradient runs across it) | travel |
   | `coastal-tides-3` | Coastal Tides #3 | a sweep around a spot near the middle (107.5″, 55″), mirrored | travel, 8 steps |
   | `golden-hour` | Golden Hour #1 (custom-3) | a radial sun at the middle of the left edge, radius 225″ (sunset pink on the deep centre) | travel: rays from the sun |
   | `golden-hour-2` | Golden Hour #2 | fin rings: warm white on the deep centre, Home Depot orange on the corners | travel, from the centre out |

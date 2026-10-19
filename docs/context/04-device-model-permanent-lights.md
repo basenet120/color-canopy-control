@@ -79,13 +79,14 @@ Host: semantics2.afero.net      Content-Type: application/json; charset=utf-8
 - On-device animation runs on each controller with no ongoing cloud traffic — but on its **own free-running clock**. Nothing phase-syncs the 9 controllers. No show mode uses it (`effects.enabled` is empty). The motion the show has is the reverse: **stepped looks** (D65), where the Conductor holds the phase and sends every step through the cloud.
 - **Fallback ladder per mode** (chosen by config/capabilities, not code): **T1** frames written by API + select (proven on Kingston only: Gate C plus a 30-head painted gradient, PHYSICAL; the Studio's paired per-head gradient has been seen only on screen, SCREEN, and never sent to hardware — preflight blocks it until String light 1 is commissioned, D56) → **T2** slots hand-painted in the Hubspace app (≈15–20 min/module) and selected by API (formal Gate B not run) → **stepped** module-level colours (and, for a breath, levels) re-sent a step at a time (D65, D75: travel, breathe or shimmer; any scene may carry one stepped rung, just before modules; simulator only until Gate R) → **T3** whole-strand CCT/RGB/preset, including module-level composition (each module = one coarse pixel). Kiosk copy follows the tier actually in use.
 
-The six modes are the six approved scenes (`config/scenes.yaml`, D59). Each mode renders its scene's palette at every
-tier, at the scene's brightness. Since D63 the palette is laid out as **one 2-D design over the canopy** (a `field` in
-canopy inches, reflected-ceiling view; `02` "Which way is left"), named once in `config/modes.yaml` with a YAML anchor
-so every tier that draws it uses the same design. Three controller slots hold three painted looks, so three modes have
-a canvas; the other three start at module level. Two scenes move today (D65); since D75 any scene may (PR D adds the
-options). (The original brief's table — white CCT, a holiday preset, a warm pathway, an amber band with motion — is
-in `02` and git history.)
+The modes are the catalog's 18 options (`config/scenes.yaml`, D59, D77): the six approved scenes, each with two
+review options. Each mode renders its scene's palette at every tier, at the scene's brightness. Since D63 the palette
+is laid out as **one 2-D design over the canopy** (a `field` in canopy inches, reflected-ceiling view; `02` "Which way
+is left"), named once in `config/modes.yaml` with a YAML anchor so every tier that draws it uses the same design.
+Three controller slots hold three painted looks, so three modes (the painted #1s) have a canvas; the other fifteen
+start at their stepped rung, then module level. Every option moves through its stepped rung (D75, D77), which live
+hardware refuses until Gate R, so on the real lights every option shows still for now. (The original brief's table —
+white CCT, a holiday preset, a warm pathway, an amber band with motion — is in `02` and git history.)
 
 What each tier does with the design:
 - **canvas (T1):** the design at each of the 270 heads, written into the mode's slot at commissioning and only
@@ -129,7 +130,7 @@ options, `<id>-2` and `<id>-3` (`option_of: <id>`). Every option has a stepped r
 | Rainbow Row Sunset #3 | fin rings | 85% | travel, in toward the centre |
 | Garden Gathering #2 | fin rings | 75% | travel, from the centre out |
 | Garden Gathering #3 | fin rings | 75% | shimmer: the level (lag 2, seed 31) |
-| Coastal Tides #2 | linear across the current (140°), mirrored and inverted | 85% | travel |
+| Coastal Tides #2 | a channel along the current (linear 140°: the gradient runs across it), mirrored and inverted | 85% | travel |
 | Coastal Tides #3 | a sweep around (107.5, 55), mirrored | 85% | travel, 8 steps a cycle |
 | Golden Hour #2 | fin rings: warm white, honey, Home Depot orange on the corners (amber on the apron) | 95% | travel, from the centre out |
 | Golden Hour #3 | linear along the current (18°) | 95% | travel |
