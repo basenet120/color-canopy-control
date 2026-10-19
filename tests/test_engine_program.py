@@ -1757,6 +1757,41 @@ def test_the_idle_breath_waits_while_anything_else_holds_the_canopy():
     assert after == (True, True)  # then the idle look breathes (its period was due all along)
 
 
+def test_a_try_on_cleared_by_a_pause_puts_its_look_back_still():
+    """D75 (review B-R6-TS-5): the transactional restore (`_restore_approved`) puts a cleared try-on's approved look
+    back still, as end_trial's own request does. A pause ends a try-on that way: for a look whose stepped rung is
+    first in its ladder (breathe-level: [stepped, modules]) the look goes back at module level, with no runner and
+    nothing stepped after, through the pause and after the resume. Never a run timed from the try-on's start."""
+    from conductor.canopy import Trial
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        now = w.clock.monotonic()
+        trial = Trial("breathe-level", "Breathe (draft)", None, None, now, now + 700, w.clock.now())
+        assert not (await w.engine.start_trial(trial)).refused
+        tried = (w.engine.current_plan().tier, w.engine.runner)
+        await w.run_for(10)
+        since = w.clock.now()
+        w.engine.pause_guest_input(True, source="ops")
+        plan = w.engine.current_plan()
+        paused = (w.engine.trial_active, plan.mode_id, plan.tier, plan.program, w.engine.runner)
+        await w.run_for(5)
+        w.engine.pause_guest_input(False, source="ops")
+        await w.run_for(20)
+        plan = w.engine.current_plan()
+        after = (plan.mode_id, plan.tier, w.engine.runner)
+        out = (tried, paused, after, program_since(w, since))
+        await w.close()
+        return out
+
+    tried, paused, after, program = run_virtual(main)
+    assert tried == (Tier.T3, None)  # the try-on itself is still (D66)
+    assert paused == (False, "breathe-level", Tier.T3, None, None)  # back still, the try-on over
+    assert after == ("breathe-level", Tier.T3, None)
+    assert program == []  # nothing stepped, during the pause or after it
+
+
 def test_motion_idle_with_the_live_gate_shut_never_breathes():
     async def main():
         tier_allowed = _wiring(simulated=False).tier_allowed
