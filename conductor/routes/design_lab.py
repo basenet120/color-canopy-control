@@ -13,7 +13,7 @@ writes to a device, starts a look, flips `live_enabled` or the ripple, or writes
 - `POST   /api/lab/versions`                 `{drafts, note?, name?, parent?}` → 201 VersionJSON; 409 T1 lock or a
                                              read-only store; 422 problems
 - `DELETE /api/lab/versions/{id}`            `{}` → `{deleted, current}`; 404
-- `POST   /api/lab/restore`                  `{version: id | "approved"}` → `{current, drafts}` (all six, seeded where
+- `POST   /api/lab/restore`                  `{version: id | "approved"}` → `{current, drafts}` (every scene, seeded where
                                              not drafted); 404; 409 stale (with problems)
 - `GET    /api/lab/export?version=&format=`  json: ExportJSON; patch: a `text/x-diff` attachment; 404; 409 stale, a
                                              failed re-read check, or a D63 warning standing
@@ -25,7 +25,7 @@ writes to a device, starts a look, flips `live_enabled` or the ripple, or writes
                                              the engine's refusal (+ `retry_after_s`); 422 problems; 503 no engine
 - `POST   /api/lab/trial/stop`               `{}` → `{trial: null, state}`: back to the show's look; 503 no engine
 - `GET    /api/lab/live`                     LiveJSON (D68): what the show runs (approved or published), the Undo
-                                             target, the six scenes as the iPad shows them, the history
+                                             target, the scenes as the iPad shows them, the history
 - `POST   /api/lab/publish`                  `{version: id | "approved" | "previous", confirm?, expected_live, who?,
                                              show?}` → `{live, report, state}`: the version (or git's looks, or the
                                              previous publication) becomes the show's look now and after every

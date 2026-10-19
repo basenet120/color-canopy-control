@@ -129,7 +129,7 @@ def catalog(recipes: RecipesFile, modes: Any = None, canopy: Mapping[str, Any] |
 
 
 def lowcountry_card(modes: Any, canopy: Mapping[str, Any] | None) -> dict:
-    """The "Preview a Lowcountry Mode" card: the six modes and the nine canopy positions to choose from."""
+    """The "Preview a Lowcountry Mode" card: every mode and the nine canopy positions to choose from."""
     card: dict[str, Any] = {
         "id": "lowcountry-preview",
         "title": "Preview a Lowcountry Mode",

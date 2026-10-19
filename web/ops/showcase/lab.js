@@ -497,7 +497,7 @@ function guardUnsaved() {
   return !q || window.confirm(q);
 }
 
-/** Open a version (or "approved") into the working drafts: POST /restore sets the store's current and answers all six. */
+/** Open a version (or "approved") into the working drafts: POST /restore sets the store's current and answers every scene. */
 async function openVersion(id) {
   if (!guardUnsaved()) return;
   try {
@@ -898,7 +898,7 @@ function liveScene(id) {
   return (L.live && Array.isArray(L.live.scenes) && L.live.scenes.find((s) => s.id === id)) || null;
 }
 
-/** "On the iPad now": the six cards as the live catalog has them (never a draft or a try-on). */
+/** "On the iPad now": the cards as the live catalog has them (never a draft or a try-on). */
 function renderIpadStrip() {
   const ul = $("#lab-ipad-cards");
   if (!ul) return;
