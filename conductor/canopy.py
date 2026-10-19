@@ -2739,13 +2739,19 @@ class CanopyEngine:
         self._runner = runner
         if runner is not None:
             # a module already showing (and verified) what step 0 sends never reads "Changing the light…" (a breath
-            # starting on the hold, a re-pick mid-run)
+            # starting on the hold, a re-pick mid-run). A module whose only problem is a flagged note with its look
+            # confirmed counts as verified too (D73, `tracker.flagged_only`): no write goes to it at a breath's start,
+            # so nothing would verify it until its first breath write, and the guest panel would say "changing"
+            # while nothing is being sent (review B-R4-C1)
             for device_id in plan.modules:
                 target = self._targets.get(device_id)
                 if (
                     target is not None
                     and self.desired_rows(device_id) == self.sent_rows.get(device_id)
-                    and self.tracker.status(target.address) is DeviceStatus.READY
+                    and (
+                        self.tracker.status(target.address) is DeviceStatus.READY
+                        or self.tracker.flagged_only(target.address)
+                    )
                 ):
                     runner.note_verified(device_id)
             runner.start()

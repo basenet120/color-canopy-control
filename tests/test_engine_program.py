@@ -1572,6 +1572,44 @@ def test_motion_idle_breathes_every_every_s_and_never_moves_the_idle_clocks():
     assert [e["run_s"] for e in events if e.get("action") == "idle_breath"] == [30.0] * len(started)
 
 
+D54_NOTE = "the controller reports 60 entries for 30 heads and this kit has no proven map yet (D54): test"
+
+
+@pytest.mark.parametrize("idle_mode", ["breathe-level", "breathe-rings"])
+def test_an_idle_breath_on_flagged_modules_never_reads_changing_while_nothing_is_sent(idle_mode):
+    """D73 on the idle breath (review B-R4-C1). On the show box Modules 1–2 carry only D54's "no proven map yet" note
+    (`tracker.flagged_only`: needs attention, look confirmed). An idle breath sends nothing at its start (step 0 is
+    the hold), so a module showing the hold counts as verified when the runner is installed, flagged or not. Before
+    the fix a flagged module waited for its own first breath write to verify: the guest panel said "Changing the
+    light…" for 8 s (breathe-level) or 26 s (breathe-rings, whose lag-3 corners are first written at step 4)."""
+
+    async def main():
+        w = stepped_world(kiosk={"idle_mode": idle_mode}, motion=BREATH_30)
+        await quiet_start(w)
+        modules = list(w.engine.current_plan().modules)
+        for d in modules:
+            w.tracker.flag_problem(w.address(d), D54_NOTE)
+        flagged = all(w.tracker.flagged_only(w.address(d)) for d in modules)
+        await w.until(lambda: w.engine.runner is not None and w.engine.runner.running, timeout=300, step=0.25)
+        start, n = w.clock.monotonic(), len(w.writes)
+        runner = w.engine.runner
+        seen = []
+        while w.clock.monotonic() - start < 30.0:
+            state = w.engine.state()
+            seen.append((round(w.clock.monotonic() - start, 2), state.look_phase, w.engine.breathing))
+            await w.run_for(0.25)
+        writes = [t - start for t, _, _ in w.writes[n:]]
+        await w.close()
+        return flagged, start, runner, seen, writes
+
+    flagged, start, runner, seen, writes = run_virtual(main)
+    assert flagged  # every module carries only the flagged note, its look confirmed
+    assert start >= 120.0 and runner.program.mode == "breathe" and seen[0][2]  # the reconciler's idle breath
+    assert writes and not [t for t in writes if t < 1.0]  # it steps later, but sends nothing at its start
+    changing = [(t, phase) for t, phase, _ in seen if phase is CanopyPhase.UPDATING]
+    assert not changing, changing  # was 0–8.25 s (breathe-level), 0–26.25 s (breathe-rings)
+
+
 def test_with_motion_idle_on_the_idle_return_from_another_look_lands_as_one_breath():
     """D75 (review B-R2-TS-2): with motion.idle on, the idle return from a guest's look is one breath of
     breathe_run_s, not the rung's 90 s run, and it counts as the period's breath (`last_breath_mono`), as the Lab's
