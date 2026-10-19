@@ -470,6 +470,42 @@ def test_a_choice_that_couldnt_run_when_it_was_installed_never_starts_on_a_re_pi
     assert program == [] and not running  # nothing stepped after the cool-off
 
 
+def test_a_clean_interval_mid_run_never_restarts_the_steps_a_downgrade_stopped():
+    """Review B-R3-TS-1 (D65, D75): throttling eases a guest's Coastal Tides run (its first rung is stepped) down to
+    the modules rung mid-run, and a clean interval lifts the floor while the run's 90 s would still be going. The lift
+    is a re-pick: it never starts a run, so the look stays on the still modules rung and nothing steps on the account
+    that was just throttled. (Re-compiling the best rung instead put the plan back on the stepped rung and its steps
+    picked up mid-schedule: 36 program commands in the next 30 s.)"""
+
+    async def main():
+        w = await _golden_world()
+        await w.engine.request_mode("coastal-tides", source="kiosk")
+        runner = w.engine.runner
+        first = (w.engine.current_plan().tier, runner.running)
+        end = _run_end(w)
+        await w.run_for(15)
+        down = w.engine.downgrade("3 commands ended throttled on account canopy")
+        after_down = (w.engine.current_plan().tier, dict(w.engine.floors), runner.running)
+        await w.run_for(10)
+        since = w.clock.monotonic()
+        lifted = w.engine.upgrade("clean")
+        after_up = (w.engine.current_plan().tier, dict(w.engine.floors), w.engine.runner)
+        await w.run_for(30)
+        out = (first, end, since, down, after_down, lifted, after_up, w.engine.current_plan().tier)
+        out += (_queued_since(w, since, "program"), w.engine.runner)
+        await w.close()
+        return out
+
+    first, end, since, down, after_down, lifted, after_up, tier, program, runner = run_virtual(main)
+    assert first == (Tier.STEPPED, True) and since < end  # the run would still be going when the floor lifts
+    assert down and after_down == (Tier.T3, {"coastal-tides": 1}, False)
+    tier_up, floors_up, runner_up = after_up
+    assert lifted == ["coastal-tides"] and tier_up is Tier.T3 and floors_up == {}
+    assert runner_up is None or not runner_up.running
+    assert tier is Tier.T3 and (runner is None or not runner.running)
+    assert program == []  # nothing stepped after the lift
+
+
 def test_a_governor_trip_holds_module_level_and_lifts_after_the_cool_off():
     async def main():
         w = await _golden_world(motion={"stepped": {"governor_cooloff_s": 120}})

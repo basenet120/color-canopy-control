@@ -1695,13 +1695,13 @@ def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
     from conductor.canopy import LOOKS_SOURCE
 
     async def check(w, mode_id: str) -> list:
-        """Every kind of re-pick after the run is over: none starts a run, none sends a program command."""
+        """Every kind of re-pick after the run is over: none starts a run, none sends a program command, and a
+        clean interval after throttling (downgrade, then upgrade) eases back to the still rung, never the stepped one
+        (review B-R3-TS-1: without the downgrade the upgrade re-picked a stepped plan as stepped, so it couldn't
+        fail)."""
         since = w.clock.now()
         running = []
         await w.engine.request_mode(mode_id, source="reconciler")
-        running.append(w.engine.runner is not None and w.engine.runner.running)
-        w.engine.floors[mode_id] = 1
-        w.engine.upgrade("clean")
         running.append(w.engine.runner is not None and w.engine.runner.running)
         w.engine._replan_soon()
         await w.run_for(2)
@@ -1717,10 +1717,14 @@ def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
         w.engine.deps.compile = longer
         await w.engine.request_mode(mode_id, source=LOOKS_SOURCE)
         running.append(w.engine.runner is not None and w.engine.runner.running)
+        down = w.engine.downgrade("3 commands ended throttled on account canopy")  # the modules rung
+        w.engine.upgrade("clean")  # the floor lifts: a re-pick
+        running.append(w.engine.runner is not None and w.engine.runner.running)
+        eased = (down, w.engine.current_plan().tier, dict(w.engine.floors))
         await w.run_for(20)
         w.engine.deps.compile = compile
         program = program_since(w, since)
-        return [running, program]
+        return [running, program, eased]
 
     async def main():
         w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
@@ -1740,9 +1744,10 @@ def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
         return out
 
     out = run_virtual(main)
-    for case, (running, program) in out.items():
+    for case, (running, program, eased) in out.items():
         assert running == [False, False, False, False], case
         assert program == [], case
+        assert eased == (True, Tier.T3, {}), case  # back up to the still rung, never the stepped one
 
 
 def test_a_settle_onto_a_motion_plan_re_triggers_every_module():
