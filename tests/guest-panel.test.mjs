@@ -228,6 +228,19 @@ test("cardsKey follows option_of, group and the thumbnail's sig", () => {
   assert.equal(one({ description: "other words" }), key);
 });
 
+test("cardsKey follows a thumbnail's brightness, which its sig doesn't carry", () => {
+  // A brightness-only Design Lab publish: the server's sig hashes the full-strength colours, so it stays the same,
+  // but paintThumb draws brightness_draft as opacity. The card must rebuild (and so repaint) at the new level.
+  const thumb = { sig: "thumb-a", basis: "modules", modules: [{ pos: "r0c0", color: "#111111", colors: null }] };
+  const at = (level, extra = {}) =>
+    cardsKey([scene("a", { group: "a", thumb, brightness_draft: level, ...extra }), scene("b", { group: "b", thumb: null })]);
+  assert.notEqual(at(40), at(80), "the same sig at another brightness");
+  assert.notEqual(at(null), at(80), "no brightness → a brightness");
+  assert.equal(at(80), at(80));
+  // the six-card strip draws no brightness: there a brightness-only publish keeps the cards as they are
+  assert.equal(at(40, { thumb: null }), at(80, { thumb: null }));
+});
+
 const review18 = () =>
   ["a", "b", "c", "d", "e", "f"].flatMap((id) => [
     scene(id, { option_of: null, group: id }),

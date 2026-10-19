@@ -172,20 +172,26 @@ export function cardTap(sceneId, state, { pendingId = null, cooldownS = 0 } = {}
  * cards instead of keeping the old names and colours. PLAN §6.5 named id, name, mood, solid and the hexes; the colour
  * names (the card's accessible name) and the frame (its strip) are drawn too, so they are in the key. From D76 the
  * review menu's grouping (option_of, group) and the card's thumbnail are too: the thumbnail by its `sig`, which
- * stands for its colours (the arrays never go in the key). */
+ * stands for its colours at full strength (the arrays never go in the key), and the scene's `brightness_draft`, which
+ * the thumbnail draws as opacity (a brightness-only publish leaves the sig as it was). A card with no thumbnail (the
+ * six-card strip) draws no brightness, so there it isn't in the key. */
 export function cardsKey(scenes) {
   return JSON.stringify(
-    (scenes || []).map((s) => [
-      s.id,
-      s.name,
-      s.mood,
-      s.solid ?? null,
-      (s.palette || []).map((p) => [p.name, p.hex]),
-      Array.isArray(s.frame) ? s.frame : null,
-      s.option_of ?? null,
-      s.group ?? null,
-      s.thumb && s.thumb.sig ? s.thumb.sig : null,
-    ]),
+    (scenes || []).map((s) => {
+      const sig = s.thumb && s.thumb.sig ? s.thumb.sig : null;
+      return [
+        s.id,
+        s.name,
+        s.mood,
+        s.solid ?? null,
+        (s.palette || []).map((p) => [p.name, p.hex]),
+        Array.isArray(s.frame) ? s.frame : null,
+        s.option_of ?? null,
+        s.group ?? null,
+        sig,
+        sig ? (s.brightness_draft ?? null) : null,
+      ];
+    }),
   );
 }
 
