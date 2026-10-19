@@ -1502,7 +1502,7 @@ test("promoteDraft copies the option's design into the base and keeps the base's
   for (const k of ["palette", "layout", "sample_at", "brightness", "solid", "description", "stepped"]) assert.deepEqual(draft[k], opt[k], k);
   for (const k of ["scene_id", "name", "mood"]) assert.equal(draft[k], base[k], k);
   assert.deepEqual(draft.copy, { modules: "auto", stepped: "auto" });
-  assert.deepEqual(notes, []);
+  assert.deepEqual(notes, ["took-motion"], "the base's stepped timing was replaced: the notice says so");
   assert.deepEqual(base, baseBefore, "the base is never changed");
   assert.deepEqual(opt, optBefore, "the option is never changed");
   assert.ok(!M.draftEquals(draft, base));
@@ -1524,10 +1524,38 @@ test("promoteDraft never adds or drops a stepped rung", () => {
   assert.deepEqual(out.notes, [], "neither moves: nothing to say");
   assert.equal(M.PROMOTE, "Make this the scene");
   // the notices name both scenes and never claim a publish
-  const words = [M.PROMOTE_COPY.title("O", "B"), M.PROMOTE_COPY.question("O", "B"), M.PROMOTE_COPY.done("O", "B"), M.PROMOTE_COPY.noRung("B"), M.PROMOTE_COPY.keptMotion("O", "B"), M.PROMOTE_COPY.same("O", "B")];
+  const words = [M.PROMOTE_COPY.title("O", "B"), M.PROMOTE_COPY.question("O", "B"), M.PROMOTE_COPY.done("O", "B"), M.PROMOTE_COPY.tookMotion("O", "B"), M.PROMOTE_COPY.noRung("B"), M.PROMOTE_COPY.keptMotion("O", "B"), M.PROMOTE_COPY.same("O", "B")];
   for (const w of words) assert.match(w, /\bB\b/);
   assert.match(M.PROMOTE_COPY.question("O", "B"), /Nothing is published until you press Publish/);
   assert.match(M.PROMOTE_COPY.done("O", "B"), /Nothing was published/);
+});
+
+test("Make this the scene says when it copies the option's motion, and only then", () => {
+  // a base with a stepped rung and an option with stepped timing: the timing is copied, so every line says so
+  const took = M.promoteDraft(golden(), option());
+  assert.deepEqual(took.draft.stepped, option().stepped);
+  assert.notDeepEqual(took.draft.stepped, golden().stepped, "the fixture's timings differ");
+  assert.deepEqual(took.notes, ["took-motion"]);
+  assert.equal(M.promoteTakesMotion(option(), { baseStepped: true }), true);
+  for (const line of [M.PROMOTE_COPY.title("O", "B", { motion: true }), M.PROMOTE_COPY.question("O", "B", { motion: true })]) {
+    assert.match(line, /description and motion \(its stepped direction, steps and timing\)/, line);
+  }
+  const [doneLine] = M.promoteNotes(took.notes, "O", "B");
+  assert.equal(doneLine, M.PROMOTE_COPY.tookMotion("O", "B"));
+  assert.match(doneLine, /^B now moves as O does: its stepped direction, steps per cycle, step time and run length were copied too\.$/);
+  // nothing moves over: no motion words in the confirm or the title
+  assert.equal(M.promoteTakesMotion(option(), { baseStepped: false }), false);
+  assert.equal(M.promoteTakesMotion(option({ stepped: null }), { baseStepped: true }), false);
+  assert.equal(M.promoteTakesMotion(null, { baseStepped: true }), false);
+  for (const line of [M.PROMOTE_COPY.title("O", "B"), M.PROMOTE_COPY.question("O", "B")]) {
+    assert.doesNotMatch(line, /motion|stepped|timing/, line);
+    assert.match(line, /palette, layout, brightness, solid colour and description/, line);
+  }
+  // each note's own line, in order; an unknown note says nothing
+  assert.deepEqual(M.promoteNotes(["no-rung"], "O", "B"), [M.PROMOTE_COPY.noRung("B")]);
+  assert.deepEqual(M.promoteNotes(["kept-motion"], "O", "B"), [M.PROMOTE_COPY.keptMotion("O", "B")]);
+  assert.deepEqual(M.promoteNotes(["took-motion", "x"], "O", "B"), [M.PROMOTE_COPY.tookMotion("O", "B")]);
+  assert.deepEqual(M.promoteNotes(undefined, "O", "B"), []);
 });
 
 test("repaintNote: the server's sentence, plus the B1 note only over commissioned slots", () => {

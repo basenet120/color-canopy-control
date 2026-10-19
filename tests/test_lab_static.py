@@ -208,7 +208,13 @@ def test_make_this_the_scene_is_a_working_draft_never_a_request():
     assert "api(" not in promote
     assert "M.draftEquals(draft, L.working[base])" in promote  # nothing to make: say so, change nothing
     assert promote.index("window.confirm(") < promote.index("L.working[base] = draft")
+    # the confirm and the done notice say when the option's stepped timing replaces the base's (C-R2-4)
+    assert 'M.PROMOTE_COPY.question(optionName, baseName, { motion: notes.includes("took-motion") })' in promote
+    assert "M.promoteNotes(notes, optionName, baseName)" in promote
     assert "text: M.PROMOTE" in js and "scene.option_of ?" in js
+    editor = _function(js, "rebuildEditor")
+    assert "M.promoteTakesMotion(d, { baseStepped: !!(baseScene && baseScene.stepped) })" in editor
+    assert "M.PROMOTE_COPY.title(d.name, sceneName(scene.option_of), { motion: promoteMotion })" in editor
     assert "onclick: promoteToBase" in js
     # an option sits under its base in the list, and a scene /ops took off the iPad says so
     scenes = _function(js, "renderSceneList")

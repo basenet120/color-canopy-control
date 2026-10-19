@@ -454,7 +454,7 @@ function promoteToBase() {
     setNotice(M.PROMOTE_COPY.same(optionName, baseName));
     return;
   }
-  if (!window.confirm(M.PROMOTE_COPY.question(optionName, baseName))) return;
+  if (!window.confirm(M.PROMOTE_COPY.question(optionName, baseName, { motion: notes.includes("took-motion") }))) return;
   L.undo[base] = M.undoPush(L.undo[base], L.working[base]);
   L.working[base] = draft;
   setAlert("save", null);
@@ -462,8 +462,7 @@ function promoteToBase() {
   motionStop();
   L.scene = base;
   rememberUi();
-  const lines = notes.map((n) => (n === "no-rung" ? M.PROMOTE_COPY.noRung(baseName) : M.PROMOTE_COPY.keptMotion(optionName, baseName)));
-  setNotice([M.PROMOTE_COPY.done(optionName, baseName), ...lines].join(" "));
+  setNotice([M.PROMOTE_COPY.done(optionName, baseName), ...M.promoteNotes(notes, optionName, baseName)].join(" "));
   rebuildEditor();
   schedulePreview();
   renderAll();
@@ -1239,7 +1238,9 @@ function rebuildEditor() {
   );
   const publishBtn = h("button", { type: "button", class: "lab-btn small publish", dataset: { publish: "editor" }, onclick: () => publishWorking(), text: M.PUBLISH });
   // D76: an option's design into its base's working draft (no request; the base's Publish publishes it)
-  const promoteBtn = scene && scene.option_of ? h("button", { type: "button", class: "lab-btn small", dataset: { promote: "editor" }, title: M.PROMOTE_COPY.title(d.name, sceneName(scene.option_of)), onclick: promoteToBase, text: M.PROMOTE }) : null;
+  const baseScene = scene && scene.option_of ? sceneOf(scene.option_of) : null;
+  const promoteMotion = M.promoteTakesMotion(d, { baseStepped: !!(baseScene && baseScene.stepped) });
+  const promoteBtn = scene && scene.option_of ? h("button", { type: "button", class: "lab-btn small", dataset: { promote: "editor" }, title: M.PROMOTE_COPY.title(d.name, sceneName(scene.option_of), { motion: promoteMotion }), onclick: promoteToBase, text: M.PROMOTE }) : null;
   const kinds = h(
     "div",
     { class: "lab-seg", role: "group", "aria-label": "Layout kind" },
