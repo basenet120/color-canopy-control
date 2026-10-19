@@ -1059,6 +1059,31 @@ test("the motion kind and the breathe controls: bounds, valid defaults, travel k
   assert.equal(JSON.stringify(a), before, "the input is never changed");
 });
 
+test("the Motion hints say what each kind of motion does with the layout and the lag (review B-R3-2)", () => {
+  const a = golden();
+  const kind = (mode) => M.steppedControls(SCENE_GOLDEN, M.setStepped(a, { mode }, CATALOG_D75), CATALOG_D75);
+  const [travel, breathe, shimmer] = ["travel", "breathe", "shimmer"].map(kind);
+  assert.deepEqual([travel.mode, breathe.mode, shimmer.mode], ["travel", "breathe", "shimmer"]);
+  // only travel moves the layout; a breath keeps it in place and moves each module's colour or level from it
+  assert.equal(travel.designHow, M.MOTION_COPY.design);
+  assert.match(travel.designHow, /^Moves the scene's own layout/);
+  for (const c of [breathe, shimmer]) {
+    assert.equal(c.designHow, M.MOTION_COPY.designInPlace, c.mode);
+    assert.doesNotMatch(c.designHow, /\bMoves\b/, c.mode);
+    assert.match(c.designHow, /in place/, c.mode);
+    assert.match(c.designHow, /each module its resting colour/, c.mode);
+  }
+  // a breathe's lag follows the design (compile.module_lags: lag_steps × t at the module centre); a shimmer's is
+  // the seed's spread (sha256 of seed:position, mod lag_steps + 1), nothing to do with the design's far end
+  assert.equal(breathe.lagHow, M.MOTION_COPY.lag);
+  assert.match(breathe.lagHow, /far end of the design/);
+  assert.equal(shimmer.lagHow, M.MOTION_COPY.lagShimmer);
+  assert.doesNotMatch(shimmer.lagHow, /far end/);
+  assert.match(shimmer.lagHow, /the most steps apart the modules' starts can be/);
+  assert.match(shimmer.lagHow, /seed/);
+  assert.equal(travel.lagHow, M.MOTION_COPY.lag, "hidden for travel (the breathe box), and unchanged");
+});
+
 test("an older draft without the breathe keys equals one with their defaults; the stepped painter draws levels", () => {
   const old = golden();
   assert.equal(Object.prototype.hasOwnProperty.call(old.stepped, "mode"), false);

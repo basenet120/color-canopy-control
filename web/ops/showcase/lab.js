@@ -1543,7 +1543,7 @@ function motionSection(scene, d) {
         c.modes.map((k) => h("button", { type: "button", class: "lab-seg-btn", dataset: { mode: k }, onclick: () => set({ mode: k }), text: kindLabel[k] || k })),
       ),
       h("p", { class: "lab-muted lab-tight", text: M.MOTION_COPY.mode }),
-      h("p", { class: "lab-muted" }, `${M.MOTION_COPY.design} Reads as: `, h("strong", { id: "lab-stepped-words" })),
+      h("p", { class: "lab-muted" }, h("span", { id: "lab-design-how", text: c.designHow }), " Reads as: ", h("strong", { id: "lab-stepped-words" })),
       h("span", { class: "lab-label-text", text: "Direction" }),
       h(
         "div",
@@ -1561,7 +1561,7 @@ function motionSection(scene, d) {
         rangePair("lab-shift", `Colour shift (${c.shift.min}–${c.shift.max} of the design)`, c.shift, c.shift.step, (v) => set({ shift: v }, { coalesce: true })),
         rangePair("lab-swing", "Brightness swing (± points)", c.swing, 1, (v) => set({ brightness_swing: v }, { coalesce: true })),
         rangePair("lab-lag", `Lag (steps, ${c.lag.min}–${c.lag.max})`, c.lag, 1, (v) => set({ lag_steps: v }, { coalesce: true })),
-        h("p", { class: "lab-muted lab-tight", text: M.MOTION_COPY.lag }),
+        h("p", { id: "lab-lag-how", class: "lab-muted lab-tight", text: c.lagHow }),
         h("div", { id: "lab-seed-box", class: "lab-pair", hidden: !c.shimmer }, h("span", { class: "lab-label-text", text: "Seed" }), seed),
         h("p", { id: "lab-seed-how", class: "lab-muted lab-tight", hidden: !c.shimmer, text: M.MOTION_COPY.seed }),
       ),
@@ -1606,6 +1606,11 @@ function syncMotionEditor(scene, d, preview) {
     if (stepsLabel) stepsLabel.textContent = `${c.breathes ? "Steps per breath" : "Steps per cycle"} (${c.steps.min}–${c.steps.max})`;
     const stepsHow = $("#lab-steps-how");
     if (stepsHow) stepsHow.textContent = c.breathes ? M.MOTION_COPY.breath : M.MOTION_COPY.cycle;
+    // what the layout and the lag do for this kind of motion (review B-R3-2)
+    const designHow = $("#lab-design-how");
+    if (designHow) designHow.textContent = c.designHow;
+    const lagHow = $("#lab-lag-how");
+    if (lagHow) lagHow.textContent = c.lagHow;
     const note = $("#lab-motion-idle-note");
     if (note) {
       note.textContent = c.note;

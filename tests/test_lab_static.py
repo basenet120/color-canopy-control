@@ -217,6 +217,22 @@ def test_the_motion_lines_come_from_the_page_model():
     assert "M.sentence(shownSt.stepsWhen)" in _function(js, "renderPresent")
 
 
+def test_the_motion_hints_follow_the_kind_of_motion():
+    """Review B-R3-2: the Motion section's layout and lag hints come from the page model's controls for the draft's
+    kind of motion (travel moves the layout; a breath keeps it in place; a shimmer's lag is its seed's spread), drawn
+    when the section is built and swapped by syncMotionEditor whenever the kind changes."""
+    js = _code(_text("lab.js"))
+    section = _function(js, "motionSection")
+    assert 'h("span", { id: "lab-design-how", text: c.designHow })' in section
+    assert 'h("p", { id: "lab-lag-how", class: "lab-muted lab-tight", text: c.lagHow })' in section
+    assert "MOTION_COPY.design" not in section and "MOTION_COPY.lag" not in section
+    sync = _function(js, "syncMotionEditor")
+    assert 'const designHow = $("#lab-design-how");' in sync
+    assert "if (designHow) designHow.textContent = c.designHow;" in sync
+    assert 'const lagHow = $("#lab-lag-how");' in sync
+    assert "if (lagHow) lagHow.textContent = c.lagHow;" in sync
+
+
 def test_the_tier_lists_moving_lines_show_only_while_the_steps_play():
     tiers = _function(_code(_text("lab.js")), "renderTiers")
     assert 'const playing = L.motion.state === "playing" && !L.present;' in tiers

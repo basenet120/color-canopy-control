@@ -1084,11 +1084,15 @@ export const MOTION_COPY = Object.freeze({
   none: "This scene has no stepped rung: it stays still at module level. Adding one is a modes.yaml change for Alon (D75).",
   noDraft: "This draft carries no stepped timing; Revert to approved brings the approved timing back.",
   design: "Moves the scene's own layout (the same design as every rung): change it under Layout.",
+  // breathe and shimmer keep the layout in place (review B-R3-2): it gives each module its resting colour
+  designInPlace: "Keeps the scene's own layout in place (the same design as every rung): it gives each module its resting colour, and the breath swells, softens or drifts it from there. Change it under Layout.",
   direction: "Forward flows the way the layout reads; reverse flows back.",
   cycle: "Steps per cycle: how many steps it takes the design to move by one full repeat.",
   mode: "Travel moves the design across the canopy; breathe swells and softens each module in place, or drifts its colour; shimmer does that on each module's own rhythm.",
   breath: "Steps per breath: how many steps one module's breath takes (up, back, down, back).",
   lag: "Lag: how many steps later the far end of the design starts its breath (0: every module together).",
+  // a shimmer's starts are spread by its seed, not by the design (compile.module_lags, review B-R3-2)
+  lagShimmer: "Lag: the most steps apart the modules' starts can be; the seed spreads each module's start over that many steps, not along the design.",
   seed: "Seed: any whole number; it picks each module's own rhythm, the same on every run.",
 });
 const MOTION_KINDS = ["travel", "breathe", "shimmer"];
@@ -1173,6 +1177,10 @@ export function steppedControls(scene, draft, limits) {
     lag: { min: b.lag_steps[0], max: b.lag_steps[1], step: 1, value: Number(s.lag_steps) || 0 },
     seed: seed === null ? null : seed,
     note: typeof scene.idle_note === "string" && scene.idle_note ? scene.idle_note : "",
+    // the hints say what this kind of motion does (review B-R3-2): only travel moves the layout, and only a
+    // breathe's lag follows the design
+    designHow: mode === "travel" ? MOTION_COPY.design : MOTION_COPY.designInPlace,
+    lagHow: mode === "shimmer" ? MOTION_COPY.lagShimmer : MOTION_COPY.lag,
   };
 }
 
