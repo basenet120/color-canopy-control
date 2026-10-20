@@ -99,7 +99,11 @@ class Show:
         shutil.rmtree(self.data, ignore_errors=True)
 
 
-async def show(*, live: bool = False, sim: SimSettings | None = None, monkeypatch=None) -> Show:
+async def show(
+    *, live: bool = False, sim: SimSettings | None = None, monkeypatch=None, stepped_live: bool | None = None
+) -> Show:
+    """`stepped_live`: motion.stepped.live_enabled for this show (None = as shipped, on since D79); False = before
+    Gate R, where the live gate refuses the stepped rung outside a rehearsal."""
     from conductor.services import build_services
 
     data = Path(tempfile.mkdtemp(prefix="canopy-rehearsal-"))
@@ -110,6 +114,8 @@ async def show(*, live: bool = False, sim: SimSettings | None = None, monkeypatc
     services.telemetry.dir = None
     if live:  # the show box's tier rules (no Gate B/C flags) over the simulator's transport
         monkeypatch.setattr(services.engine_driver, "simulated", False)
+    if stepped_live is not None:
+        services.settings.motion.stepped.live_enabled = stepped_live
     await services.start()
     wiring = ShowWiring(services)
     services.extras["show"] = wiring
@@ -211,7 +217,7 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
 
 def test_the_tier_gate_opens_for_the_rehearsals_mode_only_and_only_while_it_runs(monkeypatch):
     async def main():
-        w = await show(live=True, monkeypatch=monkeypatch)
+        w = await show(live=True, monkeypatch=monkeypatch, stepped_live=False)  # before Gate R
         gate = w.wiring.tier_allowed
         before = (gate("golden-hour", Tier.STEPPED), w.wiring.ladder("golden-hour"))
         await w.engine.rehearse("golden-hour", 1, source="ops")
@@ -486,7 +492,7 @@ def test_the_idle_look_can_be_rehearsed_with_its_own_rung(monkeypatch):
     it rehearses that rung, with the copy guests would see; the live gate opens for that mode only, while it runs."""
 
     async def main():
-        w = await show(live=True, monkeypatch=monkeypatch)
+        w = await show(live=True, monkeypatch=monkeypatch, stepped_live=False)  # before Gate R
         preview = w.engine.rehearsal_preview("lowcountry-calm", 2)
         plan = w.wiring.rehearsal_plan("lowcountry-calm")
         result = await w.engine.rehearse("lowcountry-calm", 2, source="ops")

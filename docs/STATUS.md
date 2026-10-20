@@ -50,7 +50,7 @@ copy still never says "fade" (a copy decision for Alon now the bench says fade).
   nine-kit Gate R (Rainbow Row Sunset #2, 10 min) still runs at install before tours**; a fail turns it back off.
   The rate probe wasn't run first (one kit reaches ~60 a minute); set `live_enabled` off again to run it.
 - **Verified (sim, macOS):** the tests touching `live_enabled` (`test_lab_stepped`, `test_engine_program`,
-  `test_lab_access`, `test_ops_routes`, `test_d65_modes`, `test_d77_catalog`, `test_soak`, Lab preview/static): pass;
+  `test_lab_access`, `test_ops_routes`, `test_d65_modes`, `test_d77_catalog`, `test_soak`, `test_stepped_rehearsal`, `test_lab_routes_preview`, `test_lab_publish`, Lab preview/static): pass;
   ruff clean; the full suite runs in CI on the PR (not run locally).
 - **Deploy (Alon, after merging, on its own):** the usual paste block with the merge sha; no iPad reload (config
   only). Then tap a scene on the iPad: Module 2 should step, then hold. Roll back: the previous sha (`14c2932`).
