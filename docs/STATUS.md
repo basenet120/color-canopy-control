@@ -1,9 +1,8 @@
 # Status
 
-_Last updated: 2026-10-18 night (preset-options PR B `claude/motion-every-scene`: motion on every scene — breathe and
-shimmer beside travel, a guest's choice runs first then settles on the best still tier, the idle breath off — D75;
-built and verified in sim, review rounds 1–6 fixed Oct 19, open as #39; see its block; preset-options PR A is merged as #38). Before that, evening (PR G `claude/flagged-not-changing`: a
-flagged note no longer holds the panel at "changing", D73, merged as #37 `3c3ad38`; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
+_Last updated: 2026-10-19 early (preset-options PR C `claude/ipad-review-menu`: the iPad review menu, hide and
+promote, D76; review round 3 fixed; PR #40, preset-options PR A merged as #38, PR B merged as #39; built on PR G's tip, sim only; see its block). Before that 2026-10-18 evening (PR G
+`claude/flagged-not-changing`: a flagged note no longer holds the panel at "changing", D73; and `7b21918` — D70 + D71 + D72 — deployed on the show box; see the PR G block). Also evening: PLAN, not started, `claude/preset-options-plan` (#36), three options per scene from VWBD's fin drawing; see its block. Before that, PR F
 `claude/guest-throttle-pacing`: fast guest pacing, 2 s with a throttle back-off, D72; see its block). Before that, late afternoon (PR E `claude/readback-echo-lag`: the first readback's echo
 lag, D71; see its block). Before that, 2026-10-18 afternoon (PR D `claude/guest-budget`: guests paced by the write budget, D70; before that
 PR C `claude/panel-latency`: input to reaction on the guest panel, D69 —
@@ -21,6 +20,110 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## preset-options PR C `claude/ipad-review-menu` — the iPad review menu, hide and promote (D76) → `main` (Oct 18)
+**Merge #37 (`claude/flagged-not-changing`) first:** this branch is cut from its tip (main + #37). Merge commits, not
+squash. Plan `docs/plans/preset-options/README.md` §6; decision D76. **Nothing changes on the live iPad while six or
+fewer scenes are visible** (today's six): the review menu, the thumbnails and the promote button only appear once PR
+D's options are in git. Built and tested over an in-memory 18-scene fixture (`tests/review_fixture.py`: the six plus
+`<id>-2`/`-3` options at module level); the real catalog is PR D's.
+- **Built:** `Scene.option_of` (one level deep; left out of every dump while unset, so `trio_sha` and published looks
+  are byte-identical: `1444f9d4ae93` before and after, checked at step 1); `kiosk.hidden_scenes` with its never-fail ops overlay
+  `<data>/overrides/settings.yaml`, the idle scene never hideable; `conductor/ipad_menu.py` (the menu, the /ops
+  switch, its "Needs attention" lines, the conductor.yaml fold, card thumbnails); the panel serves only visible
+  scenes, `option_of`/`group`/`thumb` and `showing`, and a hidden id gets the calm 404 on both choose routes; /ops
+  "On the iPad" (switches, the picker's "(off the iPad)", the overlay download's conductor.yaml hunk); the kiosk
+  review menu (grouped rows, pinned side, only `#grid` scrolls, scroll kept across rebuilds and reset on attract,
+  still canvas thumbnails at the tier in use, true Now Showing for a hidden scene); published trios and Lab drafts
+  can't regroup a scene; the Lab's `option_of`/`group`/`on_ipad`, "Make this the scene" (client-side working-draft
+  swap, Undo, no new route) and the export's "Made the scene on site" line, which prompts for the client's sign-off
+  and never claims it. Lab cache tag `lab-11`, kiosk tag `review-1`.
+- **Review fixes (round 1, Oct 18):** (a) the review cards are tier-true for every scene: `thumb_basis` asks the
+  engine for each visible scene's likely plan (`_likely_plan`, as /api/kiosk/modes does), so a modules- or
+  stepped-first scene the reconciler has eased down to its strand rung (the idle Lowcountry Calm among them) draws
+  no module picture while the ceiling shows one whole-strand look (round 3 makes it draw that look's colour, not
+  the palette strip). The test that pinned "options and modules-first
+  are never compiled" now pins the opposite, beside a stub test (Calm showing at strand) and a sim-engine test (a
+  hysteresis floor at strand). (b) `cardsKey` carries the scene's `brightness_draft` beside the thumbnail's `sig`,
+  so a brightness-only publish repaints the card's opacity; a card with no thumbnail (the six-card strip) is keyed
+  as before. (c) /ops "On the iPad": a failed load writes its own `#ipad-error` line, which the next fresh answer
+  clears; a switch's own answer in `#ipad-result` stays until the next switch. Each fix has a test that fails with
+  the fix reverted (checked by hand, then restored).
+- **Review fixes (round 2, Oct 18):** (a) **on a partial canopy the cards light only what the engine drives**
+  (C-R2-1, D62): every card used to light all nine panels while Now Showing lit two. `thumb_plans` keeps each scene's
+  likely plan beside its basis, and `GuestPanel.thumbs` masks the cached nine-position thumbnail to the positions
+  that plan drives (`driven_positions`; with no plan, the registered ones), so the seven unregistered panels are
+  dark hairlines with `color`/`colors` null and the sig moves with the mask; a mask change never redraws a design.
+  Tested on the real engine over the two-kit partial show (`tests/partial_canopy.py`): all 18 cards light r0c0 and
+  r0c1, as Now Showing does. (b) **"Make this the scene" says when it copies the option's motion** (C-R2-4): with a
+  stepped rung on the base and stepped timing on the option, the button's title, the confirm and the done notice
+  now name the stepped direction, steps per cycle, step time and run length (`promoteTakesMotion`, the "took-motion"
+  note, `promoteNotes`); D76 and design-lab PLAN §5.2 say so. (c) **the attract screen's six-or-fewer rule has a
+  test that can fail** (C-TS-1): six scenes where two share a group, and one group of three, cycle every scene.
+  Mutation-checked by hand, then restored: the panel without the mask, `driven_positions` ignoring the plan,
+  `mask_thumb` as a no-op, promoteDraft without its note, the title without `{motion}`, lab.js's confirm without
+  `{motion}`, and attractScenes without its `<= GRID_MAX` branch each fail at least one new test.
+- **Review fixes (round 3, Oct 19):** **a whole-strand card draws that look's one colour, not the palette strip**
+  (C-R3-1, C1). A scene whose likely plan is the strand rung (a modules- or stepped-first scene the reconciler's
+  floor has eased down) had `thumb: null`, so the kiosk drew the palette strip's 30-colour gradient in the box where
+  the other cards show the ceiling, while every strand look in git is one rgb colour; the docs said "none". Now
+  `thumb_plans` gives it the basis `"strand"`, and `GuestPanel.thumbs` reads that card from the plan itself
+  (`ipad_menu.plan_thumb` over the new `canopy_view.plan_picture`, which shares `lit_state`'s colour rule): the
+  strand colour on each driven panel and the others dark (D62), never cached, with no `mode_design` call. A look the
+  strand plays on its own (a preset or program; none in git) makes no colour claim, so its card has no thumbnail
+  and keeps the strip. D76 and guest-panel.md §2.5 and §4.5 say so. Tests: the basis tests now pin "strand"; a stub
+  test (aqua on the two kits equals `lit_state`'s claim, and the sig follows the colour); a preset test; the
+  sim-engine floor test (the modes.yaml strand colour on all nine panels, equal to `plan_picture`); and an e2e test
+  that the card paints aqua on r0c0/r0c1 and nothing on the undriven panels, while a card with no thumbnail keeps
+  the strip. Mutation-checked by hand, then restored: `thumb_plans` giving strand None (4 tests fail), the panel
+  ignoring the plan picture (2), `plan_picture` skipping a position with no claim (1), `_claim` ignoring a preset
+  (1), and kiosk.js drawing the strip for a strand thumbnail (the e2e test).
+- **Verified (sim, macOS, Oct 19, after review round 3):**
+  `nice -n 15 uv run --offline pytest -q -p no:cacheprovider tests` → 2566 passed, 5 skipped, 44 subtests (12 min)
+  (2564 after round 2, 2560 after round 1; baseline at #37: 2473 passed, 5 skipped); `ruff check` /
+  `ruff format --check` clean; `node --test` on each of the ten `tests/*.test.mjs` → fail 0 (guest-panel 32,
+  ops-ipad 4, lab-model 89, canopy-preview 10); `scripts/regen_scene_pins.py --check` exit 0 (no scene, mode or
+  recipe changed); `pytest tests_e2e --collect-only` → 55 collected (review_fixture imports conductor only).
+  **Browser (local only; CI runs no browser; the kiosk review group was re-run after round 3, while
+  `tests_e2e/test_ops_visualizer.py` was last run before round 1, so round 1's /ops error line and round 2's promote
+  motion copy are proven by pytest, node and static tests only):** 15 kiosk review tests pass against the stubbed panel at 1180×820,
+  1024×768 and 820×1180 (rows, CDP touch scroll that chooses nothing, a tap after scrolling, scroll kept across a
+  rebuild, painted pixels and alpha at dpr 2, a whole-strand card's one colour beside a card that keeps the strip,
+  a quarter-turned view, six options keep the 3 × 2, a hidden scene named in Now Showing, one attract strip per
+  group); before round 1, the whole of `tests_e2e/test_ops_visualizer.py` (11, with the new On the iPad switch
+  test). Run with the system Chrome (`channel="chrome"`, a scratch plugin: Playwright's own Chromium isn't
+  downloaded on this Mac) on port 8303 only.
+  **Pre-existing, not PR C's:** `test_panel_ready_changing_cooldown` (`#hdr-spinner` not visible) and
+  `test_debug_drawer_is_for_ops_only` fail the same way on the untouched #37 tree with that browser. **Soak** (before
+  review round 1; rounds 1–3 change no engine code): `python -m conductor.soak` → the same numbers as the committed
+  report (19 PASS; the gating settle row FAIL at p95 5.19 s, as since D72; the two reported spreads FAIL as before);
+  the report was restored, not committed.
+- **Measured (for PR D):** `catalog_thumbs` over the 18 review scenes, warm: every card per head 72.2 ms / 55,837 B
+  of JSON (the worst case); module level 3.4 ms / 8,569 B. `thumb_basis` on the sim engine over 18 visible scenes:
+  22–28 ms (niced) since review round 1 compiles every visible scene, as /api/kiosk/modes does (11.0 ms when only
+  the three painted bases were compiled; they come out per head at T1 there). It runs on every review-menu panel
+  poll (2 s). The spec's read-only baseline on git's six: `mode_design` 22.8 ms, of which 1.0 ms is the modules.
+- **UNVERIFIED:** scrolling on the 9th-gen iPad in Guided Access (Chromium's synthesized touch scroll is the closest
+  proof); the promote UI in a real Lab (git has no options before PR D: covered by node, static and route tests,
+  and a promoted draft passes `apply_drafts` and `POST /api/lab/versions`); the 18-option and fins thumbnail costs;
+  the per-poll `thumb_basis` cost on the show box; Playwright's own Chromium (system Chrome used).
+- **Needs hardware:** nothing for the logic; the client review session at the venue.
+- **Deploy notes:** hard-reload `/ops` and `/ops/showcase` after the deploy (plain StaticFiles). Lab exports made
+  before D77 lands propose a reserved D-number; renumber by hand. If C merges before A and B, DECISIONS.md has a
+  D74–D75 gap until they land. Merge order per integration: #37, A, B, C (C may merge before D).
+- **Decisions recorded in D76:** card thumbnails draw no fins and use a thumbnail dot radius (C12); the base keeps
+  its "#1" until PR E or a Lab rename (C27).
+- **Questions for Alon:** (1) the review cards draw each scene at the tier the engine would use (per light only for a
+  painted scene shown as canvas or slot; the strand look's one colour for one shown as a whole-strand look, round 3;
+  module colours otherwise, which on the show box is every other scene until per-light is commissioned), against
+  plan §5.4's per-light design on the iPad: keep tier-true cards, or add a labelled design view (new client copy)?
+  (2) Once PR E brings the iPad back to six, should those six cards also get tier-true thumbnails instead of palette
+  strips?
+- **Next:** PR D on a merge of A + B + C. Its verification should include a hand walk-through of promote on
+  `make lab-dev` with the 18 options (golden-hour-2 → golden-hour: the button, the swap, the notice, the recipe keys,
+  Publish, the export's promotion line, and the motion line on a stepped base) and `catalog_thumbs` /
+  `thumb_basis` timings with fins. D also adapts
+  `tests/review_fixture.py` and C's six-count tests to the real 18-scene catalog (integration notes).
 
 ## preset-options PR B — motion on every scene (D75), `claude/motion-every-scene` → `main` (Oct 18)
 Cut from `origin/claude/flagged-not-changing` (= `main` + #37). **Merge #37 first** (already satisfied: #37 is merged
@@ -346,7 +449,8 @@ What the drawing says:
 
 Next: PRs A (fins and visualizer), B (motion for every scene, with Gate R and `live_enabled` on the critical path) and
 C (iPad review menu, hide, promote), in parallel. Then D (the 18-option catalog), then E (cleanup after the client
-session). Briefs are in plan §10. **Built: preset-options PR B `claude/motion-every-scene`** (D75; sim-verified, #39: its block at the top; PR A is merged as #38). Nothing is verified on hardware.
+session). Briefs are in plan §10. **PR A is merged as #38 and PR B as #39. PR C is built** (D76, #40, `claude/ipad-review-menu`, sim only; see its block);
+nothing is verified on hardware.
 
 ## PR F — fast guest pacing: 2 s whatever the size, backing off on real throttling (D72), `claude/guest-throttle-pacing` → `main` (Oct 18)
 Cut from `main` at `209e52b` (#31–#34 all merged; checked each branch tip is in `main`). Alon: D70's 7.5 s on nine
@@ -836,9 +940,9 @@ Lab); both target `main`; merge commits, not squash.
 
 ## PR stack (merge order — merge commits, not squash)
 00. **Oct 18:** #28–#35 (PR A, B, B2, C, the C deploy notes, D, E, F) are merged into `main`; the show box runs
-    `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **PR G `claude/flagged-not-changing` (D73) is merged
-    as #37 (`3c3ad38`).** **Next: preset-options PR B `claude/motion-every-scene`** (D75) → `main`, "merge #37
-    first" (already satisfied; #39, sim-verified; its block at the top). Preset-options PR A is merged as #38.
+    `7b21918` (main after #35: D70 + D71 + D72) since 16:23. **Open: PR G `claude/flagged-not-changing`** (D73; no
+    other PR first). Preset-options PR A is merged as #38 and PR B as #39. **Then preset-options PR C `claude/ipad-review-menu`** (D76; cut from PR G's tip: merge #37
+    first; merge commits).
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -1355,11 +1459,11 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
-00000. **preset-options PR B (D75, `claude/motion-every-scene`):** review it (its block at the top, including the
-    review fixes), then open its PR to `main` ("merge #37 first", already satisfied; merge commit, not squash). Alon merges. Nothing
-    changes on real lights until Gate R and Alon's `live_enabled` PR.
-0000. **Alon (PR G, D73, merged as #37 `3c3ad38`):** deploy it if the box still runs `7b21918` (its last record
-    here); then a second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
+00000. **Alon (preset-options PR C, D76):** after #37, review and merge `claude/ipad-review-menu` (nothing changes
+    on the iPad until PR D's options are in git); answer its two questions (tier-true cards vs a labelled design
+    view; thumbnails on the six cards after PR E). Hard-reload `/ops` and `/ops/showcase` after deploying it.
+0000. **Alon (PR G, D73):** review and merge `claude/flagged-not-changing`; deploy it (the box runs `7b21918`); then a
+    second scene ~2 s after the first should land on the kits. Decide the kiosk cookie (`SameSite=Strict` → 401s on
     some iPad reloads). Run the account probe once (`docs/runbooks/account-rate-probe.md`), not during a demo.
 000. **PR F (D72) merged (#35) and deployed with D70 + D71 (`7b21918`, Oct 18 16:23).**
 00. **PR C (D69) is merged and deployed (Oct 18, `0f8f38c`).** Still to try on the kits: tap a scene, dim right

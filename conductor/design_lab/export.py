@@ -21,7 +21,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,6 +76,13 @@ STEPPED_STILL = "nine strands on one account would hold the still design: {why}"
 _STEP_COMMENT = re.compile(r"step every [0-9.]+ s|hold the still design \([^)]*\)")
 STEP_COMMENT_STEP = "step every {step:g} s"
 STEP_COMMENT_STILL = "hold the still design ({why})"
+# D76 "Make this the scene": a fact plus a prompt. It never asserts the client's sign-off (07 §9): only the person
+# exporting knows whether the client chose it, so the line asks them to write who and when.
+PROMOTION_LINE = (
+    "Made the scene on site (D76 “Make this the scene”): {base} now has {option}'s palette and layout "
+    "({option_id} → {base_id}). If the client chose it at the review, add who chose it and when before merging: "
+    "that choice is the D59 sign-off for its colours."
+)
 # the D65 section's live state (the Lab never sets motion.stepped.live_enabled; it says where it stands)
 STEPPED_SECTION_OFF = "live off until Gate R"
 STEPPED_SECTION_ON = "live on (motion.stepped.live_enabled)"
@@ -1029,6 +1036,53 @@ def _painted(trio: ConfigTrio, canvas: Any) -> dict:
     return dumped
 
 
+def _design_of(trio: ConfigTrio, scene_id: str) -> tuple[list[tuple[str, str]], dict] | None:
+    """A scene's palette [(name, HEX)] and its module-level design's field (a FieldCanvas), or None without one."""
+    try:
+        scene, mode = trio.scenes.get(scene_id), trio.modes.mode(scene_id)
+    except KeyError:
+        return None
+    modules = mode.techniques.modules
+    canvas = modules.sample.canvas if modules is not None and modules.sample is not None else None
+    if not isinstance(canvas, FieldCanvas):
+        return None
+    return [(c.name, c.hex.upper()) for c in scene.palette], canvas.field.model_dump(mode="json")
+
+
+def promotions(
+    patched: ConfigTrio, scene_ids: Iterable[str], *, approved: ConfigTrio | None = None
+) -> list[tuple[str, str]]:
+    """(base id, option id) for each base scene in `scene_ids` that now carries one of its options' designs: the
+    first option (catalog order) whose palette [(name, hex)] and module-level field both equal the base's — what the
+    Lab's "Make this the scene" leaves (D76). Inferred, never recorded: a later tweak of the base drops the pair.
+    With `approved`, a base that already had that design in git is no promotion (nothing was made the scene)."""
+    out: list[tuple[str, str]] = []
+    for base_id in scene_ids:
+        try:
+            base = patched.scenes.get(base_id)
+        except KeyError:
+            continue
+        if base.option_of is not None:
+            continue
+        design = _design_of(patched, base_id)
+        if design is None:
+            continue
+        if approved is not None and _design_of(approved, base_id) == design:
+            continue
+        for option in patched.scenes.options_of(base_id):
+            if _design_of(patched, option.id) == design:
+                out.append((base_id, option.id))
+                break
+    return out
+
+
+def _name_of(approved: ConfigTrio, patched: ConfigTrio, scene_id: str) -> str:
+    try:
+        return approved.scenes.get(scene_id).name
+    except KeyError:
+        return patched.scenes.get(scene_id).name
+
+
 def _next_decision(root: Path) -> str:
     path = root / "docs" / "DECISIONS.md"
     try:
@@ -1058,6 +1112,15 @@ def decision_draft(
             "Approved colour changes (D59; needs the client's sign-off and a D59 update): "
             + "; ".join(changes.approved)
             + "."
+        )
+    for base_id, option_id in promotions(patched, scene_ids, approved=approved):
+        parts.append(
+            PROMOTION_LINE.format(
+                base=_name_of(approved, patched, base_id),
+                option=_name_of(approved, patched, option_id),
+                option_id=option_id,
+                base_id=base_id,
+            )
         )
     if changes.solid:
         parts.append("Strand solid (a draft default, not a D59 colour): " + "; ".join(changes.solid) + ".")
@@ -1233,6 +1296,7 @@ __all__ = [
     "field_flow",
     "fixture_for",
     "frames_fixture",
+    "promotions",
     "reread",
     "rewrite_modes_yaml",
     "rewrite_recipes_yaml",

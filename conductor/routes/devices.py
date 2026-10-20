@@ -10,7 +10,8 @@
 - `GET /api/ops/summary` — version, "Needs attention" items, accounts, locks, the executor's rate budget per
   driver, and simulator statistics when the engine runs on the simulator. "Needs attention" includes the canopy
   resting while guest input is on, and the engine's and reconciler's alerts (conductor/alerts.py) — each alert item
-  carries `alert` (its key) for `POST /api/ops/alerts/ack {"key"}`, which hides it until it happens again.
+  carries `alert` (its key) for `POST /api/ops/alerts/ack {"key"}`, which hides it until it happens again. It also
+  names the iPad's scene menu's problems (conductor/ipad_menu.problem_lines, D76), computed live.
 
 Capabilities are fetched lazily (a profile read through the bench target's driver, Purpose.BENCH — a GET, never a
 write) and cached in `services.extras["capabilities"]`; `refresh=1` re-fetches. A failed fetch is cached for
@@ -238,6 +239,10 @@ def runtime_problems(services: Any) -> list[str]:
     from conductor.looks.live import runtime_problem_lines
 
     problems += runtime_problem_lines(services)
+    # The iPad's scene menu (D76): an unusable overrides/settings.yaml, and listed ids that hide nothing. Live too.
+    from conductor import ipad_menu
+
+    problems += ipad_menu.problem_lines(services)
     return list(dict.fromkeys(p for p in problems if p))
 
 

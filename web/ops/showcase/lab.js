@@ -18,7 +18,7 @@
 
 import { api as baseApi, connectLive, copyJSON } from "/static/app.js";
 import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-4";
-import * as M from "./lab-model.mjs?v=lab-10";
+import * as M from "./lab-model.mjs?v=lab-11";
 
 const API = "/api/lab";
 const UI_KEY = "lab-ui"; // remembered scene / view / angle / the publisher's name (not a draft key: staleDraftKeys never matches it)
@@ -440,6 +440,34 @@ function resetDraft(to) {
   renderAll();
 }
 
+/** "Make this the scene" (D76): the option on screen's design into its base's working draft (client only, never a
+ * request: Publish saves and publishes it, Undo on the base brings its draft back). Then the base is on screen. */
+function promoteToBase() {
+  const option = L.scene;
+  const scene = sceneOf(option);
+  const base = scene && scene.option_of;
+  if (!option || !base || !L.working[base] || !L.working[option]) return;
+  const { draft, notes } = M.promoteDraft(L.working[base], L.working[option], { baseStepped: !!(sceneOf(base) && sceneOf(base).stepped) });
+  const optionName = sceneName(option);
+  const baseName = sceneName(base);
+  if (M.draftEquals(draft, L.working[base])) {
+    setNotice(M.PROMOTE_COPY.same(optionName, baseName));
+    return;
+  }
+  if (!window.confirm(M.PROMOTE_COPY.question(optionName, baseName, { motion: notes.includes("took-motion") }))) return;
+  L.undo[base] = M.undoPush(L.undo[base], L.working[base]);
+  L.working[base] = draft;
+  setAlert("save", null);
+  persist(base);
+  motionStop();
+  L.scene = base;
+  rememberUi();
+  setNotice([M.PROMOTE_COPY.done(optionName, baseName), ...M.promoteNotes(notes, optionName, baseName)].join(" "));
+  rebuildEditor();
+  schedulePreview();
+  renderAll();
+}
+
 function selectScene(id) {
   if (!order().includes(id) || id === L.scene) return;
   motionStop();
@@ -844,9 +872,11 @@ function renderSceneList() {
       const unsaved = !M.draftEquals(d, L.base[id]);
       const marked = !!L.publish.marks[id];
       const strip = h("span", { class: "lab-strip", "aria-hidden": "true" }, (d.palette || []).map((c) => h("i", { style: `background:${c.hex}` })));
+      const option = !!(sceneOf(id) && sceneOf(id).option_of); // D76: an option sits under its base
+      const offIpad = !!(liveScene(id) && liveScene(id).on_ipad === false); // /ops took its card off the iPad
       const btn = h(
         "button",
-        { type: "button", class: marked ? "lab-scene is-refused" : "lab-scene", "aria-current": id === L.scene ? "true" : null, onclick: () => selectScene(id) },
+        { type: "button", class: `${marked ? "lab-scene is-refused" : "lab-scene"}${option ? " is-option" : ""}`, "aria-current": id === L.scene ? "true" : null, onclick: () => selectScene(id) },
         strip,
         h("span", { class: "lab-scene-text" }, h("strong", { text: d.name }), h("small", { text: d.mood })),
         h(
@@ -854,6 +884,7 @@ function renderSceneList() {
           { class: "lab-badges" },
           h("span", { class: `lab-live-badge ${live.toLowerCase()}`, title: held ? "Shows at module level until its slots are repainted" : `The show runs the ${live.toLowerCase()} look`, text: `Live: ${live}${held ? " · held" : ""}` }),
           h("span", { class: `lab-badge ${state.replace(/\s/g, "-")}`, title: state === "draft" ? "The working draft differs from what the show runs" : null, text: M.WORKING_TEXT[state] }),
+          offIpad ? h("span", { class: "lab-badge off-ipad", title: "Taken off the iPad on /ops: guests don’t see its card", text: "Off the iPad" }) : null,
         ),
         unsaved ? h("span", { class: "lab-dot", title: "Unsaved changes", "aria-label": "Unsaved changes" }) : null,
       );
@@ -1207,6 +1238,10 @@ function rebuildEditor() {
     ),
   );
   const publishBtn = h("button", { type: "button", class: "lab-btn small publish", dataset: { publish: "editor" }, onclick: () => publishWorking(), text: M.PUBLISH });
+  // D76: an option's design into its base's working draft (no request; the base's Publish publishes it)
+  const baseScene = scene && scene.option_of ? sceneOf(scene.option_of) : null;
+  const promoteMotion = M.promoteTakesMotion(d, { baseStepped: !!(baseScene && baseScene.stepped) });
+  const promoteBtn = scene && scene.option_of ? h("button", { type: "button", class: "lab-btn small", dataset: { promote: "editor" }, title: M.PROMOTE_COPY.title(d.name, sceneName(scene.option_of), { motion: promoteMotion }), onclick: promoteToBase, text: M.PROMOTE }) : null;
   const kinds = h(
     "div",
     { class: "lab-seg", role: "group", "aria-label": "Layout kind" },
@@ -1219,7 +1254,7 @@ function rebuildEditor() {
       "div",
       { class: "lab-editor-head" },
       h("div", {}, h("span", { class: "eyebrow", text: scene && scene.painted ? `PAINTED · ${scene.slot}` : scene && scene.stepped ? "MODULE LEVEL · STEPPED" : "MODULE LEVEL" }), h("h2", { id: "lab-editor-title", text: d.name })),
-      h("div", { class: "lab-row" }, undoBtn, resetMenu, publishBtn),
+      h("div", { class: "lab-row" }, undoBtn, resetMenu, promoteBtn, publishBtn),
     ),
     h("p", { class: "lab-reality", text: M.REALITY_LINE }),
     h("p", { id: "lab-lock", class: "lab-lock", hidden: true }),

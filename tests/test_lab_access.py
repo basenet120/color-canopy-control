@@ -242,7 +242,8 @@ def test_no_lab_route_changes_live_enabled_or_ripple(app_client, fakes):
     assert services.settings.kiosk.ripple_stagger_s == settings["kiosk"]["ripple_stagger_s"]
     assert (CONFIG_DIR / "conductor.yaml").read_bytes() == conductor_yaml
     for model in (SceneDraft, PreviewBody, SaveBody, RestoreBody, TrialStartBody):
-        assert not [n for n in _names(model) if "live" in n or "ripple" in n], model
+        # nor hide a scene on the iPad (kiosk.hidden_scenes is /ops's, D76)
+        assert not [n for n in _names(model) if "live" in n or "ripple" in n or "hidden" in n], model
 
 
 WRITER_MODULES = ("conductor.executor", "conductor.drivers", "conductor.locks")

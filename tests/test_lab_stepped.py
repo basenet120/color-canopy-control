@@ -772,8 +772,10 @@ def test_the_lab_never_flips_live_enabled_or_ripple(app_client):
 
 
 def test_no_lab_source_assigns_either_live_setting():
-    """Beyond the routes: no Lab module stores into `live_enabled` or `ripple_stagger_s` (an attribute, a subscript
-    or a model_copy/update key), whatever the receiver is called."""
+    """Beyond the routes: no Lab module stores into `live_enabled`, `ripple_stagger_s` or `hidden_scenes` (an
+    attribute, a subscript or a model_copy/update key), whatever the receiver is called. The Lab never hides a scene
+    on the iPad; /ops does (D76)."""
+    forbidden = ("live_enabled", "ripple_stagger_s", "hidden_scenes")
     sources = sorted((ROOT / "conductor" / "design_lab").glob("*.py")) + [
         ROOT / "conductor/routes/design_lab.py"
     ]
@@ -790,16 +792,16 @@ def test_no_lab_source_assigns_either_live_setting():
                     name = t.attr
                 elif isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant):
                     name = t.slice.value
-                assert name not in ("live_enabled", "ripple_stagger_s"), f"{path.name}:{node.lineno}"
+                assert name not in forbidden, f"{path.name}:{node.lineno}"
             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "setattr":
                 names = {a.value for a in node.args if isinstance(a, ast.Constant)}
-                assert not names & {"live_enabled", "ripple_stagger_s"}, f"{path.name}:{node.lineno}"
+                assert not names & set(forbidden), f"{path.name}:{node.lineno}"
             if isinstance(node, ast.Call) and getattr(node.func, "attr", "") in ("model_copy", "update"):
                 for kw in node.keywords:
-                    assert kw.arg not in ("live_enabled", "ripple_stagger_s"), f"{path.name}:{node.lineno}"
+                    assert kw.arg not in forbidden, f"{path.name}:{node.lineno}"
                     if isinstance(kw.value, ast.Dict):
                         keys = {k.value for k in kw.value.keys if isinstance(k, ast.Constant)}
-                        assert not keys & {"live_enabled", "ripple_stagger_s"}, f"{path.name}:{node.lineno}"
+                        assert not keys & set(forbidden), f"{path.name}:{node.lineno}"
 
 
 # ---- the export (D65) -----------------------------------------------------------------------------------------------------

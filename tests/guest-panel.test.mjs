@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   COPY,
+  GRID_MAX,
   IDLE_MS,
+  attractScenes,
+  cardLayout,
+  thumbDots,
   attractDue,
   brightnessToSend,
   cardsKey,
@@ -209,6 +213,117 @@ test("cardsKey changes when a scene's contents change, not only its ids", () => 
   assert.equal(cardsKey([{ ...base[0], description: "new words" }, base[1]]), key);
 });
 
+test("cardsKey follows option_of, group and the thumbnail's sig", () => {
+  // non-hex sig literals on purpose (.gitleaksignore): the key only compares them
+  const base = [scene("a", { option_of: null, group: "a", thumb: null }), scene("b", { option_of: null, group: "b", thumb: null })];
+  const key = cardsKey(base);
+  const one = (extra) => cardsKey([{ ...base[0], ...extra }, base[1]]);
+  assert.notEqual(one({ option_of: "b" }), key, "option_of null → an id");
+  assert.notEqual(one({ group: "b" }), key, "the group");
+  const thumb = (sig, colour) => ({ sig, basis: "modules", modules: [{ pos: "r0c0", color: colour, colors: null }] });
+  assert.notEqual(one({ thumb: thumb("thumb-a", "#111111") }), key, "thumb null → a thumb");
+  assert.notEqual(one({ thumb: thumb("thumb-a", "#111111") }), one({ thumb: thumb("thumb-b", "#111111") }), "a new sig");
+  // the sig stands for the colours: the same sig with other arrays is the same key (the arrays never go in)
+  assert.equal(one({ thumb: thumb("thumb-a", "#111111") }), one({ thumb: thumb("thumb-a", "#222222") }));
+  assert.equal(one({ description: "other words" }), key);
+});
+
+test("cardsKey follows a thumbnail's brightness, which its sig doesn't carry", () => {
+  // A brightness-only Design Lab publish: the server's sig hashes the full-strength colours, so it stays the same,
+  // but paintThumb draws brightness_draft as opacity. The card must rebuild (and so repaint) at the new level.
+  const thumb = { sig: "thumb-a", basis: "modules", modules: [{ pos: "r0c0", color: "#111111", colors: null }] };
+  const at = (level, extra = {}) =>
+    cardsKey([scene("a", { group: "a", thumb, brightness_draft: level, ...extra }), scene("b", { group: "b", thumb: null })]);
+  assert.notEqual(at(40), at(80), "the same sig at another brightness");
+  assert.notEqual(at(null), at(80), "no brightness → a brightness");
+  assert.equal(at(80), at(80));
+  // the six-card strip draws no brightness: there a brightness-only publish keeps the cards as they are
+  assert.equal(at(40, { thumb: null }), at(80, { thumb: null }));
+});
+
+const review18 = () =>
+  ["a", "b", "c", "d", "e", "f"].flatMap((id) => [
+    scene(id, { option_of: null, group: id }),
+    scene(`${id}-2`, { option_of: id, group: id }),
+    scene(`${id}-3`, { option_of: id, group: id }),
+  ]);
+
+test("cardLayout: six or fewer keep catalog order, more than six give one row per scene group", () => {
+  assert.equal(GRID_MAX, 6);
+  const six = [scene("a"), scene("b-2", { option_of: "b", group: "b" }), scene("c"), scene("b"), scene("d"), scene("e")];
+  const flat = cardLayout(six);
+  assert.equal(flat.review, false);
+  assert.deepEqual(flat.cards.map((c) => c.scene.id), six.map((s) => s.id));
+  assert.ok(flat.cards.every((c) => c.rowStart === false));
+  const all = review18();
+  const grouped = cardLayout(all);
+  assert.equal(grouped.review, true);
+  assert.deepEqual(grouped.cards.map((c) => c.scene.id), all.map((s) => s.id));
+  assert.deepEqual(grouped.cards.flatMap((c, i) => (c.rowStart ? [i] : [])), [0, 3, 6, 9, 12, 15]);
+  assert.deepEqual(cardLayout([]), { review: false, cards: [] });
+  assert.deepEqual(cardLayout(undefined), { review: false, cards: [] });
+});
+
+test("cardLayout: a hidden base still forms its row, options listed before their base, and groups of more than three", () => {
+  const without = review18().filter((s) => s.id !== "a");
+  const rows = cardLayout(without);
+  assert.equal(rows.cards.length, 17);
+  assert.equal(rows.cards[0].scene.id, "a-2");
+  assert.equal(rows.cards[0].rowStart, true);
+  assert.equal(rows.cards[1].rowStart, false);
+  // b-2 listed before b: one group, at b-2's position, members in catalog order
+  const early = [scene("b-2", { option_of: "b", group: "b" }), scene("a"), scene("b"), scene("c"), scene("d"), scene("e"), scene("f")];
+  const out = cardLayout(early);
+  assert.deepEqual(out.cards.map((c) => c.scene.id), ["b-2", "b", "a", "c", "d", "e", "f"]);
+  assert.deepEqual(out.cards.map((c) => c.rowStart), [true, false, true, true, true, true, true]);
+  // a five-member group: one row start, five cards (the grid wraps them)
+  const five = [scene("g"), ...[2, 3, 4, 5].map((n) => scene(`g-${n}`, { option_of: "g", group: "g" })), scene("h"), scene("i")];
+  const big = cardLayout(five);
+  assert.equal(big.cards.filter((c) => c.scene.group === "g" || c.scene.id === "g").length, 5);
+  assert.deepEqual(big.cards.map((c) => c.rowStart), [true, false, false, false, false, true, true]);
+  // with no group or option_of, the id is the group; option_of alone groups too
+  const bare = [scene("a"), scene("a-2", { option_of: "a" }), scene("b"), scene("c"), scene("d"), scene("e"), scene("f")];
+  assert.deepEqual(cardLayout(bare).cards.map((c) => c.rowStart), [true, false, true, true, true, true, true]);
+});
+
+test("attract cycles one scene per group in the review menu, every scene otherwise", () => {
+  assert.deepEqual(attractScenes(review18()).map((s) => s.id), ["a", "b", "c", "d", "e", "f"]);
+  const hidden = review18().filter((s) => s.id !== "c");
+  assert.deepEqual(attractScenes(hidden).map((s) => s.id), ["a", "b", "c-2", "d", "e", "f"]);
+  const six = review18().filter((s) => !s.option_of);
+  assert.deepEqual(attractScenes(six), six);
+  assert.deepEqual(attractScenes(undefined), []);
+});
+
+test("attract cycles every scene of six or fewer, even when some share a group", () => {
+  // six visible is the 3 × 2 grid, which shows every card: the attract screen cycles all six, a-2 too, never one per
+  // group (that is the review menu's rule, more than six)
+  const shared = [scene("a", { group: "a" }), scene("a-2", { option_of: "a", group: "a" }), ...["b", "c", "d", "e"].map((id) => scene(id, { group: id }))];
+  assert.equal(cardLayout(shared).review, false);
+  assert.deepEqual(attractScenes(shared).map((s) => s.id), ["a", "a-2", "b", "c", "d", "e"]);
+  assert.deepEqual(attractScenes(shared), shared, "the same scenes, in input order");
+  const three = [scene("b-2", { option_of: "b", group: "b" }), scene("b", { group: "b" }), scene("b-3", { option_of: "b", group: "b" })];
+  assert.deepEqual(attractScenes(three).map((s) => s.id), ["b-2", "b", "b-3"], "one group of three: all three, as listed");
+  // one more and it is the review menu: one per group again
+  const seven = [...shared, scene("e-2", { option_of: "e", group: "e" })];
+  assert.deepEqual(attractScenes(seven).map((s) => s.id), ["a", "b", "c", "d", "e"]);
+});
+
+test("thumbDots: each head the design's colour, no colour where none is known", () => {
+  const dots = ["r0c0", "r0c1"].flatMap((pos) => [0, 1, 2].map((k) => ({ pos, k, cx: 10 * k, cy: pos === "r0c0" ? 1 : 2, r: 1.5 })));
+  const perHead = { sig: "thumb-a", basis: "heads", modules: [{ pos: "r0c0", color: null, colors: ["#aa0000", "#00bb00", "#0000cc"] }, { pos: "r0c1", color: "#123abc", colors: null }] };
+  const out = thumbDots(dots, perHead);
+  assert.deepEqual(out.map((d) => d.fill), ["#AA0000", "#00BB00", "#0000CC", "#123ABC", "#123ABC", "#123ABC"]);
+  assert.deepEqual(out[1], { cx: 10, cy: 1, r: 1.5, fill: "#00BB00" }); // cx, cy and r pass through
+  assert.equal(thumbDots(dots, perHead, { r: 0.7 })[0].r, 0.7); // the card's thumbnail radius
+  const gaps = { sig: "thumb-b", basis: "heads", modules: [{ pos: "r0c0", color: null, colors: ["#AA0000", null, "#XYZ"] }] };
+  assert.deepEqual(thumbDots(dots, gaps).map((d) => [d.cx, d.cy, d.fill]), [[0, 1, "#AA0000"]]); // r0c1 has no module
+  const flatBad = { sig: "thumb-c", basis: "modules", modules: [{ pos: "r0c0", color: "#XYZ", colors: null }, { pos: "r0c1", color: null, colors: null }] };
+  assert.deepEqual(thumbDots(dots, flatBad), []);
+  assert.deepEqual(thumbDots(dots, null), []);
+  assert.deepEqual(thumbDots(undefined, perHead), []);
+});
+
 test("kiosk.js builds its cards on cardsKey, never on the ids alone", () => {
   const js = readFileSync(new URL("../web/kiosk/kiosk.js", import.meta.url), "utf8").replace(/(^|\s)\/\/.*$/gm, "");
   assert.match(js, /const key = cardsKey\(scenes\);/);
@@ -226,6 +341,17 @@ test("now showing: the scene, or calm copy with grey lights when off or unknown"
   const none = nowShowing(scenes, ready({ scene: null }));
   assert.equal(none.name, COPY.noScene);
   assert.equal(none.description, COPY.noSceneHelp);
+});
+
+test("now showing names a hidden scene from panel.showing", () => {
+  const hidden = { id: "h", name: "H #2", description: "hd", frame: scene("h").frame };
+  const shown = nowShowing([scene("a")], ready({ scene: "h" }), hidden);
+  assert.equal(shown.name, "H #2");
+  assert.equal(shown.description, "hd");
+  assert.equal(shown.scene, hidden);
+  const without = nowShowing([scene("a")], ready({ scene: "h" }));
+  assert.equal(without.name, COPY.noScene);
+  assert.equal(nowShowing([scene("a")], ready(), hidden).name, "A"); // `showing` never stands in for the scene shown
 });
 
 test("now showing draws the one colour the strands took when the server says the look is solid", () => {
@@ -320,4 +446,41 @@ test("the page writes no Hubspace feature claim of its own", () => {
     const js = readFileSync(new URL(`../web/kiosk/${name}`, import.meta.url), "utf8").replace(/(^|\s)\/\/.*$/gm, "");
     assert.doesNotMatch(js, /['"`][^'"`\n]*Hubspace[^'"`\n]*['"`]/, name);
   }
+});
+
+/** The body of `function name(` in `js` (brace-matched; strings here hold no braces that matter). */
+function fnBody(js, name) {
+  const start = js.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `kiosk.js has no function ${name}`);
+  const open = js.indexOf("{", js.indexOf(")", start));
+  let depth = 0;
+  for (let i = open; i < js.length; i += 1) {
+    if (js[i] === "{") depth += 1;
+    else if (js[i] === "}" && (depth -= 1) === 0) return js.slice(open, i + 1);
+  }
+  throw new Error(`unbalanced ${name}`);
+}
+
+test("kiosk.js draws thumbnails on a rebuild or resize, never on an animation frame", () => {
+  const js = readFileSync(new URL("../web/kiosk/kiosk.js", import.meta.url), "utf8").replace(/(^|\s)\/\/.*$/gm, "");
+  for (const name of ["paintCanopy", "tickCanopy"]) {
+    const body = fnBody(js, name);
+    assert.doesNotMatch(body, /drawThumbs|paintThumb/, name);
+  }
+  const build = fnBody(js, "buildCards");
+  for (const needle of [
+    "builtFor = key",
+    "builtCanopy = Boolean(canopy)",
+    "const keep = grid.scrollTop",
+    "grid.scrollTop = keep",
+    "dataset.review",
+    "attractScenes(",
+    "cardLayout(",
+  ]) {
+    assert.ok(build.includes(needle), needle);
+  }
+  assert.ok(fnBody(js, "attractStep").includes("attractScenes("));
+  assert.ok(fnBody(js, "showAttract").includes("scrollTop = 0"));
+  assert.ok(fnBody(js, "wireResize").includes("force: true"));
+  assert.ok(fnBody(js, "paintThumb").includes("levelOpacity(scene.brightness_draft"));
 });
