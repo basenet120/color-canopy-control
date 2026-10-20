@@ -1,7 +1,7 @@
 # Status
 
 _Last updated: 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
-targeting `main`; A, B and C are merged as #38, #39 and #40, and D is #42; see their blocks at the top. PR A
+targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
 still tier, the idle breath off); PR C `claude/ipad-review-menu` (D76: the iPad review menu, hide and promote); PR D
@@ -367,6 +367,49 @@ only: nothing new is sent to a device, and no scene changes. Plan `docs/plans/pr
 - A slot repaint of a fins frame on a real kit (a painted fins scene published live): no kit has a proven map (D54).
 
 **Blocked:** nothing.
+
+## PR F `claude/flagged-reads-lit` — flagged kits read lit on the iPad's picture, not as outlines (D78) → `main` (Oct 19)
+Not the Oct 18 PR F (`claude/guest-throttle-pacing`, #35). Cut from `main` at `3c3ad38` (#37 merged); independent of
+the preset-options PRs A–D, no other PR first, small. **Found (Alon was told with A3):** since D73 a module whose only
+problem is a flagged note (D54's "no proven map yet"), with its look confirmed, is "stuck" at once, and
+`canopy_view.lit_state` drew any stuck module as `unknown`. So the live iPad drew Modules 1–2 as outlines right after
+every confirmed scene (before D73, 10 s later), while their lights showed the scene.
+- **The fix (D78):** the engine's module record carries `flagged_only` (`tracker.flagged_only`), and `lit_state` reads
+  such a module as confirmed: `lit` with its colours, or `off` once a guest's power-off reads back off. A module stuck
+  for any other reason (a readback that still differs, a failed write, an offline controller), a locked one and a
+  resting canopy still read `unknown`. /ops is unchanged: the note shows and the phase needs attention. The payload
+  changes, not the JS: **no kiosk or Lab tag bump**. Docs: D78, guest-panel.md §2.6 (`lit` and `unknown` rows), the
+  payload note in `conductor/routes/guest.py`.
+- **Verified (sim, macOS):** **`tests/test_flagged_reads_lit.py`** (10 tests), written first against `3c3ad38`, where
+  3 failed, as on the iPad: nine flagged modules read `unknown` through the engine; the truth table read the record as
+  `unknown`; on the two-kit partial show, GET /api/kiosk/panel drew r0c1 `unknown` after a confirmed scene. After the
+  fix:
+  - a confirmed flagged module's picture equals an unflagged one's (`lit`, same colours);
+  - the record reads `stuck` and `flagged_only` true, and the look phase stays needs attention;
+  - the panel shows both kits `lit` with colours and the other seven `dark`.
+  Controls, passing before and after:
+  - a silent drop, with or without the note, is stuck only past the retry window (> 9.5 s), never `flagged_only`, and
+    reads `unknown` at the instant it is stuck;
+  - a locked flagged module reads `unknown`;
+  - in the truth table, a locked record (even marked `flagged_only`), a stuck one with `flagged_only` false, and a
+    failed write all read `unknown`, on and off;
+  - a resting canopy reads `unknown`.
+  **Mutation-checked:** without the record field, 2 fail; with lit_state unchanged, 3 fail; with the stuck check
+  dropped, or every stuck module treated as flagged-only, 4 fail. `nice -n 15 uv run --offline pytest -q` → 2484
+  passed, 5 skipped, 44 subtests (11.5 min, final code tree; D73's tests included); ruff check / format clean; node
+  151/151 (no JS changed). No dev server was run.
+- **Not changed (a follow-up for Alon):** the guest panel also hides the feature line (the technique sentence) while
+  the look phase needs attention (`conductor/guest_panel.py`, "feature"), and flagged kits keep it there. Checked in
+  the sim on the two-kit setup: settled and unflagged, the panel says "Colour and dimming: two Hubspace strands, each
+  set to a single colour from the scene."; with both kits flagged, it shows no sentence. Same cause as D78; whether a
+  flagged note alone should hide a sentence that is still true is Alon's call.
+- **Lab exports:** once D78 is on `main`, the export proposes D79 (max + 1), clear of the reserved D74–D77. If D77
+  lands first, an export made before this PR merges proposes D78, which this PR reserves: renumber it by hand. Keep
+  DECISIONS.md in numeric order whatever the merge order.
+- **Needs the real box:** after deploying, tap a scene. Once the kits confirm, the iPad should fill Modules 1–2 in the
+  scene's colours, with no outlines, and /ops should still show the D54 note on both.
+- **Deploy:** the usual paste block, on its own. No iPad reload is needed: the page is unchanged and reads `state.lit`
+  on its next poll.
 
 ## preset-options PR B — motion on every scene (D75), `claude/motion-every-scene` → `main` (Oct 18)
 Cut from `origin/claude/flagged-not-changing` (= `main` + #37). **Merge #37 first** (already satisfied: #37 is merged
@@ -1195,7 +1238,7 @@ Lab); both target `main`; merge commits, not squash.
     (built and sim-verified with review rounds 1–6 fixed, not pushed, no PR number yet; its block at the top). **Then
     preset-options PR C `claude/ipad-review-menu`** (D76; merge commits). **Then preset-options PR D
     `claude/preset-options-catalog` → `main`** (D77; built on a merge of A, B and C, so "merge A, B and C first";
-    merge commits, not squash). The preset-options stack in merge order: A, B, C, D.
+    merge commits, not squash). The preset-options stack in merge order: A, B, C, D. PR F `claude/flagged-reads-lit` (D78) is merged as #41.
 0. **Where the stack really is (checked Oct 17 with `gh pr list --json baseRefName,mergeCommit`).** #19 (D62) is on
    `main`. **#20–#23 were merged on Oct 15–16, but each into the branch below it, not into `main`** (the stacked-PR
    trap again), so `main` has none of P1/P2, the 2-D designs + ripple (D63/D64), the Studio's design painter or stepped
@@ -1826,6 +1869,8 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
 - **D65 which scenes move**, the cadence (6 s designed / 7.5 s effective), and turning `motion.stepped.live_enabled`
   on only after Gate R passes; also the stepped step-spread target (p95 2.78 s in sim).
 - **Kiosk look** (06 #13, was due Oct 5): client copy and brand sign-off.
+- **The feature line on flagged kits** (PR F `claude/flagged-reads-lit` block): today a flagged note alone (D54 on
+  Modules 1–2) hides the iPad's technique sentence, although the sentence is still true.
 - **Vignette surface** (06 #11, was due Oct 1): thin `/vignette/<room>` pages are built. The Oct 12 fallback
   criteria are in D26.
 - **Authorization letter** from Home Depot before any show-account writes (06 #20).
