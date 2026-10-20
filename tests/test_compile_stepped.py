@@ -239,7 +239,7 @@ def test_a_mode_without_a_stepped_rung_cant_compile_stepped_and_every_option_ste
     # D77: every scene and option has a stepped rung (tests/test_d77_catalog.py)
     stepping = [m for m, mode in shipped.modes.items() if mode.techniques.stepped is not None]
     assert stepping == [m for m, mode in shipped.modes.items() if "stepped" in mode.ladder]
-    assert stepping == list(shipped.modes) and len(stepping) == 18
+    assert stepping == list(shipped.modes) and len(stepping) == 36  # D77 + D80
 
 
 def test_ops_and_alerts_have_words_for_every_tier():

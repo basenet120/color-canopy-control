@@ -65,6 +65,10 @@ class ProgramStep:
     # canopy position → the device brightness this step sends (after the device's range clamp, before any guest
     # level): the rung's brightness on every step of a travel look, the breath's level on a breathe/shimmer one (D75)
     levels: dict[str, int] = field(default_factory=dict)
+    # Per-light steps (D80, `Program.lights`): canopy position → its heads in lattice order (the panel's) as 4 hex
+    # characters a head ("RGBL": each colour channel in 4 bits at full strength, then the head's level 0–F of 100),
+    # what the guest panel and the Lab draw. Empty for module-level steps.
+    heads: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
@@ -72,6 +76,7 @@ class ProgramStep:
             "rows": {d: [r.to_json() for r in rows] for d, rows in self.rows.items()},
             "colours": self.colours,
             "levels": self.levels,
+            "heads": self.heads,
         }
 
 
@@ -96,6 +101,9 @@ class Program:
     steps: list[ProgramStep]
     moving_feature: str
     mode: str = "travel"  # last: tests build Program by position
+    # D80: every step sends each module a whole per-light frame (each light's colour and level, the slot select, the
+    # mode and the power in ONE PUT, 04), not one colour; `steps[n].heads` is what each light shows
+    lights: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -106,6 +114,7 @@ class Program:
             "step_s": self.step_s,
             "run_s": self.run_s,
             "moving_feature": self.moving_feature,
+            "lights": self.lights,
             "steps": [s.to_json() for s in self.steps],
         }
 

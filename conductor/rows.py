@@ -69,7 +69,15 @@ class FrameEntry:
         return self
 
     def to_json(self) -> dict:
-        return asdict(self)
+        # = asdict(self), built directly: a per-light step encodes thousands of these (D80)
+        return {
+            "r": self.r,
+            "g": self.g,
+            "b": self.b,
+            "cct": self.cct,
+            "colorBrightness": self.colorBrightness,
+            "whiteBrightness": self.whiteBrightness,
+        }
 
     @classmethod
     def from_json(cls, d: Mapping[str, Any]) -> FrameEntry:

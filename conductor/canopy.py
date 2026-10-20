@@ -185,7 +185,16 @@ from conductor.executor_api import Command, CommandResult, CommandStatus, Device
 from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
-from conductor.rehearsal import MAX_MINUTES, REHEARSAL_DIR, Rehearsal, RehearsalRefused, confirm_sentence
+from conductor.rehearsal import (
+    MAX_MINUTES,
+    RATE_RUNGS,
+    REHEARSAL_DIR,
+    Rehearsal,
+    RehearsalRefused,
+    confirm_sentence,
+    rate_confirm_sentence,
+    rate_minutes,
+)
 from conductor.sequence import HELD_STEPS_END, ProgramRunner, planned_writes_per_min
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
@@ -454,6 +463,8 @@ class CanopyEngine:
             None  # a still look due after a 403's cool-off (`_settle_later`)
         )
         self._rehearsal: Rehearsal | None = None
+        # D80: device id → the slot a per-light run last wrote a frame into (a canvas there is rewritten on select)
+        self._streamed: dict[str, str] = {}
         self._rehearsals: list[Rehearsal] = []  # ended, report still being written (stop() waits for them)
         self.last_rehearsal: dict | None = None
         # The Design Lab's try-on (D66 Slice B): the override in force, and the task that ends it at its bound (a loop
@@ -930,7 +941,12 @@ class CanopyEngine:
         step = runner.rows_for(device_id) if runner is not None else None
         if step is not None:  # a stepped look's step: its breath keeps its swing around a guest's level (D75)
             return self._guest_rows(list(step), mt, swing=runner.swing(device_id))
-        return self._guest_rows(list(mt.rows), mt)
+        rows = list(mt.rows)
+        if mt.slot_value is not None and mt.slot and self._streamed.get(device_id) == mt.slot:
+            # D80: a per-light run overwrote this canvas's slot, so selecting it would show the run's frame: the
+            # canvas goes back into its slot in the same PUT (frame + select + mode + power, 04)
+            rows.append(R.slot_write(mt.slot, mt.slot_value))
+        return self._guest_rows(rows, mt)
 
     def _guest_rows(
         self, rows: list[StateRow], mt: ModuleTarget, *, swing: tuple[int, int] | None = None
@@ -1443,9 +1459,12 @@ class CanopyEngine:
                 "kiosk out by itself while it runs."
             )
 
-    def rehearsal_preview(self, mode_id: str, minutes: int) -> dict:
+    def rehearsal_preview(self, mode_id: str, minutes: int, *, ladder: bool = False) -> dict:
         """What a rehearsal of `mode_id` for `minutes` would do, and the sentence ops confirms before it starts (it
-        names every module written to). RehearsalRefused (a plain sentence) when it can't run now."""
+        names every module written to). RehearsalRefused (a plain sentence) when it can't run now. `ladder`: the rate
+        test (D80): its own steps (`RATE_RUNGS`), its minutes are the ladder's."""
+        if ladder:
+            minutes = rate_minutes()
         self._rehearsal_checks(mode_id, minutes)
         plan = self._rehearsal_plan(mode_id)
         modules, accounts = {}, set()
@@ -1466,15 +1485,17 @@ class CanopyEngine:
             )
         simulated = self._simulated()
         stepped = self.deps.settings.motion.stepped
-        return {
-            "mode": mode_id,
-            "label": plan.label,
-            "minutes": minutes,
-            "modules": list(modules.values()),
-            "module_ids": list(modules),
-            "accounts": accounts_sorted,
-            "simulated": simulated,
-            "confirm": confirm_sentence(
+        lights = bool(plan.program is not None and plan.program.lights)
+        if ladder:
+            confirm = rate_confirm_sentence(
+                label=plan.label,
+                modules=list(modules.values()),
+                accounts=accounts_sorted,
+                simulated=simulated,
+                lights=lights,
+            )
+        else:
+            confirm = confirm_sentence(
                 label=plan.label,
                 minutes=minutes,
                 modules=list(modules.values()),
@@ -1482,14 +1503,26 @@ class CanopyEngine:
                 simulated=simulated,
                 cap=stepped.account_writes_per_min,
                 planned=planned_writes_per_min(stepped),
-            ),
+            )
+        return {
+            "mode": mode_id,
+            "label": plan.label,
+            "minutes": minutes,
+            "ladder": list(RATE_RUNGS) if ladder else None,
+            "lights": lights,
+            "modules": list(modules.values()),
+            "module_ids": list(modules),
+            "accounts": accounts_sorted,
+            "simulated": simulated,
+            "confirm": confirm,
         }
 
-    async def rehearse(self, mode_id: str, minutes: int, *, source: str) -> dict:
+    async def rehearse(self, mode_id: str, minutes: int, *, source: str, ladder: bool = False) -> dict:
         """Start the stepped rehearsal: one stepped run of `mode_id` lasting `minutes`, then the still look. Only an
         operator starts it (the ops route, behind `rehearsal_preview`'s confirm sentence). Returns
         {ok, message, rehearsal}; RehearsalRefused (a plain sentence) when it can't start."""
-        preview = self.rehearsal_preview(mode_id, minutes)
+        preview = self.rehearsal_preview(mode_id, minutes, ladder=ladder)
+        minutes = preview["minutes"]
         # Before the rehearsal is set: with a try-on still set, compile_best would skip STEPPED for its scene (D66).
         cleared = self._clear_trial("a stepped rehearsal started")
         rehearsal = Rehearsal(
@@ -1501,6 +1534,7 @@ class CanopyEngine:
             accounts=preview["accounts"],
             source=source,
             report_dir=self.deps.rehearsal_dir,
+            ladder=RATE_RUNGS if ladder else None,
         )
         # A hysteresis floor indexes the mode's own ladder; the rehearsal's has the stepped rung in front of it.
         rehearsal.saved_floor = self.floors.pop(mode_id, None)
@@ -1528,12 +1562,20 @@ class CanopyEngine:
             }
         runner = self._runner
         assert runner is not None
-        return {
-            "ok": True,
-            "message": (
+        if ladder:
+            message = (
+                f"Rate test of {rehearsal.label}{' (per-light)' if runner.lights else ''} started: steps of "
+                f"{', '.join(f'{s:g}' for s in RATE_RUNGS)} s on {len(rehearsal.modules)} modules, about "
+                f"{minutes} minutes. The report is written when it ends."
+            )
+        else:
+            message = (
                 f"Stepped rehearsal of {rehearsal.label} started: {runner.count} steps of {runner.step_s:g} s on "
                 f"{len(rehearsal.modules)} modules. The report is written when it ends."
-            ),
+            )
+        return {
+            "ok": True,
+            "message": message,
             "rehearsal": rehearsal.status(),
         }
 
@@ -1759,7 +1801,7 @@ class CanopyEngine:
         runner = self._runner
         if runner is None or not runner.running:
             return None
-        return round(max(0.0, runner.t0 + runner.count * runner.step_s - self.clock.monotonic()), 2)
+        return round(max(0.0, runner.t0 + runner.run_len_s - self.clock.monotonic()), 2)
 
     def _rehearsal_reported(self, rehearsal: Rehearsal) -> None:
         """Called by the rehearsal once its report is written."""
@@ -2721,7 +2763,8 @@ class CanopyEngine:
             # (which does count as a change for the idle hold) never restarts a run, and a choice whose run is over
             # only holds (`over`, D75), lifted to its canvas or slot where it has one.
             if rehearsing:
-                runner = ProgramRunner(self, plan, t0=self._chosen_mono)
+                assert rehearsal is not None
+                runner = ProgramRunner(self, plan, t0=self._chosen_mono, schedule=rehearsal.schedule)
             else:
                 runner = ProgramRunner(
                     self, plan, t0=self._chosen_mono, over=self._ran_for == self._chosen_mono
@@ -2820,6 +2863,12 @@ class CanopyEngine:
             groups.setdefault(id(target.executor), (target.executor, []))[1].append(cmd)
             self.sent_rows[device_id] = rows
             sent.append(device_id)
+            written = next((r.key[1] for r in rows if r.key[0] == R.FRAME_CLASS), None)
+            if written is not None:  # D80: which slot the last frame write left holding something else
+                if plan.program is not None and plan.program.lights:
+                    self._streamed[device_id] = str(written)
+                elif self._streamed.get(device_id) == written:
+                    self._streamed.pop(device_id, None)
         if self._runner is not None and sent:
             self._runner.note_sent(sent)
         for executor, cmds in groups.values():

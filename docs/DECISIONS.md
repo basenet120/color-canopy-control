@@ -1421,3 +1421,32 @@ at 13 writes a minute, not nine at 72–90: the nine-kit Gate R (Rainbow Row Sun
 install before tours, and a fail there turns it back off. The rate probe (`account-rate-probe.md`) was not run first
 (on one kit it reaches ~60 writes a minute); with `live_enabled` on, its look flips may start stepped runs, so set it
 back off for the probe. Also seen: The Goodnight Glow #1's breath (swing 4 around 28%) was not visible on the strand.
+
+**D80 — Per-light motion, the rate test, and 18 per-light options (Oct 19; follows D65, D75, D77, D79).** Alon asked
+for (1) a test of how fast the canopy can step (each module every 1–2 s) and (2) three more options per scene whose
+ripples and breaths roll gradually at per-light resolution ("individual light level programming"), modules or lights
+switching off included. He asked where 07 §6's "never loop 3.4 KB writes" came from (Sep 26's contracts, written
+before any bench, as caution about unknowns: unpublished account limits, flash wear or reloads on repeated pattern
+writes) and chose both layers plus a bench test, built so it can go live easily:
+- **Per-light motion.** A stepped rung may carry a `lights` block (`schema.LightsMotion`): each step sends each module
+  ONE PUT with a whole frame (each light's colour and its own colorBrightness, 0 = off), the slot select, the mode and
+  the power (04's proven T1 write) into `motion.lights.slot` (custom-3). Effects over an envelope field (radial, fins,
+  linear, sweep): ripple (rings rolling out or in), glow (a front growing from the field's start and back, lights past
+  it at `floor`, 0 = dark), breathe (a breath rolling outward by `lag`), twinkle (each light's own seeded rhythm), and
+  `colour_travel`. The runner, governor, account cap, rehearsal and panel are the stepped ones; per-light steps go no
+  faster than `motion.lights.min_step_s` (1 s). It runs in the simulator always; on live hardware only with
+  `motion.lights.live_enabled` (off) or during an operator's rehearsal of that look, and per kit only with Gate C and a
+  proven map — otherwise the same rung's module-level steps run, and the copy says which (07 §6 amended for exactly
+  this). A canvas whose slot a run overwrote is written back into its slot with its next select.
+- **The rate test.** The rehearsal's `ladder` mode: steps of 4, 3, 2, 1.5, 1 s, 60 s each, our account cap not
+  applied, the per-device 1 s gap and the governor kept, stopped at the first 429/403; the report gives each rung's
+  attempts, throttling, verification and `fastest_clean_step_s`. In the simulator (no account limit) a nine-module
+  run is clean to 1 s; below ~2 s most writes are superseded before their readback verifies them.
+- **18 options** `<scene>-4, -5, -6`, new on-theme colours (drafts, D59/colour study), each a per-light rung with a
+  module-level breathe fallback that passes every scene rule; on the iPad unless hidden from /ops (git's
+  `hidden_scenes` stays empty). Per-light is opt-in at the compile context (the show and the Lab pass it). Review page: the compiler's own frames animated on the 270-light layout.
+- **Not done / needs hardware:** no per-light frame has been streamed to a real kit; neither kit has Gate C + a map on
+  the show box; whether a strand reloads or flickers on each frame write, and whether the account takes the pace, is
+  the bench rehearsal's and the rate test's to answer. At nine kits our own 90-a-minute plan stretches per-light steps
+  to 7.5 s until the rate test justifies more.
+

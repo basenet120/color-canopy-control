@@ -97,10 +97,19 @@ from conductor.drivers.base import StateRow
 from conductor.engine_api import ModePlan, ModuleTarget, PlanError, Program, ProgramStep, Tier
 from conductor.geometry import load_canopy_config, panel_lattice
 from conductor.looks import field as F
-from conductor.looks.composer import compose_canvas, evaluate, head_positions, parse_position, placement_for
+from conductor.looks.composer import (
+    OFF,
+    _Evaluator,
+    compose_canvas,
+    evaluate,
+    head_positions,
+    parse_position,
+    placement_for,
+)
 from conductor.looks.schema import (
     FieldCanvas,
     GradientCanvas,
+    LightsMotion,
     LookSpec,
     Mode,
     ModesFile,
@@ -191,6 +200,12 @@ class CompileContext:
     canopy: dict | None = None
     config_dir: Path = CONFIG_DIR
     addresses: Mapping[str, str | None] | None = None
+    # D80: may a stepped rung's `lights` block stream per-light frames? Opt-in: False (the default) compiles the rung's
+    # module-level steps. The show passes True in the simulator, and live motion.lights.live_enabled or True while an
+    # operator rehearses that look; the Lab's design context passes True. With `flags` each module still needs Gate C
+    # (`t1_frames`) and a usable map.
+    lights: bool = False
+    lights_slot: str = "custom-3"
 
     def __post_init__(self) -> None:
         key = str(self.config_dir)
@@ -348,7 +363,18 @@ def compile_mode(mode_id: str, tier: Tier | str, ctx: CompileContext) -> ModePla
         )
     if skipped:
         plan.skipped = skipped
-        if tier in (Tier.T3, Tier.STEPPED):
+        if plan.program is not None and plan.program.lights:  # D80: the hold is a per-light frame
+            n = len(ready)
+            strands = (
+                "its one Hubspace strand"
+                if n == 1
+                else f"{'both' if n == 2 else _count_words(n)} Hubspace strands"
+            )
+            plan.feature = (
+                f"Colour and dimming: each light on {strands} set individually, saved as a Hubspace custom pattern "
+                "and selected through the Hubspace cloud."
+            )
+        elif tier in (Tier.T3, Tier.STEPPED):
             # "the palette steps across the canopy column by column" isn't true of the modules that are left
             plan.feature = _partial_modules_feature(len(ready))
         else:
@@ -1053,9 +1079,259 @@ def step_looks(
     return out
 
 
+# ---- per-light steps (D80) -----------------------------------------------------------------------------------------
+LIGHTS_GAMMA = (
+    1.6  # a light's level follows v ** this (0 ≤ v ≤ 1): the dim side of a ring lasts long enough to read
+)
+
+
+def lights_problem(ctx: CompileContext, devices: Sequence[DeviceEntry]) -> str | None:
+    """Why these modules can't take per-light frames now (the rung then steps at module level), or None."""
+    if not ctx.lights:
+        return "per-light motion is off here (motion.lights.live_enabled)"
+    slot = ctx.lights_slot
+    for d in devices:
+        c = ctx.caps(d.id)
+        if not c.individual:
+            return f"{d.id} has no per-head (individual) mode"
+        if c.slots and slot not in c.slots:
+            return f"{d.id} has no slot {slot}"
+        if ctx.flags is not None and ctx.flags.get(d.id, DeviceFlags()).t1_frames is not True:
+            return f"frames written by the Conductor aren't proven on {d.id} yet (bench Gate C)"
+        if ctx.addresses is not None and ctx.canopy is not None:
+            check = framemap.head_check(d, ctx.addresses.get(d.id), c, len(panel_lattice(ctx.canopy)))
+            if check.problem:
+                return f"{d.id}: {check.problem}"
+    return None
+
+
+def _twinkle(seed: int, pos: str, i: int) -> tuple[int, float]:
+    """A light's own rhythm (D80 twinkle): (cycles per program cycle, 1 or 2; its start, 0…1), the same every run."""
+    h = int(hashlib.sha256(f"{seed}:{pos}:{i}".encode()).hexdigest(), 16)
+    return 1 + h % 2, (h >> 8) % 10_000 / 10_000
+
+
+def light_level(lights: LightsMotion, t: float, p: float, twinkle: tuple[int, float] | None = None) -> int:
+    """A light's level (its colorBrightness, 0–100) at field value `t` and cycle phase `p` (see `LightsMotion`)."""
+    out = lights.direction == "outward"
+    if lights.effect == "ripple":
+        u = lights.rings * t - p if out else lights.rings * t + p
+        v = 0.5 + 0.5 * math.cos(2 * math.pi * u)
+    elif lights.effect == "glow":
+        reach = 0.5 - 0.5 * math.cos(2 * math.pi * (p + 0.5))  # step 0 is the whole field lit (the hold)
+        d = t if out else 1.0 - t
+        x = (reach * (1.0 + lights.softness) - d) / lights.softness
+        x = min(1.0, max(0.0, x))
+        v = x * x * (3 - 2 * x)
+    elif lights.effect == "breathe":
+        d = t if out else 1.0 - t
+        v = 0.5 + 0.5 * math.cos(2 * math.pi * (p - lights.lag * d))
+    else:
+        assert twinkle is not None
+        k, start = twinkle
+        v = 0.5 + 0.5 * math.cos(2 * math.pi * (k * p + start))
+    return _half_up(lights.floor + (lights.peak - lights.floor) * v**LIGHTS_GAMMA)
+
+
+def _encode_head(entry: R.FrameEntry) -> str:
+    """One head for the panel and the Lab (`ProgramStep.heads`): RGB in 4 bits each at full strength, then its level."""
+    return (
+        "".join(f"{round(c / 17):X}" for c in (entry.r, entry.g, entry.b))
+        + f"{round(entry.colorBrightness * 15 / 100):X}"
+    )
+
+
+def _lattice_heads(canopy: Mapping[str, Any], entry: DeviceEntry, entries: Sequence[R.FrameEntry]) -> str:
+    """A module's heads for the panel and the Lab (`ProgramStep.heads`): wire order → the position's lattice order,
+    as the guest panel draws a still look's colours (`canopy_view.module_colours`); wire order when the wiring isn't
+    one to one."""
+    from conductor.canopy_view import (
+        lattice_slots,  # the panel's own mapping (it imports the composer, not this)
+    )
+
+    coded = [_encode_head(e) for e in entries]
+    slots = lattice_slots(canopy, entry)
+    if slots is None or len(slots) != len(coded):
+        return "".join(coded)
+    out = [""] * len(slots)
+    for i, j in enumerate(slots):
+        out[j] = coded[i]
+    return "".join(out)
+
+
+_LIGHTS_CACHE: dict[tuple, tuple[Any, ModePlan]] = {}
+_LIGHTS_CACHE_MAX = 64
+
+
+def _lights_stepped(
+    mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEntry], lights: LightsMotion
+) -> ModePlan:
+    """`_lights_plan`, memoized on everything it reads (the look, the modules' placement, map and capabilities, the
+    slot and its readback header): the guest panel's cards and the Lab compile the same looks again and again. Each
+    call gets its own plan, targets and program (the steps are shared, never changed)."""
+    tech = mode.techniques.stepped
+    caps = [ctx.caps(d.id) for d in devices]
+    key = (
+        mode_id,
+        id(tech),
+        ctx.lights_slot,
+        id(ctx.canopy),
+        id(ctx.recipes),
+        tuple(
+            (
+                d.id,
+                d.module,
+                d.orientation,
+                d.cable_path,
+                d.start_corner,
+                repr(d.wire_order),
+                d.expected_heads,
+                repr(ctx.frame_indices(d, c)),
+                repr(c),
+                repr(ctx.readback(d.id, ctx.lights_slot)),
+            )
+            for d, c in zip(devices, caps, strict=True)
+        ),
+    )
+    hit = _LIGHTS_CACHE.get(key)
+    if hit is None or hit[0] is not tech:  # an id reused by another object is a miss
+        if len(_LIGHTS_CACHE) >= _LIGHTS_CACHE_MAX:
+            _LIGHTS_CACHE.pop(next(iter(_LIGHTS_CACHE)))
+        hit = (tech, _lights_plan(mode_id, mode, ctx, devices, lights))
+        _LIGHTS_CACHE[key] = hit
+    plan = hit[1]
+    assert plan.program is not None
+    return replace(
+        plan,
+        modules={d: replace(t) for d, t in plan.modules.items()},
+        notes=list(plan.notes),
+        skipped=dict(plan.skipped),
+        program=replace(plan.program),
+    )
+
+
+def _lights_plan(
+    mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEntry], lights: LightsMotion
+) -> ModePlan:
+    """The rung as per-light frames (D80): step n sends each module ONE PUT — every light's colour (the canvas at the
+    light, moved `colour_travel` repeats a cycle) at its own level (`light_level` over the envelope field), the slot
+    select, the mode and the power — into `ctx.lights_slot`. Step 0 is the hold (the plan's `modules`)."""
+    tech = mode.techniques.stepped
+    assert tech is not None and ctx.canopy is not None and ctx.recipes is not None
+    canopy, slot = ctx.canopy, ctx.lights_slot
+    env = lights.field if lights.field is not None else tech.canvas.field
+    colour = _Evaluator(tech.canvas, canopy, ctx.recipes)
+    caps = {d.id: ctx.caps(d.id) for d in devices}
+    indices = {d.id: ctx.frame_indices(d, caps[d.id]) for d in devices}
+    placements = {
+        d.id: placement_for(canopy, d, frame_length=caps[d.id].framebuffer_length, indices=indices[d.id])
+        for d in devices
+    }
+    points = {d.id: head_positions(canopy, placements[d.id]) for d in devices}
+    ts = {d.id: [F.value(env, x, y, canopy) for x, y in points[d.id]] for d in devices}
+    still = {
+        d.id: [colour(x, y) for x, y in points[d.id]] for d in devices
+    }  # the colours when they don't travel
+    spc = lights.steps_per_cycle
+    notes = _Notes()
+    steps: list[ProgramStep] = []
+    holds: dict[str, ModuleTarget] = {}
+    for n in range(spc):
+        p = n / spc
+        rows: dict[str, list[StateRow]] = {}
+        colours: dict[str, str] = {}
+        levels: dict[str, int] = {}
+        heads: dict[str, str] = {}
+        for d in devices:
+            c, pos = caps[d.id], str(d.module)
+            phase = lights.colour_travel * p
+            entries = []
+            for i, ((x, y), t) in enumerate(zip(points[d.id], ts[d.id], strict=True)):
+                base = colour(x, y, phase) if phase else still[d.id][i]
+                tw = _twinkle(lights.seed or 0, pos, i) if lights.effect == "twinkle" else None
+                level = light_level(lights, t, p, tw)
+                entries.append(
+                    R.FrameEntry(
+                        base.r,
+                        base.g,
+                        base.b,
+                        base.cct,
+                        _half_up(base.colorBrightness * level / 100),
+                        _half_up(base.whiteBrightness * level / 100) if base.cct else 0,
+                    )
+                )
+            frame = entries
+            if indices[d.id] is not None:
+                frame = [OFF] * int(c.framebuffer_length or len(entries))
+                for j, e in zip(indices[d.id], entries, strict=True):
+                    frame[j] = e
+            frame = _clamp_frame(frame, c, notes, d.id)
+            try:
+                value = R.frame_value(
+                    ctx.readback(d.id, slot),
+                    frame,
+                    expected_length=c.framebuffer_length,
+                    effects=STATIC_EFFECTS,
+                    cct_range=c.cct_range,
+                )
+            except R.PayloadError as e:
+                raise PlanError(f"{d.id}: {e}") from None
+            lo, hi = c.brightness_range or (1, 100)
+            vector = _vector(R.Look("slot", brightness=max(lo, min(hi, lights.brightness)), slot=slot), c)
+            module_rows = R.dedupe([*vector, R.slot_write(slot, value)])
+            rows[d.id] = module_rows
+            full = [(e.r, e.g, e.b) for e in entries]
+            colours[pos] = _hex([_half_up(sum(ch) / len(full)) for ch in zip(*full, strict=True)])
+            levels[pos] = max(lo, min(hi, lights.brightness))
+            heads[pos] = _lattice_heads(canopy, d, entries)
+            if n == 0:
+                holds[d.id] = _target(
+                    d,
+                    c,
+                    module_rows,
+                    expect=module_rows,
+                    slot=slot,
+                    slot_value=value,
+                    slot_hash=R.slot_hash(value),
+                    preview_rows=module_rows,
+                    indices=indices[d.id],
+                )
+        steps.append(ProgramStep(index=n, rows=rows, colours=colours, levels=levels, heads=heads))
+    if ctx.readback(devices[0].id, slot) is None:
+        notes.add(f"No readback of {slot} yet: the default slot header is used")
+    feature = (
+        "Colour and dimming: each light on each Hubspace strand set individually, saved as a Hubspace custom "
+        "pattern and selected through the Hubspace cloud."
+    )
+    plan = ModePlan(mode_id, mode.label, Tier.STEPPED, feature, False, holds, notes.lines(len(devices)))
+    plan.program = Program(
+        kind="stepped",
+        field=env.model_dump(mode="json"),
+        direction=lights.direction,
+        step_s=lights.step_s,
+        run_s=lights.run_s,
+        steps=steps,
+        moving_feature=lights.moving_feature,
+        mode=f"lights-{lights.effect}",
+        lights=True,
+    )
+    plan.notes.append(
+        f"Per-light ({lights.effect}): {spc} steps of {lights.step_s:g} s, every light's colour and level in one "
+        f"PUT per module into {slot}, a run of {lights.run_s:g} s, then the first step holds"
+    )
+    return plan
+
+
 def _stepped(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEntry]) -> ModePlan:
     tech: SteppedTechnique | None = mode.techniques.stepped
     assert tech is not None and ctx.canopy is not None
+    if tech.lights is not None:
+        why = lights_problem(ctx, devices)
+        if why is None:
+            return _lights_stepped(mode_id, mode, ctx, devices, tech.lights)
+        lights_note = f"Per-light motion not used: {why}; the module-level steps run instead"
+    else:
+        lights_note = None
     # The hold: the static module-level look (its copy, notes, previews and checks — every module takes RGB).
     plan = _modules(mode_id, mode, ctx, devices)
     # An RGB look clamps nothing a note would report (its brightness is the hold's, checked below).
@@ -1091,6 +1367,8 @@ def _stepped(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
                     "holds its still look"
                 )
     plan.tier = Tier.STEPPED
+    if lights_note is not None:
+        plan.notes.append(lights_note)
     plan.program = Program(
         kind="stepped",
         field=tech.canvas.field.model_dump(mode="json"),
@@ -1121,6 +1399,17 @@ def _moving_feature(mode: Mode, plan: ModePlan, *, partial: bool) -> str:
     what each strand is sent is what the plan's own steps change (its colour, its level, or both)."""
     assert plan.program is not None and mode.techniques.stepped is not None
     steps = plan.program.steps
+    if plan.program.lights:  # D80: every light set on its own, a frame a step
+        n = len(plan.modules)
+        if not partial:
+            return plan.program.moving_feature
+        strands = (
+            "one Hubspace strand" if n == 1 else f"{'both' if n == 2 else _count_words(n)} Hubspace strands"
+        )
+        return (
+            f"Colour and dimming through the Hubspace cloud: each light on {strands} set individually, its colour "
+            "and level sent every few seconds."
+        )
     if all(s.rows == steps[0].rows for s in steps[1:]):
         plan.notes.append(STEPPED_STILL)
         return plan.feature

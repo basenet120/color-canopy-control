@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,36 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR `claude/per-light-motion` — per-light motion, the rate test, 18 per-light options (D80) → `main` (Oct 19 night)
+Alon's overnight ask: a test of how fast the canopy can step (each module every 1–2 s), and three more options per
+scene that roll ripples and breaths **light by light**. 07 §6 amended (Alon chose it after asking where the rule came
+from). **Sim only: nothing new reached a light; the show box still runs `4ae479c`.**
+- **Per-light motion** (`schema.LightsMotion`, `compile._lights_stepped`): a stepped rung's `lights` block sends each
+  module one PUT per step with a whole frame — each light's colour and level (0 = off), select, mode, power — into
+  `motion.lights.slot` (custom-3). Effects: ripple, glow, breathe, twinkle over any field (+ colour travel). Live only
+  with `motion.lights.live_enabled` (off) or in an operator's rehearsal of that look, and per kit only with Gate C + a
+  proven map; otherwise the rung's module-level breath runs and the copy says so. ≥ 1 s a step per module.
+- **The rate test**: `/ops` → Stepped rehearsal → tick **Rate test (4 → 1 s steps)**. 4, 3, 2, 1.5, 1 s, 60 s each,
+  our 90/min plan not applied, stops at the first 429/403; report `ratetest-*.json` with per-rung counts and
+  `fastest_clean_step_s`. Sim (nine modules, no account limit): clean to 1 s; under ~2 s most writes are superseded
+  before their readback verifies (they still go out).
+- **18 options** `<scene>-4/-5/-6`, new on-theme colours (drafts), all pass the scene rules. **They show on the iPad
+  after the deploy (36 cards)** unless hidden from /ops "On the iPad" (git's `hidden_scenes` stays `[]`: the menu's
+  tests and overlay fold assume it). Review: Design Lab on :8200 (Play the steps, Ceiling plan), and the
+  private review page https://claude.ai/artifact/TFPHZPvN3zMixAVFexE8v7 (the compiler's own frames animated).
+- **iPad and Lab draw per-light runs** (each light's colour and level; kiosk tag bumped to `lights-1`). While a
+  per-light run moves, `/api/kiosk/panel` is ~115 KB on nine modules (one cycle of each light's frames), polled
+  every 2 s. Per-light compiles are memoized (18 options ≈ 0.36 s cold).
+- **Verified (sim, macOS):** per-light compile (0.03 s, ~3.4 KB a PUT for 30 lights); a virtual-clock rate test on
+  nine modules; scene rules 0 problems on 36 scenes; scene pins regenerated (the 18 existing unchanged); targeted
+  pytest (see the PR); ruff clean. **Not run:** the full suite locally (CI runs it), `make soak`, `make lab-roundtrip`.
+- **Needs hardware, in order (Alon + someone at the kit):** (1) Gate C + address probes + Apply map on String light 1
+  (`/ops/bench`); (2) rehearse a per-light option 2 min (Coastal Tides #5 or Lowcountry Calm #5) — watch for a
+  flicker or reload per frame; (3) the rate test with it; (4) if clean, Alon sets `motion.lights.live_enabled: true`.
+  At nine kits our own 90/min plan stretches per-light steps to 7.5 s until a nine-kit rate test justifies more.
+- **Deploy:** merge, then the usual paste block (no data migration); reload the iPad on its own address with `?r=1`
+  (the kiosk page changed: tag `lights-1`). Hard-reload `/ops` (the Rate test box) and the Lab.
 
 ## PR `claude/gate-r-one-kit` — Gate R passed on one kit; stepped looks on live hardware (D79) → `main` (Oct 19)
 **Deployed first (Alon, Oct 19 20:48): `14c2932`** (main after #42: the preset-options stack D74–D78) on the Mac show
@@ -1784,6 +1814,9 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+00000000. **Alon (D80):** review `claude/per-light-motion` (Lab :8200 + the review page), merge, deploy; then at
+    the kit: Gate C + map on String light 1, a per-light rehearsal, the rate test; flip `motion.lights.live_enabled`
+    if clean. Decide which of the 18 options show on the iPad.
 0000000. **Alon (D79):** review and merge `claude/gate-r-one-kit`, deploy it on its own, tap a scene: Module 2 steps,
     then holds. At install, before tours: the nine-kit Gate R (Rainbow Row Sunset #2, 10 min); a fail turns
     `live_enabled` off. Decide whether the moving copy may say "fade", and whether the breaths (Goodnight's swing 4)

@@ -65,6 +65,7 @@ Rules (binding text: `config/conductor.yaml` → motion.stepped, 07 §6):
 from __future__ import annotations
 
 import asyncio
+import bisect
 import contextlib
 import logging
 import math
@@ -99,12 +100,31 @@ def planned_writes_per_min(settings: Any) -> float:
 class ProgramRunner:
     """Steps one installed stepped plan (see the module docstring). Built and cancelled by the CanopyEngine."""
 
-    def __init__(self, engine: CanopyEngine, plan: ModePlan, *, t0: float, over: bool = False) -> None:
+    def __init__(
+        self,
+        engine: CanopyEngine,
+        plan: ModePlan,
+        *,
+        t0: float,
+        over: bool = False,
+        schedule: list[float] | None = None,
+    ) -> None:
         assert plan.program is not None
         self.engine = engine
         self.plan = plan
         self.program: Program = plan.program
         self.settings = engine.deps.settings.motion.stepped
+        # D80: a per-light program steps no faster than motion.lights.min_step_s (≤ 1 write a second per module)
+        self.lights = bool(getattr(self.program, "lights", False))
+        self.min_step_s = (
+            float(engine.deps.settings.motion.lights.min_step_s)
+            if self.lights
+            else float(self.settings.min_step_s)
+        )
+        # The rate test (D80, an operator's rehearsal ladder): each step's own length, the account cap not applied
+        # (it is what the test measures; the per-device 1 s gap and the governor still hold). None = the even pace.
+        self.schedule = list(schedule) if schedule else None
+        self._times: list[float] | None = None
         self.clock = engine.clock
         self.t0 = t0  # monotonic: when step 0 (the hold) was sent
         self.t0_wall = self.clock.now() - (self.clock.monotonic() - t0)
@@ -130,7 +150,13 @@ class ProgramRunner:
         self._unsubscribe: Any = None
         self._sleep = self.clock.sleep  # tests make a step late by wrapping it
         self.step_s, why = self._effective_step()
-        self.count = self.count_for(self.step_s)  # the step number the hold goes out at
+        if self.schedule is not None:
+            self._times = [0.0]
+            for length in self.schedule:
+                self._times.append(self._times[-1] + length)
+            self.count = len(self.schedule)
+        else:
+            self.count = self.count_for(self.step_s)  # the step number the hold goes out at
         if over:  # this choice already ran (D75): a re-pick only holds, whatever its run_s; no alert
             self.state, self.shown, self.ended = DONE, None, "this choice already ran (a re-pick only holds)"
             return
@@ -157,12 +183,17 @@ class ProgramRunner:
         """The runner's step and, when the look can't step, why (it then holds still)."""
         s = self.settings
         accounts = self._accounts()
+        if self.schedule is not None:  # the rate test: its own lengths; only a cool-off stops it
+            until = max((u for a, u in self.engine.stepped_cooloff.items() if a in accounts), default=None)
+            if until is not None and until > self.clock.monotonic():
+                return self.schedule[0], "Hubspace throttled this account recently (the governor's cool-off)"
+            return self.schedule[0], None
         busiest = max(accounts.values(), default=len(self.plan.modules))
         rings = self.engine._rings(self.plan)  # the ripple a mood choice would land with (D64)
         span = (len(rings) - 1) * self.engine.deps.settings.kiosk.ripple_stagger_s if rings else 0.0
         # the ripple's span is 0 without a ripple, so the last term is also the min_step_s floor
         planned = planned_writes_per_min(s)
-        step = max(self.program.step_s, busiest * 60.0 / planned, span + s.min_step_s)
+        step = max(self.program.step_s, busiest * 60.0 / planned, span + self.min_step_s)
         step = math.ceil(step * 1000 - _EPS) / 1000  # whole milliseconds: 6.0, not 6.000000000001
         if step > s.max_step_s + _EPS:
             return step, (
@@ -185,6 +216,23 @@ class ProgramRunner:
     def count_for(self, step: float) -> int:
         return int(self.program.run_s / step + _EPS)
 
+    def _at(self, n: int) -> float:
+        """Seconds after t0 that step n is due (n = count: the hold at the end)."""
+        if self._times is not None:
+            return self._times[min(n, len(self._times) - 1)]
+        return n * self.step_s
+
+    def step_length(self, n: int) -> float:
+        """How long step n lasts (the rate test's rung, else the even step)."""
+        if self.schedule is not None:
+            return self.schedule[min(max(n, 0), len(self.schedule) - 1)]
+        return self.step_s
+
+    @property
+    def run_len_s(self) -> float:
+        """Seconds from t0 to the hold at the run's end."""
+        return self._at(self.count)
+
     def _never(self, why: str) -> None:
         self.state, self.shown, self.ended = DONE, None, why
         self.engine.telemetry.record(
@@ -195,7 +243,10 @@ class ProgramRunner:
         )
 
     def _schedule_index(self) -> int:
-        return max(0, math.floor((self.clock.monotonic() - self.t0) / self.step_s + _EPS))
+        elapsed = self.clock.monotonic() - self.t0
+        if self._times is not None:
+            return max(0, bisect.bisect_right(self._times, elapsed + _EPS) - 1)
+        return max(0, math.floor(elapsed / self.step_s + _EPS))
 
     def start(self) -> None:
         """Start the step task (a running look only; one that never ran or is over just holds)."""
@@ -209,7 +260,7 @@ class ProgramRunner:
             step_s=self.step_s,
             design_step_s=self.program.step_s,
             steps=self.count,
-            run_s=round(self.count * self.step_s, 3),
+            run_s=round(self.run_len_s, 3),
             at_step=self.index,
         )
         self._task = asyncio.get_running_loop().create_task(
@@ -239,7 +290,7 @@ class ProgramRunner:
                 n += 1
                 if n >= self.count:
                     break
-                await self._sleep_until(self.t0 + n * self.step_s)
+                await self._sleep_until(self.t0 + self._at(n))
                 due = self._schedule_index()
                 if due > n:  # late: the steps that fell due meanwhile are skipped, never queued
                     self.skipped += due - n
@@ -250,7 +301,7 @@ class ProgramRunner:
                 self._step(n)
                 if self.state is not RUNNING:  # the step ended the run (held steps) or something else did
                     return
-            await self._sleep_until(self.t0 + self.count * self.step_s)
+            await self._sleep_until(self.t0 + self._at(self.count))
             self.index = self.count
             self.finish("the run is over")
         except asyncio.CancelledError:
@@ -321,6 +372,8 @@ class ProgramRunner:
           share of `budget_reserve` a mood chosen mid-run needs. The runner never spends it: a run that starts while
           another run's steps are still in the window holds its first steps until that room is back.
         - `writes_60s`: the account's whole 60 s count, as /ops shows it."""
+        if self.schedule is not None:  # the rate test measures the account: no cap of ours in its way
+            return None
         engine = self.engine
         per_account: dict[str, list[Any]] = {}
         for device_id in wanted:
@@ -507,7 +560,7 @@ class ProgramRunner:
         if not self.running:
             return None
         n = min(self.index + 1, self.count)
-        return max(0.0, self.t0 + n * self.step_s - self.clock.monotonic())
+        return max(0.0, self.t0 + self._at(n) - self.clock.monotonic())
 
     def fold_guest(self, source: str) -> bool:
         """A guest brightness change (from `source`): True when the next step is close enough to carry it (sent with
@@ -519,7 +572,10 @@ class ProgramRunner:
         keeps is for it. (The hold at the run's end is never held back, so it can always carry a change.) Should the
         step be held after all (the window filled in the moments between), the change goes out then (`_send_folded`)."""
         wait = self.next_step_in()
-        if wait is None or not self.moving or wait > self.settings.fold_guest_within_s:
+        within = min(
+            self.settings.fold_guest_within_s, self.step_s / 2
+        )  # a 1 s per-light step folds within 0.5 s
+        if wait is None or not self.moving or wait > within:
             return False
         if self.index + 1 < self.count and self._over_cap(list(self.plan.modules)) is not None:
             return False
@@ -556,7 +612,9 @@ class ProgramRunner:
     def status(self, device_id: str) -> DeviceStatus:
         """The module's status while the run moves (see Phase in the module docstring)."""
         since = self._pending.get(device_id)
-        if since is not None and self.clock.monotonic() - since > max(2 * self.step_s, NEEDS_ATTENTION_MIN_S):
+        if since is not None and self.clock.monotonic() - since > max(
+            2 * self.step_length(self.index), NEEDS_ATTENTION_MIN_S
+        ):
             return DeviceStatus.NEEDS_ATTENTION
         if device_id not in self._verified:
             return DeviceStatus.UPDATING
@@ -575,11 +633,13 @@ class ProgramRunner:
         """CanopyState.program: {t0, step_s, step, ends_at, frames, levels} (see engine_api.CanopyState). Frames
         after the step last sent, up to the schedule's step, repeat the step last sent: a held step is never drawn."""
         positions = self._positions()
-        frames, levels = [], []
+        frames, levels, heads = [], [], []
         for n in range(self.count + 1):
             k = self.shown if self.shown is not None and self.shown < n <= self.index else n
             step = self.program.steps[0 if k == self.count else k % self.cycle]
             frames.append([step.colours.get(pos) if pos in positions else None for pos in GRID])
+            # D80: a per-light step's heads, as the step index into one cycle (the panel looks them up once)
+            heads.append(0 if k == self.count else k % self.cycle)
             row: list[int | None] = []
             for pos in GRID:
                 device_id = positions.get(pos)
@@ -591,14 +651,23 @@ class ProgramRunner:
                 swing = self.swing(device_id) if k != self.count else None
                 row.append(self.engine.level_sent(device_id, rows, swing=swing))
             levels.append(row)
-        return {
+        out = {
             "t0": self.t0_wall,
             "step_s": self.step_s,
             "step": self.index,
-            "ends_at": self.t0_wall + self.count * self.step_s,
+            "ends_at": self.t0_wall + self.run_len_s,
             "frames": frames,
             "levels": levels,
         }
+        if self._times is not None:  # the rate test's uneven steps: when each frame starts (wall seconds)
+            out["times"] = [self.t0_wall + t for t in self._times]
+        if self.lights:
+            out["head_steps"] = heads
+            out["heads"] = [
+                [step.heads.get(pos) if pos in positions else None for pos in GRID]
+                for step in self.program.steps
+            ]
+        return out
 
     def _positions(self) -> dict[str, str]:
         """The canopy positions this plan drives → their device ids."""

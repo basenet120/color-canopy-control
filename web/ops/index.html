@@ -64,11 +64,15 @@
             <select id="rehearsal-mode"></select>
             <input id="rehearsal-minutes" type="number" min="1" max="10" step="1" value="10"
               aria-label="Minutes (1 to 10)" title="Minutes (1 to 10)">
+            <label class="small" title="Steps of 4, 3, 2, 1.5 then 1 s, 60 s each; stops at the first 429 or 403">
+              <input type="checkbox" id="rehearsal-ladder"> Rate test (4 → 1 s steps)</label>
             <button type="button" class="secondary" id="rehearsal-btn">Rehearse…</button>
             <button type="button" class="danger" id="rehearsal-stop" hidden>Stop rehearsal</button>
           </div>
           <p class="muted small" id="rehearsal-note">Only someone at this page starts it, after confirming the
-            modules and minutes. Who runs it and how it passes: docs/runbooks/stepped-rehearsal.md.</p>
+            modules and minutes. The rate test steps faster and faster to find the account's limit; a per-light look
+            rehearses per-light where a kit has Gate C and a map. Who runs it and how it passes:
+            docs/runbooks/stepped-rehearsal.md.</p>
           <p class="notice" id="rehearsal-status" role="status" hidden></p>
         </div>
         <p class="notice" id="control-result" role="status" hidden></p>

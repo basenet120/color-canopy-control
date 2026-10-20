@@ -279,6 +279,77 @@ class ModulesTechnique(_Strict):
         return self
 
 
+# Per-light moving copy (D80): it says the lights are set one by one, and the pace; never an on-device effect, a
+# controller animation or continuous motion (each step is a frame sent through the cloud).
+LIGHTS_FALSE_CLAIMS = re.compile(
+    r"\b(effects?|animat\w*|controllers?|continuous\w*|seamless\w*|fluid\w*|fad(?:e|es|ed|ing))\b",
+    re.IGNORECASE,
+)
+LIGHTS_PHRASES = ("each light", "every light", "light by light")
+LightsEffect = Literal["ripple", "glow", "breathe", "twinkle"]
+
+
+class LightsMotion(_Strict):
+    """Per-light motion (D80): each step sends every driven module a whole frame — each light's colour (the rung's
+    canvas at that light, moved `colour_travel` repeats a cycle) and its own level — through the Hubspace cloud. The
+    level follows `effect` over `field` (the envelope's geometry; default the canvas's own field), t = the field at
+    the light, p = n / steps_per_cycle:
+
+    - `ripple`: rings of brightness rolling `direction` across the field, `rings` of them at once;
+    - `glow`: a front that grows from t = 0 out to the far edge and back, lights past it at `floor` (0 = off), its
+      edge `softness` wide;
+    - `breathe`: every light swells and softens, the far edge `lag` cycles behind the near one (a rolling breath);
+    - `twinkle`: each light on its own seeded rhythm (`seed`).
+
+    A light's level runs `floor`…`peak` (its colorBrightness; 0 = off), the module's brightness row is `brightness`.
+    It runs only where every driven module can take per-light frames (sim; live: `motion.lights`, Gate C and a map),
+    else the rung's module-level steps run. `moving_feature` is shown while it runs."""
+
+    effect: LightsEffect
+    field: F.FieldSpec | None = None
+    direction: Literal["outward", "inward"] = "outward"
+    rings: float = Field(1.0, ge=0.25, le=6.0)
+    steps_per_cycle: int = Field(16, ge=4, le=64)
+    step_s: float = Field(2.0, ge=1.0, le=12.0)
+    run_s: float = Field(90.0, gt=0, le=180.0)
+    brightness: int = Field(100, ge=1, le=100)
+    peak: int = Field(100, ge=1, le=100)
+    floor: int = Field(10, ge=0, le=100)
+    softness: float = Field(0.25, ge=0.02, le=1.0)
+    lag: float = Field(0.5, ge=0.0, le=2.0)
+    colour_travel: float = Field(0.0, ge=-2.0, le=2.0)
+    seed: int | None = Field(None, ge=0, le=2_147_483_647)
+    moving_feature: str = Field(min_length=10)
+
+    @model_validator(mode="after")
+    def _honest(self) -> LightsMotion:
+        if self.run_s < self.step_s:
+            raise ValueError(f"run_s ({self.run_s:g} s) is shorter than one step ({self.step_s:g} s)")
+        if self.floor >= self.peak:
+            raise ValueError(
+                f"floor ({self.floor}) must be below peak ({self.peak}), or no light would change"
+            )
+        if (self.effect == "twinkle") != (self.seed is not None):
+            raise ValueError(
+                "seed is for effect: twinkle only, and twinkle needs one (each light's own rhythm)"
+            )
+        copy = self.moving_feature.lower()
+        if m := LIGHTS_FALSE_CLAIMS.search(self.moving_feature):
+            raise ValueError(
+                f"moving_feature says {m.group(0)!r}: per-light motion is a frame of each light's colour and level "
+                "sent through the Hubspace cloud a step at a time, not an on-device effect or continuous motion"
+            )
+        if not any(p in copy for p in LIGHTS_PHRASES):
+            raise ValueError(
+                f"moving_feature must say the lights are set one by one ({' or '.join(map(repr, LIGHTS_PHRASES))})"
+            )
+        if "through the hubspace cloud" not in copy or STEPPED_PACE not in copy:
+            raise ValueError(
+                f"moving_feature must say it is sent 'through the Hubspace cloud' and {STEPPED_PACE!r}"
+            )
+        return self
+
+
 class SteppedTechnique(_Strict):
     """Module level, stepped: the mode's sampled design (`canvas`, the same canvas as its `modules` sample) re-sent
     a step at a time, each step one colour (and one brightness) per module sent through the cloud, `step_s` apart,
@@ -313,6 +384,8 @@ class SteppedTechnique(_Strict):
     lag_steps: int = Field(0, ge=0, le=6)
     seed: int | None = Field(None, ge=0, le=2_147_483_647)
     moving_feature: str = Field(min_length=10)
+    # D80: per-light motion where every driven module can take frames; the fields above are its module-level steps
+    lights: LightsMotion | None = None
 
     @model_validator(mode="after")
     def _honest(self) -> SteppedTechnique:

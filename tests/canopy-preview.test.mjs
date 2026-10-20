@@ -208,7 +208,7 @@ test("a breathing run gives each lit panel its frame's level, drawn as opacity",
   // the page paints each dot with its own panel's opacity, and hands it to the fins those dots light (D74 × D75):
   // the canopy's level is only a fin's fallback for a head with none, never the dots' own opacity
   const kiosk = readFileSync(new URL("../web/kiosk/kiosk.js", import.meta.url), "utf8");
-  assert.match(kiosk, /const dotOpacity = moduleOpacity\(byPos\.get\(dot\.pos\)/);
+  assert.match(kiosk, /const dotOpacity = headOpacity\(byPos\.get\(dot\.pos\), dot\.k, lit, floor\)/);
   assert.match(kiosk, /setAttribute\("fill-opacity", String\(lightOn \? dotOpacity : 1\)\)/);
   assert.match(kiosk, /paints\[i\] = \{ \.\.\.p, opacity: lightOn \? dotOpacity : 1 \}/);
   assert.doesNotMatch(kiosk, /fill-opacity", String\(lightOn \? opacity/);

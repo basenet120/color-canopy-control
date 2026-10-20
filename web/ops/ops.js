@@ -158,12 +158,14 @@ async function loadRehearsalModes() {
 
 async function previewRehearsal(button) {
   const mode = $("rehearsal-mode").value;
-  const minutes = Number($("rehearsal-minutes").value);
+  const ladder = $("rehearsal-ladder").checked; // D80: the rate test (its own minutes)
+  const minutes = ladder ? 1 : Number($("rehearsal-minutes").value);
   button.disabled = true;
   try {
     const q = new URLSearchParams({ mode, minutes: String(minutes) });
+    if (ladder) q.set("ladder", "true");
     const body = await api(`/api/canopy/stepped-rehearsal?${q}`);
-    rehearsalPending = { mode, minutes, confirm: body.preview.confirm };
+    rehearsalPending = { mode, minutes, confirm: body.preview.confirm, ladder };
     $("rehearsal-confirm").textContent = body.preview.confirm;
     const dialog = $("rehearsal-dialog");
     if (typeof dialog.showModal === "function") dialog.showModal();
@@ -185,6 +187,9 @@ async function startRehearsal() {
 
 function setupRehearsal() {
   $("rehearsal-btn").addEventListener("click", (e) => previewRehearsal(e.currentTarget));
+  $("rehearsal-ladder").addEventListener("change", (e) => {
+    $("rehearsal-minutes").disabled = e.currentTarget.checked; // the rate test runs its own ladder
+  });
   $("rehearsal-stop").addEventListener("click", (e) =>
     control(e.currentTarget, "/api/canopy/stepped-rehearsal/stop", {}, "Stopping…").then(() => loadState()),
   );

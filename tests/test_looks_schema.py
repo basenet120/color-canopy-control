@@ -61,7 +61,7 @@ def test_the_real_modes_file_loads_the_catalogs_eighteen_modes_and_unique_slots(
     modes = load_modes()
     bases = ["lowcountry-calm", "rainbow-row-sunset", "garden-gathering", "coastal-tides", "golden-hour"]
     bases.append("goodnight-glow")
-    catalog = [x for base in bases for x in (base, f"{base}-2", f"{base}-3")]  # D77: three options per scene
+    catalog = [x for base in bases for x in (base, *(f"{base}-{n}" for n in (2, 3, 4, 5, 6)))]  # D77, D80
     assert list(modes.modes) == catalog
     slots = [m.slot for m in modes.modes.values() if m.slot]
     assert sorted(slots) == ["custom-1", "custom-2", "custom-3"]
@@ -97,7 +97,7 @@ def test_load_modes_reads_a_config_dir(tmp_path):
         "fins.json",
     ):  # fins.json sits next to canopy.yaml
         shutil.copy(CONFIG_DIR / name, tmp_path / name)
-    assert len(load_modes(tmp_path).modes) == 18
+    assert len(load_modes(tmp_path).modes) == 36
     (tmp_path / "modes.yaml").unlink()
     with pytest.raises(ConfigError, match="modes.yaml is missing"):
         load_modes(tmp_path)
