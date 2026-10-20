@@ -64,7 +64,7 @@ motion:
   # Stepped looks (D65, conductor/sequence.py): the Conductor sends a module-level design a step at a time, one
   # full-state PUT per module whose colour changes, for a bounded run, then holds the still design. Sim-first.
   stepped:
-    live_enabled: false          # off on live hardware until the stepped rehearsal (Gate R) passes; Alon flips it
+    live_enabled: true           # on since Gate R passed on one kit (String light 1, Oct 19); nine-kit Gate R at install
     min_step_s: 4.0              # never step faster than this
     max_step_s: 12.0             # a step the budget would stretch past this holds the still look instead
     account_writes_per_min: 90   # the account's cap: writes of any kind in any 60 s (Gate R fails above it)

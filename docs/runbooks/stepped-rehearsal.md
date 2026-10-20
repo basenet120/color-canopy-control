@@ -6,6 +6,10 @@ IP, that Hubspace takes that write rate without throttling us. The rehearsal is 
 run that only someone at `/ops` can start. The code is `conductor/rehearsal.py`, `CanopyEngine.rehearse`, and
 `POST /api/canopy/stepped-rehearsal`.
 
+**Since D79 (Oct 19) `live_enabled` is on:** Gate R passed on one kit (String light 1, Module 2, 10 min of Rainbow
+Row Sunset #2 at 13 writes a minute). That doesn't measure the nine-kit rate: run step 2 below (nine kits, Rainbow Row
+Sunset #2, 10 minutes) during install before tours, and if it fails, Alon turns `live_enabled` back off.
+
 **Who:** Alon, or the on-duty tech with Alon on the phone, plus one observer standing under the lights.
 **When:** never during tours or the event, and never with guests at the kiosk.
 1. On the two VWBD test kits (Modules 1–2), from the Mac show box, on the bench account, as soon as convenient.

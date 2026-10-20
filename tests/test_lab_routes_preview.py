@@ -52,7 +52,7 @@ def test_every_approved_scene_previews_as_approved(app_client, scene_id):
     assert body["copy"]["modules"]["chosen"] == "approved"
     assert body["changes"]["copy"] == [] and not body["changes"]["needs_d59"]
     assert body["today"]["note"] == P.NO_ENGINE  # app_client runs without the canopy engine
-    assert body["show_box_today"]["tier"] == "modules"
+    assert body["show_box_today"]["tier"] == "stepped"  # every scene has a rung (D77), live since D79
 
 
 def test_the_done_means_edit_previews_with_its_changes_and_its_time(app_client):

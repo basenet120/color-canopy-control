@@ -149,6 +149,7 @@ leaves the other seven out. What each upper rung needs before a real runtime use
 - **slot (T2):** Gate B (`t2_select`) on every module and a hash recorded as hand-painted in the Hubspace app on
   every module. Formal Gate B has not been run on any kit.
 - **stepped:** `motion.stepped.live_enabled: true`, which only Alon sets, after a Gate R pass on the show kits.
+  **On since D79 (Oct 19)** after a one-kit pass; the nine-kit Gate R still runs at install.
   Until then the show's `tier_allowed` refuses the stepped rung on any non-simulated driver and the ladder lands on
   the next rung (`tests/test_d65_modes.py` proves it through the show's own wiring on a live-named driver). The one
   exception is the operator-started stepped rehearsal, which opens the rung for its one mode while it runs.

@@ -1409,3 +1409,15 @@ guest's power-off reads back off. A module stuck for any other reason (a readbac
 an offline controller), a locked one and a resting canopy still make no colour claim; /ops is unchanged (the note
 shows, the phase needs attention). The server payload changes, not the kiosk JS: no kiosk or Lab tag bump. Reproduced
 first (`tests/test_flagged_reads_lit.py`).
+
+**D79 — Stepped looks on live hardware after Gate R passed on one kit (Oct 19; follows D65, D75, D77).** Alon ran
+the stepped rehearsal from `/ops` on the show box (`14c2932`) on the one kit online, String light 1 (Module 2,
+`canopy-r0c1`; Module 1 offline in transit and held on `/ops/module`; Modules 3–9 not yet registered): Rainbow Row
+Sunset #2 for 10 minutes passed every criterion (100 of 100 steps at 6 s, 104 attempts, 0 throttled, 0 403s, at most
+13 writes on `bench` in any 60 s, verified p50 1.46 s and p95 2.68 s, 3 superseded, 0 skipped, no governor trips),
+report `rehearsal-20261020T011258Z-rainbow-row-sunset-2.json`. The observer saw each colour change **fade** ("a nice
+fade"), bench item 6's answer on this kit. Alon set `motion.stepped.live_enabled: true` knowing it measures one kit
+at 13 writes a minute, not nine at 72–90: the nine-kit Gate R (Rainbow Row Sunset #2, 10 min) still runs during
+install before tours, and a fail there turns it back off. The rate probe (`account-rate-probe.md`) was not run first
+(on one kit it reaches ~60 writes a minute); with `live_enabled` on, its look flips may start stepped runs, so set it
+back off for the probe. Also seen: The Goodnight Glow #1's breath (swing 4 around 28%) was not visible on the strand.

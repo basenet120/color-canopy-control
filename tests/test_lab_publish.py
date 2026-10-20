@@ -655,7 +655,8 @@ def test_kits_without_gate_c_publish_a_design_with_zero_slot_writes(no_threads, 
         return out
 
     status, info, slots, golden, _expected, tier = run_virtual(main)
-    assert status == 200 and slots == [] and tier is Tier.T3
+    # no Gate C: no slot write; ops keeps the ladder, so with live_enabled on (D79) Golden Hour steps at module level
+    assert status == 200 and slots == [] and tier is Tier.STEPPED
     assert info["sentence"] == "No slot repaint: no module has custom-3 commissioned on this show box."
     assert info["available"] is True and info["commissioned"] == []
     assert golden["label"] == PINKER and golden["module_colours"] is not None
