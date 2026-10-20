@@ -37,7 +37,7 @@ from conductor.design_lab.service import LabService
 from conductor.engine_api import Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, ladder, scene_rules
-from conductor.looks.compile import design_field
+from conductor.looks.compile import design_field, module_lags, program_cycle
 from conductor.looks.schema import STEPPED_PACE, SteppedTechnique, _stepped_problems
 from conductor.show import STEPPED_LIVE_OFF
 
@@ -258,9 +258,15 @@ def test_the_preview_steps_are_compile_modes_steps(scene_id, name):
         canopy=CANOPY,
     )
     plan = compile_mode(scene_id, Tier.STEPPED, design)
-    assert shown["steps"] == [{"index": s.index, "colours": s.colours} for s in plan.program.steps]
+    assert shown["steps"] == [
+        {"index": s.index, "colours": s.colours, "levels": dict(s.levels)} for s in plan.program.steps
+    ]
     tech = patched.modes.mode(scene_id).techniques.stepped
-    assert len(shown["steps"]) == tech.steps_per_cycle == draft.stepped.steps_per_cycle
+    # a travel scene's program is one cycle of steps_per_cycle steps (a breath's adds its largest lag: PR D's)
+    assert len(shown["steps"]) == tech.steps_per_cycle == draft.stepped.steps_per_cycle == shown["cycle"]
+    assert shown["mode"] == "travel" and {v for s in shown["steps"] for v in s["levels"].values()} == {
+        tech.brightness
+    }
     assert (shown["direction"], shown["design_step_s"], shown["run_s"]) == (
         draft.stepped.direction,
         draft.stepped.step_s,
@@ -290,6 +296,119 @@ def test_an_edit_moves_the_steps():
     assert reverse[1] != approved[1] and reverse[1]["colours"] == approved[-1]["colours"]  # ... flowing back
 
 
+def test_a_breathe_preview_plays_the_compilers_steps_with_their_levels():
+    """D75: a breathe draft previews the compiled program's own steps, each with the level every module is sent; the
+    cycle is a breath plus its largest lag."""
+    draft = edit(
+        "coastal-tides", **{"stepped.mode": "breathe", "stepped.brightness_swing": 6, "stepped.lag_steps": 2}
+    )
+    shown = P.preview(make_lab(), draft)["stepped"]
+    patched = patched_of(draft)
+    design = CompileContext(
+        registry=P.design_registry(),
+        capabilities={d.id: CAPS for d in P.design_registry()},
+        modes=patched.modes,
+        recipes=patched.recipes,
+        canopy=CANOPY,
+    )
+    plan = compile_mode("coastal-tides", Tier.STEPPED, design)
+    assert shown["steps"] == [
+        {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)} for s in plan.program.steps
+    ]
+    tech = patched.modes.mode("coastal-tides").techniques.stepped
+    lags = module_lags(tech, list(D.GRID), CANOPY)
+    assert (shown["mode"], shown["shift"], shown["brightness_swing"], shown["lag_steps"], shown["seed"]) == (
+        "breathe",
+        0.0,
+        6,
+        2,
+        None,
+    )
+    assert max(lags.values()) == 2
+    assert shown["cycle"] == len(shown["steps"]) == 6 + max(lags.values()) == program_cycle(tech, lags)
+    # the levels breathe around the rung's 85 (85 ± 6); without a shift every step keeps the still design's colours
+    levels = [v for s in shown["steps"] for v in s["levels"].values()]
+    assert (min(levels), max(levels)) == (79, 91)
+    assert all(s["colours"] == shown["steps"][0]["colours"] for s in shown["steps"])
+    assert shown["moving_feature"] == tech.moving_feature and "swells and softens" in tech.moving_feature
+    assert shown["trial_note"] == ST.TRIAL_NEVER_STEPS  # D66 unchanged: a try-on stays still
+    # the catalog's idle scene (Lowcountry Calm) has no rung, so no scene carries an idle note
+    from conductor.routes.design_lab import catalog_json
+
+    assert [s["idle_note"] for s in catalog_json(make_lab())["scenes"]] == [None] * len(IDS)
+    # an idle look with a rung says when it runs: never on start-up; on an idle return only with motion.idle on
+    tides_idle = settings_with(kiosk={"idle_mode": "coastal-tides"})
+    notes = {s["id"]: s["idle_note"] for s in catalog_json(make_lab(tides_idle))["scenes"]}
+    assert notes["coastal-tides"] == ST.IDLE_RUNS_OFF.format(label="Coastal Tides")
+    assert "start-up and an idle return show it still" in notes["coastal-tides"]
+    assert {k for k, v in notes.items() if v is not None} == {"coastal-tides"}
+    breathing = settings_with(
+        kiosk={"idle_mode": "coastal-tides"}, motion={"idle": {"breathe_run_s": 60, "every_s": 300}}
+    )
+    assert ST.idle_note(breathing, "coastal-tides", TRIO.modes.mode("coastal-tides")) == (
+        "Coastal Tides is the idle look: start-up shows it still; an idle return lands as one 60 s breath and it "
+        "breathes again every 300 s while it shows (motion.idle); a guest's choice runs it in full."
+    )
+    assert catalog_json(make_lab(breathing))["live"]["idle_breath"] == {
+        "breathe_run_s": 60.0,
+        "every_s": 300.0,
+    }
+
+
+def _kits_plan(patched: D.ConfigTrio, scene_id: str):
+    """The show box's own compile: the rung over the two kits it drives (D62), as the engine compiles it there."""
+    context = P._design_context(
+        patched, CANOPY, addresses={f"design-{p}": (f"design-{p}" if p in KITS else None) for p in D.GRID}
+    )
+    return compile_mode(scene_id, Tier.STEPPED, context)
+
+
+def test_the_show_box_pace_plays_the_show_boxs_own_program_or_says_it_holds_still():
+    """B-R1-3 (D75): the show box compiles its rung over the modules it drives, so a breath's lags, cycle and rhythm
+    there differ from the nine's. The Lab's `today` pace plays that program's steps (`today_steps`); when that compile
+    refuses (a breath resting on both kits for a step), the preview says the show box holds still instead of playing
+    the nine-module steps under the nine-module sentence."""
+    from conductor.engine_api import PlanError
+
+    draft = edit(
+        "coastal-tides", **{"stepped.mode": "breathe", "stepped.brightness_swing": 6, "stepped.lag_steps": 2}
+    )
+    shown = P.preview(make_lab(), draft)["stepped"]
+    kits = _kits_plan(patched_of(draft), "coastal-tides")
+    assert shown["pace"]["today_positions"] == KITS and shown["today_error"] is None
+    assert shown["today_steps"] == [
+        {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)} for s in kits.program.steps
+    ]
+    assert len(shown["today_steps"]) == 6 < len(shown["steps"]) == 8  # lags over the two kits, not over nine
+    assert shown["today_moving_feature"] == kits.program.moving_feature
+    assert shown["runs"]["today"]["still"] is None and shown["runs"]["today"]["hold_at"] > 1
+    # a shimmer the nine modules can run but whose two kits would both rest for a whole step
+    for seed in range(200):
+        refused = edit(
+            "coastal-tides",
+            **{
+                "stepped.mode": "shimmer",
+                "stepped.brightness_swing": 6,
+                "stepped.steps_per_cycle": 3,
+                "stepped.lag_steps": 6,
+                "stepped.seed": seed,
+            },
+        )
+        try:
+            _kits_plan(patched_of(refused), "coastal-tides")
+        except PlanError as exc:
+            why = str(exc)
+            break
+    else:
+        pytest.fail("no seed in 0–199 rests both kits")
+    shown = P.preview(make_lab(), refused)["stepped"]
+    assert shown["error"] is None and len(shown["steps"]) > 3  # the nine modules step
+    assert "would send none of them anything" in why
+    assert shown["today_error"] == f"{why}." and shown["today_steps"] is None
+    assert shown["today_moving_feature"] is None
+    assert shown["runs"]["today"]["still"] == shown["today_error"] and shown["runs"]["today"]["hold_at"] == 0
+
+
 @pytest.mark.parametrize("scene_id", STILL)
 def test_scenes_without_a_stepped_rung_have_no_stepped_preview_and_refuse_stepped_edits(scene_id):
     seed = D.seed_draft(TRIO, scene_id)
@@ -300,9 +419,11 @@ def test_scenes_without_a_stepped_rung_have_no_stepped_preview_and_refuse_steppe
         patched_of(D.SceneDraft.model_validate({**seed.model_dump(), "stepped": timing}))
     [problem] = refused.value.problems
     assert problem.field == "stepped"
-    if scene_id == SHIPPED.kiosk.idle_mode:  # the idle look never steps (D65; the show refuses one that does)
-        assert problem.message == D.IDLE_NEVER_STEPS.format(label=TRIO.modes.mode(scene_id).label)
-        assert "the idle look never steps (D65)" in problem.message
+    if scene_id == SHIPPED.kiosk.idle_mode:  # D75: the idle look may carry a rung, but a draft can't add one
+        assert problem.message == D.IDLE_NO_RUNG.format(label=TRIO.modes.mode(scene_id).label)
+        assert (
+            "has no stepped rung to edit" in problem.message and "modes.yaml change (D75)" in problem.message
+        )
     else:
         assert "has no stepped rung" in problem.message
 
@@ -318,6 +439,13 @@ REFUSED = [
     ("run_s", 0),
     ("run_s", 181),
     ("run_s", 5.5),  # shorter than one 6 s step
+    # D75: the kind of motion and a breath's bounds
+    ("mode", "sparkle"),
+    ("shift", 0.6),
+    ("shift", -0.1),
+    ("brightness_swing", 21),
+    ("lag_steps", 7),
+    ("seed", -1),
 ]
 # SteppedTechnique takes any step_s in [4, 12]; the Lab's editor moves it in half seconds, so an EDIT off the
 # increment is refused when the draft applies (an approved value off it is kept as it is)
@@ -379,6 +507,11 @@ def test_the_catalog_offers_the_editor_its_limits_and_live_lines(app_client):
         "run_s_min": "step_s",
         "run_s_max": 180.0,
         "directions": ["forward", "reverse"],
+        "modes": ["travel", "breathe", "shimmer"],
+        "shift": [0.0, 0.5],
+        "shift_increment": 0.05,
+        "brightness_swing": [0, 20],
+        "lag_steps": [0, 6],
     }
     assert body["limits"]["ripple"] == {"stagger_s": [0.0, 1.2], "max_rings": RIPPLE_MAX_WAVES}
     live = body["live"]
@@ -387,6 +520,7 @@ def test_the_catalog_offers_the_editor_its_limits_and_live_lines(app_client):
     assert live["ripple_stagger_s"] == 0 and live["ripple_note"] == ST.RIPPLE_OFF_NOTE
     assert live["effects_note"] == "Effects — not enabled: no code has passed the bench (06 #4)"
     assert live["effects_enabled"] is False
+    assert live["idle_breath"] is None  # motion.idle: off as shipped (D75)
     assert {s["id"] for s in body["scenes"] if s["stepped"]} == set(LIVE_STEPPED)
 
 
@@ -468,7 +602,11 @@ def test_the_route_previews_a_stepped_edit(app_client):
     r = app_client.post("/api/lab/preview", json={"scene_id": scene_id, "draft": draft})
     assert r.status_code == 200, r.text[:300]
     body = r.json()
-    assert len(body["stepped"]["steps"]) == 8 and body["stepped"]["direction"] == "reverse"
+    # a travel program is one cycle of steps_per_cycle steps; a breath's adds its largest lag (D75)
+    tech = LIVE.modes.mode(scene_id).techniques.stepped.model_copy(update={"steps_per_cycle": 8})
+    cycle = program_cycle(tech, module_lags(tech, list(D.GRID), CANOPY))
+    assert len(body["stepped"]["steps"]) == cycle == body["stepped"]["cycle"]
+    assert body["stepped"]["steps_per_cycle"] == 8 and body["stepped"]["direction"] == "reverse"
     assert body["stepped"]["live_sentence"] == STEPPED_LIVE_OFF
     assert body["copy"]["stepped"]["chosen"] == "generated"
     assert body["stepped"]["moving_feature"] == body["copy"]["stepped"]["sentence"]
@@ -831,11 +969,12 @@ def test_the_d65_section_says_where_the_live_gate_stands():
 
 
 # ---- a scene whose stepped rung sits under painted rungs says when it steps ---------------------------------------------
-def test_a_stepped_rung_under_higher_rungs_says_it_steps_only_where_they_cant_run():
+def test_a_stepped_rung_under_higher_rungs_says_it_runs_when_a_guest_chooses_it_then_holds_on_its_best_still_rung():
     golden = P.preview(make_lab(), D.seed_draft(TRIO, "golden-hour"))["stepped"]
     assert golden["steps_when"] == (
-        "Golden Hour steps only where its higher rungs (Painted (all 270 lights), Painted in the app) can't run; "
-        "where one of them runs, that look shows instead and nothing steps"
+        "When a guest chooses Golden Hour on the iPad it moves for its run, then holds on its best still rung "
+        "(Painted (all 270 lights), Painted in the app where available, else module level); chosen from /ops it "
+        "shows the first of its rungs that can run, and a re-pick keeps a run going or holds its best still rung"
     )
     tides = P.preview(make_lab(), D.seed_draft(TRIO, "coastal-tides"))["stepped"]
     assert TRIO.modes.mode("coastal-tides").ladder[0] == "stepped" and tides["steps_when"] is None

@@ -4,6 +4,7 @@ tests/fixtures_modes_stepped.yaml plus a still idle mode. Sim-first: the stepped
 
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +34,7 @@ from conductor.sim.profiles import profile_parts
 from conductor.sim.settings import SimSettings
 
 PATH = Path(__file__).with_name("fixtures_modes_stepped.yaml")
+BREATHE_PATH = Path(__file__).with_name("fixtures_modes_breathe.yaml")  # D75: breathe and shimmer rungs
 CALM = {
     "label": "Lowcountry Calm",
     "blurb": "The resting look",
@@ -63,7 +65,8 @@ RECIPES = _frozen_recipes()
 
 def stepped_modes():
     raw = yaml.safe_load(PATH.read_text(encoding="utf-8"))
-    raw["modes"]["lowcountry-calm"] = CALM  # a still idle mode (the idle mode never steps)
+    raw["modes"].update(yaml.safe_load(BREATHE_PATH.read_text(encoding="utf-8"))["modes"])
+    raw["modes"]["lowcountry-calm"] = CALM  # a still idle mode
     return parse_modes(raw, recipes=RECIPES, canopy=load_canopy_config(), path=PATH)
 
 
@@ -327,16 +330,13 @@ def test_a_step_that_would_take_the_account_past_the_cap_is_held_back():
         runner = w.engine.runner
         await w.run_for(runner.next_step_in() + 0.5)  # step 1 is out
         sent_before = len(w.writes)
-        budget = w.executor.budget
-        crowd = {"extra": 75}  # 75 writes by others on the account in the last 60 s: 9 + 9 + 75 > 90
+        account_writes = w.executor.account_writes
+        crowd = {"extra": 75}  # 75 writes by others on the account in the last 60 s: 9 + 9 + 75 + 9 > 90
 
-        def crowded(address=None):
-            out = budget(address)
-            if address is not None:
-                out = {**out, "account_writes_60s": out["account_writes_60s"] + crowd["extra"]}
-            return out
+        def crowded(address, **kw):
+            return account_writes(address, **kw) + crowd["extra"]
 
-        w.executor.budget = crowded
+        w.executor.account_writes = crowded
         shown = runner.shown
         await w.run_for(runner.next_step_in() + 0.5)  # step 2 comes due
         held = (len(w.writes) - sent_before, runner.index, runner.shown, runner.budget_holds)
@@ -352,10 +352,215 @@ def test_a_step_that_would_take_the_account_past_the_cap_is_held_back():
     assert shown == 1
     assert held == (0, 2, 1, 1)  # nothing sent; the index advanced, the step shown is still step 1
     assert state.program is not None and state.program["step"] == 2
+    assert state.program["frames"][2] == state.program["frames"][1]  # the held step is drawn as held (D75)
     assert after[:2] == (3, 1) and after[2] == 9  # step 3 went out to every module
     [hold] = holds
     assert hold["account"] == "canopy" and hold["step"] == 2 and hold["cap"] == 90
-    assert hold["writes_60s"] + hold["step_writes"] > 90
+    assert hold["room"] == 9 and hold["counted"] + hold["step_writes"] + hold["room"] > 90
+
+
+def test_a_run_chosen_mid_run_holds_its_first_step_until_a_guest_has_room_again():
+    """B-R1-1 (D75): a guest's mood chosen mid-run runs too, so the account's 60 s window holds the old run's steps,
+    the new mood's burst and a guest brightness when the new run's first step comes due. The old rule (the window
+    plus the step within the cap) sent it at exactly 90, leaving nothing for a 429 retry or a re-assert; a step now
+    keeps one guest burst of room (one write per module) and waits, and the run then goes on to its end."""
+
+    async def main():
+        w = stepped_world(shipped=True)  # cap 90 less 20 %: 7.5 s steps on nine
+        await quiet_start(w)
+        sends: list[tuple[float, str, int]] = []
+        original = w.engine.send
+
+        def spy(device_ids, *, source, label):
+            sent = original(device_ids, source=source, label=label)
+            if source == "program" and label.startswith("step") and label.endswith("linear-rows"):
+                sends.append((w.clock.monotonic(), label, len(sent)))
+            return sent
+
+        w.engine.send = spy
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("linear-columns", source="ops")  # run A
+        await w.run_for(61.5)  # A's step 8 went out at t0 + 60
+        t_choice = w.clock.monotonic()
+        # a guest's mood mid-run: it runs too (D75)
+        await w.engine.request_mode("linear-rows", source="kiosk")
+        runner = w.engine.runner
+        await w.run_for(3.0)
+        await w.engine.set_guest_brightness(50, source="kiosk")  # not folded: step 1 is 4.5 s away
+        await w.run_for(runner.next_step_in() + 0.5)  # step 1 comes due
+        after_1 = (runner.shown, runner.held_steps, runner.running)
+        await w.run_for(runner.next_step_in() + 0.5)  # step 2
+        after_2 = (runner.shown, runner.held_steps, runner.running)
+        await w.run_for(100)
+        holds = [e for e in w.events("program") if e.get("action") == "budget_hold"]
+        out = (t0, t_choice, after_1, after_2, runner.ended, holds, sends, list(w.writes))
+        await w.close()
+        return out
+
+    _t0, t_choice, after_1, after_2, ended, holds, sends, writes = run_virtual(main)
+    assert after_1 == (0, 1, True)  # step 1 held: the step shown is still step 0
+    assert after_2 == (2, 0, True)  # step 2 went out; a sent step resets the count
+    assert ended == "the run is over"
+    [hold] = holds
+    assert hold["mode"] == "linear-rows" and hold["step"] == 1 and hold["room"] == 9
+    # the old rule (the window plus the step within the cap) would have sent it, leaving no room
+    assert hold["writes_60s"] + hold["step_writes"] <= 90
+    assert hold["counted"] + hold["step_writes"] + hold["room"] > 90
+    # from the simulator's own log: every step of the new run left room for a guest's burst in the window it shares
+    # (writes that leave it within the 1 s per-device gap aren't shared)
+    assert sends and sends[0][1].startswith("step 2 ")
+    for t, label, n in sends:
+        shared = sum(1 for wt, _, _ in writes if t - 59.0 < wt < t)  # before the step's own
+        assert shared + n + 9 <= 90, (t - t_choice, label, shared, n)
+
+
+def test_writes_about_to_leave_the_window_dont_hold_a_step_when_sends_land_after_the_boundary():
+    """Review B-R3-TS-5 (B-R1-1): the cap check leaves out the writes older than 60 s less the per-device gap, which
+    are gone before the step's own writes are out. In virtual time a step's sends are stamped exactly on its boundary,
+    so the step from 60 s before leaves the window just as the next is due and the rule can't be seen. On hardware
+    they land a few ms after it: here 5 ms. Then the whole 60 s window still holds eight steps (72), and one 429
+    retry in it makes 72 + 1 + 9 (the step) + 9 (a guest's room) = 91 > 90, so counting it held a step that the 60 s
+    cap never needed held. With the gap rule it counts 63 + 1, and every step goes out."""
+    from conductor.drivers.base import Outcome, WriteResult
+
+    late_s = 0.005
+
+    async def main():
+        w = stepped_world(shipped=True)  # nine modules, 7.5 s steps, the cap of 90
+        await quiet_start(w)
+        wait_rate = w.executor._wait_rate
+
+        async def late(slot):  # a send leaves a few ms after the step's boundary, as on hardware
+            await wait_rate(slot)
+            await w.clock.sleep(late_s)
+
+        w.executor._wait_rate = late
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner = w.engine.runner
+        write, throttle = w.sim.write, {"at": t0 + 6 * runner.step_s}
+
+        async def throttled_once(device_id, rows, *, purpose, **kw):  # step 6's write to r1c1 is answered 429
+            if (
+                "at" in throttle
+                and w.clock.monotonic() >= throttle["at"]
+                and device_id.endswith("canopy-r1c1")
+            ):
+                del throttle["at"]
+                return WriteResult(
+                    device_id,
+                    Outcome.THROTTLED,
+                    http_status=429,
+                    sent_at=w.clock.now(),
+                    error="HTTP 429 (test)",
+                )
+            return await write(device_id, rows, purpose=purpose, **kw)
+
+        w.sim.write = throttled_once
+        await w.run_for(100)
+        out = {
+            "runner": runner,
+            "holds": [e for e in w.events("program") if e.get("action") == "budget_hold"],
+            "throttled": [e for e in w.events("attempt") if e.get("http_status") == 429],
+            "sends": [t - t0 for t, _, _ in w.writes if t >= t0],
+        }
+        await w.close()
+        return out
+
+    out = run_virtual(main)
+    runner, sends = out["runner"], out["sends"]
+    assert len(out["throttled"]) == 1  # the one 429, retried once
+    assert runner.step_s == 7.5 and runner.count == 12
+    assert out["holds"] == []  # no step held back
+    for n in range(12):  # every step's sends landed 5 ms after its boundary, not on it
+        landed = [t - n * 7.5 for t in sends if n * 7.5 <= t < n * 7.5 + 0.5]
+        assert landed and all(abs(d - late_s) < 1e-6 for d in landed), (n, landed)
+    # by send time the whole 60 s before step 8 held steps 0–7 (the 429's retry among them; the 429 itself is the
+    # executor's 73rd): counted in full, 73 + 9 + 9 = 91
+    assert sum(1 for t in sends if 0.0 < t < 60.0) == 72
+    assert runner.ended == "the run is over" and runner.steps_sent == 12  # 11 steps and the hold
+
+
+def test_two_held_steps_apart_never_end_a_run_a_sent_step_resets_the_count():
+    """B4 / TS-3: only HELD_STEPS_END (2) holds *in a row* end a run. A step held, the next sent, a later one held
+    again: the run goes on (with fast guest pacing holds come and go on a busy account; they mustn't add up)."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner = w.engine.runner
+        real = runner._over_cap
+
+        def over_cap(wanted):  # the account's cap holds steps 2 and 4 back, and only them
+            if runner.index in (2, 4):
+                return {"account": "canopy", "writes_60s": 90, "counted": 90, "step_writes": 9, "room": 9}
+            return real(wanted)
+
+        runner._over_cap = over_cap
+        seen = []
+        for _ in range(5):  # steps 1–5 (7.5 s apart; None once the run is over)
+            wait = runner.next_step_in()
+            await w.run_for((7.5 if wait is None else wait) + 0.5)
+            seen.append((runner.index, runner.shown, runner.held_steps, runner.running))
+        await w.run_for(100)
+        out = (seen, runner.budget_holds, runner.ended)
+        await w.close()
+        return out
+
+    seen, holds, ended = run_virtual(main)
+    assert seen == [
+        (1, 1, 0, True),
+        (2, 1, 1, True),  # held: step 1 is still shown
+        (3, 3, 0, True),  # sent: the count is back to 0
+        (4, 3, 1, True),  # held again, not twice in a row: still running
+        (5, 5, 0, True),
+    ]
+    assert holds == 2 and ended == "the run is over"
+
+
+def test_a_breath_whose_every_changing_step_is_held_ends_a_step_with_nothing_to_write_resets_nothing():
+    """Review round 3 (D75, B4): a step with nothing to write isn't a sent step. breathe-level comes back to its hold's
+    level every other step (28, 32, 28, 24), so on an account with no room for any step that writes, step 1 is
+    held, step 2 has nothing to write (it is what the canopy shows), and step 3 is held: two holds in a row, and the
+    run ends on its still copy. Counted as sent, step 2 reset the count, and the breath ran on to its end under
+    "swells and softens" without a single level change on the lights."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        runner, plan = w.engine.runner, w.engine.current_plan()
+        real = runner._over_cap
+
+        def full(wanted):  # the account has no room for any step that writes
+            if wanted:
+                return {"account": "canopy", "writes_60s": 90, "counted": 90, "step_writes": 9, "room": 9}
+            return real(wanted)
+
+        runner._over_cap = full
+        await w.run_for(1.0)  # the mode's burst (step 0) is out
+        n = len(w.writes)
+        seen = []
+        for _ in range(3):  # steps 1–3
+            await w.run_for(runner.next_step_in() + 0.5)
+            seen.append((runner.index, runner.shown, runner.held_steps, runner.running))
+        out = (plan, seen, runner.ended, w.writes[n:], w.engine.state())
+        await w.close()
+        return out
+
+    plan, seen, ended, writes, state = run_virtual(main)
+    assert (
+        step_rows(plan, 2) == step_rows(plan, 0) != step_rows(plan, 1)
+    )  # the breath is back at its hold's level
+    assert seen == [
+        (1, 0, 1, True),  # held
+        (2, 2, 1, True),  # nothing to write: shown, the count kept
+        (3, None, 2, False),  # held again: two in a row end the run
+    ]
+    assert ended == "the account's write budget held back 2 steps in a row"
+    assert writes == []  # the lights never left the hold's level, and the end's hold was already showing
+    assert state.program is None and state.feature == plan.feature  # the still copy
 
 
 def shows_rows_equal(plan) -> bool:
@@ -606,6 +811,108 @@ def test_a_guest_brightness_change_mid_step_is_sent_at_once():
 
     burst = run_virtual(main)
     assert len(burst) == 9 and all(R.brightness(40) in rows for _, _, rows in burst)
+
+
+def test_a_guest_brightness_change_the_cap_would_hold_back_goes_out_at_once_never_folded():
+    """Review B-R3-1 (D75): a guest's level is never folded into a step the account's cap will hold back. A guest
+    moving the brightness every ~2 s (D72's pace on nine) through a guest's run at 7.5 s steps fills the window, so
+    the step after the last change is held. Folded into it, that change waited for the run's end (8 s here) while
+    the panel drew it on lights still at the old level. It goes out at once instead, as its own burst (the room the
+    cap keeps is for it), and the level the panel draws is always the one the lights were sent."""
+
+    async def main():
+        w = stepped_world(shipped=True)  # the shipped budget: 7.5 s steps on nine
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="kiosk")
+        runner = w.engine.runner
+        await w.run_for(5 * runner.step_s + 0.5)  # step 5 is out
+        refused = []
+        for level in (50, 60, 40):  # each goes out at once: step 6 is more than fold_guest_within_s away
+            refused.append((await w.engine.set_guest_brightness(level, source="kiosk")).refused)
+            await w.run_for(2.1)
+        due = runner.t0 + 6 * runner.step_s
+        wait = due - w.clock.monotonic()  # 0.7 s: close enough to step 6 to fold into it
+        refused.append((await w.engine.set_guest_brightness(30, source="kiosk")).refused)
+        at = w.clock.monotonic()
+        drawn_not_sent = []
+        while w.clock.monotonic() < at + 3 * runner.step_s:
+            program = w.engine.state().program
+            if program is not None:
+                drawn = {v for v in program["levels"][program["step"]] if v is not None}
+                sent = {level_of(w.engine.sent_rows[d]) for d in runner.plan.modules}
+                if drawn != sent:
+                    drawn_not_sent.append((round(w.clock.monotonic() - at, 2), drawn, sent))
+            await w.run_for(0.1)
+        holds = [e["step"] for e in w.events("program") if e.get("action") == "budget_hold"]
+        first = min((t for t, _, rows in w.writes if t >= at and level_of(rows) == 30), default=None)
+        out = (refused, wait, at, due, first, drawn_not_sent, holds, runner.ended)
+        await w.close()
+        return out
+
+    refused, wait, at, due, first, drawn_not_sent, holds, ended = run_virtual(main)
+    assert refused == [False] * 4 and 0 < wait <= 2.0
+    assert holds[:1] == [6]  # the step it would have folded into was held back
+    assert first is not None and first < due and first - at < 0.5  # out at once, not with a held step
+    assert drawn_not_sent == []  # the panel never drew a level the lights weren't sent
+    assert ended == "the account's write budget held back 2 steps in a row"
+
+
+def test_a_guest_level_folded_into_a_step_the_cap_then_holds_back_goes_out_at_that_step():
+    """Review B-R3-1: there was room when the guest's level was folded into the next step, but writes from
+    elsewhere filled the window in the moments before it, so the step is held. The level goes out then, on the step
+    last sent (one PUT per module), not a step or a run later: the lights, the frozen frame and the level the panel
+    draws agree, and the next step carries it on."""
+
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        await w.engine.request_mode("linear-columns", source="ops")
+        runner, plan = w.engine.runner, w.engine.current_plan()
+        await w.run_for(runner.next_step_in() + 0.5)  # step 1 is out
+        await w.run_for(runner.next_step_in() - 1.5)  # 1.5 s before step 2
+        n, at = len(w.writes), w.clock.monotonic()
+        await w.engine.set_guest_brightness(40, source="ops")
+        await w.run_for(1.0)
+        before = w.writes[n:]  # folded: nothing of its own yet
+        account_writes, crowd = w.executor.account_writes, {"extra": 75}
+
+        def crowded(address, **kw):  # others fill the account's window just before step 2
+            return account_writes(address, **kw) + crowd["extra"]
+
+        w.executor.account_writes = crowded
+        await w.run_for(1.0)  # step 2 came due 0.5 s ago: held
+        burst = w.writes[n:]
+        held = (runner.index, runner.shown, runner.budget_holds, runner.running)
+        program = w.engine.state().program
+        await w.run_for(2.0)  # the burst has landed
+        lights = {level_of(w.sim.device_view(w.address(d))) for d in plan.modules}
+        crowd["extra"] = 0
+        m = len(w.writes)
+        await w.run_for(runner.next_step_in() + 0.5)  # step 3: room again
+        step_3 = (runner.shown, w.writes[m:])
+        labels = {
+            c["label"] for c in w.events("command") if c["source"] == "ops" and c["t"] >= w.clock.epoch + at
+        }
+        await w.close()
+        return plan, at, before, burst, held, program, lights, step_3, labels
+
+    plan, at, before, burst, held, program, lights, (shown_3, writes_3), labels = run_virtual(main)
+    assert before == []
+    assert held == (2, 1, 1, True)  # step 2 held: step 1 is still the step shown
+    # the guest's level went out when step 2 was held: one PUT per module, on step 1's colours, within the fold window
+    assert sorted(d for _, d, _ in burst) == sorted(plan.modules)
+    assert all(t - at <= 2.0 for t, _, _ in burst)
+    step_1 = step_rows(plan, 1)
+    for _, d, rows in burst:
+        assert level_of(rows) == 40
+        assert [r for r in rows if r.key != ("brightness", None)] == [
+            r for r in step_1[d] if r.key != ("brightness", None)
+        ]
+    assert labels == {"guest brightness: linear-columns"}
+    # the frozen frame is drawn at the level sent, and the lights read it
+    assert program["frames"][2] == program["frames"][1]
+    assert {v for v in program["levels"][2] if v is not None} == {40} == lights
+    assert shown_3 == 3 and len(writes_3) == 9 and all(level_of(rows) == 40 for _, _, rows in writes_3)
 
 
 def test_a_lock_release_sends_the_one_module():
@@ -896,6 +1203,871 @@ def test_a_re_pick_of_the_look_now_showing_keeps_the_runs_phase():
     assert before == after and before[2] == 3
 
 
+# ---- D75: a breath on the real engine, held steps, a choice runs once, the idle look ------------------------------
+BREATH_LEVELS = [28, 32, 28, 24]  # breathe-level's step levels (brightness 28 ± a swing of 4, lag 0)
+
+
+def program_groups(w, since: float = 0.0) -> dict[str, list[dict]]:
+    """The runner's commands, by label ("step n (k of c): mode"), in send order."""
+    groups: dict[str, list[dict]] = {}
+    for c in w.events("command"):
+        if c["source"] == "program" and c["t"] >= since:
+            groups.setdefault(c["label"], []).append(c)
+    return groups
+
+
+def level_of(rows) -> int | None:
+    return next((r.value for r in rows if r.key == ("brightness", None)), None)
+
+
+def program_since(w, since: float) -> list[dict]:
+    """The runner's commands queued at or after wall time `since` (a command's event is recorded when it ends)."""
+    return [c for c in w.events("command") if c["source"] == "program" and c["timings"]["queued_at"] >= since]
+
+
+def test_a_breath_sends_each_step_as_one_put_per_changed_module_with_its_brightness():
+    async def main():
+        w = stepped_world(shipped=True)
+        await quiet_start(w)
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("breathe-level", source="ops")
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        await w.run_for(100)
+        out = (plan, runner, [(t - t0, d, rows) for t, d, rows in w.writes if t >= t0], w.events("command"))
+        await w.close()
+        return out
+
+    plan, runner, writes, commands = run_virtual(main)
+    assert runner.ended == "the run is over" and runner.budget_holds == 0 and runner.count == 12
+    steps = plan.program.steps
+    by_label: dict[str, list[str]] = {}
+    for c in commands:
+        if c["source"] == "program":
+            by_label.setdefault(c["label"].split(":")[0], []).append(c["device_id"])
+    for label, ids in by_label.items():
+        if label == "hold":
+            continue
+        n = int(label.split()[1])
+        changed = [d for d in plan.modules if steps[n % 4].rows[d] != steps[(n - 1) % 4].rows[d]]
+        assert sorted(ids) == sorted(f"sim-{d}" for d in changed), label  # one command per changed module
+    # every write: the full state vector, its brightness the breath's level for that step, step by step
+    for n in range(1, 12):
+        sent = [rows for t, _, rows in writes if n * 7.5 - 1e-6 <= t < n * 7.5 + 1.0]
+        assert len(sent) == 9 and {level_of(rows) for rows in sent} == {BREATH_LEVELS[n % 4]}, n
+        assert all([r.key for r in rows] == ROW_KEYS for rows in sent)
+    end = [rows for t, _, rows in writes if 90 - 1e-6 <= t < 91.0]
+    assert end and {level_of(rows) for rows in end} == {28}  # the run ends on the hold (step 0's level)
+
+
+def test_a_lagged_breath_writes_only_the_modules_that_change():
+    async def main():
+        w = stepped_world()  # 6 s steps
+        await quiet_start(w)
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("breathe-rings", source="ops")
+        plan = w.engine.current_plan()
+        await w.run_for(95)
+        out = (plan, program_groups(w), [(t - t0, d) for t, d, _ in w.writes if t >= t0])
+        await w.close()
+        return out
+
+    plan, groups, writes = run_virtual(main)
+    steps = plan.program.steps
+    assert len(steps) == 7
+    sizes = []
+    for label, cmds in groups.items():
+        if label.startswith("hold"):
+            continue
+        n = int(label.split()[1])
+        changed = {d for d in plan.modules if steps[n % 7].rows[d] != steps[(n - 1) % 7].rows[d]}
+        assert {c["device_id"].removeprefix("sim-") for c in cmds} == changed, label
+        # a module whose rows are unchanged gets nothing that step
+        at = [d for t, d in writes if n * 6.0 - 1e-6 <= t < n * 6.0 + 1.0]
+        assert sorted(at) == sorted(changed), label
+        sizes.append(len(changed))
+    assert len(sizes) == 14  # steps 1–14 of a 90 s run at 6 s
+    assert min(sizes) >= 1 and min(sizes) < 9  # every step changes something; resting modules get nothing
+
+
+def test_a_breath_under_a_guest_mash_draws_held_steps_as_held_and_ends_after_two():
+    async def main():
+        w = stepped_world(shipped=True, kiosk={"fast_pacing": True, "cooldown_min_s": 2})
+        await quiet_start(w)
+        sends: list[tuple[float, str, int]] = []
+        original = w.engine.send
+
+        def spy(device_ids, *, source, label):
+            sent = original(device_ids, source=source, label=label)
+            sends.append((w.clock.monotonic(), label, len(sent)))
+            return sent
+
+        w.engine.send = spy
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("breathe-level", source="ops")
+        runner, plan = w.engine.runner, w.engine.current_plan()
+        frozen, level = [], 40
+        while runner.running and w.clock.monotonic() < t0 + 90:
+            await w.engine.set_guest_brightness(level, source="kiosk")
+            level = 100 - level  # 40, 60, 40, …
+            await w.run_for(2.5)
+            state = w.engine.state()
+            if runner.running and runner.shown is not None and runner.shown < runner.index and state.program:
+                frozen.append((runner.shown, runner.index, state.program))
+        await w.run_for(1)
+        out = (runner, plan, frozen, w.engine.state(), sends, list(w.writes), t0)
+        await w.close()
+        return out
+
+    runner, plan, frozen, after, sends, writes, t0 = run_virtual(main)
+    assert runner.ended == "the account's write budget held back 2 steps in a row"
+    assert frozen  # a held step was drawn while the run went on
+    for shown, index, program in frozen:
+        for k in range(shown + 1, index + 1):
+            assert program["frames"][k] == program["frames"][shown], (shown, index, k)
+            assert program["levels"][k] == program["levels"][shown], (shown, index, k)
+    assert after.feature == plan.feature and after.program is None  # the still sentence afterwards
+    # never past the cap: the writes on the account in the 60 s before each step went out, plus the step's own
+    for t, label, n in sends:
+        if label.startswith("step"):
+            recent = sum(1 for wt, _, _ in writes if t - 60 < wt < t)
+            assert recent + n <= 90, (t - t0, label, recent, n)
+    by_device: dict[str, list[float]] = {}
+    for wt, d, _ in writes:
+        by_device.setdefault(d, []).append(wt)
+    assert all(b - a >= 1.0 - 1e-6 for times in by_device.values() for a, b in pairwise(times))
+
+
+@pytest.mark.parametrize(
+    ("guest", "centre"),
+    [
+        (50, 50),  # mid-range: the breath swings 46–54 around the guest's level
+        (
+            100,
+            96,
+        ),  # B-R1-1: full brightness. Clamped level by level it read 100, 100, 100, 96: half the steps silent
+        (
+            10,
+            14,
+        ),  # TS-1: kiosk.guest_brightness_min (10). Never 6, and not 10, 14, 10, 10 (a silent step either)
+    ],
+)
+def test_a_guest_brightness_moves_the_breath_instead_of_flattening_it(guest, centre):
+    """D75 (B3): a guest level during a breath keeps the breath, swung around the guest's level, and the moving copy
+    stays. The breath's centre moves so its whole swing (± 4 here) fits [kiosk.guest_brightness_min, 100]: every step
+    still sends every module a new level, so the copy ("sent a brighter or softer level every few seconds") stays
+    true at 100 and at the minimum. The iPad's levels (state.program) are the levels sent, the guest's applied (TS-2);
+    the last frame (the hold) is the guest's own level."""
+
+    async def main():
+        w = stepped_world()  # 6 s steps
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        await w.run_for(8.5)  # step 1 is out; 3.5 s before step 2
+        sent: list[tuple[str, str, int, set]] = []
+        original = w.engine.send
+
+        def spy(device_ids, *, source, label):
+            ids = original(device_ids, source=source, label=label)
+            sent.append((source, label, len(ids), {level_of(w.engine.sent_rows[d]) for d in ids}))
+            return ids
+
+        w.engine.send = spy
+        state = await w.engine.set_guest_brightness(guest, source="ops")
+        program = state.program
+        await w.run_for(40)
+        out = (plan, runner.running, runner.count, state, program, list(sent), w.engine.state())
+        await w.run_for(50)  # the run ends at 90 s
+        hold = [entry for entry in sent if entry[1].startswith("hold")]
+        after = {level_of(w.engine.desired_rows(d)) for d in plan.modules}
+        out = (*out, runner.ended, hold, after)
+        await w.close()
+        return out
+
+    plan, running, count, state, program, sent, later, ended, hold, after = run_virtual(main)
+    swing = [centre + level - 28 for level in BREATH_LEVELS]  # 28 ± 4: offsets 0, +4, 0, −4
+    assert min(swing) >= 10 and max(swing) <= 100 and len({*swing}) == 3
+    burst, *steps = sent
+    assert burst[0] == "ops" and burst[2] == 9 and burst[3] == {swing[1]}  # sent at once, at step 1's offset
+    assert [label.split()[1] for _, label, _, _ in steps][:6] == ["2", "3", "4", "5", "6", "7"]
+    for source, label, n, levels in steps:
+        # every step sends every module its new level: no silent step under the moving copy
+        assert source == "program" and n == 9 and levels == {swing[int(label.split()[1]) % 4]}, label
+    assert state.feature == plan.program.moving_feature and later.feature == plan.program.moving_feature
+    assert running
+    # TS-2: the levels the guest panel draws, from the current step on, are the levels sent (the guest's applied)
+    levels = program["levels"]
+    assert program["step"] == 1 and len(levels) == count + 1
+    for n in range(1, count):
+        assert levels[n] == [swing[n % 4]] * 9, n
+    assert levels[count] == [guest] * 9  # the hold after the run: the guest's own level
+    # after the run the still look is at the guest's own level: the hold goes out where the moved centre left the
+    # last step elsewhere (at 50 the last step, offset 0, already is the hold)
+    assert ended == "the run is over" and after == {guest}
+    assert [(n, levels) for _, _, n, levels in hold] == ([(9, {guest})] if centre != guest else [])
+
+
+def test_the_state_carries_each_frames_levels():
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        await w.run_for(8)
+        state, plan = w.engine.state(), w.engine.current_plan()
+        lit = canopy_view.lit_state(CANOPY_CFG, w.registry, plan, state, now=w.clock.now())
+        await w.close()
+        # a partial canopy (two kits driven): undriven positions carry no level
+        w = stepped_world()
+        kits = {
+            e.id: (w.registry.address(e.id, "sim") if e.module in ("r0c0", "r0c1") else None)
+            for e in w.registry.canopy_modules()
+        }
+        ctx = CompileContext(
+            registry=w.registry,
+            capabilities={e.id: CAPS for e in w.registry.canopy_modules()},
+            modes=MODES,
+            recipes=RECIPES,
+            canopy=load_canopy_config(),
+            addresses=kits,
+        )
+        w.engine.deps.compile = lambda mode_id, tier: compile_mode(mode_id, tier, ctx)
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="ops")
+        await w.run_for(8)
+        partial = (w.engine.state(), w.engine.current_plan())
+        partial_lit = canopy_view.lit_state(CANOPY_CFG, w.registry, partial[1], partial[0], now=w.clock.now())
+        await w.close()
+        return state, lit, partial, partial_lit
+
+    state, lit, (partial, partial_plan), partial_lit = run_virtual(main)
+    levels = state.program["levels"]
+    assert len(levels) == len(state.program["frames"]) == 16  # 90 s at 6 s, and the hold
+    assert levels[:5] == [[28] * 9, [32] * 9, [28] * 9, [24] * 9, [28] * 9] and levels[-1] == [28] * 9
+    assert lit["motion"]["levels"] == levels  # every position lit
+    assert state.to_json()["program"]["levels"] == levels
+    driven = {GRID.index("r0c0"), GRID.index("r0c1")}
+    assert len(partial_plan.modules) == 2
+    for row in partial.program["levels"]:
+        assert all((v is not None) == (i in driven) for i, v in enumerate(row))
+    for row in partial_lit["motion"]["levels"]:
+        assert all((v is not None) == (i in driven) for i, v in enumerate(row))
+
+
+def test_start_up_and_the_idle_return_never_start_a_run_on_an_idle_look_with_a_rung():
+    async def main():
+        w = stepped_world(kiosk={"idle_mode": "breathe-level"})
+        await w.engine.start()
+        await w.run_for(1)
+        first = (w.engine.current_plan().tier, w.engine.runner)
+        await w.run_for(QUIET_S)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        await w.run_for(185)
+        back = (w.engine.current_plan().mode_id, w.engine.current_plan().tier, w.engine.runner)
+        returned = w.clock.now()
+        await w.run_for(60)
+        program_after = program_since(w, returned)
+        await w.engine.request_mode("breathe-level", source="startup")
+        repick = (w.engine.current_plan().tier, w.engine.runner)
+        await w.close()
+        return first, back, program_after, repick
+
+    first, back, program_after, repick = run_virtual(main)
+    tier, runner = first
+    assert tier is Tier.T3 or (runner is not None and not runner.running)
+    mode, tier, runner = back
+    assert mode == "breathe-level" and tier is Tier.T3 and (runner is None or not runner.running)
+    assert program_after == []
+    assert repick[0] is Tier.T3 and (repick[1] is None or not repick[1].running)
+
+
+def test_a_guest_choosing_the_idle_scene_gets_its_run():
+    from conductor.canopy import RESTORE_SOURCE
+
+    async def main():
+        w = stepped_world(kiosk={"idle_mode": "breathe-level"})
+        await quiet_start(w)
+        await w.engine.request_mode("breathe-level", source="kiosk")
+        kiosk = (w.engine.runner.running, w.engine.runner.program.run_s, w.engine.current_plan().tier)
+        await w.run_for(10)
+        await w.engine.request_mode("breathe-level", source="ops")
+        ops = (w.engine.runner.running, w.engine.current_plan().tier)
+        await w.run_for(10)
+        await w.engine.request_mode("breathe-level", source=RESTORE_SOURCE)
+        restore = (w.engine.current_plan().tier, w.engine.runner)
+        await w.close()
+        return kiosk, ops, restore
+
+    kiosk, ops, restore = run_virtual(main)
+    assert kiosk == (True, 90.0, Tier.STEPPED)
+    assert ops == (True, Tier.STEPPED)  # stepped is first in its ladder
+    assert restore == (Tier.T3, None)  # the checklist's change back never starts a run
+
+
+IDLE_BREATH = {"idle_mode": "breathe-level"}
+BREATH_30 = {"idle": {"breathe_run_s": 30, "every_s": 120}}
+
+
+def test_an_idle_breath_yields_at_once_to_a_guest():
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.idle_breath()
+        runner = w.engine.runner
+        breathing = (runner.running, w.engine.breathing, runner.program.run_s)
+        await w.run_for(8)  # mid-breath
+        n = len(w.writes)
+        since = w.clock.now()
+        await w.engine.set_guest_brightness(40, source="kiosk")
+        await w.run_for(40)
+        after = w.writes[n:]
+        program = program_since(w, since)
+        ends = [e for e in w.events("program") if e.get("action") == "end"]
+        out = (breathing, runner, after, program, ends, w.engine.breathing)
+        await w.close()
+        return out
+
+    breathing, runner, after, program, ends, still = run_virtual(main)
+    assert breathing == (True, True, 30.0)
+    assert not runner.running and runner.ended == "a guest changed the canopy" and not still
+    assert len(after) == 9 and all(R.brightness(40) in rows for _, _, rows in after)  # one burst at 40
+    assert program == []  # nothing more of the breath went out
+    assert ends[-1]["reason"] == "a guest changed the canopy"
+
+
+def test_motion_idle_breathes_every_every_s_and_never_moves_the_idle_clocks():
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        breaths = []
+        original = w.engine.idle_breath
+
+        async def spy():
+            before = (w.engine.last_change_mono, w.engine.last_guest_input_mono, len(w.writes))
+            state = await original()
+            runner = w.engine.runner
+            breaths.append(
+                (w.clock.monotonic(), before, state, runner, runner is not None and runner.running)
+            )
+            return state
+
+        w.engine.idle_breath = spy
+        await w.engine.start()
+        await w.run_for(400)
+        clocks = (w.engine.last_change_mono, w.engine.last_guest_input_mono)
+        out = (breaths, clocks, list(w.writes), w.events("program"))
+        await w.close()
+        return out
+
+    breaths, clocks, writes, events = run_virtual(main)
+    started = [b for b in breaths if b[4]]
+    assert len(started) >= 3
+    first_t, (change, guest, n), state, runner, _ = started[0]
+    assert first_t >= 120.0  # every_s after the first look (start-up at 0)
+    assert runner.count == int(30 / runner.step_s + 1e-6) == 5 and runner.program.run_s == 30.0
+    assert (
+        clocks == (change, guest) == (0.0, 0.0)
+    )  # the idle hold and the idle reset count as they always did
+    assert not [t for t, _, _ in writes[n:] if first_t <= t < first_t + 1.0]  # step 0 is the look showing
+    assert state.look_phase is CanopyPhase.READY and state.feature == runner.program.moving_feature
+    assert all(b[0] - a[0] >= 120.0 for a, b in pairwise(started))
+    assert [e["run_s"] for e in events if e.get("action") == "idle_breath"] == [30.0] * len(started)
+
+
+D54_NOTE = "the controller reports 60 entries for 30 heads and this kit has no proven map yet (D54): test"
+
+
+@pytest.mark.parametrize("idle_mode", ["breathe-level", "breathe-rings"])
+def test_an_idle_breath_on_flagged_modules_never_reads_changing_while_nothing_is_sent(idle_mode):
+    """D73 on the idle breath (review B-R4-C1). On the show box Modules 1–2 carry only D54's "no proven map yet" note
+    (`tracker.flagged_only`: needs attention, look confirmed). An idle breath sends nothing at its start (step 0 is
+    the hold), so a module showing the hold counts as verified when the runner is installed, flagged or not. Before
+    the fix a flagged module waited for its own first breath write to verify: the guest panel said "Changing the
+    light…" for 8 s (breathe-level) or 26 s (breathe-rings, whose lag-3 corners are first written at step 4)."""
+
+    async def main():
+        w = stepped_world(kiosk={"idle_mode": idle_mode}, motion=BREATH_30)
+        await quiet_start(w)
+        modules = list(w.engine.current_plan().modules)
+        for d in modules:
+            w.tracker.flag_problem(w.address(d), D54_NOTE)
+        flagged = all(w.tracker.flagged_only(w.address(d)) for d in modules)
+        await w.until(lambda: w.engine.runner is not None and w.engine.runner.running, timeout=300, step=0.25)
+        start, n = w.clock.monotonic(), len(w.writes)
+        runner = w.engine.runner
+        seen = []
+        while w.clock.monotonic() - start < 30.0:
+            state = w.engine.state()
+            seen.append((round(w.clock.monotonic() - start, 2), state.look_phase, w.engine.breathing))
+            await w.run_for(0.25)
+        writes = [t - start for t, _, _ in w.writes[n:]]
+        await w.close()
+        return flagged, start, runner, seen, writes
+
+    flagged, start, runner, seen, writes = run_virtual(main)
+    assert flagged  # every module carries only the flagged note, its look confirmed
+    assert start >= 120.0 and runner.program.mode == "breathe" and seen[0][2]  # the reconciler's idle breath
+    assert writes and not [t for t in writes if t < 1.0]  # it steps later, but sends nothing at its start
+    changing = [(t, phase) for t, phase, _ in seen if phase is CanopyPhase.UPDATING]
+    assert not changing, changing  # was 0–8.25 s (breathe-level), 0–26.25 s (breathe-rings)
+
+
+def test_with_motion_idle_on_the_idle_return_from_another_look_lands_as_one_breath():
+    """D75 (review B-R2-TS-2): with motion.idle on, the idle return from a guest's look is one breath of
+    breathe_run_s, not the rung's 90 s run, and it counts as the period's breath (`last_breath_mono`), as the Lab's
+    staff copy says (IDLE_RUNS_ON)."""
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        chosen = w.clock.monotonic()
+        await w.until(lambda: w.engine.current_plan().mode_id == "breathe-level", timeout=200, step=0.5)
+        returned = w.clock.monotonic()
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        back = (plan.tier, runner.running, runner.program.run_s, runner.count, w.engine.breathing)
+        breath_at = w.engine.last_breath_mono
+        await w.run_for(60)
+        program = [
+            c["timings"]["queued_at"] - w.clock.epoch - returned
+            for c in program_since(w, w.clock.epoch + returned)
+        ]
+        out = (returned - chosen, back, breath_at - returned, program, runner.ended)
+        await w.close()
+        return out
+
+    after, back, breath_at, program, ended = run_virtual(main)
+    assert 180.0 <= after <= 182.0  # the idle hold (kiosk.idle_return_s)
+    assert back == (Tier.STEPPED, True, 30.0, 5, True)  # one breath: 30 s of 6 s steps
+    assert abs(breath_at) <= 0.5  # the period's breath starts here
+    assert program and max(program) <= 30.0 + 1e-3  # it stepped, and stopped once its 30 s were up
+    assert ended == "the run is over"
+
+
+def test_a_guest_choosing_the_idle_look_mid_breath_gets_the_full_run():
+    """D75 (review B-R2-TS-2): a guest's choice of the idle look during its idle breath is a choice, so it runs the
+    rung in full (90 s), never the breath's leftover breathe_run_s."""
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.idle_breath()
+        breath = (w.engine.breathing, w.engine.runner.program.run_s)
+        await w.run_for(8)  # mid-breath
+        await w.engine.request_mode("breathe-level", source="kiosk")
+        runner = w.engine.runner
+        out = (breath, runner.running, runner.program.run_s, runner.count, w.engine.breathing)
+        await w.close()
+        return out
+
+    breath, running, run_s, count, breathing = run_virtual(main)
+    assert breath == (True, 30.0)
+    assert running and run_s == 90.0 and count == 15 and not breathing
+
+
+def test_an_idle_breath_that_couldnt_run_when_it_landed_never_starts_on_a_re_pick():
+    """D75 (review B-R2-1): with motion.idle on, an idle return that lands while the account cools off holds still
+    (breathe-level has no canvas or slot, so its plan stays stepped). The breath counts as spent: once the cool-off
+    lifts, inside the 30 s it would have taken, a re-pick neither starts it mid-way nor reads as breathing."""
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        chosen = w.clock.monotonic()
+        await w.run_for(170)  # the guest's run is long over
+        account = w.engine._account_of(w.engine.target_of("canopy-r0c0").address)
+        w.engine.stepped_cooloff[account] = w.clock.monotonic() + 20.0  # lifts 10 s after the idle return
+        await w.until(lambda: w.engine.current_plan().mode_id == "breathe-level", timeout=20, step=0.5)
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        back = (w.clock.monotonic() - chosen, plan.tier, runner.running, runner.ended, w.engine.breathing)
+        spent = w.engine._breath_run_s  # the breath's run_s is spent with it
+        await w.run_for(12)  # the cool-off is over
+        since = w.clock.now()
+        await w.engine.request_mode("breathe-level", source="reconciler")
+        repick = (w.engine.current_plan().tier, w.engine.runner.running, w.engine.breathing)
+        await w.run_for(25)
+        out = (back, spent, repick, program_since(w, since))
+        await w.close()
+        return out
+
+    back, spent, repick, program = run_virtual(main)
+    after, tier, running, ended, breathing = back
+    assert 180.0 <= after <= 182.0 and tier is Tier.STEPPED and not running and not breathing
+    assert "cool-off" in ended and spent is None
+    assert repick == (Tier.STEPPED, False, False)
+    assert program == []  # nothing of the breath went out
+
+
+def test_the_idle_breath_waits_while_anything_else_holds_the_canopy():
+    from conductor.canopy import Trial
+
+    async def held(case: str) -> list:
+        sections = {"kiosk": {**IDLE_BREATH, "idle_reset_s": 3600}, "motion": BREATH_30}
+        w = stepped_world(**sections)
+        await w.engine.start()
+        await w.run_for(5)
+        if case == "paused":
+            w.engine.pause_guest_input(True, source="ops")
+        elif case == "try-on":
+            now = w.clock.monotonic()
+            trial = Trial("breathe-level", "Breathe (draft)", None, None, now, now + 700, w.clock.now())
+            assert not (await w.engine.start_trial(trial)).refused
+        elif case == "rehearsal":
+            await w.engine.rehearse("breathe-level", 10, source="ops")
+        elif case == "guest":
+            await w.engine.set_guest_brightness(50, source="ops")
+        elif case == "outage":
+            w.sim.faults.set_outage(True)
+            w.engine.enter_outage("test outage")
+        await w.run_for(590)
+        out = [e for e in w.events("program") if e.get("action") == "idle_breath"]
+        await w.close()
+        return out
+
+    async def guest_run() -> tuple:
+        """A guest's run of the idle look itself (90 s) outlasting every_s (60 s), which no config rule rules out
+        (IdleMotionSettings checks only every_s > breathe_run_s): the period comes due mid-run (60 s after the
+        choice), and the breath waits for the run to end on its own (review B-R6-TS-4)."""
+        w = stepped_world(
+            kiosk={**IDLE_BREATH, "idle_reset_s": 3600}, motion={"idle": {"breathe_run_s": 30, "every_s": 60}}
+        )
+        await w.engine.start()
+        await w.run_for(5)
+        assert not (await w.engine.request_mode("breathe-level", source="kiosk")).refused
+        chosen, runner = w.clock.monotonic(), w.engine.runner
+        same, during = [], None
+        while runner.running and w.clock.monotonic() - chosen < 200:
+            same.append(w.engine.runner is runner)
+            during = [e for e in w.events("program") if e.get("action") == "idle_breath"]
+            await w.run_for(0.5)
+        lasted, ended = w.clock.monotonic() - chosen, runner.ended
+        await w.run_for(10)  # the period is long due: the breath comes once the run is over
+        after = (w.engine.breathing, w.engine.runner is not runner)
+        await w.close()
+        return runner.program.run_s, same, during, lasted, ended, after
+
+    async def main():
+        cases = {case: await held(case) for case in ("paused", "try-on", "rehearsal", "guest", "outage")}
+        return cases, await guest_run()
+
+    out, (run_s, same, during, lasted, ended, after) = run_virtual(main)
+    assert out == {case: [] for case in out}
+    assert run_s == 90.0 and len(same) > 120 and all(same)  # one runner, the guest's, from choice to end
+    assert during == []  # no idle breath while it ran, though every_s (60 s) was up 30 s before its end
+    assert 90.0 <= lasted <= 91.0 and ended == "the run is over"  # it ended on its own
+    assert after == (True, True)  # then the idle look breathes (its period was due all along)
+
+
+def test_a_try_on_cleared_by_a_pause_puts_its_look_back_still():
+    """D75 (review B-R6-TS-5): the transactional restore (`_restore_approved`) puts a cleared try-on's approved look
+    back still, as end_trial's own request does. A pause ends a try-on that way: for a look whose stepped rung is
+    first in its ladder (breathe-level: [stepped, modules]) the look goes back at module level, with no runner and
+    nothing stepped after, through the pause and after the resume. Never a run timed from the try-on's start."""
+    from conductor.canopy import Trial
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        now = w.clock.monotonic()
+        trial = Trial("breathe-level", "Breathe (draft)", None, None, now, now + 700, w.clock.now())
+        assert not (await w.engine.start_trial(trial)).refused
+        tried = (w.engine.current_plan().tier, w.engine.runner)
+        await w.run_for(10)
+        since = w.clock.now()
+        w.engine.pause_guest_input(True, source="ops")
+        plan = w.engine.current_plan()
+        paused = (w.engine.trial_active, plan.mode_id, plan.tier, plan.program, w.engine.runner)
+        await w.run_for(5)
+        w.engine.pause_guest_input(False, source="ops")
+        await w.run_for(20)
+        plan = w.engine.current_plan()
+        after = (plan.mode_id, plan.tier, w.engine.runner)
+        out = (tried, paused, after, program_since(w, since))
+        await w.close()
+        return out
+
+    tried, paused, after, program = run_virtual(main)
+    assert tried == (Tier.T3, None)  # the try-on itself is still (D66)
+    assert paused == (False, "breathe-level", Tier.T3, None, None)  # back still, the try-on over
+    assert after == ("breathe-level", Tier.T3, None)
+    assert program == []  # nothing stepped, during the pause or after it
+
+
+def test_motion_idle_with_the_live_gate_shut_never_breathes():
+    async def main():
+        tier_allowed = _wiring(simulated=False).tier_allowed
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30, tier_allowed=tier_allowed)
+        await w.engine.start()
+        await w.run_for(600)
+        out = (
+            [c for c in w.events("command") if c["source"] == "program"],
+            w.engine.current_plan(),
+            w.engine.runner,
+            w.engine.last_breath_mono,
+        )
+        await w.close()
+        return out
+
+    program, plan, runner, last = run_virtual(main)
+    assert program == [] and plan.program is None and plan.tier is Tier.T3 and runner is None
+    assert last >= 480.0  # it kept asking, once a period, and the gate kept saying no
+
+
+def test_a_resting_module_is_still_read_and_healed_within_10_s():
+    """D75: a lagged breath leaves a module resting for steps at a time. Its rolling reads go on (the global
+    stand-down is gone), so a change made outside the Conductor heals within 10 s; a module the next step writes is
+    never read (the read would race that step's verified write)."""
+
+    async def main():
+        w = stepped_world()  # 6 s steps
+        await quiet_start(w)
+        t0 = w.clock.monotonic()
+        await w.engine.request_mode("breathe-rings", source="ops")
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        reads: list[tuple[float, str, bool]] = []
+        original = w.engine.reconciler._read_one
+
+        async def spy(device_id, target):
+            steps, n = runner.program.steps, runner.index
+            if runner.running:  # what the next step sends it, against what it has now
+                now_rows = steps[(runner.shown if runner.shown is not None else n) % 7].rows[device_id]
+                reads.append(
+                    (w.clock.monotonic() - t0, device_id, steps[(n + 1) % 7].rows[device_id] == now_rows)
+                )
+            return await original(device_id, target)
+
+        w.engine.reconciler._read_one = spy
+        await w.run_for(
+            30.5 - (w.clock.monotonic() - t0)
+        )  # step 5 is out; r1c1 rests through steps 5, 6 and 0
+        response = w.sim.faults.change_out_of_band(
+            w.address("canopy-r1c1"), [R.color_mode("white"), R.color_temperature(5000)]
+        )
+        changed = w.clock.monotonic()
+        wrong = await w.until(lambda: not w.correct("canopy-r1c1"), timeout=3)
+        healed = await w.until(lambda: w.correct("canopy-r1c1"), timeout=15)
+        healed_at = w.clock.monotonic() - changed
+        running = runner.running
+        await w.close()
+        return plan, response, wrong, healed, healed_at, running, reads
+
+    plan, response, wrong, healed, healed_at, running, reads = run_virtual(main)
+    lags = plan.program.steps
+    assert len(lags) == 7 and response.ok and running
+    assert wrong is not None and healed is not None and healed_at <= 10.0, healed_at
+    assert any(d == "canopy-r1c1" and 30.5 <= t <= 42.0 for t, d, _ in reads)  # read while it rests
+    assert reads and all(resting for _, _, resting in reads)  # never a module the next step writes
+
+
+def test_a_finished_breath_or_run_never_restarts_on_a_re_pick():
+    from conductor.canopy import LOOKS_SOURCE
+
+    async def check(w, mode_id: str) -> list:
+        """Every kind of re-pick after the run is over: none starts a run, none sends a program command, and a
+        clean interval after throttling (downgrade, then upgrade) eases back to the still rung, never the stepped one
+        (review B-R3-TS-1: without the downgrade the upgrade re-picked a stepped plan as stepped, so it couldn't
+        fail)."""
+        since = w.clock.now()
+        running = []
+        await w.engine.request_mode(mode_id, source="reconciler")
+        running.append(w.engine.runner is not None and w.engine.runner.running)
+        w.engine._replan_soon()
+        await w.run_for(2)
+        running.append(w.engine.runner is not None and w.engine.runner.running)
+        compile = w.engine.deps.compile
+
+        def longer(m, tier):  # a publish whose run is longer than the one that ran
+            plan = compile(m, tier)
+            if plan.program is not None:
+                plan.program.run_s = 150.0
+            return plan
+
+        w.engine.deps.compile = longer
+        await w.engine.request_mode(mode_id, source=LOOKS_SOURCE)
+        running.append(w.engine.runner is not None and w.engine.runner.running)
+        down = w.engine.downgrade("3 commands ended throttled on account canopy")  # the modules rung
+        w.engine.upgrade("clean")  # the floor lifts: a re-pick
+        running.append(w.engine.runner is not None and w.engine.runner.running)
+        eased = (down, w.engine.current_plan().tier, dict(w.engine.floors))
+        await w.run_for(20)
+        w.engine.deps.compile = compile
+        program = program_since(w, since)
+        return [running, program, eased]
+
+    async def main():
+        w = stepped_world(kiosk=IDLE_BREATH, motion=BREATH_30)
+        await quiet_start(w)
+        await w.engine.idle_breath()  # a breath that runs out
+        await w.run_for(35)
+        out = {"breath": await check(w, "breathe-level")}
+        await w.engine.idle_breath()  # a breath a guest ends
+        await w.run_for(8)
+        await w.engine.set_guest_brightness(40, source="ops")
+        await w.run_for(1)
+        out["yield"] = await check(w, "breathe-level")
+        await w.engine.request_mode("radial-outward", source="kiosk")  # a guest's run that runs out
+        await w.run_for(95)
+        out["kiosk"] = await check(w, "radial-outward")
+        await w.close()
+        return out
+
+    out = run_virtual(main)
+    for case, (running, program, eased) in out.items():
+        assert running == [False, False, False, False], case
+        assert program == [], case
+        assert eased == (True, Tier.T3, {}), case  # back up to the still rung, never the stepped one
+
+
+def test_a_run_that_ends_on_its_own_marks_its_choice_run_before_any_re_pick():
+    """D75 (spec summary point 3, review B-R5-TS-2): a guest's run that runs out marks its choice as run when it ends
+    (`finish` → `note_run_over`), so the first re-pick after it — here a Lab publish whose run is longer (150 s) than
+    the one that ran — only holds. Without the mark, that re-pick's runner would count its 150 s from the choice and
+    start the steps again 95 s in. (The test above always re-picks through the reconciler first, and `_install` marks
+    a choice whose runner can't run itself, so it can't see this.)"""
+    from conductor.canopy import LOOKS_SOURCE
+
+    async def main():
+        w = stepped_world()
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        first = (runner.running, runner.count * runner.step_s)
+        await w.run_for(95)  # its 90 s run ends on its own
+        ended = (runner.running, runner.ended, w.engine.runner is runner)
+        compile = w.engine.deps.compile
+
+        def longer(m, tier):  # a publish whose run is longer than the one that ran
+            plan = compile(m, tier)
+            if plan.program is not None:
+                plan.program.run_s = 150.0
+            return plan
+
+        w.engine.deps.compile = longer
+        since = w.clock.now()
+        await w.engine.request_mode("radial-outward", source=LOOKS_SOURCE)  # the first re-pick after the end
+        plan, after = w.engine.current_plan(), w.engine.runner
+        repick = (plan.tier, plan.program.run_s, after.running, after.ended)
+        await w.run_for(20)
+        out = (first, ended, repick, program_since(w, since), w.engine.runner.running)
+        w.engine.deps.compile = compile
+        await w.close()
+        return out
+
+    first, ended, repick, program, running = run_virtual(main)
+    assert first == (True, 90.0)
+    assert ended == (False, "the run is over", True)  # it ran out: no guest, no re-pick ended it
+    assert repick == (Tier.STEPPED, 150.0, False, "this choice already ran (a re-pick only holds)")
+    assert program == [] and not running  # nothing steps again after the publish
+
+
+def _motion_t1_world(keep: dict[str, list]):
+    """radial-outward on the ladder [T1, STEPPED, T3], its T1 a painted, animating "canvas" stand-in (motion True):
+    the modules in `keep` (filled in by the test once it knows what they were last sent) get exactly those rows, so
+    nothing but 07 §6 sends them anything; the others a level (55) no step or hold of it sends."""
+    from dataclasses import replace
+
+    w = stepped_world()
+    compile = w.engine.deps.compile
+
+    def with_t1(mode_id, tier):
+        if mode_id == "radial-outward" and tier is Tier.T1:
+            hold = compile(mode_id, Tier.T3)
+            modules = {}
+            for d, mt in hold.modules.items():
+                rows = keep.get(d) or [
+                    R.brightness(55) if r.key == ("brightness", None) else r for r in mt.rows
+                ]
+                modules[d] = replace(mt, rows=list(rows), expect=list(rows))
+            return replace(hold, tier=Tier.T1, motion=True, modules=modules, waves=None, feature="T1 (test)")
+        return compile(mode_id, tier)
+
+    w.engine.deps.compile = with_t1
+    w.engine.deps.ladder = lambda m: (
+        [Tier.T1, Tier.STEPPED, Tier.T3] if m == "radial-outward" else ladder(m, MODES)
+    )
+    return w
+
+
+def test_a_settle_onto_a_motion_plan_re_triggers_every_module():
+    """07 §6 (D75, review B-R5-TS-3): a run that ends on its own settles onto a motion plan by re-triggering all nine
+    modules, the two whose T1 rows are exactly what the run's last step sent them included. (A run ends on its last
+    step, not on the hold: 90 s of 6 s steps is 15 steps, and step 14 is cycle step 2, so the two modules' T1 rows are
+    built from that step; built from the hold, they'd differ from what was sent and count as changed anyway.)"""
+
+    async def main():
+        keep: dict[str, list] = {}
+        w = _motion_t1_world(keep)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        first = (w.engine.current_plan().tier, runner.running)
+        kept = list(runner.plan.modules)[:2]
+        last = step_rows(runner.plan, runner.count - 1)  # the step the run ends on
+        keep.update({d: list(last[d]) for d in kept})
+        before: dict[str, list | None] = {}
+        settle = w.engine.settle_after_run
+
+        def spy(r):  # what the two modules were last sent, as the run hands over to the settle
+            before.update({d: w.engine.sent_rows.get(d) for d in kept})
+            return settle(r)
+
+        w.engine.settle_after_run = spy
+        await w.run_for(92)
+        settles = [c for c in w.events("command") if c["source"] == "settle"]
+        out = (first, runner.ended, w.engine.current_plan(), w.engine.runner, kept, keep, before, settles)
+        await w.close()
+        return out
+
+    first, ended, plan, runner, kept, keep, before, settles = run_virtual(main)
+    assert first == (Tier.STEPPED, True)  # a guest's choice runs the rung first
+    assert ended == "the run is over" and plan.tier is Tier.T1 and runner is None
+    assert all(plan.modules[d].rows == keep[d] for d in kept)
+    assert before == {d: keep[d] for d in kept}  # those two already show their T1 rows: only 07 §6 sends them
+    assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: radial-outward"}
+    assert {c["device_id"].removeprefix("sim-") for c in settles} == set(plan.modules)
+
+
+def test_a_deferred_settle_onto_a_motion_plan_re_triggers_every_module():
+    """07 §6 through `_settle_later` (D75, review B-R5-TS-3): a run the write budget ended (HELD_STEPS_END holds in a
+    row) sends its hold at once, and one cap window later `_settle` moves it to a motion plan by re-triggering all nine
+    modules, the two whose T1 rows are exactly the hold they were just sent included."""
+
+    async def main():
+        keep: dict[str, list] = {}
+        w = _motion_t1_world(keep)
+        await quiet_start(w)
+        await w.engine.request_mode("radial-outward", source="kiosk")
+        runner = w.engine.runner
+        kept = list(runner.plan.modules)[:2]
+        keep.update({d: list(runner.plan.modules[d].rows) for d in kept})  # the hold: the plan's own rows
+        await w.run_for(20)  # a few steps are out
+        real = w.executor.account_writes
+        w.executor.account_writes = lambda address, **kw: real(address, **kw) + 120  # the 60 s window is full
+        while runner.running:
+            await w.run_for(0.5)
+        end = w.clock.monotonic()
+        w.executor.account_writes = real
+        ended = (runner.ended, w.engine.current_plan().tier)
+        await w.run_for(30)  # the hold is out; the settle waits one cap window
+        before = (
+            {d: w.engine.sent_rows.get(d) for d in kept},
+            [c for c in w.events("command") if c["source"] == "settle"],
+        )
+        await w.run_for(end + 65 - w.clock.monotonic())
+        settles = [c for c in w.events("command") if c["source"] == "settle"]
+        out = (ended, before, w.engine.current_plan(), w.engine.runner, kept, keep, settles)
+        await w.close()
+        return out
+
+    ended, (sent, early), plan, runner, kept, keep, settles = run_virtual(main)
+    assert ended == ("the account's write budget held back 2 steps in a row", Tier.STEPPED)
+    assert early == []  # nothing settles inside the cap window
+    # those two already show their T1 rows (the hold they were just sent): only 07 §6 sends them
+    assert sent == {d: keep[d] for d in kept}
+    assert plan.tier is Tier.T1 and runner is None and all(plan.modules[d].rows == keep[d] for d in kept)
+    assert len(settles) == 9 and {c["label"] for c in settles} == {"after the run: radial-outward"}
+    assert {c["device_id"].removeprefix("sim-") for c in settles} == set(plan.modules)
+
+
 # ---- gates and config ---------------------------------------------------------------------------------------------
 def _wiring(*, simulated: bool, live_enabled: bool = False, rehearsal: bool = False) -> ShowWiring:
     wiring = object.__new__(ShowWiring)  # tier_allowed needs only services, engine and the commissioning flag
@@ -953,14 +2125,46 @@ def test_motion_stepped_settings_load_with_the_lead_defaults_and_refuse_nonsense
             load_settings(tmp_path)
 
 
-def test_a_run_must_end_before_the_idle_hold_and_the_idle_mode_never_steps():
+def test_motion_idle_settings_load_off_and_refuse_nonsense(tmp_path):
+    """motion.idle (D75): the idle look's breath, off (null) as shipped; only Alon turns it on."""
+    assert load_settings().motion.idle is None
+    (tmp_path / "conductor.yaml").write_text("motion: {idle: {breathe_run_s: 60, every_s: 300}}\n")
+    idle = load_settings(tmp_path).motion.idle
+    assert (idle.breathe_run_s, idle.every_s) == (60.0, 300.0)
+    (tmp_path / "conductor.yaml").write_text("motion: {idle: {breathe_run_s: 60, every_s: 30}}\n")
+    with pytest.raises(ConfigError, match="must be longer than breathe_run_s"):
+        load_settings(tmp_path)
+    (tmp_path / "conductor.yaml").write_text("motion: {idle: {breathe_run_s: 200, every_s: 300}}\n")
+    with pytest.raises(ConfigError, match="breathe_run_s"):
+        load_settings(tmp_path)
+    (tmp_path / "conductor.yaml").write_text(
+        "motion: {idle: {breathe_run_s: 60, every_s: 300, burst: true}}\n"
+    )
+    with pytest.raises(ConfigError, match="burst"):
+        load_settings(tmp_path)
+    # against the modes (show._check_stepped): an idle look with a rung, and room for two paced steps on nine
+    idle = {"idle_mode": "breathe-level"}
+    _check_stepped(settings_with(kiosk=idle, motion={"idle": {"breathe_run_s": 60, "every_s": 300}}), MODES)
+    _check_stepped(settings_with(kiosk=idle, motion={"idle": {"breathe_run_s": 15, "every_s": 300}}), MODES)
+    too_short = settings_with(kiosk=idle, motion={"idle": {"breathe_run_s": 10, "every_s": 300}})
+    with pytest.raises(ConfigError, match="breathe_run_s: 10 s fits fewer than two 7.5 s steps") as e:
+        _check_stepped(too_short, MODES)
+    assert "make it at least 15 s" in str(e.value)
+    still = settings_with(motion={"idle": {"breathe_run_s": 60, "every_s": 300}})  # Calm, no rung
+    with pytest.raises(ConfigError, match="has no stepped rung to breathe with"):
+        _check_stepped(still, MODES)
+
+
+def test_a_run_must_end_before_the_idle_hold_and_motion_idle_needs_an_idle_rung():
     _check_stepped(ConductorSettings(), MODES)  # 90 s runs, idle_return_s 180, a still idle mode
     short = settings_with(kiosk={"idle_return_s": 60})
     with pytest.raises(ConfigError, match="run_s: 90 s is longer than kiosk.idle_return_s"):
         _check_stepped(short, MODES)
-    stepping_idle = settings_with(kiosk={"idle_mode": "radial-outward"})
-    with pytest.raises(ConfigError, match="idle mode .* can't have a stepped rung"):
-        _check_stepped(stepping_idle, MODES)
+    # D75: the idle look may carry a rung (start-up and an idle return still show it still, motion.idle off)
+    _check_stepped(settings_with(kiosk={"idle_mode": "radial-outward"}), MODES)
+    breathing_calm = settings_with(motion={"idle": {"breathe_run_s": 60, "every_s": 300}})
+    with pytest.raises(ConfigError, match="'lowcountry-calm' .* has no stepped rung to breathe with"):
+        _check_stepped(breathing_calm, MODES)
 
 
 def test_the_show_checks_stepped_runs_against_the_kiosk_settings_when_it_loads(tmp_path):

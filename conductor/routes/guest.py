@@ -49,7 +49,8 @@ and the panel then draws its 30-light serpentine instead). A fixed contract:
                  modules: [{pos, state: off|dark|unknown|lit|changing,
                             color: "#RRGGBB" | null, colors: ["#RRGGBB" × 30 in lattice order] | null} × 9],
                  motion: null | {kind: "ripple", t0, stagger_s, rings}
-                              | {kind: "steps", t0, step_s, frames: [[hex | null × 9]], ends_at}}
+                              | {kind: "steps", t0, step_s, frames: [[hex | null × 9]],
+                                 levels?: [[int | null × 9]], ends_at}}
 
 Colours are full strength (the level is drawn separately); `color` is set when every head is the same, else `colors`;
 `off`, `dark` and `unknown` carry no colour. `off` is claimed only once a panel reads back off; a locked or stuck panel,

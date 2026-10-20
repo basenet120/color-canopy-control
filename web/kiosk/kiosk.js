@@ -22,7 +22,7 @@
 // Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
 // browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, connectLive, setSimBadge } from "/static/app.js?v=review-2";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=review-3";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -65,7 +65,7 @@ import {
   switchView,
   thumbDots,
   waitToastOver,
-} from "/kiosk/panel-model.mjs?v=review-2";
+} from "/kiosk/panel-model.mjs?v=review-3";
 import {
   DOT_R_IN,
   ariaSummary,
@@ -73,10 +73,11 @@ import {
   geometryKey,
   layout,
   levelOpacity,
+  moduleOpacity,
   motionActive,
   motionColors,
   paintFor,
-} from "/kiosk/canopy-preview.mjs?v=review-2";
+} from "/kiosk/canopy-preview.mjs?v=review-3";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -473,19 +474,22 @@ function paintCanopy(canopy, lit) {
   canopyView.shown = modules;
   const byPos = new Map(modules.map((m) => [m.pos, m]));
   const reduced = reducedMotion();
-  const opacity = levelOpacity(lit.level, canopy.view && canopy.view.dim_floor);
-  const paints = new Array(canopyView.dots.length); // every head's paint, for the fins
+  const floor = canopy.view && canopy.view.dim_floor;
+  const opacity = levelOpacity(lit.level, floor); // the canopy's level: a fin's fallback when a head has none
+  const paints = new Array(canopyView.dots.length); // every head's paint, with its own opacity, for the fins
   let dirty = false;
   canopyView.dots.forEach((dot, i) => {
+    // a breathing run's frame gives each panel its own level (D75); the fins it lights follow it
+    const dotOpacity = moduleOpacity(byPos.get(dot.pos), lit, floor);
     const p = paintFor(byPos.get(dot.pos), dot.k, { reduced });
     const lightOn = p.kind === "lit" || p.kind === "changing";
-    const paint = `${p.kind}|${p.fill}|${p.pulse}|${lightOn ? opacity : 1}`;
-    paints[i] = p;
+    const paint = `${p.kind}|${p.fill}|${p.pulse}|${lightOn ? dotOpacity : 1}`;
+    paints[i] = { ...p, opacity: lightOn ? dotOpacity : 1 };
     if (paint === dot.paint) return; // untouched dots keep their transition and pulse running
     dirty = true;
     dot.paint = paint;
     dot.node.setAttribute("fill", p.fill || "none");
-    dot.node.setAttribute("fill-opacity", String(lightOn ? opacity : 1));
+    dot.node.setAttribute("fill-opacity", String(lightOn ? dotOpacity : 1));
     dot.node.setAttribute("class", `dot is-${p.kind}${p.pulse ? " changing" : ""}`);
   });
   // A fin's paint is a function of its near dots' paints: a frame where no dot changed changes no fin.

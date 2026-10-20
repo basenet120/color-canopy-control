@@ -423,7 +423,9 @@ def test_test_mode_change_restores_the_previous_mode(app_client):
     result = app_client.post("/api/ops/checklist/test-mode-change", json={}).json()
     assert result["mode"] == "goodnight-glow" and result["ok"] is True
     assert result["restored_to"] == "lowcountry-calm"
-    assert engine.calls[-1] == ("request_mode", {"mode_id": "lowcountry-calm", "source": "ops"})
+    # D75: the change back puts the look back still (its own source never starts a run); the test's choice is ops
+    assert engine.calls[-2] == ("request_mode", {"mode_id": "goodnight-glow", "source": "ops"})
+    assert engine.calls[-1] == ("request_mode", {"mode_id": "lowcountry-calm", "source": "ops-restore"})
 
 
 def test_test_mode_change_reports_modules_that_miss_the_window(app_client, monkeypatch):
@@ -990,7 +992,8 @@ def test_the_rehearsal_starts_only_with_the_confirm_sentence_and_never_past_ten_
     assert [name for name, _ in engine.calls] == ["rehearsal_preview", "rehearsal_preview"]
     engine.calls.clear()
     preview = app_client.get(route, params={"mode": "golden-hour", "minutes": 2}).json()
-    assert preview["preview"]["confirm"] == sentence and "lowcountry-calm" not in [
+    # D75: any look can be rehearsed, the idle look included
+    assert preview["preview"]["confirm"] == sentence and "lowcountry-calm" in [
         m["id"] for m in preview["modes"]
     ]
     started = app_client.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})

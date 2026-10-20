@@ -17,7 +17,7 @@ Binding rules for the build, written after an adversarial review of the plan aga
 - `HUBSPACE_LIVE_UNTIL=<date>` (staging: `2026-10-19`) — after it, the runtime refuses writes. Staging can't touch anything during the show window.
 - If a connected account can see devices that aren't allowlisted, stay read-only for those and alert on /ops (catches kits that were shared or moved).
 - Bench jobs and the single-module test page (`/ops/module`) take an exclusive per-device lock that pauses the reconciler and idle hold for that device. The page releases it on exit or after 10 min idle; a lock can never be held on a device outside the allowlist.
-- A test enumerates every writer path (executor, reconciler, idle hold, slot manager, bench, module page, the Lab's try-on and the Lab's publish repaint) and proves each is denied for a non-allowlisted id. A grep test proves nothing outside the adapter imports aioafero or calls aiohttp write methods.
+- A test enumerates every writer path (executor, reconciler, idle hold, slot manager, bench, module page, the Lab's try-on, the Lab's publish repaint, and the stepped runner, its settle and the idle breath, D75) and proves each is denied for a non-allowlisted id. A grep test proves nothing outside the adapter imports aioafero or calls aiohttp write methods.
 
 ## 2. Auth and surfaces
 - Implemented: `conductor/auth.py` — Basic auth on every HTTP **and** WebSocket request except `/healthz`; the process refuses to start without `CONDUCTOR_BASIC_AUTH` on Railway, with `HUBSPACE_LIVE=1`, or outside sim (local-only opt-out `CONDUCTOR_AUTH=off`).
@@ -52,7 +52,7 @@ Binding rules for the build, written after an adversarial review of the plan aga
 
 ## 6. Executor, reconciler and looks
 - **Never split one module's update across PUTs** (a stepped sweep or dim-down is several updates, each one PUT). A mode change bursts the 9 module PUTs concurrently over a warm session with a token that has ≥ 15 s left (to force a refresh: `bridge.set_token_data(bridge.token_data._replace(expiration=0))` then one cheap GET).
-- **Re-assert only modules whose readback differs.** For motion looks (Golden Hour), re-trigger all nine as one burst or not at all — a single re-select may restart that module's phase.
+- **Re-assert only modules whose readback differs.** For on-device motion looks (none today; stepped looks are not motion looks: `Mode.motion` stays false, D75), re-trigger all nine as one burst or not at all — a single re-select may restart that module's phase.
 - **Downgrade with hysteresis:** retry first; downgrade a mode's tier only if a module stays wrong > 10 s, or on ≥ 3 throttles in 60 s per account; upgrade back after 5 clean minutes. 5% random throttling must not downgrade. "Correct" means the requested mode at its current tier.
 - **Slot hashes** use a canonical projection of the **readback** (framebuffer entries in order; fields r, g, b, cct, colorBrightness, whiteBrightness). Record the hash from readback right after commissioning. Rewrite a drifted slot at most once per 10 min, then alert — never loop 3.4 KB writes at show hardware.
 - **Operator repaint (D68):** publishing a new painted design from the Design Lab repaints that scene's slot, after a confirm naming the modules and the cost, only on modules whose slot was commissioned (origin "api") and that have their own Gate C and map; never over a hand-painted ("app") slot (a design change over one is refused). One slot write per module through the executor (≤ 1 write/s per device; retried at most twice more within the job only when it didn't land), header from the device's readback, inside a quiet window (no show, guest, reconciler or rehearsal command until it ends), the readback hash recorded exactly as commissioning records it. Until a module's slot holds the live design the scene runs below T1, so the copy is true. An operator repaints a given scene at most once per `lab.repaint_min_interval_s` (120 s): a sooner publish installs at once and queues the repaint; nothing ever blocks a revert. The reconciler's own drift/stale rewrite stays at once per `reconciler.slot_rewrite_min_interval_s` (600 s), counted from an operator repaint's attempt too, and never acts on a slot whose operator repaint is pending. For motion looks the re-select after a repaint is all nine as one burst.
@@ -63,7 +63,7 @@ Binding rules for the build, written after an adversarial review of the plan aga
   account cap), never under `kiosk.cooldown_min_s` (2 s): two strands 2 s, nine 7.5 s (D70; was a fixed 8 s) — and
   with `kiosk.fast_pacing` on (D72, the default) only `cooldown_min_s`, falling back to that budget gap while
   Hubspace throttles the account (≥ 2 attempts answered 429/403 in 60 s, held 120 s); after 3 min idle, return to
-  Lowcountry Calm.
+  Lowcountry Calm (an idle return never starts a run unless `motion.idle` is on, D75).
 - `SupplementalDriver`: interface stub only.
 - Naming: `DeviceDriver` is the interface (lights, plugs, locks, fans); `AferoDriver` in `conductor/drivers/afero.py` is the only aioafero importer.
 

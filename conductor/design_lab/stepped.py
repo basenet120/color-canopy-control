@@ -7,7 +7,10 @@
 - `stepped_preview(patched, scene_id, canopy, settings, today_positions)` — the EXACT steps the compiler gives the
   draft (`compile_mode(scene, Tier.STEPPED, <the design context>)`, the same nine stand-in modules as every other
   tier's sentence), the timing, the real pacing (`pace.nine`, `pace.today`), the schema-checked moving copy and the
-  live gate's sentence. None for a scene without a stepped rung (the idle look never has one: the show refuses it).
+  live gate's sentence. None for a scene without a stepped rung. Each step carries its colours and, D75, the level
+  each module is sent (`levels`), so a breath previews as it breathes.
+- `idle_note(settings, scene_id, mode)` — for the idle look with a stepped rung only (D75): when it runs (a guest's
+  choice, an /ops choice when its rung is first, and the idle breath when `motion.idle` is on).
 - `ripple_rings(patched, scene_id, canopy)` — the rings a new mood would land in (D64): `field.bands` of the mode's
   design (`compile.design_field` at module level) over the module centres, as the compiler orders a plan's `waves`.
 - `ripple_json(...)` — those rings plus the stagger slider's range and a true sentence about the live ripple.
@@ -28,6 +31,7 @@ from conductor.engine_api import ModePlan, PlanError, Tier
 from conductor.looks import compile_mode
 from conductor.looks import field as F
 from conductor.looks.compile import design_field
+from conductor.looks.schema import Mode
 from conductor.sequence import planned_writes_per_min
 from conductor.show import STEPPED_LIVE_OFF
 
@@ -48,6 +52,15 @@ RIPPLE_ON_NOTE = (
 )
 EFFECTS_OFF = "Effects — not enabled: no code has passed the bench (06 #4)"
 TRIAL_NEVER_STEPS = "A try-on never steps: the lights hold the still module-level look."
+# D75: the idle look may carry a rung. Start-up and an idle return show it still unless motion.idle is on.
+IDLE_RUNS_OFF = (
+    "{label} is the idle look: start-up and an idle return show it still; it runs only when chosen — by a guest, "
+    "or from /ops when its stepped rung is first in its ladder."
+)
+IDLE_RUNS_ON = (
+    "{label} is the idle look: start-up shows it still; an idle return lands as one {breathe_run_s:g} s breath and "
+    "it breathes again every {every_s:g} s while it shows (motion.idle); a guest's choice runs it in full."
+)
 
 
 def run_s_max(settings: ConductorSettings) -> float:
@@ -154,8 +167,9 @@ def canopy_pace(
 
 
 def steps_when(patched: ConfigTrio, scene_id: str) -> str | None:
-    """When a scene whose stepped rung sits under higher rungs (Golden Hour: canvas, slot) actually steps: only where
-    none of those can run (D65: a downgrade passes over the stepped rung). None when stepped is the ladder's first."""
+    """When a scene whose stepped rung sits under higher rungs (Golden Hour: canvas, slot) actually steps (D75): a
+    guest's choice runs the rung first, then the run holds on the best still rung; an /ops choice keeps ladder order;
+    a re-pick never starts a run. None when stepped is the ladder's first (every choice runs it)."""
     from conductor.design_lab.preview import TIERS  # (preview imports this module)
 
     mode = patched.modes.mode(scene_id)
@@ -164,9 +178,21 @@ def steps_when(patched: ConfigTrio, scene_id: str) -> str | None:
         return None
     above = ", ".join(TIERS[t][0] if t in TIERS else t for t in ladder[: ladder.index("stepped")])
     return (
-        f"{mode.label} steps only where its higher rungs ({above}) can't run; where one of them runs, that look "
-        "shows instead and nothing steps"
+        f"When a guest chooses {mode.label} on the iPad it moves for its run, then holds on its best still rung "
+        f"({above} where available, else module level); chosen from /ops it shows the first of its rungs that can "
+        "run, and a re-pick keeps a run going or holds its best still rung"
     )
+
+
+def idle_note(settings: ConductorSettings, scene_id: str, mode: Mode) -> str | None:
+    """When the idle look (`kiosk.idle_mode`) runs, for the idle look with a stepped rung only (D75): never on
+    start-up; on an idle return and every `every_s` only with `motion.idle` on. None for any other scene."""
+    if scene_id != settings.kiosk.idle_mode or "stepped" not in mode.ladder:
+        return None
+    idle = settings.motion.idle
+    if idle is None:
+        return IDLE_RUNS_OFF.format(label=mode.label)
+    return IDLE_RUNS_ON.format(label=mode.label, breathe_run_s=idle.breathe_run_s, every_s=idle.every_s)
 
 
 def ripple_note(settings: ConductorSettings) -> str:
@@ -192,6 +218,11 @@ def _compile(patched: ConfigTrio, scene_id: str, canopy: dict, **kw: Any) -> Mod
     return compile_mode(scene_id, Tier.STEPPED, _design_context(patched, canopy, **kw))
 
 
+def _sentence(text: str) -> str:
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
 def stepped_preview(
     patched: ConfigTrio,
     scene_id: str,
@@ -202,7 +233,13 @@ def stepped_preview(
     """SteppedPreviewJSON for a scene with a stepped rung, else None. `steps` are the compiled program's steps exactly
     (step 0 is the still design, the hold); `pace.nine` / `pace.today` the seconds a step really takes on the full
     canopy and on `today_positions` (the show box's driven kits); `moving_feature` the schema-checked moving copy
-    the full canopy would show while a run moves (`today_moving_feature`: the partial canopy's, D62)."""
+    the full canopy would show while a run moves (`today_moving_feature`: the partial canopy's, D62).
+
+    The show box compiles its own program over the modules it drives (D75: a breath's lags count over them, so its
+    cycle and rhythm differ from the nine's), so `today_steps` are that program's steps, which the Lab plays at the
+    `today` pace. When that compile refuses (a breath that would rest on every driven strand for a step),
+    `today_error` says why, `today_steps` is None and `runs.today.still` carries the reason: the show box holds the
+    still look, and the Lab says so instead of playing the nine-module steps."""
     mode = patched.modes.mode(scene_id)
     tech = mode.techniques.stepped
     if tech is None or "stepped" not in mode.ladder:
@@ -213,10 +250,20 @@ def stepped_preview(
         "steps_per_cycle": tech.steps_per_cycle,
         "run_s": tech.run_s,
         "direction": tech.direction,
+        # D75: the kind of motion and a breath's parameters; `cycle` is the program's length (a breath's
+        # steps_per_cycle plus its largest lag), 0 when it can't compile
+        "mode": tech.mode,
+        "shift": tech.shift,
+        "brightness_swing": tech.brightness_swing,
+        "lag_steps": tech.lag_steps,
+        "seed": tech.seed,
+        "cycle": 0,
         "steps": [],
         "feature": None,
         "moving_feature": None,
         "today_moving_feature": None,
+        "today_steps": None,  # the show box's own program (its driven modules), played at the `today` pace
+        "today_error": None,  # why that program won't compile (the show box then holds the still look)
         "pace": None,
         "runs": None,
         "live_enabled": live,
@@ -232,7 +279,10 @@ def stepped_preview(
         out["error"] = f"{mode.label} can't step: {exc}"
         return out
     assert plan.program is not None
-    out["steps"] = [{"index": s.index, "colours": dict(s.colours)} for s in plan.program.steps]
+    out["steps"] = [
+        {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)} for s in plan.program.steps
+    ]
+    out["cycle"] = len(plan.program.steps)
     out["feature"] = plan.feature
     out["moving_feature"] = plan.program.moving_feature
     today = [p for p in GRID if p in set(today_positions)]
@@ -244,11 +294,19 @@ def stepped_preview(
                 canopy,
                 addresses={f"design-{p}": (f"design-{p}" if p in today else None) for p in GRID},
             )
-            out["today_moving_feature"] = partial.program.moving_feature if partial.program else None
-        except PlanError:
-            pass
+        except PlanError as exc:
+            out["today_error"] = _sentence(str(exc))
+        else:
+            if partial.program is not None:
+                out["today_moving_feature"] = partial.program.moving_feature
+                out["today_steps"] = [
+                    {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)}
+                    for s in partial.program.steps
+                ]
     nine = canopy_pace(patched, scene_id, canopy, settings, GRID)
     here = canopy_pace(patched, scene_id, canopy, settings, today)
+    if here is not None and out["today_error"] is not None:  # the show box holds the still look (B-R1-3)
+        here = {**here, "hold_at": 0, "moves_s": 0.0, "still": out["today_error"]}
     assert nine is not None
     out["runs"] = {"nine": nine, "today": here}
     out["pace"] = {
@@ -271,6 +329,7 @@ __all__ = [
     "STEP_S_INCREMENT",
     "canopy_pace",
     "effective_step_s",
+    "idle_note",
     "ripple_json",
     "ripple_note",
     "ripple_rings",

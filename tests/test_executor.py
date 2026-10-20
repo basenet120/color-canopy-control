@@ -412,6 +412,29 @@ def test_listeners_budget_and_in_flight():
     assert w.executor.budget("sim-unknown")["writes_60s"] == 0
 
 
+def test_account_writes_counts_the_accounts_attempts_within_a_span():
+    """The stepped runner's cap check (D75) reads the account's writes in the last 60 s less the per-device gap:
+    every attempt on any of the account's devices, retries included, none older than the span."""
+    w = World(backoff_s=[1.0], max_attempts=2, readback_delay_s=0.0)
+    # sim-b's first attempt is a 429, its retry goes 1 s later
+    w.driver.script_write("sim-b", Outcome.THROTTLED)
+
+    async def main():
+        await w.executor.submit(cmd("sim-a", verify=False))  # t 0
+        await asyncio.sleep(10.0)
+        b, c = cmd("sim-b", verify=False), cmd("sim-c", verify=False)
+        await asyncio.gather(w.executor.submit(b), w.executor.submit(c))
+        at_11 = (w.executor.account_writes("sim-a"), w.executor.account_writes("sim-c", within_s=5.0))
+        await asyncio.sleep(59.5 - w.clock.monotonic())  # sim-a's write is 59.5 s old
+        late = (w.executor.account_writes("sim-b"), w.executor.account_writes("sim-b", within_s=59.0))
+        return at_11, late, w.executor.budget("sim-a")["account_writes_60s"]
+
+    (whole, recent), (still, shared), gauge = run_virtual(main)
+    assert whole == 4 and recent == 3  # sim-a, sim-b twice (429, retry), sim-c on one account
+    assert still == 4 == gauge and shared == 3  # sim-a's write leaves the 60 s window within the next second
+    assert w.executor.account_writes("sim-unknown") == 4  # the fake driver puts every device on one account
+
+
 def test_close_resolves_unfinished_commands_and_refuses_new_ones():
     w = World()
     w.driver.latency_s = 5.0

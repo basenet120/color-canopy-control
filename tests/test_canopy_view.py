@@ -548,3 +548,37 @@ def test_the_panel_animates_exactly_the_steps_the_engine_sent():
         assert dict(zip(GRID, frame, strict=True)) == want, now
     frames = {tuple(_client_frame(lit["motion"], now)) for now, lit, _ in moving}
     assert len(frames) == len(plan.program.steps)  # it really moved: every step of the cycle was drawn
+
+
+def test_stepped_levels_ride_with_their_frames_and_a_settle_draws_the_per_head_picture():
+    """D75: a breath's frames carry the level each panel is sent (drawn as opacity), null wherever the frame is; a
+    program without levels gives no key; a run that settled onto Golden Hour's sun draws its per-head colours."""
+    plan = compile_mode("breathe-level", Tier.STEPPED, STEPPED_CTX)
+    program = _program(plan, count=12)
+    levels = [[plan.program.steps[0 if n == 12 else n % 4].levels[pos] for pos in GRID] for n in range(13)]
+    with_levels = {**program, "levels": levels}
+    motion = lit_state(CFG, REGISTRY, plan, _state(plan, program=with_levels), now=1001.0)["motion"]
+    assert len(motion["levels"]) == len(motion["frames"]) == 13
+    assert [row[0] for row in motion["levels"][:5]] == [28, 32, 28, 24, 28] and motion["levels"][-1] == [
+        28
+    ] * 9
+    # a locked panel (null in every frame) carries no level either
+    locked = _with(_state(plan, program=with_levels), "canopy-r1c1", locked=True, status="locked")
+    motion = lit_state(CFG, REGISTRY, plan, locked, now=1001.0)["motion"]
+    i = GRID.index("r1c1")
+    assert all(
+        f[i] is None and row[i] is None for f, row in zip(motion["frames"], motion["levels"], strict=True)
+    )
+    assert all(row[GRID.index("r0c0")] is not None for row in motion["levels"])
+    # a program that doesn't say (or says something else): no key, as before D75
+    assert "levels" not in lit_state(CFG, REGISTRY, plan, _state(plan, program=program), now=1001.0)["motion"]
+    short = {**program, "levels": levels[:3]}
+    assert "levels" not in lit_state(CFG, REGISTRY, plan, _state(plan, program=short), now=1001.0)["motion"]
+    # settled onto the sun: no motion, its own per-head colours (lattice order)
+    t1 = compile_mode("golden-hour", Tier.T1, CTX)
+    lit = lit_state(CFG, REGISTRY, t1, _state(t1), now=1001.0)
+    assert lit["motion"] is None
+    assert all(m["state"] == "lit" and (m["colors"] or m["color"]) for m in lit["modules"])
+    assert any(
+        m["colors"] and len(set(m["colors"])) > 1 for m in lit["modules"]
+    )  # per head, not one per module

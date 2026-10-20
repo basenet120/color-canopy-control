@@ -17,7 +17,7 @@
 // a light any other way, and no publish state is kept in this browser (only working drafts and UI prefs).
 
 import { api as baseApi, connectLive, copyJSON } from "/static/app.js";
-import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-3";
+import { buildCanopy, paintCanopy } from "./demo-model.mjs?v=show-design-4";
 import * as M from "./lab-model.mjs?v=lab-11";
 
 const API = "/api/lab";
@@ -1064,7 +1064,8 @@ function sidePicker(side) {
 function paintStage(st, preview, view, { fresh = true, failed = false, notes = [], paint = {} } = {}) {
   const painter = M.viewPainter(preview, view, paint);
   const p = painter.error ? M.unlitPainter(painter.error) : painter;
-  const level = Number.isFinite(Number(p.level)) ? Number(p.level) : 100;
+  // a breathing step's level is per module (a function of the head, D75); otherwise the draft's one level
+  const level = typeof p.level === "function" ? p.level : Number.isFinite(Number(p.level)) ? Number(p.level) : 100;
   paintCanopy(st.view, p.head, p.spill, level);
   const note = $(".lab-stage-note", st.el);
   const parts = [];
@@ -1543,7 +1544,7 @@ function rangePair(id, label, range, numberStep, onValue) {
     const n = Number(num.value);
     if (Number.isFinite(n) && num.value !== "") onValue(Math.min(Number(num.max), Math.max(Number(num.min), n)));
   });
-  return h("div", { class: "lab-pair" }, h("span", { class: "lab-label-text", text: label }), slider, num);
+  return h("div", { class: "lab-pair" }, h("span", { class: "lab-label-text", id: `${id}-l`, text: label }), slider, num);
 }
 
 function setPairValue(id, v) {
@@ -1554,7 +1555,8 @@ function setPairValue(id, v) {
 }
 
 /** The editor's Motion section: the stepped timing for scenes with a stepped rung (read-only with the reason
- * otherwise), the live line, and the greyed effects card. */
+ * otherwise), the kind of motion and a breath's controls (D75; shown for breathe/shimmer only, synced by
+ * syncMotionEditor), the live line, and the greyed effects card. */
 function motionSection(scene, d) {
   const limits = L.catalog.limits;
   const c = M.steppedControls(scene, d, limits);
@@ -1562,8 +1564,22 @@ function motionSection(scene, d) {
   const parts = [h("h3", { text: "Motion" })];
   if (!c.editable) parts.push(h("p", { class: "lab-readonly", text: c.reason }));
   else {
+    const kindLabel = { travel: "Travel", breathe: "Breathe", shimmer: "Shimmer" };
+    const seed = h("input", { type: "number", id: "lab-seed", class: "lab-input num", min: 0, step: 1, "aria-label": "Seed (a whole number)", inputmode: "numeric" });
+    seed.addEventListener("change", () => {
+      const n = Number(seed.value);
+      if (Number.isFinite(n) && seed.value !== "") set({ seed: Math.max(0, Math.round(n)) });
+    });
     parts.push(
-      h("p", { class: "lab-muted" }, `${M.MOTION_COPY.design} Reads as: `, h("strong", { id: "lab-stepped-words" })),
+      h("p", { id: "lab-motion-idle-note", class: "lab-muted lab-tight", hidden: true }),
+      h("span", { class: "lab-label-text", text: "Kind of motion" }),
+      h(
+        "div",
+        { id: "lab-motion-mode", class: "lab-seg", role: "group", "aria-label": "Kind of motion" },
+        c.modes.map((k) => h("button", { type: "button", class: "lab-seg-btn", dataset: { mode: k }, onclick: () => set({ mode: k }), text: kindLabel[k] || k })),
+      ),
+      h("p", { class: "lab-muted lab-tight", text: M.MOTION_COPY.mode }),
+      h("p", { class: "lab-muted" }, h("span", { id: "lab-design-how", text: c.designHow }), " Reads as: ", h("strong", { id: "lab-stepped-words" })),
       h("span", { class: "lab-label-text", text: "Direction" }),
       h(
         "div",
@@ -1574,7 +1590,17 @@ function motionSection(scene, d) {
       ),
       h("p", { class: "lab-muted lab-tight", text: M.MOTION_COPY.direction }),
       rangePair("lab-steps", `Steps per cycle (${c.steps.min}–${c.steps.max})`, c.steps, 1, (v) => set({ steps_per_cycle: v }, { coalesce: true })),
-      h("p", { class: "lab-muted lab-tight", text: M.MOTION_COPY.cycle }),
+      h("p", { id: "lab-steps-how", class: "lab-muted lab-tight", text: M.MOTION_COPY.cycle }),
+      h(
+        "div",
+        { id: "lab-breathe", hidden: !c.breathes },
+        rangePair("lab-shift", `Colour shift (${c.shift.min}–${c.shift.max} of the design)`, c.shift, c.shift.step, (v) => set({ shift: v }, { coalesce: true })),
+        rangePair("lab-swing", "Brightness swing (± points)", c.swing, 1, (v) => set({ brightness_swing: v }, { coalesce: true })),
+        rangePair("lab-lag", `Lag (steps, ${c.lag.min}–${c.lag.max})`, c.lag, 1, (v) => set({ lag_steps: v }, { coalesce: true })),
+        h("p", { id: "lab-lag-how", class: "lab-muted lab-tight", text: c.lagHow }),
+        h("div", { id: "lab-seed-box", class: "lab-pair", hidden: !c.shimmer }, h("span", { class: "lab-label-text", text: "Seed" }), seed),
+        h("p", { id: "lab-seed-how", class: "lab-muted lab-tight", hidden: !c.shimmer, text: M.MOTION_COPY.seed }),
+      ),
       rangePair("lab-step-s", `Step time (s, ${M.fmtS(c.step_s.min)}–${M.fmtS(c.step_s.max)}, in 0.5 s steps)`, c.step_s, M.STEP_S_STEP, (v) => set({ step_s: v }, { coalesce: true })),
       rangePair("lab-run-s", "Run length (s)", c.run_s, M.STEP_S_STEP, (v) => set({ run_s: v }, { coalesce: true })),
       h("p", { class: "lab-muted lab-tight", text: c.runLimit }),
@@ -1595,6 +1621,37 @@ function syncMotionEditor(scene, d, preview) {
   if (c.editable && document.getElementById("lab-steps-r")) {
     setPairValue("lab-steps", c.steps.value);
     setPairValue("lab-step-s", c.step_s.value);
+    // D75: the kind of motion and a breath's controls (the swing's top follows the brightness)
+    for (const b of document.querySelectorAll("#lab-motion-mode .lab-seg-btn")) b.setAttribute("aria-pressed", String(b.dataset.mode === c.mode));
+    const breathe = $("#lab-breathe");
+    if (breathe) breathe.hidden = !c.breathes;
+    for (const id of ["#lab-seed-box", "#lab-seed-how"]) {
+      const el = $(id);
+      if (el) el.hidden = !c.shimmer;
+    }
+    for (const suffix of ["-r", "-n"]) {
+      const el = document.getElementById(`lab-swing${suffix}`);
+      if (el) el.max = String(c.swing.max);
+    }
+    setPairValue("lab-shift", c.shift.value);
+    setPairValue("lab-swing", c.swing.value);
+    setPairValue("lab-lag", c.lag.value);
+    const seed = $("#lab-seed");
+    if (seed && document.activeElement !== seed) seed.value = c.seed === null ? "" : String(c.seed);
+    const stepsLabel = $("#lab-steps-l");
+    if (stepsLabel) stepsLabel.textContent = `${c.breathes ? "Steps per breath" : "Steps per cycle"} (${c.steps.min}–${c.steps.max})`;
+    const stepsHow = $("#lab-steps-how");
+    if (stepsHow) stepsHow.textContent = c.breathes ? M.MOTION_COPY.breath : M.MOTION_COPY.cycle;
+    // what the layout and the lag do for this kind of motion (review B-R3-2)
+    const designHow = $("#lab-design-how");
+    if (designHow) designHow.textContent = c.designHow;
+    const lagHow = $("#lab-lag-how");
+    if (lagHow) lagHow.textContent = c.lagHow;
+    const note = $("#lab-motion-idle-note");
+    if (note) {
+      note.textContent = c.note;
+      note.hidden = !c.note;
+    }
     for (const suffix of ["-r", "-n"]) {
       const el = document.getElementById(`lab-run-s${suffix}`);
       if (el) el.min = String(c.run_s.min); // a run is never shorter than one step
@@ -1724,9 +1781,12 @@ function motionPaint(preview, view) {
   if (tl.error) return { view, paint: {}, notes: [tl.error], label: "", moving: "" };
   const at = M.stepAt(tl, motionElapsed());
   const where = M.stepPositions(preview, tl.pace);
+  // the pace's own steps: at `today` the show box's program over its driven modules (D75: lags count over them)
+  const step = M.paceSteps(st, tl.pace)[at.index];
   return {
     view: "stepped",
-    paint: { step: { colours: st.steps[at.index].colours, positions: where.positions } },
+    // D75: a breath's step carries each module's level, drawn as its brightness
+    paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } },
     notes: [m.fast ? `${M.MOTION_COPY.fast}.` : "", where.note],
     label: M.stepCounter(tl, at, { state: m.state, fast: m.fast }),
     moving: M.movingLine(st, m.state, at, tl.pace),

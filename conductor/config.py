@@ -234,8 +234,9 @@ class SteppedMotionSettings(_Strict):
     `account_writes_per_min` is the account's cap on writes of any kind in any 60 s. The runner plans its steps at
     the cap less `budget_reserve` (the room left for 429 retries, silent-drop re-sends and a mood chosen mid-run), so
     its step is never shorter than `min_step_s`, nor than the account's share of that planned rate (9 modules at
-    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would take the
-    account past the cap (`sequence.ProgramRunner._step`); above `max_step_s` the look holds still. The governor stops a run when, within
+    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would leave the account
+    less than a guest's burst of room under the cap (one write per module, D75; `sequence.ProgramRunner._over_cap`);
+    above `max_step_s` the look holds still. The governor stops a run when, within
     `governor_window_s`, at least `governor_min_throttled` of the run's write attempts on one account came back 429/403
     and they are at least `governor_throttled_share` of its attempts; stepped runs on that account then wait
     `governor_cooloff_s`. A guest brightness change within `fold_guest_within_s` of the next step goes out with it."""
@@ -265,8 +266,31 @@ class SteppedMotionSettings(_Strict):
         return self
 
 
+class IdleMotionSettings(_Strict):
+    """The idle look's breath (D75, `motion.idle`): one run of the idle mode's stepped rung, `breathe_run_s` long."""
+
+    breathe_run_s: float = Field(60.0, gt=0, le=180.0)
+    every_s: float = Field(300.0, gt=0, le=3600.0)
+
+    @model_validator(mode="after")
+    def _rests(self) -> IdleMotionSettings:
+        if self.every_s <= self.breathe_run_s:
+            raise ValueError(
+                f"every_s ({self.every_s:g} s) must be longer than breathe_run_s ({self.breathe_run_s:g} s), or the "
+                "idle look would never rest between breaths"
+            )
+        return self
+
+
 class MotionSettings(_Strict):
+    """Motion through the cloud. `stepped`: the stepped runner's pacing and gates (D65). `idle` (D75, off = null, the
+    shipped value; only Alon turns it on): while the idle look (`kiosk.idle_mode`) shows, on, with no guest setting in
+    force, it breathes once for `breathe_run_s` every `every_s` after the last change or breath, and an idle return
+    to it lands as one breath. It runs only through `tier_allowed`, so never on live hardware until
+    `motion.stepped.live_enabled`, and it yields at once to any guest input."""
+
     stepped: SteppedMotionSettings = Field(default_factory=SteppedMotionSettings)
+    idle: IdleMotionSettings | None = None
 
 
 class LabSettings(_Strict):

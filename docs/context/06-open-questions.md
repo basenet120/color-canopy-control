@@ -86,7 +86,8 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     *Default (D65, `motion.stepped` in `config/conductor.yaml`):* design pace 6 s a step, 6 steps a cycle; the runner
     plans at the account cap of 90 writes a minute less a 20% reserve (72), so nine modules on one account step every
     7.5 s (two kits every 6 s); never faster than 4 s, and a step that would need more than 12 s holds still instead.
-    A step that would take the account past 90 writes in any 60 s is held back. Runs last 90 s, then the still design
+    A step that would take the account past 90 writes in any 60 s is held back (since D75, one that would leave less
+    than a guest's burst of room under 90). Runs last 90 s, then the still design
     holds. The governor stops a run at ≥ 8 throttled attempts that are ≥ 25% of its attempts in 60 s and holds stepped
     looks on that account still for 5 min. **Live off** (`live_enabled: false`) until a Gate R pass on the show kits
     (`04` gate 14); only Alon flips it. Each step's landing spread was p95 2.78 s in the simulator against 05's 2 s

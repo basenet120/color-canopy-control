@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SHOWCASE = ROOT / "web" / "ops" / "showcase"
 LAB_FILES = ("lab.js", "lab.css", "lab-model.mjs")
 DEMO_MODEL_URL = (
-    "./demo-model.mjs?v=show-design-3"  # the URL studio.js imports: one module instance on the page
+    "./demo-model.mjs?v=show-design-4"  # the URL studio.js imports: one module instance on the page
 )
 # demo-model's handoff palette and the painters that fall back to it (demo-model.mjs scenePainters): under a Draft
 # label they would show Paris's handoff colours, not the draft's
@@ -71,10 +71,12 @@ def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
-    assert '<script type="module" src="./studio.js?v=screen-2"></script>' in html
+    assert '<script type="module" src="./studio.js?v=screen-3"></script>' in html
     assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-11"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
     assert 'from "./lab-model.mjs?v=lab-11"' in _text("lab.js")
+    # ... and of demo-model: the Studio and the Lab import it at one tag (D75 bumped it with paintCanopy's levels)
+    assert f"from '{DEMO_MODEL_URL}'" in _text("studio.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -257,6 +259,44 @@ def test_the_motion_lines_come_from_the_page_model():
     assert "M.rippleLine(schedule, liveStagger)" in render and "M.sentence(st.stepsWhen)" in render
     assert "M.steppedSectionClause(x, L.catalog.live)" in js and "live off until Gate R" not in js
     assert "M.sentence(shownSt.stepsWhen)" in _function(js, "renderPresent")
+
+
+def test_the_motion_hints_follow_the_kind_of_motion():
+    """Review B-R3-2: the Motion section's layout and lag hints come from the page model's controls for the draft's
+    kind of motion (travel moves the layout; a breath keeps it in place; a shimmer's lag is its seed's spread), drawn
+    when the section is built and swapped by syncMotionEditor whenever the kind changes."""
+    js = _code(_text("lab.js"))
+    section = _function(js, "motionSection")
+    assert 'h("span", { id: "lab-design-how", text: c.designHow })' in section
+    assert 'h("p", { id: "lab-lag-how", class: "lab-muted lab-tight", text: c.lagHow })' in section
+    assert "MOTION_COPY.design" not in section and "MOTION_COPY.lag" not in section
+    sync = _function(js, "syncMotionEditor")
+    assert 'const designHow = $("#lab-design-how");' in sync
+    assert "if (designHow) designHow.textContent = c.designHow;" in sync
+    assert 'const lagHow = $("#lab-lag-how");' in sync
+    assert "if (lagHow) lagHow.textContent = c.lagHow;" in sync
+
+
+def test_the_breath_preview_plays_the_paces_own_steps_with_their_levels():
+    """D75 (review B-R5-TS-5): the page model's `paceSteps` and `viewPainter` are pinned in lab-model.test.mjs; this pins
+    that lab.js calls them. motionPaint plays the pace's own steps (at "Show box today" the show box's program over the
+    modules it drives, review B-R1-3, not the nine-module one) and hands each step's per-module levels to the painter;
+    paintStage passes a per-head level function through to paintCanopy as it is, else the one level."""
+    js = _code(_text("lab.js"))
+    motion = _function(js, "motionPaint")
+    assert "const step = M.paceSteps(st, tl.pace)[at.index];" in motion
+    assert "st.steps[" not in motion  # never the nine-module program whatever the pace
+    assert (
+        "paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } }"
+        in motion
+    )
+    stage = _function(js, "paintStage")
+    assert "const painter = M.viewPainter(preview, view, paint);" in stage
+    assert (
+        'const level = typeof p.level === "function" ? p.level : Number.isFinite(Number(p.level)) ? Number(p.level) : 100;'
+        in stage
+    )
+    assert "paintCanopy(st.view, p.head, p.spill, level);" in stage
 
 
 def test_the_tier_lists_moving_lines_show_only_while_the_steps_play():

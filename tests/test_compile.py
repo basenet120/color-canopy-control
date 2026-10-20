@@ -15,7 +15,7 @@ from conductor.config import DeviceFlags, load_registry
 from conductor.drivers.base import TELEMETRY_CLASSES
 from conductor.engine_api import ModePlan, PlanError, Tier
 from conductor.looks import CompileContext, available_tiers, compile_first, compile_mode, ladder, load_modes
-from conductor.looks.schema import MOTION_WORDS
+from conductor.looks.schema import MOTION_WORDS, breathe_words
 from conductor.scenes import load_scenes
 from conductor.sim.profiles import profile_parts
 
@@ -270,9 +270,15 @@ def test_features_differ_per_tier_and_only_motion_copy_mentions_movement():
             assert not MOTION_WORDS.search(plan.feature), (mode_id, tier)
             if tier is Tier.STEPPED:
                 # D65: a stepped plan's feature is its hold's (the modules rung's: nothing moves until a runner
-                # steps it); only the moving copy, shown while a run moves, says it moves
+                # steps it); only the moving copy, shown while a run moves, says it moves (travel) or says how it
+                # breathes (D75: breathe/shimmer)
                 assert plan.feature == compile_mode(mode_id, Tier.T3, _ctx()).feature, mode_id
-                assert MOTION_WORDS.search(plan.program.moving_feature), mode_id
+                tech = MODES.mode(mode_id).techniques.stepped
+                moving = plan.program.moving_feature
+                if tech.mode == "travel":
+                    assert MOTION_WORDS.search(moving), mode_id
+                else:
+                    assert breathe_words(tech) in moving.lower(), mode_id
                 continue
             features.append(plan.feature)
         assert len(set(features)) == len(features), mode_id
@@ -376,5 +382,7 @@ def test_plan_json_is_serialisable():
     ("mode_id", "tier"), [(m, t) for m, mode in MODES.modes.items() for t in (Tier(x) for x in mode.ladder)]
 )
 def test_each_target_carries_its_device_brightness_range_for_guest_dimming(mode_id, tier):
-    plan = compile_mode(mode_id, tier, _ctx(_caps(brightness_range=(20, 80)), **_painted()))
-    assert {mt.brightness_range for mt in plan.modules.values()} == {(20, 80)}
+    # a range that clamps no scene's level: a breath clamped flat on every strand holds still instead (D75), so a
+    # narrower one would test the clamp, not the range carried
+    plan = compile_mode(mode_id, tier, _ctx(_caps(brightness_range=(2, 99)), **_painted()))
+    assert {mt.brightness_range for mt in plan.modules.values()} == {(2, 99)}
