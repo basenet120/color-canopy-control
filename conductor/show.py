@@ -459,9 +459,11 @@ class ShowWiring:
         self.request_refresh()
 
     # ---- compiling -----------------------------------------------------------------------------------------------
-    def context(self, modes: Any = None, recipes: Any = None) -> Any:
+    def context(self, modes: Any = None, recipes: Any = None, *, rehearsing: bool = False) -> Any:
         """The compile context from the live registry. `modes`/`recipes`: another modes file / recipes (the
-        rehearsal's design, a Design Lab try-on's patch); None = the show's own (the live looks: git or published)."""
+        rehearsal's design, a Design Lab try-on's patch); None = the show's own (the live looks: git or published).
+        Per-light motion (D80): always in the simulator; live with motion.lights.live_enabled or, `rehearsing`, for
+        the look an operator is rehearsing (each module still needs Gate C and a map)."""
         from conductor.looks import CompileContext
 
         services = self.services
@@ -485,6 +487,8 @@ class ShowWiring:
             recipes=recipes if recipes is not None else self.recipes,  # never the git cache (D68)
             config_dir=services.config_dir,
             addresses=addresses,
+            lights=simulated or rehearsing or services.settings.motion.lights.live_enabled,
+            lights_slot=services.settings.motion.lights.slot,
         )
 
     def compile(self, mode_id: str, tier: Tier) -> Any:
@@ -522,7 +526,9 @@ class ShowWiring:
         """The stepped plan a rehearsal of `mode_id` runs (PlanError when the mode has nothing to step)."""
         from conductor.looks import compile_mode
 
-        return compile_mode(mode_id, Tier.STEPPED, self.context(self.rehearsal_modes(mode_id)))
+        return compile_mode(
+            mode_id, Tier.STEPPED, self.context(self.rehearsal_modes(mode_id), rehearsing=True)
+        )
 
     def rehearsal_modes(self, mode_id: str) -> Any:
         """The modes file with `mode_id` given a stepped rung first in its ladder: its own stepped technique, or

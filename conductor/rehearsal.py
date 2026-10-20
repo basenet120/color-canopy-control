@@ -41,6 +41,12 @@ Rules (binding text: docs/runbooks/stepped-rehearsal.md; 07 §1, §6, §8, §9):
   labelled SIMULATED and never counts for Gate R. Only Alon flips `motion.stepped.live_enabled`.
 - The report file is written atomically under `<data>/bench/rehearsals/` (07 §8), beside the bench results but not
   among them (the bench page lists only `<data>/bench/*.json`).
+- **The rate test (D80, `ladder`).** The same operator-started run, but its steps follow `RATE_RUNGS` (4, 3, 2, 1.5
+  then 1 s, `RATE_RUNG_S` each): it finds how fast the account takes the look's writes. The account cap of ours is
+  not applied (`ProgramRunner.schedule`), every module still gets at most one write a second (the executor's gap)
+  and the governor still holds; it stops at the first 429 as well as the first 403. The report adds `rungs` (each
+  rung's attempts, throttling, verification and writes a minute) and `fastest_clean_step_s`. A per-light look
+  (D80) rehearses per-light where each module has Gate C and a map — the per-light bench test.
 """
 
 from __future__ import annotations
@@ -67,6 +73,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 MAX_MINUTES = 10
+RATE_RUNGS = (4.0, 3.0, 2.0, 1.5, 1.0)  # the rate test's step lengths (D80), slowest first
+RATE_RUNG_S = 60.0  # how long each rung runs
 MAX_THROTTLED_SHARE = 0.05  # Gate R: throttled attempts must stay under 5 %
 WINDOW_S = 60.0  # max_writes_60s
 REPORT_GRACE_S = 20.0  # wait at most this long for the writes still in flight when the run ends
@@ -116,6 +124,38 @@ def confirm_sentence(
     )
 
 
+def rate_schedule(rungs: tuple[float, ...] = RATE_RUNGS, rung_s: float = RATE_RUNG_S) -> list[float]:
+    """The rate test's step lengths, in order: each rung's step repeated for `rung_s` seconds."""
+    out: list[float] = []
+    for step in rungs:
+        out += [step] * max(1, int(rung_s / step + 1e-6))
+    return out
+
+
+def rate_minutes(rungs: tuple[float, ...] = RATE_RUNGS, rung_s: float = RATE_RUNG_S) -> int:
+    return max(1, round(sum(rate_schedule(rungs, rung_s)) / 60))
+
+
+def rate_confirm_sentence(
+    *, label: str, modules: list[str], accounts: list[str], simulated: bool, lights: bool
+) -> str:
+    """What ops confirms before the rate test (D80): the look, every module, the ladder and what stops it."""
+    n = len(modules)
+    where = f"account {accounts[0]}" if len(accounts) == 1 else f"accounts {_names(accounts)}"
+    sim = " (simulator: no real lights)" if simulated else ""
+    rungs = ", ".join(f"{s:g}" for s in RATE_RUNGS)
+    kind = "a per-light frame (every light's colour and level)" if lights else "its next colour or level"
+    top = n * 60 / min(RATE_RUNGS)
+    return (
+        f"Run the rate test with {label} on {_names(modules)} ({n} {'module' if n == 1 else 'modules'} on {where})"
+        f"{sim}? Each step sends every module {kind}; the steps come every {rungs} s, {RATE_RUNG_S:g} s each "
+        f"(about {rate_minutes()} minutes, up to {top:g} writes a minute at 1 s). Our 90-a-minute plan is not "
+        "applied (that is what it measures); each module still gets at most one write a second. It stops at the "
+        "first 429 or 403, or if the throttle governor trips, then the still look holds. Guests can't change the "
+        "canopy meanwhile."
+    )
+
+
 def _wall(t: float | None) -> str | None:
     if t is None:
         return None
@@ -136,13 +176,18 @@ class Rehearsal:
         accounts: list[str],
         source: str,
         report_dir: Path | None,
+        ladder: tuple[float, ...] | None = None,
     ) -> None:
         self.engine = engine
+        self.ladder = tuple(ladder) if ladder else None  # D80: the rate test's rungs
+        self.schedule = rate_schedule(self.ladder) if self.ladder else None
+        self._rungs: list[dict] = [_new_rung(step) for step in self.ladder] if self.ladder else []
+        self._stopping = False
         self.clock = engine.clock
         self.mode = mode
         self.label = label
         self.minutes = minutes
-        self.run_s = float(minutes * 60)
+        self.run_s = float(sum(self.schedule)) if self.schedule else float(minutes * 60)
         self.modules = dict(modules)
         self.accounts = list(accounts)
         self.source = source
@@ -150,7 +195,8 @@ class Rehearsal:
         self.simulated = engine._simulated()
         self.started = self.clock.now()
         self.started_mono = self.clock.monotonic()
-        self.run_id = f"rehearsal-{datetime.fromtimestamp(self.started, UTC):%Y%m%dT%H%M%SZ}-{mode}"
+        kind = "ratetest" if self.ladder else "rehearsal"
+        self.run_id = f"{kind}-{datetime.fromtimestamp(self.started, UTC):%Y%m%dT%H%M%SZ}-{mode}"
         self.saved_floor: int | None = None  # the mode's hysteresis floor before it (restored after)
         self.runner: ProgramRunner | None = None  # the newest runner of this rehearsal's look
         self.ended: str | None = None  # why it ended
@@ -233,6 +279,19 @@ class Rehearsal:
             self.puts += left
             self.throttled_429 += status == 429
             self.forbidden_403 += status == 403
+            rung = self._rung_at(self.clock.monotonic() - float(event.get("elapsed_s") or 0.0))
+            if rung is not None:
+                rung["attempts"] += 1
+                rung["puts"] += left
+                rung["throttled_429"] += status == 429
+                rung["forbidden_403"] += status == 403
+                if left:
+                    rung["_sent"].append(self.clock.monotonic() - float(event.get("elapsed_s") or 0.0))
+            if self.ladder and status == 429 and not self._stopping:  # the rate test stops at the first 429
+                self._stopping = True
+                step = rung["step_s"] if rung is not None else None
+                why = f"Hubspace answered 429 at {step:g} s steps" if step else "Hubspace answered 429"
+                self._call_soon(lambda: self.engine._stop_rehearsal(why))
         if status == 403:  # the engine stops the run at the first one (once: later ones find it ended)
             self.forbidden_any.append(account)
             self._call_soon(lambda: self.engine._rehearsal_403(self, account))
@@ -253,11 +312,33 @@ class Rehearsal:
             timings = event.get("timings") or {}
             if status == str(CommandStatus.APPLIED) and timings.get("sent_at") and timings.get("verified_at"):
                 self.verified.append(float(timings["verified_at"]) - float(timings["sent_at"]))
+            if self.ladder and timings.get("sent_at"):
+                runner = self.runner
+                if runner is not None:
+                    rung = self._rung_at(runner.t0 + float(timings["sent_at"]) - runner.t0_wall)
+                    if rung is not None:
+                        rung["commands"][status] = rung["commands"].get(status, 0) + 1
+                        if status == str(CommandStatus.APPLIED) and timings.get("verified_at"):
+                            rung["_verified"].append(
+                                float(timings["verified_at"]) - float(timings["sent_at"])
+                            )
 
     def _on_alert(self, event: dict) -> None:
         level = str(event.get("level") or "info")
         message = str(event.get("message") or "")
         self.alerts.append({"t": event.get("t"), "level": level, "message": message})
+
+    def _rung_at(self, mono: float) -> dict | None:
+        """The rate test's rung a send at monotonic `mono` belongs to (None outside the ladder)."""
+        if not self.ladder or self.runner is None:
+            return None
+        elapsed, start = mono - self.runner.t0, 0.0
+        for rung in self._rungs:
+            length = rung["step_s"] * max(1, int(RATE_RUNG_S / rung["step_s"] + 1e-6))
+            if elapsed < start + length:
+                return rung if elapsed >= start - 1e-6 else None
+            start += length
+        return None
 
     def _call_soon(self, fn: Callable[[], Any]) -> None:
         """Act after the event that triggered it (never from inside the executor's or the runner's bookkeeping)."""
@@ -380,6 +461,15 @@ class Rehearsal:
                 or "no writes",
             },
         ]
+        rungs = None
+        fastest = None
+        if self.ladder:
+            criteria = [
+                c for c in criteria if c["id"] != "max_writes_60s"
+            ]  # the rate test measures the account
+            rungs = [self._rung_report(r) for r in self._rungs]
+            clean = [r for r in rungs if r["complete"] and r["clean"]]
+            fastest = min((r["step_s"] for r in clean), default=None)
         verdict = "pass" if all(c["ok"] for c in criteria) else "fail"
         failed = [c["title"] for c in criteria if not c["ok"]]
         summary = (
@@ -398,8 +488,18 @@ class Rehearsal:
                 "skipped": runner.skipped,
                 "budget_holds": runner.budget_holds,
             }
+        lights = bool(runner is not None and runner.lights)
+        if self.ladder:
+            summary = (
+                f"Rate test, {self.label}{' (per-light)' if lights else ''} on {len(self.modules)} modules: fastest "
+                f"clean step {f'{fastest:g} s' if fastest is not None else 'none'}; {self.attempts} attempts, "
+                f"{self.throttled_429} × 429, {self.forbidden_403} × 403; ended: {self.ended}."
+            )
         return {
-            "kind": "stepped_rehearsal",
+            "kind": "rate_test" if self.ladder else "stepped_rehearsal",
+            "lights": lights,
+            "rungs": rungs,
+            "fastest_clean_step_s": fastest,
             "run_id": self.run_id,
             "mode": self.mode,
             "label": self.label,
@@ -439,6 +539,41 @@ class Rehearsal:
             "summary": summary,
         }
 
+    def _rung_report(self, rung: dict) -> dict:
+        n = len(self.modules)
+        times = sorted(rung["_sent"])
+        best, lo = 0, 0
+        for hi, t in enumerate(times):
+            while t - times[lo] >= WINDOW_S:
+                lo += 1
+            best = max(best, hi - lo + 1)
+        failed = rung["commands"].get(str(CommandStatus.FAILED), 0)
+        complete = bool(rung["attempts"]) and (self.completed or rung is not self._last_rung_with_attempts())
+        return {
+            "step_s": rung["step_s"],
+            "planned_writes_per_min": round(n * 60 / rung["step_s"], 1),
+            "attempts": rung["attempts"],
+            "puts": rung["puts"],
+            "throttled_429": rung["throttled_429"],
+            "forbidden_403": rung["forbidden_403"],
+            "max_writes_60s": best,
+            "commands": dict(sorted(rung["commands"].items())),
+            "superseded": rung["commands"].get(str(CommandStatus.SUPERSEDED), 0),
+            "verification_s": {
+                "count": len(rung["_verified"]),
+                "p50": _round(percentile(rung["_verified"], 50)),
+                "p95": _round(percentile(rung["_verified"], 95)),
+            },
+            # writes a newer step replaced before their readback verified them still reached Hubspace (attempts =
+            # puts): at a step shorter than the readback's ~2 s most are superseded, the lights still change
+            "verified_share": round(len(rung["_verified"]) / max(1, sum(rung["commands"].values())), 3),
+            "complete": complete,
+            "clean": rung["throttled_429"] == 0 and rung["forbidden_403"] == 0 and failed == 0,
+        }
+
+    def _last_rung_with_attempts(self) -> dict | None:
+        return next((r for r in reversed(self._rungs) if r["attempts"]), None)
+
     def max_writes(self) -> dict[str, int]:
         """Per account, the most writes sent within any 60 s (a half-open window, by send time)."""
         out = {}
@@ -475,7 +610,7 @@ class Rehearsal:
         runner = self.runner
         ends_at = None
         if runner is not None and runner.running:
-            ends_at = runner.t0_wall + runner.count * runner.step_s
+            ends_at = runner.t0_wall + runner.run_len_s
         return {
             "run_id": self.run_id,
             "mode": self.mode,
@@ -500,6 +635,19 @@ class Rehearsal:
             "ended": self.ended,
             "file": str(self.path) if self.path else None,
         }
+
+
+def _new_rung(step: float) -> dict:
+    return {
+        "step_s": step,
+        "attempts": 0,
+        "puts": 0,
+        "throttled_429": 0,
+        "forbidden_403": 0,
+        "commands": {},
+        "_sent": [],
+        "_verified": [],
+    }
 
 
 def _round(v: float | None) -> float | None:

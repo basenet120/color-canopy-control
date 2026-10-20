@@ -360,4 +360,15 @@ def _steps_motion(program: Any, modules: Sequence[Mapping[str, Any]], now: float
             ]
             for frame, row in zip(frames, levels, strict=False)
         ]
+    times = program.get("times")
+    if isinstance(times, list) and len(times) == len(frames):  # the rate test's uneven steps (D80)
+        motion["times"] = list(times)
+    heads, head_steps = program.get("heads"), program.get("head_steps")
+    if isinstance(heads, list) and isinstance(head_steps, list) and len(head_steps) == len(frames):
+        # D80: a per-light run — each step's lights per position ("RGBL" per head), drawn where the panel is lit
+        motion["head_steps"] = list(head_steps)
+        motion["heads"] = [
+            [h if pos in moving and isinstance(h, str) else None for pos, h in zip(GRID, step, strict=False)]
+            for step in heads
+        ]
     return motion

@@ -1786,7 +1786,7 @@ function motionPaint(preview, view) {
   return {
     view: "stepped",
     // D75: a breath's step carries each module's level, drawn as its brightness
-    paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } },
+    paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null, heads: step.heads || null } },
     notes: [m.fast ? `${M.MOTION_COPY.fast}.` : "", where.note],
     label: M.stepCounter(tl, at, { state: m.state, fast: m.fast }),
     moving: M.movingLine(st, m.state, at, tl.pace),

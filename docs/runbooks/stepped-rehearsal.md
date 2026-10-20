@@ -135,3 +135,36 @@ A report with `"simulated": true` (made on a laptop or staging) **never counts f
 - In both cases the canopy is back on the look's best still tier: its canvas or slot where that can run, else its
   still module-level design (D75; T3 on hardware before Gate C). It returns to Lowcountry Calm after the usual idle
   time, shown still (an idle return never starts a run unless `motion.idle` is on).
+
+---
+
+## The rate test (D80): how fast can the account take steps?
+
+Same page, same confirm dialog, same stop rules — tick **Rate test (4 → 1 s steps)** before **Rehearse…**. The
+look then steps every 4 s for a minute, then every 3, 2, 1.5 and 1 s (about 5 minutes in all). Our 90-writes-a-minute
+plan is not applied, because finding the account's real limit is the point; each module still gets at most one write
+a second (the executor's gap), and the run **stops at the first 429** (as well as the first 403, or the governor).
+
+- Run it on the kits that are online. One kit at 1 s steps is 60 writes a minute, so it measures the kit's pace and
+  readback, not the account; nine kits at 1 s is 540 a minute.
+- Read the report (`ratetest-<UTC time>-<look>.json` beside the rehearsal reports): `rungs` gives each step length's
+  attempts, 429s and 403s, the most writes in any 60 s, how many writes verified (`verified_share`: below about 2 s a
+  newer step replaces a write before its readback verifies it; the write still reached Hubspace), and
+  `fastest_clean_step_s`, the shortest step with no throttling at all.
+- With a clean nine-kit run, Alon can raise `motion.stepped.account_writes_per_min` (and lower `min_step_s`) in a PR.
+  A 429 anywhere: note the rung, leave the plan as it is.
+
+## Per-light (D80): the bench rehearsal
+
+A look with a per-light rung (the `<scene>-4`, `-5`, `-6` options) rehearses per-light on a kit that has its own
+Gate C (`t1_frames`) and a proven map (`framebuffer_mapping`, Apply map on `/ops/bench`). Any other kit gets the
+look's module-level steps, and the confirm dialog says which it will be ("a per-light frame" vs "its next colour or
+level"). `motion.lights.live_enabled` stays off until this passes; only Alon turns it on.
+
+1. Commission the kit first (Gate C with someone at the strand, then the address probes and Apply map).
+2. Rehearse a per-light option for 2 minutes, e.g. **Coastal Tides #5** (rings from a point) or **Lowcountry Calm #5**
+   (a glow that switches lights off). Then the rate test with the same look.
+3. The observer watches for: does each step land as a whole frame or does the strand blank or reload between steps
+   (a flicker)? Do the rings or the glow move the way the design says? Does anything stay behind?
+4. Pass = no flicker or reload, no throttling, readbacks verify (or are superseded only at the fastest rungs).
+   Then Alon sets `motion.lights.live_enabled: true` in a PR.

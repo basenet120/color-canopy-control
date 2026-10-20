@@ -24,6 +24,9 @@ from conductor.sim.settings import SimSettings
 
 REPORT_FIELDS = {
     "kind",
+    "lights",  # D80: a per-light run
+    "rungs",  # D80: the rate test's rungs (None for a rehearsal)
+    "fastest_clean_step_s",
     "run_id",
     "mode",
     "label",
@@ -782,7 +785,7 @@ def test_the_runbook_says_which_feature_line_the_kiosk_shows_during_a_rehearsal(
     text = (Path(__file__).resolve().parent.parent / "docs" / "runbooks" / "stepped-rehearsal.md").read_text()
     step5 = " ".join(text.split("\n5. ", 1)[1].split("\n\n", 1)[0].split())
     stepping = {i: m for i, m in load_modes(CONFIG_DIR).modes.items() if m.techniques.stepped is not None}
-    assert len(stepping) == 18  # D77
+    assert len(stepping) == 36  # D77 + D80
     for prefix in {m.techniques.stepped.moving_feature.split(", so ")[0] for m in stepping.values()}:
         assert prefix in step5  # every kind of sentence a rehearsal can show
     for scene in load_scenes(CONFIG_DIR).scenes:

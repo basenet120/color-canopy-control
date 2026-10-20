@@ -99,6 +99,8 @@ function todayOf(view, preview) {
 /** The caption that always sits with a picture, so a painted design is never read as what module level shows. When
  * "today" paints the approved design (the slots hold it), the caption says so: the picture isn't the draft. */
 export function tierCaption(view, preview) {
+  // D80: a per-light rung steps every light, not one colour per strand
+  if (view === "stepped" && preview && preview.stepped && preview.stepped.lights) return "Per-light, stepped · every light's own colour and level, a step at a time";
   if (CAPTIONS[view]) return CAPTIONS[view];
   const today = todayOf(view, preview);
   if (!today) return "";
@@ -208,8 +210,50 @@ export function viewPainter(preview, view, { heads = CANOPY.heads, width = CANOP
   return { ...painter, head: (h) => byKey.get(headKey(h.module, h.x, h.y)) || UNLIT_RGB, spill: spillOf(heads, colours, width) };
 }
 
+/** D80: a per-light step (`step.heads`: position → "RGBL" per head in lattice order) drawn light by light. */
+function lightsPainter(preview, step, heads, width) {
+  const lattice = latticeIndex(preview.design);
+  const lit = Array.isArray(step.positions) ? new Set(step.positions) : null;
+  const decoded = {};
+  for (const [pos, text] of Object.entries(step.heads || {})) {
+    if (typeof text !== "string" || (lit && !lit.has(pos))) continue;
+    const cols = [];
+    for (let i = 0; i + 4 <= text.length; i += 4) {
+      cols.push({
+        rgb: [0, 1, 2].map((j) => parseInt(text[i + j], 16) * 17),
+        level: (parseInt(text[i + 3], 16) * 100) / 15,
+      });
+    }
+    decoded[pos] = cols;
+  }
+  const at = (h) => {
+    const k = lattice ? lattice.get(headKey(h.module, h.x, h.y)) : undefined;
+    const cols = decoded[h.module];
+    return cols && k !== undefined ? cols[k] : null;
+  };
+  const colours = heads.map((h) => {
+    const c = at(h);
+    return c ? rgbObj(c.rgb) : UNLIT_RGB;
+  });
+  const byKey = new Map(heads.map((h, i) => [headKey(h.module, h.x, h.y), colours[i]]));
+  const base = Number.isFinite(Number(preview.brightness)) ? Number(preview.brightness) : 100;
+  const level = (h) => {
+    const c = at(h);
+    return c ? (c.level * base) / 100 : 0;
+  };
+  return {
+    head: (h) => byKey.get(headKey(h.module, h.x, h.y)) || UNLIT_RGB,
+    spill: spillOf(heads, colours, width),
+    level,
+    caption: "Per-light step: every light's own colour and level",
+  };
+}
+
 function steppedPainter(preview, step, heads, width) {
   if (!step || !step.colours || typeof step.colours !== "object") return { error: "There is no step to draw." };
+  if (step.heads && typeof step.heads === "object" && Object.keys(step.heads).length) {
+    return lightsPainter(preview, step, heads, width);
+  }
   const lit = Array.isArray(step.positions) ? new Set(step.positions) : null;
   const modules = [...new Set(heads.map((h) => h.module))].map((pos) => {
     const hex = step.colours[pos];

@@ -256,6 +256,8 @@ def test_in_sim_the_studio_design_matches_the_visualizer_and_the_kiosk_head_for_
         design = c.get(f"/api/canopy/design?mode={mode_id}").json()
         first = design["ladder"][0]
         assert str(plan.tier) == first, (mode_id, plan.tier)  # the simulator runs the first rung
+        if plan.program is not None and plan.program.lights:
+            continue  # D80: a per-light hold is a frame of each light's own level, not the Studio's still design
         by_point = {_point(h["x"], h["y"]): h["rgb"] for h in design["heads"]}
         by_module = {m["module"]: m["rgb"] for m in design["modules"]}
         # a stepped rung (D65) moves the module-level design; the Studio opens it at module level (its still look)

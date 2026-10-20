@@ -128,7 +128,7 @@ def test_modes_list_matches_modes_yaml(app_client, engine):
     listing = r.json()
     specs = MODES_YAML["modes"]
     assert [m["id"] for m in listing] == list(specs)
-    assert len(listing) == len(specs) == 18  # D77: the six scenes and their 12 options
+    assert len(listing) == len(specs) == 36  # D77's six scenes and 12 options, D80's 18 per-light options
     for m in listing:
         assert m["label"] == specs[m["id"]]["label"]
         assert m["blurb"] == specs[m["id"]]["blurb"]
@@ -160,7 +160,7 @@ def test_module_level_modes_picture_their_designs_without_a_plan(app_client, eng
     canopy, modes, scenes = load_canopy_config(), load_modes(), load_scenes()
     by_id = {m["id"]: m for m in app_client.get("/api/kiosk/modes").json()}
     module_level = [m for m, mode in modes.modes.items() if mode.ladder[0] in ("modules", "stepped")]
-    assert len(module_level) == 15  # D77: every mode but the painted three
+    assert len(module_level) == 33  # every mode but the painted three (D77, D80)
     for mode_id in module_level:
         spec = modes.mode(mode_id).techniques.modules.sample.canvas.field
         palette = scenes.get(mode_id).model_copy(update={"transform": "linear"})  # the design's stops
@@ -240,7 +240,7 @@ def test_each_tier_draws_what_the_ceiling_shows():
 def test_modes_serve_without_an_engine(app_client):
     app_client.app.state.services.extras.pop("canopy", None)
     listing = app_client.get("/api/kiosk/modes").json()
-    assert len(listing) == len(MODES_YAML["modes"]) == 18 and all(m["feature"] is None for m in listing)
+    assert len(listing) == len(MODES_YAML["modes"]) == 36 and all(m["feature"] is None for m in listing)
 
 
 def test_the_legacy_kiosk_routes_leave_hidden_scenes_out(app_client, engine):
@@ -254,7 +254,7 @@ def test_the_legacy_kiosk_routes_leave_hidden_scenes_out(app_client, engine):
     assert r.status_code == 404 and r.json()["detail"] == "That mood isn't one of the canopy's choices."
     assert engine.calls == []
     kiosk.hidden_scenes = []
-    assert len(app_client.get("/api/kiosk/modes").json()) == len(MODES_YAML["modes"]) == 18
+    assert len(app_client.get("/api/kiosk/modes").json()) == len(MODES_YAML["modes"]) == 36
     assert app_client.post("/api/kiosk/select", json={"mode": "golden-hour"}).status_code == 200
     assert engine.calls == [("golden-hour", "kiosk")]
 

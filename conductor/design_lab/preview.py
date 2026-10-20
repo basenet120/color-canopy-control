@@ -117,6 +117,7 @@ def _design_context(patched: ConfigTrio, canopy: dict, **kw: Any) -> CompileCont
         modes=patched.modes,
         recipes=patched.recipes,
         canopy=canopy,
+        lights=kw.pop("lights", True),  # D80: the Lab previews per-light rungs as designed
         **kw,
     )
 

@@ -83,12 +83,15 @@ BASE_NAMES = {
 }
 CATALOG = [x for base in BASE_NAMES for x in (base, f"{base}-2", f"{base}-3")]
 OPTIONS = [x for x in CATALOG if x not in BASE_NAMES]
-BASE_OF = {x: x if x in BASE_NAMES else x.rsplit("-", 1)[0] for x in CATALOG}
+# the whole git catalog: D77's eighteen, then D80's per-light #4-#6 after each scene's #3
+FULL = [x for base in BASE_NAMES for x in (base, *(f"{base}-{n}" for n in (2, 3, 4, 5, 6)))]
+BASE_OF = {x: x if x in BASE_NAMES else x.rsplit("-", 1)[0] for x in FULL}
 PAINTED = {"rainbow-row-sunset": "custom-1", "garden-gathering": "custom-2", "golden-hour": "custom-3"}
 IDLE = "lowcountry-calm"
 # /api/kiosk/panel, which the iPad polls every 2 s: 62.7 KB on D77's tree with no engine (PR A's canopy geometry
 # 44 KB; the 18 scenes 27 KB, PR C's thumbnails 9.6 KB of it); the ceiling leaves room for the engine's lit state
-PANEL_MAX_BYTES = 80_000
+# D80: 86.2 KB with the 36 scenes (no engine); a per-light run adds its frames (~115 KB in the sim on nine modules)
+PANEL_MAX_BYTES = 100_000
 
 # The copy prefixes. T3: module level. A: every strand is sent its next colour (travel, and the colour-only breaths of
 # Calm #1 and Tides #1). B: every strand is sent a level (the level-only breaths and Garden #3's shimmer). C: both
@@ -488,7 +491,7 @@ def _level(rows) -> int:
 
 # ---- the catalog -----------------------------------------------------------------------------------------------------
 def test_eighteen_options_three_per_scene_in_catalog_order():
-    assert [s.id for s in SCENES.scenes] == CATALOG == list(MODES.modes)
+    assert [s.id for s in SCENES.scenes] == FULL == list(MODES.modes)
     for base in BASE_NAMES:
         i = CATALOG.index(base)
         assert CATALOG[i : i + 3] == [base, f"{base}-2", f"{base}-3"]
@@ -499,7 +502,7 @@ def test_eighteen_options_three_per_scene_in_catalog_order():
         assert mode.blurb == scene.mood == SCENES.get(BASE_OF[scene.id]).mood
         assert mode.label == scene.name
     names = [s.name for s in SCENES.scenes]
-    assert len(set(names)) == len(names) == 18
+    assert len(set(names)) == len(names) == len(FULL)
 
 
 def test_the_firsts_keep_their_slots_and_idle_role():
@@ -780,7 +783,7 @@ def test_client_copy_and_colour_names_pass_the_copy_rules():
         mode = MODES.mode(scene.id)
         assert len(mode.label) <= 40 and len(mode.blurb) <= 120 and len(mode.preview) <= 6
         assert "deepening" not in scene.description.lower()
-    assert strings == 54
+    assert strings == 3 * len(FULL)
 
 
 def test_hash_names_are_quoted_in_the_yaml():
@@ -794,7 +797,7 @@ def test_hash_names_are_quoted_in_the_yaml():
         assert f'name: "{scene.name}"' in scenes_text
         assert f'label: "{scene.name}"' in modes_text
     if all(drafted(x) for x in CATALOG):
-        assert len(hashed) == 18
+        assert len(hashed) == len(FULL)
 
 
 def _stop_weights(scene, mode) -> dict[str, float]:
@@ -1126,14 +1129,16 @@ def test_the_review_menu_sees_the_real_catalog(app_client):
     tests/test_kiosk_node.py (integration C24); this pins what /api/kiosk/panel hands them on the shipped catalog."""
     r = app_client.get("/api/kiosk/panel")
     body = r.json()
-    assert [s["id"] for s in body["scenes"]] == CATALOG
+    assert [s["id"] for s in body["scenes"]] == FULL
     for s in body["scenes"]:
         assert s["option_of"] == (None if s["id"] in BASE_NAMES else BASE_OF[s["id"]])
         assert s["group"] == BASE_OF[s["id"]]
         assert s["thumb"] is not None  # the review menu: every card carries its picture
     # the iPad polls this every 2 s: PR A's fin geometry and PR C's 18 thumbnails together, pinned
     assert len(r.content) < PANEL_MAX_BYTES, len(r.content)
-    for option in OPTIONS:  # /ops "Show on the iPad" off for every option: the six #1s, in order
+    for option in [
+        x for x in FULL if x not in BASE_NAMES
+    ]:  # every option off the iPad: the six #1s, in order
         hidden = app_client.post("/api/ops/ipad-scenes", json={"scene": option, "show": False})
         assert hidden.status_code == 200, hidden.text
     six = _panel(app_client)["scenes"]
@@ -1157,7 +1162,7 @@ def test_an_overlay_that_hides_the_idle_scene_keeps_it_on_the_ipad_and_says_so(m
     with TestClient(app) as client:
         ids = [s["id"] for s in _panel(client)["scenes"]]
         lines = IM.problem_lines(client.app.state.services)
-    assert ids == CATALOG
+    assert ids == FULL
     kept = f"kiosk.hidden_scenes names '{IDLE}', the idle scene (kiosk.idle_mode): the iPad offers it anyway."
     assert kept in lines, lines
 

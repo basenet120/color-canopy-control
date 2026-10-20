@@ -74,6 +74,14 @@ motion:
     governor_throttled_share: 0.25  # ... that are ≥ this share of the attempts
     governor_cooloff_s: 300      # then stepped runs on that account wait this long (the still look holds)
     fold_guest_within_s: 2.0     # a guest brightness change this close to the next step goes out with that step
+  # Per-light motion (D80): a stepped rung's `lights` block streams a whole per-light frame (every light's colour and
+  # level) to each module a step at a time, one PUT per module per step, into `slot`. Sim always; live only with
+  # live_enabled (or during an operator's rehearsal of that look) and, per module, Gate C + a proven map — else the
+  # rung's module-level steps run. Alon flips it after the per-light bench rehearsal (stepped-rehearsal.md).
+  lights:
+    live_enabled: false
+    min_step_s: 1.0              # ≤ 1 write a second per module (Afero's per-device guidance)
+    slot: custom-3               # the slot each step's frame is written to and selected
   # D75: the idle look's breath. null = off (the shipped value). Alon sets it, e.g. {breathe_run_s: 60, every_s: 300},
   # only after a 30-minute live soak: live_enabled on, then this on, watched on /ops (budget, readbacks), back to
   # null to revert (a breath on nine ≈ 72 writes/min while it runs).

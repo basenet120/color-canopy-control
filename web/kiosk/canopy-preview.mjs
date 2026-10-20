@@ -187,6 +187,9 @@ export function paintFor(litModule, k, { reduced = false } = {}) {
   const state = litModule && litModule.state;
   if (UNLIT_STATES.has(state)) return { kind: "unlit", fill: UNLIT, pulse: false };
   if (LIT.has(state)) {
+    if (Array.isArray(litModule.headLevels) && litModule.headLevels[k] === 0) {
+      return { kind: "unlit", fill: UNLIT, pulse: false }; // D80: a light this step turns off
+    }
     const c = Array.isArray(litModule.colors) ? litModule.colors[k] : litModule.color;
     if (typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c)) {
       return { kind: state, fill: c.toUpperCase(), pulse: state === "changing" && !reduced };
@@ -251,6 +254,27 @@ export function moduleOpacity(module, lit, floor = DIM_FLOOR) {
   return levelOpacity(own !== undefined ? own : lit && lit.level, floor);
 }
 
+/** Dot k's opacity: in a per-light run (D80) its own level times the panel's, else the panel's (`moduleOpacity`). */
+export function headOpacity(module, k, lit, floor = DIM_FLOOR) {
+  const own = module && Array.isArray(module.headLevels) ? module.headLevels[k] : undefined;
+  if (typeof own !== "number") return moduleOpacity(module, lit, floor);
+  const panel = module && typeof module.level === "number" ? module.level : lit && typeof lit.level === "number" ? lit.level : 100;
+  return levelOpacity((own * panel) / 100, floor);
+}
+
+/** One per-light step's heads (D80): "RGBL" per head → {colors: ["#RRGGBB"], levels: [0–100]}. */
+export function decodeHeads(text) {
+  const colors = [];
+  const levels = [];
+  if (typeof text !== "string") return null;
+  for (let i = 0; i + 4 <= text.length; i += 4) {
+    const ch = (j) => parseInt(text[i + j], 16) * 17;
+    colors.push("#" + [ch(0), ch(1), ch(2)].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase());
+    levels.push(Math.round((parseInt(text[i + 3], 16) * 100) / 15));
+  }
+  return { colors, levels };
+}
+
 const byPos = (modules) => new Map((modules || []).map((m) => [m.pos, m]));
 
 /** True while `motion` still has a frame to come at `now` (server seconds): the page animates only then. */
@@ -294,10 +318,18 @@ export function motionColors(motion, prevLit, lit, now) {
     const step = Number(motion.step_s);
     const last = motion.frames.length - 1;
     const t = Math.min(now, Number(motion.ends_at) - 1e-6); // time stops at ends_at
-    const raw = step > 0 ? Math.floor((t - Number(motion.t0)) / step) : last;
+    let raw = step > 0 ? Math.floor((t - Number(motion.t0)) / step) : last;
+    if (Array.isArray(motion.times) && motion.times.length === motion.frames.length) {
+      // the rate test's uneven steps (D80): the last frame that has started
+      raw = 0;
+      for (let j = 0; j < motion.times.length; j += 1) if (Number(motion.times[j]) <= t) raw = j;
+    }
     const index = Math.min(last, Math.max(0, Number.isFinite(raw) ? raw : last));
     const frame = motion.frames[index] || [];
     const levels = Array.isArray(motion.levels) ? motion.levels[index] || [] : null;
+    // D80: a per-light run gives each lit panel its lights' own colours and levels
+    const heads =
+      Array.isArray(motion.heads) && Array.isArray(motion.head_steps) ? motion.heads[motion.head_steps[index]] || null : null;
     return modules.map((m) => {
       if (!LIT.has(m.state)) return m;
       const i = GRID.indexOf(m.pos);
@@ -305,6 +337,11 @@ export function motionColors(motion, prevLit, lit, now) {
       if (typeof hex !== "string") return { pos: m.pos, state: "dark", color: null, colors: null };
       const item = { pos: m.pos, state: m.state, color: hex, colors: null };
       if (levels && typeof levels[i] === "number" && Number.isFinite(levels[i])) item.level = levels[i];
+      const own = heads ? decodeHeads(heads[i]) : null;
+      if (own) {
+        item.colors = own.colors;
+        item.headLevels = own.levels;
+      }
       return item;
     });
   }

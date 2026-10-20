@@ -78,7 +78,7 @@ def _ripple_span_s(settings: ConductorSettings, rings: int) -> float:
 
 
 def effective_step_s(
-    design_step_s: float, n_modules: int, settings: ConductorSettings, *, rings: int = 1
+    design_step_s: float, n_modules: int, settings: ConductorSettings, *, rings: int = 1, lights: bool = False
 ) -> float:
     """`ProgramRunner._effective_step`'s step for `n_modules` on one account: max(the design's step_s, n × 60 / the
     planned rate (the account cap less the reserve), the ripple's span + min_step_s), rounded up to whole ms. With
@@ -86,19 +86,26 @@ def effective_step_s(
     s = settings.motion.stepped
     planned = planned_writes_per_min(s)
     span = _ripple_span_s(settings, rings)
-    step = max(float(design_step_s), n_modules * 60.0 / planned, span + s.min_step_s)
+    floor = settings.motion.lights.min_step_s if lights else s.min_step_s  # D80: per-light steps from 1 s
+    step = max(float(design_step_s), n_modules * 60.0 / planned, span + floor)
     return math.ceil(step * 1000 - _EPS) / 1000
 
 
 def run_pace(
-    design_step_s: float, run_s: float, n_modules: int, settings: ConductorSettings, *, rings: int = 1
+    design_step_s: float,
+    run_s: float,
+    n_modules: int,
+    settings: ConductorSettings,
+    *,
+    rings: int = 1,
+    lights: bool = False,
 ) -> dict:
     """One pace: the step, the step number the hold goes out at (`ProgramRunner.count_for`), and why the look would
     hold still instead of stepping: the runner's own two set-up reasons (a throttle cool-off is runtime only), and a
     run that fits only step 0, which IS the still design (the mode change sends it as the hold, and the runner sends
     steps 1 … count − 1 only), so no colour would ever change."""
     s = settings.motion.stepped
-    step = effective_step_s(design_step_s, n_modules, settings, rings=rings)
+    step = effective_step_s(design_step_s, n_modules, settings, rings=rings, lights=lights)
     hold_at = int(run_s / step + _EPS)
     still = None
     if step > s.max_step_s + _EPS:
@@ -163,6 +170,10 @@ def canopy_pace(
     if tech is None or not positions:
         return None
     rings = _stepped_rings(patched, scene_id, canopy, positions)
+    if tech.lights is not None:  # D80: the Lab's design context always takes per-light frames
+        return run_pace(
+            tech.lights.step_s, tech.lights.run_s, len(positions), settings, rings=rings, lights=True
+        )
     return run_pace(tech.step_s, tech.run_s, len(positions), settings, rings=rings)
 
 
@@ -218,6 +229,14 @@ def _compile(patched: ConfigTrio, scene_id: str, canopy: dict, **kw: Any) -> Mod
     return compile_mode(scene_id, Tier.STEPPED, _design_context(patched, canopy, **kw))
 
 
+def _step_json(step: Any) -> dict:
+    """A compiled step as the Lab plays it: its colours and levels, and (D80, a per-light step) each light's."""
+    out = {"index": step.index, "colours": dict(step.colours), "levels": dict(step.levels)}
+    if step.heads:
+        out["heads"] = dict(step.heads)
+    return out
+
+
 def _sentence(text: str) -> str:
     text = text.strip()
     return text if text.endswith((".", "!", "?")) else f"{text}."
@@ -246,6 +265,7 @@ def stepped_preview(
         return None
     live = bool(settings.motion.stepped.live_enabled)
     out: dict[str, Any] = {
+        "lights": False,
         "design_step_s": tech.step_s,
         "steps_per_cycle": tech.steps_per_cycle,
         "run_s": tech.run_s,
@@ -279,9 +299,16 @@ def stepped_preview(
         out["error"] = f"{mode.label} can't step: {exc}"
         return out
     assert plan.program is not None
-    out["steps"] = [
-        {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)} for s in plan.program.steps
-    ]
+    out["steps"] = [_step_json(s) for s in plan.program.steps]
+    out["lights"] = bool(plan.program.lights)  # D80: each step is a per-light frame (`steps[i].heads`)
+    if plan.program.lights and tech.lights is not None:  # the per-light rung's own timing and kind of motion
+        out.update(
+            design_step_s=tech.lights.step_s,
+            steps_per_cycle=tech.lights.steps_per_cycle,
+            run_s=tech.lights.run_s,
+            mode=f"lights-{tech.lights.effect}",
+            effect=tech.lights.effect,
+        )
     out["cycle"] = len(plan.program.steps)
     out["feature"] = plan.feature
     out["moving_feature"] = plan.program.moving_feature
@@ -299,10 +326,7 @@ def stepped_preview(
         else:
             if partial.program is not None:
                 out["today_moving_feature"] = partial.program.moving_feature
-                out["today_steps"] = [
-                    {"index": s.index, "colours": dict(s.colours), "levels": dict(s.levels)}
-                    for s in partial.program.steps
-                ]
+                out["today_steps"] = [_step_json(s) for s in partial.program.steps]
     nine = canopy_pace(patched, scene_id, canopy, settings, GRID)
     here = canopy_pace(patched, scene_id, canopy, settings, today)
     if here is not None and out["today_error"] is not None:  # the show box holds the still look (B-R1-3)

@@ -40,7 +40,7 @@ APPROVED = [
     "golden-hour",
     "goodnight-glow",
 ]
-OPTIONS = (2, 3)
+OPTIONS = (2, 3, 4, 5, 6)  # D77's #2/#3 and D80's per-light #4–#6 (git's own catalog)
 REVIEW_IDS = [x for s in APPROVED for x in (s, *(f"{s}-{n}" for n in OPTIONS))]
 OPTION_IDS = [x for x in REVIEW_IDS if x not in APPROVED]
 PER_LIGHT_RUNGS = ("canvas", "slot")

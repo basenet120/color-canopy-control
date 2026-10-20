@@ -173,6 +173,141 @@ modes:
       strand:
         look: {kind: rgb, rgb: [211, 226, 234], brightness: 70}   # mist blue
         feature: "Colour and dimming: all nine Hubspace strands set to mist blue."
+  lowcountry-calm-4:
+    label: "Lowcountry Calm #4"
+    blurb: Settle in
+    preview: ["#F6F1E6", "#CDEBE2", "#A9DCD8"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &lowcountry-calm-4-design   # D80 "Tide pool"
+            kind: field
+            field: {kind: "linear", angle_deg: 30}
+            stops:
+              - {at: 0.0, color: pearl}
+              - {at: 0.5, color: sea-foam}
+              - {at: 1.0, color: pale-aqua}
+            recipe: rgb_only
+          at: centre
+          brightness: 70
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: pearl, then sea foam and pale aqua."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *lowcountry-calm-4-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 70
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: pearl, then sea foam and pale aqua."
+        lights:
+          effect: ripple
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          rings: 1.5
+          steps_per_cycle: 24
+          step_s: 2.0
+          run_s: 120
+          floor: 12
+          peak: 100
+          brightness: 70
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so slow rings of light roll out from the centre like ripples on a tide pool."
+      strand:
+        look: {kind: rgb, rgb: [205, 235, 226], brightness: 70}   # sea foam
+        feature: "Colour and dimming: all nine Hubspace strands set to sea foam."
+
+  lowcountry-calm-5:
+    label: "Lowcountry Calm #5"
+    blurb: Settle in
+    preview: ["#FFE7BF", "#FFF6E5", "#BFD4E6"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &lowcountry-calm-5-design   # D80 "Porch lantern"
+            kind: field
+            field: {kind: "linear", angle_deg: 45}
+            stops:
+              - {at: 0.0, color: lantern-glow}
+              - {at: 0.5, color: porch-cream}
+              - {at: 1.0, color: dusk-blue}
+            recipe: rgb_only
+          at: centre
+          brightness: 70
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: lantern glow, then porch cream and dusk blue."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *lowcountry-calm-5-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 70
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: lantern glow, then porch cream and dusk blue."
+        lights:
+          effect: glow
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          steps_per_cycle: 20
+          step_s: 2.0
+          run_s: 120
+          floor: 0
+          peak: 100
+          softness: 0.35
+          brightness: 70
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a lantern glow grows out from the centre to the edges and draws back in, the lights past it going dark."
+      strand:
+        look: {kind: rgb, rgb: [255, 231, 191], brightness: 70}   # lantern glow
+        feature: "Colour and dimming: all nine Hubspace strands set to lantern glow."
+
+  lowcountry-calm-6:
+    label: "Lowcountry Calm #6"
+    blurb: Settle in
+    preview: ["#D9DDCF", "#C4D3C0", "#F3EEE3"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &lowcountry-calm-6-design   # D80 "Spanish moss"
+            kind: field
+            field: {kind: "linear", angle_deg: 25}
+            stops:
+              - {at: 0.0, color: moss-grey}
+              - {at: 0.5, color: sage-mist}
+              - {at: 1.0, color: oak-linen}
+            recipe: rgb_only
+          at: centre
+          brightness: 70
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: moss grey, then sage mist and oak linen."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *lowcountry-calm-6-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 70
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: moss grey, then sage mist and oak linen."
+        lights:
+          effect: breathe
+          field: {kind: "linear", angle_deg: 25}
+          steps_per_cycle: 20
+          step_s: 2.0
+          run_s: 120
+          floor: 20
+          peak: 100
+          lag: 0.8
+          brightness: 70
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a slow breath rolls diagonally across the canopy, each light swelling and softening a moment after the last."
+      strand:
+        look: {kind: rgb, rgb: [243, 238, 227], brightness: 70}   # oak linen
+        feature: "Colour and dimming: all nine Hubspace strands set to oak linen."
+
 
   rainbow-row-sunset:
     label: "Rainbow Row Sunset #1"
@@ -275,6 +410,143 @@ modes:
       strand:
         look: {kind: rgb, rgb: [255, 138, 122], brightness: 85}   # coral
         feature: "Colour and dimming: all nine Hubspace strands set to coral."
+  rainbow-row-sunset-4:
+    label: "Rainbow Row Sunset #4"
+    blurb: Stay a little longer
+    preview: ["#FF8F85", "#FFC4A3", "#FFB3CF", "#BFA8F0"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &rainbow-row-sunset-4-design   # D80 "Facade ripple"
+            kind: field
+            field: {kind: "linear", angle_deg: 18}
+            stops:
+              - {at: 0.0, color: facade-coral}
+              - {at: 0.3333333333333333, color: facade-peach}
+              - {at: 0.6666666666666666, color: facade-rose}
+              - {at: 1.0, color: facade-lilac}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: facade coral, then facade peach, facade rose and facade lilac."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *rainbow-row-sunset-4-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: facade coral, then facade peach, facade rose and facade lilac."
+        lights:
+          effect: ripple
+          field: {kind: "linear", angle_deg: 0}
+          rings: 2.0
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 15
+          peak: 100
+          colour_travel: 0.5
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new colour and level every few seconds, so bands of light roll along the canopy like sun across a row of pastel facades."
+      strand:
+        look: {kind: rgb, rgb: [255, 179, 207], brightness: 85}   # facade rose
+        feature: "Colour and dimming: all nine Hubspace strands set to facade rose."
+
+  rainbow-row-sunset-5:
+    label: "Rainbow Row Sunset #5"
+    blurb: Stay a little longer
+    preview: ["#FFE3A3", "#FFB98C", "#F59AB5"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &rainbow-row-sunset-5-design   # D80 "Front-door glow"
+            kind: field
+            field: {kind: "radial", centre_in: [112.5, 120.0], metric: "canopy"}
+            stops:
+              - {at: 0.0, color: rainbow-row-sunset-5-butter-yellow}
+              - {at: 0.5, color: apricot}
+              - {at: 1.0, color: door-rose}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: butter yellow, then apricot and door rose."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *rainbow-row-sunset-5-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens from one edge: butter yellow, then apricot and door rose."
+        lights:
+          effect: glow
+          field: {kind: "radial", centre_in: [112.5, 120.0], metric: "canopy"}
+          steps_per_cycle: 20
+          step_s: 2.0
+          run_s: 120
+          floor: 0
+          peak: 100
+          softness: 0.3
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a warm glow rises from the middle of one long side across the canopy and back, the lights past it going dark."
+      strand:
+        look: {kind: rgb, rgb: [255, 185, 140], brightness: 85}   # apricot
+        feature: "Colour and dimming: all nine Hubspace strands set to apricot."
+
+  rainbow-row-sunset-6:
+    label: "Rainbow Row Sunset #6"
+    blurb: Stay a little longer
+    preview: ["#B9E8D2", "#CDB6F2", "#FFC9D6"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &rainbow-row-sunset-6-design   # D80 "Sunset pinwheel"
+            kind: field
+            field: {kind: "linear", angle_deg: 160}
+            stops:
+              - {at: 0.0, color: porch-mint}
+              - {at: 0.5, color: pinwheel-lavender}
+              - {at: 1.0, color: pinwheel-blush}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: porch mint, then pinwheel lavender and pinwheel blush."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *rainbow-row-sunset-6-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: porch mint, then pinwheel lavender and pinwheel blush."
+        lights:
+          effect: ripple
+          field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 0}
+          rings: 2.0
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 10
+          peak: 100
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so two beams of light turn around the centre like a pinwheel."
+      strand:
+        look: {kind: rgb, rgb: [255, 201, 214], brightness: 85}   # pinwheel blush
+        feature: "Colour and dimming: all nine Hubspace strands set to pinwheel blush."
+
 
   garden-gathering:
     label: "Garden Gathering #1"
@@ -380,6 +652,141 @@ modes:
       strand:
         look: {kind: rgb, rgb: [255, 225, 163], brightness: 75}   # lantern gold
         feature: "Colour and dimming: all nine Hubspace strands set to lantern gold."
+  garden-gathering-4:
+    label: "Garden Gathering #4"
+    blurb: Bring everyone together
+    preview: ["#F4F1A0", "#7FB77E", "#3F7F5A"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &garden-gathering-4-design   # D80 "Firefly garden"
+            kind: field
+            field: {kind: "linear", angle_deg: 35}
+            stops:
+              - {at: 0.0, color: garden-gathering-4-firefly}
+              - {at: 0.5, color: fern}
+              - {at: 1.0, color: deep-leaf}
+            recipe: rgb_only
+          at: centre
+          brightness: 75
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: firefly, then fern and deep leaf."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *garden-gathering-4-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 75
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: firefly, then fern and deep leaf."
+        lights:
+          effect: twinkle
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 6
+          peak: 100
+          seed: 1029
+          brightness: 75
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, each on its own rhythm, so lights brighten and dim across the garden like fireflies."
+      strand:
+        look: {kind: rgb, rgb: [127, 183, 126], brightness: 75}   # fern
+        feature: "Colour and dimming: all nine Hubspace strands set to fern."
+
+  garden-gathering-5:
+    label: "Garden Gathering #5"
+    blurb: Bring everyone together
+    preview: ["#F7B6C8", "#FFF4F0", "#9CCB8E"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &garden-gathering-5-design   # D80 "Garden bloom"
+            kind: field
+            field: {kind: "linear", angle_deg: 120}
+            stops:
+              - {at: 0.0, color: peony}
+              - {at: 0.5, color: blossom-white}
+              - {at: 1.0, color: bloom-leaf}
+            recipe: rgb_only
+          at: centre
+          brightness: 75
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: peony, then blossom white and bloom leaf."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *garden-gathering-5-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 75
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: peony, then blossom white and bloom leaf."
+        lights:
+          effect: glow
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          steps_per_cycle: 24
+          step_s: 2.0
+          run_s: 120
+          floor: 5
+          peak: 100
+          softness: 0.5
+          brightness: 75
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so the light opens out from the centre like a flower and closes again."
+      strand:
+        look: {kind: rgb, rgb: [247, 182, 200], brightness: 75}   # peony
+        feature: "Colour and dimming: all nine Hubspace strands set to peony."
+
+  garden-gathering-6:
+    label: "Garden Gathering #6"
+    blurb: Bring everyone together
+    preview: ["#D4EE9B", "#A9C7A0", "#7E9B6B"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &garden-gathering-6-design   # D80 "Breeze through leaves"
+            kind: field
+            field: {kind: "linear", angle_deg: 140}
+            stops:
+              - {at: 0.0, color: breeze-lime}
+              - {at: 0.5, color: breeze-sage}
+              - {at: 1.0, color: olive}
+            recipe: rgb_only
+          at: centre
+          brightness: 75
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: breeze lime, then breeze sage and olive."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *garden-gathering-6-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 75
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: breeze lime, then breeze sage and olive."
+        lights:
+          effect: ripple
+          field: {kind: "linear", angle_deg: 140}
+          rings: 2.5
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 25
+          peak: 100
+          brightness: 75
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so gusts of light roll diagonally across the canopy like a breeze through leaves."
+      strand:
+        look: {kind: rgb, rgb: [169, 199, 160], brightness: 75}   # breeze sage
+        feature: "Colour and dimming: all nine Hubspace strands set to breeze sage."
+
 
   coastal-tides:
     label: "Coastal Tides #1"
@@ -480,6 +887,142 @@ modes:
       strand:
         look: {kind: rgb, rgb: [91, 143, 203], brightness: 85}   # harbor blue
         feature: "Colour and dimming: all nine Hubspace strands set to harbor blue."
+  coastal-tides-4:
+    label: "Coastal Tides #4"
+    blurb: Find your coast
+    preview: ["#EEF8FA", "#4F9FD1", "#2B5F8C"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &coastal-tides-4-design   # D80 "Rolling surf"
+            kind: field
+            field: {kind: "linear", angle_deg: 75}
+            stops:
+              - {at: 0.0, color: surf-white}
+              - {at: 0.5, color: coastal-tides-4-ocean-blue}
+              - {at: 1.0, color: deep-sea}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: surf white, then ocean blue and deep sea."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *coastal-tides-4-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: surf white, then ocean blue and deep sea."
+        lights:
+          effect: ripple
+          field: {kind: "linear", angle_deg: 90}
+          rings: 2.0
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 10
+          peak: 100
+          direction: "inward"
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so lines of light roll across the canopy like surf coming in to shore."
+      strand:
+        look: {kind: rgb, rgb: [79, 159, 209], brightness: 85}   # ocean blue
+        feature: "Colour and dimming: all nine Hubspace strands set to ocean blue."
+
+  coastal-tides-5:
+    label: "Coastal Tides #5"
+    blurb: Find your coast
+    preview: ["#7FD6D0", "#2F9C9A", "#F2E3C2"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &coastal-tides-5-design   # D80 "Tide pool rings"
+            kind: field
+            field: {kind: "linear", angle_deg: 50}
+            stops:
+              - {at: 0.0, color: pool-aqua}
+              - {at: 0.5, color: pool-teal}
+              - {at: 1.0, color: wet-sand}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: pool aqua, then pool teal and wet sand."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *coastal-tides-5-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: pool aqua, then pool teal and wet sand."
+        lights:
+          effect: ripple
+          field: {kind: "radial", centre_in: [75.0, 40.0], metric: "canopy"}
+          rings: 3.0
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 8
+          peak: 100
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so rings of light spread out across the canopy like ripples from a drop in a tide pool."
+      strand:
+        look: {kind: rgb, rgb: [127, 214, 208], brightness: 85}   # pool aqua
+        feature: "Colour and dimming: all nine Hubspace strands set to pool aqua."
+
+  coastal-tides-6:
+    label: "Coastal Tides #6"
+    blurb: Find your coast
+    preview: ["#FFE29A", "#DDEFF6", "#2E4C7A"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &coastal-tides-6-design   # D80 "Lighthouse"
+            kind: field
+            field: {kind: "linear", angle_deg: 155}
+            stops:
+              - {at: 0.0, color: beacon-gold}
+              - {at: 0.5, color: sea-foam-white}
+              - {at: 1.0, color: coastal-tides-6-night-sea}
+            recipe: rgb_only
+          at: centre
+          brightness: 85
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: beacon gold, then sea foam white and night sea."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *coastal-tides-6-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 85
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: beacon gold, then sea foam white and night sea."
+        lights:
+          effect: ripple
+          field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 90}
+          rings: 1.0
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 6
+          peak: 100
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a beam of light turns around the centre like a lighthouse."
+      strand:
+        look: {kind: rgb, rgb: [46, 76, 122], brightness: 85}   # night sea
+        feature: "Colour and dimming: all nine Hubspace strands set to night sea."
+
 
   golden-hour:
     label: "Golden Hour #1"
@@ -586,6 +1129,142 @@ modes:
       strand:
         look: {kind: rgb, rgb: [232, 117, 58], brightness: 95}   # burnt orange
         feature: "Colour and dimming: all nine Hubspace strands set to burnt orange."
+  golden-hour-4:
+    label: "Golden Hour #4"
+    blurb: Let the evening glow
+    preview: ["#FFD27D", "#FFB08A", "#F28BA8", "#B39AE0"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &golden-hour-4-design   # D80 "Sunrise bloom"
+            kind: field
+            field: {kind: "linear", angle_deg: 40}
+            stops:
+              - {at: 0.0, color: sunrise-gold}
+              - {at: 0.3333333333333333, color: sunrise-peach}
+              - {at: 0.6666666666666666, color: sunrise-rose}
+              - {at: 1.0, color: sunrise-lavender}
+            recipe: rgb_only
+          at: centre
+          brightness: 95
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: sunrise gold, then sunrise peach, sunrise rose and sunrise lavender."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *golden-hour-4-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 5
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 95
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: sunrise gold, then sunrise peach, sunrise rose and sunrise lavender."
+        lights:
+          effect: glow
+          field: {kind: "radial", centre_in: [0.0, 60.0], metric: "canopy", radius_in: 225}
+          steps_per_cycle: 24
+          step_s: 2.0
+          run_s: 120
+          floor: 4
+          peak: 100
+          softness: 0.4
+          brightness: 95
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so the light spreads from one short side across the canopy like a sunrise, then draws back."
+      strand:
+        look: {kind: rgb, rgb: [255, 176, 138], brightness: 95}   # sunrise peach
+        feature: "Colour and dimming: all nine Hubspace strands set to sunrise peach."
+
+  golden-hour-5:
+    label: "Golden Hour #5"
+    blurb: Let the evening glow
+    preview: ["#FFC870", "#FFA45C", "#FF8A7A"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &golden-hour-5-design   # D80 "Heat shimmer"
+            kind: field
+            field: {kind: "linear", angle_deg: 60}
+            stops:
+              - {at: 0.0, color: golden-hour-5-honey}
+              - {at: 0.5, color: amber-glow}
+              - {at: 1.0, color: warm-coral}
+            recipe: rgb_only
+          at: centre
+          brightness: 95
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: honey, then amber glow and warm coral."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *golden-hour-5-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 5
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 95
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: honey, then amber glow and warm coral."
+        lights:
+          effect: breathe
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 30
+          peak: 100
+          lag: 1.2
+          brightness: 95
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so waves of warmth swell out from the centre, each ring of lights brightening a moment after the one inside it."
+      strand:
+        look: {kind: rgb, rgb: [255, 164, 92], brightness: 95}   # amber glow
+        feature: "Colour and dimming: all nine Hubspace strands set to amber glow."
+
+  golden-hour-6:
+    label: "Golden Hour #6"
+    blurb: Let the evening glow
+    preview: ["#FFEFCF", "#FFC24D", "#FF8C5A"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &golden-hour-6-design   # D80 "Sun rays"
+            kind: field
+            field: {kind: "linear", angle_deg: 20}
+            stops:
+              - {at: 0.0, color: champagne}
+              - {at: 0.5, color: marigold}
+              - {at: 1.0, color: persimmon}
+            recipe: rgb_only
+          at: centre
+          brightness: 95
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: champagne, then marigold and persimmon."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *golden-hour-6-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 5
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 95
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: champagne, then marigold and persimmon."
+        lights:
+          effect: ripple
+          field: {kind: "sweep", centre_in: [0.0, 60.0], start_deg: 270}
+          rings: 3.0
+          steps_per_cycle: 16
+          step_s: 1.5
+          run_s: 120
+          floor: 15
+          peak: 100
+          brightness: 95
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so rays of light fan out from one short side and sweep across the canopy like a low sun."
+      strand:
+        look: {kind: rgb, rgb: [255, 194, 77], brightness: 95}   # marigold
+        feature: "Colour and dimming: all nine Hubspace strands set to marigold."
+
 
   goodnight-glow:
     label: "The Goodnight Glow #1"
@@ -689,3 +1368,138 @@ modes:
       strand:
         look: {kind: rgb, rgb: [255, 191, 115], brightness: 26}   # candle amber
         feature: "Colour and dimming: all nine Hubspace strands set to candle amber."
+  goodnight-glow-4:
+    label: "The Goodnight Glow #4"
+    blurb: Slow the night down
+    preview: ["#E6E9F2", "#C9D6F5", "#6F7FC0"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &goodnight-glow-4-design   # D80 "Moonrise"
+            kind: field
+            field: {kind: "radial", centre_in: [112.5, 0.0], metric: "canopy"}
+            stops:
+              - {at: 0.0, color: moonrise-silver}
+              - {at: 0.5, color: moonrise-blue}
+              - {at: 1.0, color: goodnight-glow-4-night-blue}
+            recipe: rgb_only
+          at: centre
+          brightness: 28
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out from one edge: moonrise silver, then moonrise blue and night blue."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *goodnight-glow-4-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 6
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 28
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens from one edge: moonrise silver, then moonrise blue and night blue."
+        lights:
+          effect: glow
+          field: {kind: "radial", centre_in: [112.5, 0.0], metric: "canopy"}
+          steps_per_cycle: 20
+          step_s: 2.5
+          run_s: 150
+          floor: 0
+          peak: 100
+          softness: 0.35
+          brightness: 28
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a soft moonglow rises from one long side across the canopy and settles back, the lights past it going dark."
+      strand:
+        look: {kind: rgb, rgb: [201, 214, 245], brightness: 28}   # moonrise blue
+        feature: "Colour and dimming: all nine Hubspace strands set to moonrise blue."
+
+  goodnight-glow-5:
+    label: "The Goodnight Glow #5"
+    blurb: Slow the night down
+    preview: ["#F1F3FF", "#CFC6F0", "#4B4F9E"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &goodnight-glow-5-design   # D80 "Starfield"
+            kind: field
+            field: {kind: "linear", angle_deg: 30}
+            stops:
+              - {at: 0.0, color: star-white}
+              - {at: 0.5, color: star-lilac}
+              - {at: 1.0, color: deep-indigo}
+            recipe: rgb_only
+          at: centre
+          brightness: 28
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: star white, then star lilac and deep indigo."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *goodnight-glow-5-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 6
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 28
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: star white, then star lilac and deep indigo."
+        lights:
+          effect: twinkle
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          steps_per_cycle: 16
+          step_s: 2.0
+          run_s: 150
+          floor: 0
+          peak: 100
+          seed: 7731
+          brightness: 28
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, each on its own rhythm, so lights come and go across the canopy like stars."
+      strand:
+        look: {kind: rgb, rgb: [207, 198, 240], brightness: 28}   # star lilac
+        feature: "Colour and dimming: all nine Hubspace strands set to star lilac."
+
+  goodnight-glow-6:
+    label: "The Goodnight Glow #6"
+    blurb: Slow the night down
+    preview: ["#BFB3E6", "#9EA6DE", "#D9B3CF"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &goodnight-glow-6-design   # D80 "Sleepy breath"
+            kind: field
+            field: {kind: "linear", angle_deg: 145}
+            stops:
+              - {at: 0.0, color: lavender-haze}
+              - {at: 0.5, color: sleepy-periwinkle}
+              - {at: 1.0, color: dusk-rose}
+            recipe: rgb_only
+          at: centre
+          brightness: 28
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: lavender haze, then sleepy periwinkle and dusk rose."
+      stepped:   # D80: per-light where the kits can take frames, else this module-level breath
+        canvas: *goodnight-glow-6-design
+        mode: breathe
+        direction: forward
+        brightness_swing: 6
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 28
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: lavender haze, then sleepy periwinkle and dusk rose."
+        lights:
+          effect: breathe
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          steps_per_cycle: 16
+          step_s: 3.0
+          run_s: 150
+          floor: 15
+          peak: 100
+          lag: 0.6
+          brightness: 28
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a slow breath rolls out from the centre, each light swelling and softening a moment after the one inside it."
+      strand:
+        look: {kind: rgb, rgb: [191, 179, 230], brightness: 28}   # lavender haze
+        feature: "Colour and dimming: all nine Hubspace strands set to lavender haze."
+

@@ -21,7 +21,9 @@ BASES = [
     "golden-hour",
     "goodnight-glow",
 ]
-APPROVED = [x for base in BASES for x in (base, f"{base}-2", f"{base}-3")]  # D77: three options per scene
+APPROVED = [
+    x for base in BASES for x in (base, *(f"{base}-{n}" for n in (2, 3, 4, 5, 6)))
+]  # D77 #2-#3, D80 #4-#6
 
 
 def test_the_catalog_is_the_six_scenes_and_their_options_in_order():
@@ -70,7 +72,7 @@ def test_an_option_names_its_base_and_groups_under_it():
     assert option.name == "Golden Hour #2"
     base = catalog.get("golden-hour")
     assert base.option_of is None and base.group == "golden-hour"
-    assert [s.id for s in catalog.options_of("golden-hour")] == ["golden-hour-2", "golden-hour-3"]
+    assert [s.id for s in catalog.options_of("golden-hour")] == [f"golden-hour-{n}" for n in (2, 3, 4, 5, 6)]
     assert catalog.options_of("golden-hour-2") == []
 
 
@@ -116,7 +118,9 @@ def test_option_of_is_left_out_of_every_dump_while_unset():
     catalog = load_scenes()
     keys = {"id", "name", "mood", "description", "transform", "brightness_draft", "default_solid", "palette"}
     for scene in catalog.model_dump(mode="json")["scenes"]:  # D77's options carry it, the six bases don't
-        assert set(scene) == (keys | {"option_of"} if scene["id"].endswith(("-2", "-3")) else keys)
+        assert set(scene) == (
+            keys | {"option_of"} if scene["id"].endswith(("-2", "-3", "-4", "-5", "-6")) else keys
+        )
     bases = SceneCatalog(
         scenes=[s for s in catalog.scenes if s.option_of is None]
     )  # a catalog without options
@@ -126,6 +130,6 @@ def test_option_of_is_left_out_of_every_dump_while_unset():
     review = review_scenes(catalog)
     dumped = review.model_dump(mode="json")
     for scene in dumped["scenes"]:
-        assert ("option_of" in scene) == scene["id"].endswith(("-2", "-3")), scene["id"]
+        assert ("option_of" in scene) == scene["id"].endswith(("-2", "-3", "-4", "-5", "-6")), scene["id"]
     assert SceneCatalog.model_validate(dumped) == review
     assert SceneCatalog.model_validate(catalog.model_dump(mode="json")) == catalog

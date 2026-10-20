@@ -287,7 +287,7 @@ def test_the_breath_preview_plays_the_paces_own_steps_with_their_levels():
     assert "const step = M.paceSteps(st, tl.pace)[at.index];" in motion
     assert "st.steps[" not in motion  # never the nine-module program whatever the pace
     assert (
-        "paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } }"
+        "paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null, heads: step.heads || null } }"
         in motion
     )
     stage = _function(js, "paintStage")

@@ -362,7 +362,9 @@ def test_a_visible_option_of_a_hidden_base_keeps_its_group():
     assert GOLDEN not in [s.id for s in m.visible.scenes]
     option = m.visible.get("golden-hour-2")
     assert option.group == GOLDEN and option.option_of == GOLDEN
-    assert [s.id for s in m.visible.options_of(GOLDEN)] == ["golden-hour-2", "golden-hour-3"]
+    assert [s.id for s in m.visible.options_of(GOLDEN)] == [
+        x for x in OPTION_IDS if x.startswith(f"{GOLDEN}-")
+    ]
 
 
 def test_six_visible_is_the_grid_seven_is_the_review_menu():
@@ -411,8 +413,8 @@ def test_the_ops_body_lists_every_scene_with_its_switch(tmp_path):
         "idle": False,
     }
     assert {k: body[k] for k in ("visible", "total", "grid_max", "review", "notes", "file", "writable")} == {
-        "visible": 18,
-        "total": 18,
+        "visible": len(REVIEW_IDS),
+        "total": len(REVIEW_IDS),
         "grid_max": 6,
         "review": True,
         "notes": [],
@@ -538,7 +540,9 @@ def test_an_unusable_overlay_is_a_live_ops_line_and_the_next_switch_writes_it_ag
     services = _services(tmp_path, "kiosk: {hidden_scenes: [golden-hour]\n")
     path = Path(services.data) / SETTINGS_OVERLAY_PATH
     before = path.read_bytes()
-    assert services.settings.kiosk.hidden_scenes == [] and len(IM.live_menu(services).visible.scenes) == 18
+    assert services.settings.kiosk.hidden_scenes == [] and len(IM.live_menu(services).visible.scenes) == len(
+        REVIEW_IDS
+    )
     lines = IM.problem_lines(services)
     assert lines == [
         (
@@ -1121,7 +1125,7 @@ def test_on_the_partial_live_canopy_the_cards_light_the_two_panels_now_showing_l
         assert sorted(m["pos"] for m in lit if m["state"] == "dark") == [
             m["pos"] for m in lit if m["pos"] not in ("r0c0", "r0c1")
         ]
-        assert len(body["scenes"]) == 18
+        assert len(body["scenes"]) == len(REVIEW_IDS)
         for s in body["scenes"]:
             assert s["thumb"] is not None and s["thumb"]["basis"] == "modules", s["id"]
             assert _lit(s["thumb"]) == ["r0c0", "r0c1"], s["id"]
@@ -1229,15 +1233,15 @@ def test_thumbnails_are_computed_once_per_published_look_and_basis(app_client, m
     calls = counted(monkeypatch)
     for _ in range(3):
         _panel(app_client)
-    assert len(calls) == 18 and all(heads is False for _, heads in calls)
+    assert len(calls) == len(REVIEW_IDS) and all(heads is False for _, heads in calls)
     install_looks(services, trio, why="again")  # a new published look: every card again
     _panel(app_client)
-    assert len(calls) == 36
+    assert len(calls) == 2 * len(REVIEW_IDS)
     _panel(app_client)
-    assert len(calls) == 36
+    assert len(calls) == 2 * len(REVIEW_IDS)
     engine.tiers[GOLDEN] = Tier.T1  # e.g. its slot commissioned: only that card is redrawn
     body = _panel(app_client)
-    assert len(calls) == 37 and calls[-1] == (GOLDEN, True)
+    assert len(calls) == 2 * len(REVIEW_IDS) + 1 and calls[-1] == (GOLDEN, True)
     assert next(s for s in body["scenes"] if s["id"] == GOLDEN)["thumb"]["basis"] == "heads"
 
 
@@ -1275,7 +1279,10 @@ def test_a_hidden_scene_is_off_the_panel_and_refused_calmly(app_client):
     trio = install_review(services, hide=["golden-hour-2"])
     engine = _engine(app_client, trio)
     body = _panel(app_client)
-    assert "golden-hour-2" not in [s["id"] for s in body["scenes"]] and len(body["scenes"]) == 17
+    assert (
+        "golden-hour-2" not in [s["id"] for s in body["scenes"]]
+        and len(body["scenes"]) == len(REVIEW_IDS) - 1
+    )
     r = app_client.post("/api/kiosk/scene", json={"scene": "golden-hour-2"})
     assert r.status_code == 404 and r.json()["detail"] == "That scene isn't one of the panel's choices."
     assert engine.calls == []
@@ -1356,13 +1363,15 @@ def test_the_ipad_switch_hides_and_shows_a_scene_without_an_engine(app_client):
     body = app_client.get("/api/ops/ipad-scenes").json()
     assert [s["id"] for s in body["scenes"]] == REVIEW_IDS and all(s["on_ipad"] for s in body["scenes"])
     assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM]
-    assert body["review"] is True and body["notes"] == [] and body["visible"] == body["total"] == 18
+    assert (
+        body["review"] is True and body["notes"] == [] and body["visible"] == body["total"] == len(REVIEW_IDS)
+    )
     r = app_client.post("/api/ops/ipad-scenes", json={"scene": "golden-hour-2", "show": False})
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     res = r.json()
     assert res["ok"] is True and res["message"].startswith("Golden Hour #2 is off the iPad")
     assert next(s for s in res["scenes"] if s["id"] == "golden-hour-2")["on_ipad"] is False
-    assert res["visible"] == 17
+    assert res["visible"] == len(REVIEW_IDS) - 1
     assert "golden-hour-2" not in [s["id"] for s in _panel(app_client)["scenes"]]
     path = Path(services.data) / SETTINGS_OVERLAY_PATH
     assert yaml.safe_load(path.read_text()) == {"kiosk": {"hidden_scenes": ["golden-hour-2"]}}
@@ -1475,7 +1484,7 @@ def test_the_list_survives_a_restart(monkeypatch, tmp_path):
         assert services.settings.kiosk.hidden_scenes == ["golden-hour-2"]
         install_review(services)  # hide=None keeps the list the overlay put in force
         ids = [s["id"] for s in _panel(client)["scenes"]]
-        assert "golden-hour-2" not in ids and len(ids) == 17
+        assert "golden-hour-2" not in ids and len(ids) == len(REVIEW_IDS) - 1
 
 
 def test_names_that_hide_nothing_are_an_ops_summary_line_and_the_next_switch_drops_them(

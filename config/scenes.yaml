@@ -46,6 +46,42 @@ scenes:
       - {name: "Oyster shell", hex: "#EEE6DA"}
       - {name: "Spartina", hex: "#CFDDBE"}
       - {name: "Mist blue", hex: "#D3E2EA"}
+  - id: lowcountry-calm-4
+    option_of: lowcountry-calm   # "Tide pool" (D80, per-light)
+    name: "Lowcountry Calm #4"
+    mood: "Settle in"
+    description: "Pearl and sea foam with pale aqua at the edges, like light on a quiet tide pool."
+    transform: linear
+    brightness_draft: 70
+    default_solid: 1
+    palette:
+      - {name: "Pearl", hex: "#F6F1E6"}
+      - {name: "Sea foam", hex: "#CDEBE2"}
+      - {name: "Pale aqua", hex: "#A9DCD8"}
+  - id: lowcountry-calm-5
+    option_of: lowcountry-calm   # "Porch lantern" (D80, per-light)
+    name: "Lowcountry Calm #5"
+    mood: "Settle in"
+    description: "A warm lantern glow at the heart of cream and dusk blue, like a porch light at evening."
+    transform: linear
+    brightness_draft: 70
+    default_solid: 0
+    palette:
+      - {name: "Lantern glow", hex: "#FFE7BF"}
+      - {name: "Porch cream", hex: "#FFF6E5"}
+      - {name: "Dusk blue", hex: "#BFD4E6"}
+  - id: lowcountry-calm-6
+    option_of: lowcountry-calm   # "Spanish moss" (D80, per-light)
+    name: "Lowcountry Calm #6"
+    mood: "Settle in"
+    description: "Moss grey, sage mist and linen, soft as Spanish moss in a live oak."
+    transform: linear
+    brightness_draft: 70
+    default_solid: 2
+    palette:
+      - {name: "Moss grey", hex: "#D9DDCF"}
+      - {name: "Sage mist", hex: "#C4D3C0"}
+      - {name: "Oak linen", hex: "#F3EEE3"}
   - id: rainbow-row-sunset
     name: "Rainbow Row Sunset #1"
     mood: "Stay a little longer"
@@ -85,6 +121,43 @@ scenes:
       - {name: "Coral", hex: "#FF8A7A"}
       - {name: "Rose", hex: "#E979A0"}
       - {name: "Dusk violet", hex: "#9A86D6"}
+  - id: rainbow-row-sunset-4
+    option_of: rainbow-row-sunset   # "Facade ripple" (D80, per-light)
+    name: "Rainbow Row Sunset #4"
+    mood: "Stay a little longer"
+    description: "Coral, peach, rose and lilac, a row of pastel facades in the late sun."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 2
+    palette:
+      - {name: "Facade coral", hex: "#FF8F85"}
+      - {name: "Facade peach", hex: "#FFC4A3"}
+      - {name: "Facade rose", hex: "#FFB3CF"}
+      - {name: "Facade lilac", hex: "#BFA8F0"}
+  - id: rainbow-row-sunset-5
+    option_of: rainbow-row-sunset   # "Front-door glow" (D80, per-light)
+    name: "Rainbow Row Sunset #5"
+    mood: "Stay a little longer"
+    description: "Butter yellow, apricot and rose, the glow of a painted front door at dusk."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 1
+    palette:
+      - {name: "Butter yellow", hex: "#FFE3A3"}
+      - {name: "Apricot", hex: "#FFB98C"}
+      - {name: "Door rose", hex: "#F59AB5"}
+  - id: rainbow-row-sunset-6
+    option_of: rainbow-row-sunset   # "Sunset pinwheel" (D80, per-light)
+    name: "Rainbow Row Sunset #6"
+    mood: "Stay a little longer"
+    description: "Mint, lavender and blush turning around the centre like a pinwheel on a porch rail."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 2
+    palette:
+      - {name: "Porch mint", hex: "#B9E8D2"}
+      - {name: "Pinwheel lavender", hex: "#CDB6F2"}
+      - {name: "Pinwheel blush", hex: "#FFC9D6"}
   - id: garden-gathering
     name: "Garden Gathering #1"
     mood: "Bring everyone together"
@@ -122,6 +195,42 @@ scenes:
       - {name: "Lantern gold", hex: "#FFE1A3"}
       - {name: "Fern green", hex: "#9DC89B"}
       - {name: "Warm white", hex: "#FFF4E2"}
+  - id: garden-gathering-4
+    option_of: garden-gathering   # "Firefly garden" (D80, per-light)
+    name: "Garden Gathering #4"
+    mood: "Bring everyone together"
+    description: "Firefly yellow over fern and deep leaf green, a garden at the first dark of evening."
+    transform: linear
+    brightness_draft: 75
+    default_solid: 1
+    palette:
+      - {name: "Firefly", hex: "#F4F1A0"}
+      - {name: "Fern", hex: "#7FB77E"}
+      - {name: "Deep leaf", hex: "#3F7F5A"}
+  - id: garden-gathering-5
+    option_of: garden-gathering   # "Garden bloom" (D80, per-light)
+    name: "Garden Gathering #5"
+    mood: "Bring everyone together"
+    description: "A peony-pink heart opening into blossom white and leaf green."
+    transform: linear
+    brightness_draft: 75
+    default_solid: 0
+    palette:
+      - {name: "Peony", hex: "#F7B6C8"}
+      - {name: "Blossom white", hex: "#FFF4F0"}
+      - {name: "Bloom leaf", hex: "#9CCB8E"}
+  - id: garden-gathering-6
+    option_of: garden-gathering   # "Breeze through leaves" (D80, per-light)
+    name: "Garden Gathering #6"
+    mood: "Bring everyone together"
+    description: "Lime, sage and olive, leaves turning in a light breeze."
+    transform: linear
+    brightness_draft: 75
+    default_solid: 1
+    palette:
+      - {name: "Breeze lime", hex: "#D4EE9B"}
+      - {name: "Breeze sage", hex: "#A9C7A0"}
+      - {name: "Olive", hex: "#7E9B6B"}
   - id: coastal-tides
     name: "Coastal Tides #1"
     mood: "Find your coast"
@@ -160,6 +269,42 @@ scenes:
       - {name: "Harbor blue", hex: "#5B8FCB"}
       - {name: "Lamp gold", hex: "#FFE4AE"}
       - {name: "Beam white", hex: "#F3F6FF"}
+  - id: coastal-tides-4
+    option_of: coastal-tides   # "Rolling surf" (D80, per-light)
+    name: "Coastal Tides #4"
+    mood: "Find your coast"
+    description: "Surf white over ocean blue and deep sea, the shore at high tide."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 1
+    palette:
+      - {name: "Surf white", hex: "#EEF8FA"}
+      - {name: "Ocean blue", hex: "#4F9FD1"}
+      - {name: "Deep sea", hex: "#2B5F8C"}
+  - id: coastal-tides-5
+    option_of: coastal-tides   # "Tide pool rings" (D80, per-light)
+    name: "Coastal Tides #5"
+    mood: "Find your coast"
+    description: "Aqua and teal over sand, rings spreading where a drop lands in a tide pool."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 0
+    palette:
+      - {name: "Pool aqua", hex: "#7FD6D0"}
+      - {name: "Pool teal", hex: "#2F9C9A"}
+      - {name: "Wet sand", hex: "#F2E3C2"}
+  - id: coastal-tides-6
+    option_of: coastal-tides   # "Lighthouse" (D80, per-light)
+    name: "Coastal Tides #6"
+    mood: "Find your coast"
+    description: "A beacon gold beam over night sea blue and sea foam."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 2
+    palette:
+      - {name: "Beacon gold", hex: "#FFE29A"}
+      - {name: "Sea foam white", hex: "#DDEFF6"}
+      - {name: "Night sea", hex: "#2E4C7A"}
   - id: golden-hour
     name: "Golden Hour #1"
     mood: "Let the evening glow"
@@ -199,6 +344,43 @@ scenes:
       - {name: "Burnt orange", hex: "#E8753A"}
       - {name: "Dusty rose", hex: "#D98AA2"}
       - {name: "Smoky violet", hex: "#8F7CC4"}
+  - id: golden-hour-4
+    option_of: golden-hour   # "Sunrise bloom" (D80, per-light)
+    name: "Golden Hour #4"
+    mood: "Let the evening glow"
+    description: "Gold, peach, rose and lavender, the sun coming up over the water."
+    transform: linear
+    brightness_draft: 95
+    default_solid: 1
+    palette:
+      - {name: "Sunrise gold", hex: "#FFD27D"}
+      - {name: "Sunrise peach", hex: "#FFB08A"}
+      - {name: "Sunrise rose", hex: "#F28BA8"}
+      - {name: "Sunrise lavender", hex: "#B39AE0"}
+  - id: golden-hour-5
+    option_of: golden-hour   # "Heat shimmer" (D80, per-light)
+    name: "Golden Hour #5"
+    mood: "Let the evening glow"
+    description: "Honey, amber and coral, warm air rising off the marsh at the end of the day."
+    transform: linear
+    brightness_draft: 95
+    default_solid: 1
+    palette:
+      - {name: "Honey", hex: "#FFC870"}
+      - {name: "Amber glow", hex: "#FFA45C"}
+      - {name: "Warm coral", hex: "#FF8A7A"}
+  - id: golden-hour-6
+    option_of: golden-hour   # "Sun rays" (D80, per-light)
+    name: "Golden Hour #6"
+    mood: "Let the evening glow"
+    description: "Champagne, marigold and persimmon, low sun rays fanning across the room."
+    transform: linear
+    brightness_draft: 95
+    default_solid: 1
+    palette:
+      - {name: "Champagne", hex: "#FFEFCF"}
+      - {name: "Marigold", hex: "#FFC24D"}
+      - {name: "Persimmon", hex: "#FF8C5A"}
   - id: goodnight-glow
     name: "The Goodnight Glow #1"
     mood: "Slow the night down"
@@ -234,3 +416,39 @@ scenes:
       - {name: "Candle amber", hex: "#FFBF73"}
       - {name: "Dusky mauve", hex: "#A487B3"}
       - {name: "Night blue", hex: "#5C70AA"}
+  - id: goodnight-glow-4
+    option_of: goodnight-glow   # "Moonrise" (D80, per-light)
+    name: "The Goodnight Glow #4"
+    mood: "Slow the night down"
+    description: "Moonlight blue and silver over night blue, the moon lifting over the water."
+    transform: linear
+    brightness_draft: 28
+    default_solid: 1
+    palette:
+      - {name: "Moonrise silver", hex: "#E6E9F2"}
+      - {name: "Moonrise blue", hex: "#C9D6F5"}
+      - {name: "Night blue", hex: "#6F7FC0"}
+  - id: goodnight-glow-5
+    option_of: goodnight-glow   # "Starfield" (D80, per-light)
+    name: "The Goodnight Glow #5"
+    mood: "Slow the night down"
+    description: "Star white and pale lilac over deep indigo, a clear night sky."
+    transform: linear
+    brightness_draft: 28
+    default_solid: 1
+    palette:
+      - {name: "Star white", hex: "#F1F3FF"}
+      - {name: "Star lilac", hex: "#CFC6F0"}
+      - {name: "Deep indigo", hex: "#4B4F9E"}
+  - id: goodnight-glow-6
+    option_of: goodnight-glow   # "Sleepy breath" (D80, per-light)
+    name: "The Goodnight Glow #6"
+    mood: "Slow the night down"
+    description: "Lavender haze, periwinkle and dusk rose, the room breathing slowly toward sleep."
+    transform: linear
+    brightness_draft: 28
+    default_solid: 0
+    palette:
+      - {name: "Lavender haze", hex: "#BFB3E6"}
+      - {name: "Sleepy periwinkle", hex: "#9EA6DE"}
+      - {name: "Dusk rose", hex: "#D9B3CF"}

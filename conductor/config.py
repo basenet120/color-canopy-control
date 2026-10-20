@@ -282,6 +282,21 @@ class IdleMotionSettings(_Strict):
         return self
 
 
+class LightsMotionSettings(_Strict):
+    """Per-light motion (D80): a stepped rung's `lights` block sends each driven module a whole per-light frame (every
+    light's colour and level) a step at a time — one full-state PUT per module per step carrying the frame, the slot
+    select, the mode and the power (04's proven T1 write), into `slot`. In the simulator it always runs; on live
+    hardware only with `live_enabled` (or during an operator's rehearsal of that look) AND, per module, Gate C
+    (`t1_frames`) and a proven controller map — otherwise the rung falls back to its module-level steps. `min_step_s`
+    keeps every module at or under 1 write a second (Afero's published per-device guidance, 03); the account's cap
+    and governor are `motion.stepped`'s. Only Alon flips `live_enabled`, after the per-light bench rehearsal
+    (docs/runbooks/stepped-rehearsal.md, "Per-light")."""
+
+    live_enabled: bool = False
+    min_step_s: float = Field(1.0, ge=1.0, le=12.0)
+    slot: Literal["custom-1", "custom-2", "custom-3"] = "custom-3"
+
+
 class MotionSettings(_Strict):
     """Motion through the cloud. `stepped`: the stepped runner's pacing and gates (D65). `idle` (D75, off = null, the
     shipped value; only Alon turns it on): while the idle look (`kiosk.idle_mode`) shows, on, with no guest setting in
@@ -290,6 +305,7 @@ class MotionSettings(_Strict):
     `motion.stepped.live_enabled`, and it yields at once to any guest input."""
 
     stepped: SteppedMotionSettings = Field(default_factory=SteppedMotionSettings)
+    lights: LightsMotionSettings = Field(default_factory=LightsMotionSettings)
     idle: IdleMotionSettings | None = None
 
 

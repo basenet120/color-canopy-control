@@ -15,7 +15,8 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
                                      + `rehearsal` (the stepped rehearsal running now and the last one's verdict)
 - `GET  /api/canopy/stepped-rehearsal[?mode=&minutes=]`  the rehearsal's status, the looks it can run and, with a
                                      mode and minutes, the preview: the modules it writes to and the confirm sentence
-- `POST /api/canopy/stepped-rehearsal`  `{mode, minutes (1–10), confirm}` start the stepped rehearsal (Gate R,
+- `POST /api/canopy/stepped-rehearsal`  `{mode, minutes (1–10), confirm, ladder?}` start the stepped rehearsal (Gate R,
+                                     or with `ladder` the rate test, D80: steps of 4, 3, 2, 1.5 then 1 s),
                                      conductor/rehearsal.py). Without `confirm` equal to the preview's sentence (it
                                      names every module and the minutes) it answers 409 `confirm_required` and sends
                                      nothing. Operator-started only: nothing else ever starts one.
@@ -172,6 +173,7 @@ class RehearsalBody(_Body):
     mode: str = Field(min_length=1, max_length=64)
     minutes: int = Field(ge=1, le=REHEARSAL_MAX_MINUTES)
     confirm: str | None = Field(None, max_length=2000)
+    ladder: bool = False  # D80: the rate test (steps of 4 → 1 s), its own minutes
 
 
 class IpadSceneBody(_Body):
@@ -576,7 +578,7 @@ def _rehearsal_engine(services: Any) -> Any:
 
 @router.get("/api/canopy/stepped-rehearsal")
 async def rehearsal_info(
-    request: Request, _ops: Ops, mode: str | None = None, minutes: int | None = None
+    request: Request, _ops: Ops, mode: str | None = None, minutes: int | None = None, ladder: bool = False
 ) -> JSONResponse:
     services = services_of(request)
     engine = _rehearsal_engine(services)
@@ -594,7 +596,8 @@ async def rehearsal_info(
                 detail=f"A stepped rehearsal runs 1 to {REHEARSAL_MAX_MINUTES} whole minutes.",
             )
         body["preview"] = await _engine_call(
-            "prepare the stepped rehearsal", lambda: engine.rehearsal_preview(mode, minutes)
+            "prepare the stepped rehearsal",
+            lambda: engine.rehearsal_preview(mode, minutes, **({"ladder": True} if ladder else {})),
         )
     return JSONResponse(body, headers=NO_STORE)
 
@@ -605,7 +608,10 @@ async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> J
     engine = _rehearsal_engine(services)
     _known_mode(services, body.mode)
     preview = await _engine_call(
-        "prepare the stepped rehearsal", lambda: engine.rehearsal_preview(body.mode, body.minutes)
+        "prepare the stepped rehearsal",
+        lambda: engine.rehearsal_preview(
+            body.mode, body.minutes, **({"ladder": True} if body.ladder else {})
+        ),
     )
     if body.confirm != preview["confirm"]:
         # Nothing is sent until ops has confirmed this very sentence (the modules or minutes may have changed).
@@ -620,7 +626,10 @@ async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> J
             headers=NO_STORE,
         )
     result = await _engine_call(
-        "start the stepped rehearsal", lambda: engine.rehearse(body.mode, body.minutes, source="ops")
+        "start the stepped rehearsal",
+        lambda: engine.rehearse(
+            body.mode, body.minutes, source="ops", **({"ladder": True} if body.ladder else {})
+        ),
     )
     _publish(services, "rehearsal", mode=body.mode, minutes=body.minutes)
     return JSONResponse(
@@ -697,7 +706,7 @@ def stepped_gauge(services: Any, engine: Any) -> dict | None:
         steps=runner.count,
         step_s=runner.step_s,
         design_step_s=runner.program.step_s,
-        holds_at=runner.t0_wall + runner.count * runner.step_s,
+        holds_at=runner.t0_wall + runner.run_len_s,
         account=busiest,
         writes_60s=writes.get(busiest, 0) if busiest is not None else None,
     )
