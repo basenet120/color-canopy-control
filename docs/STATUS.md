@@ -1,7 +1,7 @@
 # Status
 
 _Last updated: 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
-targeting `main`; all four built and verified in sim, none pushed; see their blocks at the top. PR A
+targeting `main`; A, B and C are merged as #38, #39 and #40, and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
 still tier, the idle breath off); PR C `claude/ipad-review-menu` (D76: the iPad review menu, hide and promote); PR D
