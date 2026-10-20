@@ -1104,7 +1104,7 @@ orientation question: **p14** (all 270 drawn lights sit on the p14 lattice; 150 
   `/visualizer` labels read "r0c0 · A · P-03". VWBD numbers its panels row by row on its sheet, so P-0n is not
   Module n: record each kit against its panel at install (today's Modules 1–2 belong on P-03 and P-06).
 - **Not changed:** no shipped scene uses the kind (D77 does). `lit_state` is left alone, so since D73 the show box's
-  flagged-only Modules 1–2 read unknown after every confirmed scene and draw as outline dots and dashed fins. fins.json
+  flagged-only Modules 1–2 read unknown after every confirmed scene and draw as outline dots and dashed fins (D78 reads them lit). fins.json
   stays outside `live.config_sha` on purpose (widening it would flag every saved Lab version and publication at
   deploy; published trios are re-validated against the loaded canopy at every start).
 
@@ -1288,3 +1288,13 @@ fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the
   (`trio_sha`, published looks, the scene pins). It is pinned like the ids: a published trio or a Lab draft can never
   regroup a scene (validate_trio, the Lab's shape check).
 - Lab exports made before D77 lands propose a reserved D-number (`_next_decision` is max + 1); renumber by hand.
+
+**D78 — A module whose only problem is a flagged note shows its look on the iPad's picture (Oct 19; follows D73).**
+D73 makes such a module "stuck" at once, and `canopy_view.lit_state` drew every stuck module as `unknown` (an outline,
+no colour), so the live iPad drew Modules 1–2 as outlines right after every confirmed scene (before D73, 10 s later)
+while their lights showed it. Now the engine's module record carries `flagged_only` (`tracker.flagged_only`: the look
+sent, read back and matching), and the picture reads that module as confirmed: `lit` with its colours, or `off` once a
+guest's power-off reads back off. A module stuck for any other reason (a readback that still differs, a failed write,
+an offline controller), a locked one and a resting canopy still make no colour claim; /ops is unchanged (the note
+shows, the phase needs attention). The server payload changes, not the kiosk JS: no kiosk or Lab tag bump. Reproduced
+first (`tests/test_flagged_reads_lit.py`).
