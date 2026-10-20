@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,26 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## Oct 20 (shop) — String light 1 is ready for per-light; `9e31dbe` deployed
+**Deployed (Alon asked, 11:25): `9e31dbe`** (main after #44, D80) on the Mac show box — backup
+`canopy-data-20261020-112510-manual.tar.gz`, previous `4ae479c` in `~/canopy-prev-sha.txt`, preflight ok, rc 0,
+`bench` reconnected (12 devices); `motion.lights.live_enabled` false as shipped.
+**True on hardware (Alon at the kit, String light 1 = Module 2, `canopy-r0c1`):**
+- **Gate C passed** (`20261020T152627-gate_c-60f02a`): slot 1 replayed into slot 2 and selected, HTTP 200, hashes
+  match; Alon saw slot 1's pattern (a rainbow-type pattern) appear, then the show took the strand back 2 s later
+  (expected). `t1_frames: true`, proven on its own device id.
+- **Map recorded** from two answered bounded probes: markers (`…-026133`, head 1 red, 2 green, 30 blue, rest dark:
+  yes) and entries 30–59 (`…-3e4c76`, all dark: yes) → `framebuffer_mapping`: 30 heads in a 60-entry frame, entries
+  0–29 in order. (One 30–59 run, `…-3e0bc5`, failed on a lagging brightness readback and restored exactly; the rerun
+  passed.)
+- **Not done (tomorrow morning, with the nine kits installed):** the per-light bench rehearsal and the rate test.
+  **Per-light is all-or-nothing per look**: a rehearsal of a #4–#6 runs per-light only if *every* module it drives
+  has Gate C and a map, so commission each installed kit first (install-day-commissioning.md §5), or leave out the
+  ones that haven't (Module 1, Kingston, is still offline in transit and has neither). A per-module mix is a
+  possible follow-up (needs Alon's design call: some strands per-light, others one colour, in one look).
+- The bench CLI works from the Mac's Terminal (`uv run python -m conductor.bench --user ops …`); the ops password
+  was shown in chat on Oct 19/20 — rotate it (STATUS "Next step").
 
 ## PR `claude/per-light-motion` — per-light motion, the rate test, 18 per-light options (D80) → `main` (Oct 19 night)
 Alon's overnight ask: a test of how fast the canopy can step (each module every 1–2 s), and three more options per
@@ -1814,6 +1834,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+000000000. **Oct 21 morning (Alon, at the canopy):** Gate C + address probes + Apply map on each installed kit
+    (`/ops/bench/` or the bench CLI), then the per-light rehearsal (2 min, Coastal Tides #5) and the rate test; flip
+    `motion.lights.live_enabled` in a PR if clean. **Rotate the ops password** (it was printed into chat): edit
+    `CONDUCTOR_BASIC_AUTH` in `conductor.env` with a fresh `openssl rand -hex 12`, `canopy-mac restart`.
 00000000. **Alon (D80):** review `claude/per-light-motion` (Lab :8200 + the review page), merge, deploy; then at
     the kit: Gate C + map on String light 1, a per-light rehearsal, the rate test; flip `motion.lights.live_enabled`
     if clean. Decide which of the 18 options show on the iPad.
