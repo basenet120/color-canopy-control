@@ -89,8 +89,10 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     A step that would take the account past 90 writes in any 60 s is held back (since D75, one that would leave less
     than a guest's burst of room under 90). Runs last 90 s, then the still design
     holds. The governor stops a run at ≥ 8 throttled attempts that are ≥ 25% of its attempts in 60 s and holds stepped
-    looks on that account still for 5 min. **Live off** (`live_enabled: false`) until a Gate R pass on the show kits
-    (`04` gate 14); only Alon flips it. Each step's landing spread was p95 2.78 s in the simulator against 05's 2 s
+    looks on that account still for 5 min. **Live on since D79 (Oct 19):** Gate R passed on one kit (String light 1,
+    10 min, 13 writes a minute, 0 throttled); the nine-kit Gate R (`04` gate 14) still runs at install, and only Alon
+    flips it. **Bench item 6 answered on String light 1:** a strand's colour change **fades** (observer: "a nice
+    fade"); not yet seen on the other kits. Each step's landing spread was p95 2.78 s in the simulator against 05's 2 s
     target: reported, not gating, until Alon signs off a per-step target.
 28. **Throttling: per account or per IP?** The canopy account and the bench account write from the show box's one
     IP (the vignettes are outside this system, D67; anything they do in the stock app comes from the same venue

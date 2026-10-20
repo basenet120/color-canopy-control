@@ -515,8 +515,9 @@ def test_the_catalog_offers_the_editor_its_limits_and_live_lines(app_client):
     }
     assert body["limits"]["ripple"] == {"stagger_s": [0.0, 1.2], "max_rings": RIPPLE_MAX_WAVES}
     live = body["live"]
-    assert live["stepped_live_enabled"] is False and live["stepped_live_sentence"] == STEPPED_LIVE_OFF
-    assert live["stepped_live_note"] == "Alon sets motion.stepped.live_enabled after Gate R"
+    # as shipped since Gate R passed on one kit (Oct 19): stepped looks on live hardware
+    assert live["stepped_live_enabled"] is True and live["stepped_live_sentence"] is None
+    assert live["stepped_live_note"] == ST.STEPPED_LIVE_ON
     assert live["ripple_stagger_s"] == 0 and live["ripple_note"] == ST.RIPPLE_OFF_NOTE
     assert live["effects_note"] == "Effects — not enabled: no code has passed the bench (06 #4)"
     assert live["effects_enabled"] is False
@@ -607,7 +608,7 @@ def test_the_route_previews_a_stepped_edit(app_client):
     cycle = program_cycle(tech, module_lags(tech, list(D.GRID), CANOPY))
     assert len(body["stepped"]["steps"]) == cycle == body["stepped"]["cycle"]
     assert body["stepped"]["steps_per_cycle"] == 8 and body["stepped"]["direction"] == "reverse"
-    assert body["stepped"]["live_sentence"] == STEPPED_LIVE_OFF
+    assert body["stepped"]["live_sentence"] is None  # live_enabled as shipped (on since Gate R, Oct 19)
     assert body["copy"]["stepped"]["chosen"] == "generated"
     assert body["stepped"]["moving_feature"] == body["copy"]["stepped"]["sentence"]
 
@@ -764,7 +765,7 @@ def test_the_lab_never_flips_live_enabled_or_ripple(app_client):
         assert app_client.get(f"/api/lab/export?version={saved.json()['id']}&format=json").status_code == 200
     assert app_client.get("/api/lab/catalog").status_code == 200
     assert settings.model_dump() == dumped
-    assert settings.motion.stepped.live_enabled is False and settings.kiosk.ripple_stagger_s == 0
+    assert settings.motion.stepped.live_enabled is True and settings.kiosk.ripple_stagger_s == 0  # as shipped
     assert _sha(conductor_yaml) == before
     # no draft field can carry either setting
     for model in (D.SceneDraft, D.DraftStepped):

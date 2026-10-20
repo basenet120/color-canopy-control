@@ -238,7 +238,7 @@ def test_no_lab_route_changes_live_enabled_or_ripple(app_client, fakes):
         # 503: the try-on routes with no canopy engine (app_client runs without one)
         assert send(app_client, method, url, payload).status_code in {200, 201, 404, 409, 503}, (method, url)
     assert services.settings.model_dump() == settings
-    assert services.settings.motion.stepped.live_enabled is False
+    assert services.settings.motion.stepped.live_enabled is True  # as shipped
     assert services.settings.kiosk.ripple_stagger_s == settings["kiosk"]["ripple_stagger_s"]
     assert (CONFIG_DIR / "conductor.yaml").read_bytes() == conductor_yaml
     for model in (SceneDraft, PreviewBody, SaveBody, RestoreBody, TrialStartBody):

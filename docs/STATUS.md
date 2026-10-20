@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,35 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR `claude/gate-r-one-kit` — Gate R passed on one kit; stepped looks on live hardware (D79) → `main` (Oct 19)
+**Deployed first (Alon, Oct 19 20:48): `14c2932`** (main after #42: the preset-options stack D74–D78) on the Mac show
+box from the paste block — backup `canopy-data-20261019-204800-manual.tar.gz`, previous `7b21918` in
+`~/canopy-prev-sha.txt`, preflight ok, rc 0, `/healthz` OK, `bench` reconnected (12 devices); no Lab publication
+existed, so nothing to export. (`canopy-mac` isn't on Alon's PATH: paste blocks call `~/canopy-show/deploy/mac/canopy-mac`.)
+**True on hardware (Oct 19 evening, Alon at `/ops`, observer at the strand):** only String light 1 (Module 2,
+`canopy-r0c1`) is online; Kingston test (Module 1) is in transit (HTTP 424 on writes) and was held on `/ops/module`;
+Modules 3–9 aren't registered (all nine cells "need attention" for those reasons, expected). Rehearsals, all on
+String light 1 only (details and table: `docs/current-live-test-session.md`):
+- **Rainbow Row Sunset #2, 10 min: PASS** — 100/100 steps at 6 s, 104 attempts, 0 throttled, 0 403s, at most 13
+  writes on `bench` in any 60 s, verified p50 1.46 s / p95 2.68 s, 3 superseded, 0 skipped
+  (`rehearsal-20261020T011258Z-rainbow-row-sunset-2.json`).
+- **Bench item 6: a colour change fades** ("a nice fade") on this kit.
+- **The Goodnight Glow #1's breath wasn't visible** (swing 4 around 28%): a pattern question for the Lab, not changed here.
+**The change:** `motion.stepped.live_enabled: true` (Alon's call, D79) plus the six tests that pinned the shipped
+value as off; docs (D79, 04, 06 #27, the Gate R runbook, the session log). No code, scene or copy change; the moving
+copy still never says "fade" (a copy decision for Alon now the bench says fade).
+- **What it does on the show:** a guest's scene choice runs that option's stepped rung (travel, breathe or shimmer)
+  on the modules online, then settles on its best still tier; /ops keeps its ladder; the idle return stays still
+  (`motion.idle: null`); the governor and the 90-a-minute account cap still apply; the kiosk draws the run.
+- **Not measured:** nine kits at 72–90 writes a minute; start skew across kits; the fade on other kits. **The
+  nine-kit Gate R (Rainbow Row Sunset #2, 10 min) still runs at install before tours**; a fail turns it back off.
+  The rate probe wasn't run first (one kit reaches ~60 a minute); set `live_enabled` off again to run it.
+- **Verified (sim, macOS):** the tests touching `live_enabled` (`test_lab_stepped`, `test_engine_program`,
+  `test_lab_access`, `test_ops_routes`, `test_d65_modes`, `test_d77_catalog`, `test_soak`, Lab preview/static): pass;
+  ruff clean; the full suite runs in CI on the PR (not run locally).
+- **Deploy (Alon, after merging, on its own):** the usual paste block with the merge sha; no iPad reload (config
+  only). Then tap a scene on the iPad: Module 2 should step, then hold. Roll back: the previous sha (`14c2932`).
 
 ## preset-options PR D `claude/preset-options-catalog` — the 18-option catalog (D77) → `main` (Oct 19)
 **Merge `claude/fin-visualizer`, `claude/motion-every-scene` and `claude/ipad-review-menu` first** (preset-options
@@ -1755,6 +1784,10 @@ Sources: `docs/preset-functionality-session.md`, `docs/custom-pattern-session.md
    (§5a, install day, controller swap) use the button.
 
 ## Next step
+0000000. **Alon (D79):** review and merge `claude/gate-r-one-kit`, deploy it on its own, tap a scene: Module 2 steps,
+    then holds. At install, before tours: the nine-kit Gate R (Rainbow Row Sunset #2, 10 min); a fail turns
+    `live_enabled` off. Decide whether the moving copy may say "fade", and whether the breaths (Goodnight's swing 4)
+    need more swing to be seen.
 000000. **The preset-options stack (D74–D77), in this order:** Alon reviews and merges A
     `claude/fin-visualizer`, B `claude/motion-every-scene`, C `claude/ipad-review-menu`, then D
     `claude/preset-options-catalog` (merge commits). Then, on the show box and only when Alon asks:

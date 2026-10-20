@@ -902,7 +902,7 @@ def test_the_stepped_card_shows_the_accounts_writes_a_minute_and_the_cap(app_cli
         "running": True,
         "moving": True,
         "cap": 90.0,
-        "live_enabled": False,
+        "live_enabled": True,
         "cooloff": [],
         "governor_trips": 0,
         "mode": "golden-hour",

@@ -56,3 +56,22 @@ Import `live-workshop-2026-09-28.test-center.json` into the Test Center to revie
 Five built-in presets were exercised in seven variants. Rainbow Roll at -8 flashed in place; spatial motion was not observed. Rainbow Road at 0 traveled between LEDs and at -8 moved very slowly. Gradient Rainbow displayed a static rainbow progression in matching adjacent pairs. Fade 3 slowly cycled red, green and blue through darkness. Jump 3 at -3 showed only red within the 20-second window; at +5 the user confirmed sharp RGB changes.
 
 The +5 Jump 3 command returned HTTP 200 but immediate readback still differed on color-mode. Physical operation passed; that cloud-verification discrepancy is retained. Both timed Jump 3 tests automatically returned to warm white. A final fresh read confirmed real-driver operation, white 2200 K at 50%, no read error, and the test lock was released.
+
+## Gate R on one kit — October 19, 2026 (show box, `14c2932`)
+
+Alon at `/ops` on the Mac show box; an observer at the strand. Only String light 1 (Module 2, `canopy-r0c1`) was
+online; Kingston test (Module 1, `canopy-r0c0`) was in transit (Hubspace answered its writes with HTTP 424) and held on
+`/ops/module`, so every rehearsal wrote to String light 1 only. Reports under
+`<data>/bench/rehearsals/` on the show box.
+
+| Rehearsal (UTC) | Look | Minutes | Result | Observer |
+|---|---|---|---|---|
+| 01:06:34 | The Goodnight Glow #1 (breathe, swing 4 at 28%, 10 s steps) | 1 | completed; 6 steps, 0 throttled | Nothing visible |
+| 01:08:12 | The Goodnight Glow #1 | 1 | stopped by ops | — |
+| 01:09:14 | Rainbow Row Sunset #3 | 1 | stopped by ops | — |
+| 01:10:47 | Rainbow Row Sunset #2 (travel, 6 s steps, 85%) | 1 | all criteria pass; 13 writes/60 s | Colour changes seen |
+| **01:12:58** | **Rainbow Row Sunset #2** | **10** | **PASS:** 100/100 steps, 104 attempts, 0 × 429, 0 × 403, max 13 writes/60 s, verified p50 1.46 s / p95 2.68 s, 3 superseded | **Each change fades ("a nice fade")** |
+
+- **Bench item 6 (cut or fade):** fade, on String light 1.
+- **Not measured:** the nine-kit rate (72–90 writes a minute); start skew across kits (one kit); the fade on other kits.
+- **Decision:** Alon turned `motion.stepped.live_enabled` on (D79); the nine-kit Gate R runs at install.
