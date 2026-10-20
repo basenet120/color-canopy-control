@@ -42,11 +42,13 @@ Pure: no network, no engine calls, nothing written. Two parts, both served with 
   (off, resting), or when the look went out as one burst.
 
   While a stepped look moves (Tier.STEPPED, the engine's `CanopyState.program`), `{kind: "steps", t0, step_s,
-  frames: [[hex | null] × 9 in grid order r0c0…r2c2], ends_at}` (wall seconds): frame n is what step n sent, from
-  t0 + n × step_s, and the last frame is the still look the run ends on, sent at the program's `ends_at`. Exactly
-  the frames the engine sends, nothing in between (the kiosk switches, it doesn't blend). A position not `lit` or
-  `changing` (left out, locked, stuck, unknown) is null in every frame, so the picture never moves a panel nobody
-  can vouch for. The motion's `ends_at` is one step after the still look is sent, so a page that hasn't heard the
+  frames: [[hex | null] × 9 in grid order r0c0…r2c2], ends_at, levels?}` (wall seconds): frame n is what step n
+  sent, from t0 + n × step_s, and the last frame is the still look the run ends on, sent at the program's `ends_at`.
+  Exactly the frames the engine sends, nothing in between (the kiosk switches, it doesn't blend); a budget-held step
+  repeats the step last sent (D75). `levels` (D75, when the program carries them: [[int | null] × 9] alongside
+  frames) is the brightness each panel is sent at that frame, the guest's level applied — the panel draws it as that
+  panel's opacity, while colours stay full strength (D59). A position not `lit` or `changing` (left out, locked,
+  stuck, unknown) is null in every frame and level, so the picture never moves a panel nobody can vouch for. The motion's `ends_at` is one step after the still look is sent, so a page that hasn't heard the
   run is over draws that last frame (the kiosk clamps its time to just before `ends_at`) and not the step before it.
   None once the still look is sent (the plan's own colours are then the picture), while the run's writes are held
   (the engine reports no program then: paused, resting, off), or when no position is lit or changing.
@@ -226,6 +228,41 @@ def _runs_its_own(target: ModuleTarget) -> bool:
     return sequence_preview(target.rows) is not None
 
 
+def _claim(
+    cfg: Mapping[str, Any], entry: Any, target: ModuleTarget
+) -> tuple[str | None, list[str] | None] | None:
+    """The colours a planned position claims, as `(color, colors)`: one "#RRGGBB" when every head is the same, else
+    the heads in lattice order. None when there is no known colour (a T2 slot whose content isn't known) or the
+    strand plays the look on its own (a preset or program: its preview is a guess)."""
+    if not target.colors or _runs_its_own(target):
+        return None
+    colours = module_colours(cfg, entry, target.colors)
+    if len(set(colours)) == 1:
+        return colours[0], None
+    return None, colours
+
+
+def plan_picture(cfg: Mapping[str, Any], registry: Any, plan: ModePlan) -> list[dict] | None:
+    """The still picture `plan` puts on the canopy, as Now Showing draws it once every position is lit:
+    `[{pos, color, colors}] × 9` in grid order, a position the plan doesn't drive dark (both None). The same colour
+    claim `lit_state` makes (`_claim`), without the engine's readback states. None when a driven position makes no
+    colour claim: there is then no truthful still picture of the look. The iPad's review card draws this for a
+    whole-strand plan (guest_panel.thumb_plans, D76)."""
+    by_position = {e.module: e for e in registry.canopy_modules()}
+    out: list[dict] = []
+    for pos, _row, _col, _heads in _modules(_key(cfg)):
+        entry = by_position.get(pos)
+        target = plan.modules.get(entry.id) if entry is not None else None
+        item: dict[str, Any] = {"pos": pos, "color": None, "colors": None}
+        if target is not None:
+            claim = _claim(cfg, entry, target)
+            if claim is None:
+                return None
+            item["color"], item["colors"] = claim
+        out.append(item)
+    return out
+
+
 def lit_state(
     cfg: Mapping[str, Any], registry: Any, plan: ModePlan | None, state: Any, now: float | None = None
 ) -> dict | None:
@@ -260,15 +297,11 @@ def lit_state(
                 item["state"] = UNKNOWN
         elif target is None:
             item["state"] = DARK
-        elif not target.colors or _runs_its_own(target):
+        elif (claim := _claim(cfg, entry, target)) is None:
             item["state"] = UNKNOWN
         else:
             item["state"] = LIT if confirmed else CHANGING
-            colours = module_colours(cfg, entry, target.colors)
-            if len(set(colours)) == 1:
-                item["color"] = colours[0]
-            else:
-                item["colors"] = colours
+            item["color"], item["colors"] = claim
         modules.append(item)
     return {
         "level": getattr(state, "brightness", None) if on else None,
@@ -308,7 +341,7 @@ def _steps_motion(program: Any, modules: Sequence[Mapping[str, Any]], now: float
         [hex_ if pos in moving else None for pos, hex_ in zip(GRID, frame, strict=False)]
         for frame in program["frames"]
     ]
-    return {
+    motion = {
         "kind": "steps",
         "t0": program["t0"],
         "step_s": step_s,
@@ -316,3 +349,15 @@ def _steps_motion(program: Any, modules: Sequence[Mapping[str, Any]], now: float
         # one step past the still look's send time, so the page ends on that frame (see the module docstring)
         "ends_at": ends_at + step_s,
     }
+    levels = program.get("levels")
+    if isinstance(levels, list) and len(levels) == len(frames):  # D75: each frame's levels, where it is drawn
+        motion["levels"] = [
+            [
+                lv
+                if pos in moving and hex_ is not None and isinstance(lv, int) and not isinstance(lv, bool)
+                else None
+                for pos, hex_, lv in zip(GRID, frame, row, strict=False)
+            ]
+            for frame, row in zip(frames, levels, strict=False)
+        ]
+    return motion

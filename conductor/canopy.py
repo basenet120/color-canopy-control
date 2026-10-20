@@ -83,18 +83,40 @@ Rules implemented here (binding text: `conductor/engine_api.py`, 07 §5–§6):
   rings with it. The safe look, start-up (the first look, however it is requested: `start()`, or the show's wiring
   asking for the idle mode once its capability reads are back), re-picks of the look now showing (a tier change,
   recovery, new slot records), lock releases and re-asserts are always one burst; so is a motion plan (`waves` None).
-- **Stepped looks (Tier.STEPPED, D65).** Installing a plan with a `program` starts a `ProgramRunner`
+- **Stepped looks (Tier.STEPPED, D65, D75).** Installing a plan with a `program` starts a `ProgramRunner`
   (conductor/sequence.py) on the injected clock; a newer look, or `stop()`, cancels it. While it runs, the desired
   state of each driven module is the current step's full state vector (`desired_rows` / `_desired_expect` ask the
   runner), so every re-send — a re-assert, a lock release, recovery, a guest change — sends the current step. The
   runner's own steps go through `send(…, source="program")`, only to the modules whose rows changed. While the run
-  moves, `feature` is the program's moving sentence and `CanopyState.program` says what each step shows; the phase
-  judges each module by whether the writes sent to it verify (`ProgramRunner.status`), not by the step in flight.
-  A guest brightness change just before a step goes out with that step. After the run, the plan's own sentence and
-  the still design (the hold) are back.
+  moves, `feature` is the program's moving sentence and `CanopyState.program` says what each step shows (colours and
+  levels; a budget-held step is drawn as the step last sent); the phase judges each module by whether the writes
+  sent to it verify (`ProgramRunner.status`), not by the step in flight. A guest brightness change just before a
+  step goes out with that step; a guest level during a breath keeps the breath, swung around the guest's level, its
+  centre moved so the whole swing stays within [`kiosk.guest_brightness_min`, the device's 100]: every step still
+  changes something under the moving copy (D75, `_guest_rows`).
+- **Which plan a source shows (D75, `_pick`).** Any scene may carry one stepped rung, placed just before
+  [modules, strand]. A guest's choice (kiosk) runs the rung first (`compile_best(prefer=STEPPED)`), the idle scene
+  included; an /ops choice keeps the ladder order (D65; "show after publish" is one); a re-pick of the look now
+  showing (`RECOMPILE_SOURCES`) keeps a running run going and never starts one (`_repick_best`); start-up, the idle
+  return, the safe look, a try-on, the checklist's change back (`RESTORE_SOURCE`) and any other source show a still
+  tier (`STILL_ONLY` skipped) — unless `motion.idle` is on, when the idle return from another look is one breath. A
+  floored look never steps. **A choice runs once:** when its run ends (`note_run_over`), or when its runner can't run
+  as it is installed (a cool-off, a step too long: `_install`), a re-pick builds the runner `over` (DONE at once,
+  whatever its run_s) and lifts it to the best still tier. **The settle:** at a run's end the look moves to the
+  mode's best still tier when that is a canvas or slot (`settle_after_run`: installed with source `SETTLE_SOURCE`,
+  one write per module that changes; a motion plan re-triggers all, 07 §6), else the runner sends its hold. After a
+  governor trip or held steps the hold goes out now and the settle waits (`_settle_later`: the cool-off, or one cap
+  window). D72's fast back-off doesn't hold it: that only puts guest pacing back on the budget rule the run was
+  already paced at, and the settle is one burst like the hold it replaces (waiting the back-off's 120 s after a 90 s
+  run would land past the 180 s idle return, so it would never show). A run that ended inside an outage settles at
+  recovery (the recovery burst carries it). **The idle breath (`motion.idle`, off as shipped):** while the idle look
+  holds with nothing else in force, `idle_breath()` runs its rung once for `breathe_run_s` (the reconciler asks
+  every `every_s`), without touching the idle clocks or the guest settings; any guest input ends it at once
+  (`ProgramRunner.yield_to_guest`) and the guest's own burst carries the still look.
 - **The stepped rehearsal (Gate R, conductor/rehearsal.py).** `rehearse(mode, minutes, source)` — operator-started
-  only, from the ops route behind `rehearsal_preview`'s confirm sentence — runs one stepped look of `mode` whose run
-  lasts `minutes` (1–10; `_install` gives the program that run_s), from the mode's own stepped design or its
+  only, from the ops route behind `rehearsal_preview`'s confirm sentence; any look, the idle look included (D75) —
+  runs one stepped look of `mode` whose run lasts `minutes` (1–10; `_install` gives the program that run_s), from
+  the mode's own stepped design or its
   module-level design stepped (`EngineDeps.rehearsal_compile`). While it runs `rehearsal_mode` names the mode, and
   the show's tier rule opens the stepped tier on live hardware for that mode only. Kiosk requests are refused
   (`REHEARSAL_MESSAGE`) and the idle hold waits. It ends when the run does, at the first 403, when the governor
@@ -164,7 +186,7 @@ from conductor.gate import Purpose
 from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
 from conductor.rehearsal import MAX_MINUTES, REHEARSAL_DIR, Rehearsal, RehearsalRefused, confirm_sentence
-from conductor.sequence import ProgramRunner, planned_writes_per_min
+from conductor.sequence import HELD_STEPS_END, ProgramRunner, planned_writes_per_min
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
 from conductor.tokens import atomic_write
@@ -211,6 +233,13 @@ GUEST_INPUT_FILE = "guest_input.json"
 # hold: staff just changed the look. ("publish" already means the state push here, so the name says looks.)
 LOOKS_SOURCE = "looks"
 RECOMPILE_SOURCES = frozenset({"reconciler", "recovery", "startup", LOOKS_SOURCE})
+# D75: what a source may show (`_pick`). STILL_ONLY is the skip set of a source that never starts a run; a settle
+# (a run's end onto the mode's best still tier) is installed and sent with SETTLE_SOURCE, which keeps it out of the
+# stepped soak's per-runner grouping; the checklist's "change back" uses RESTORE_SOURCE: ops in every respect except
+# that it never starts a run (it puts the previous look back still).
+STILL_ONLY = frozenset({Tier.STEPPED})
+SETTLE_SOURCE = "settle"
+RESTORE_SOURCE = "ops-restore"
 BRIGHTNESS_KEY = ("brightness", None)
 # The Design Lab's try-on (D66 Slice B): its request source, the guest's refusal while it runs, the tiers it never
 # uses (a try-on is module level only and never steps), and the ripple seam (a try-on is one burst; RECOMPILE_SOURCES
@@ -374,6 +403,12 @@ class CanopyEngine:
         self.last_change_mono: float = self.clock.monotonic()  # any accepted change (idle hold)
         # the last look chosen (not a re-pick, not a guest setting): a stepped look's run counts from it
         self._chosen_mono: float = self.last_change_mono
+        # D75: the run_s of an idle breath being installed or running (None otherwise); when the last idle breath
+        # started (the reconciler's every_s counts from it); the t0 of the choice whose run is over (a re-pick then
+        # builds its runner `over`: a choice runs once)
+        self._breath_run_s: float | None = None
+        self.last_breath_mono: float = float("-inf")
+        self._ran_for: float | None = None
         # Guest overrides (D60): a brightness for every module (None = designed) and on/off. Desired state, not saved.
         self._guest_brightness: int | None = None
         self._guest_power = True
@@ -688,7 +723,11 @@ class CanopyEngine:
         # A look chosen (by ops) ends the stepped rehearsal before the tier is picked, so its gate is closed.
         if rehearsal is not None:
             self._end_rehearsal(f"{source} chose {mode_id}", rehearsal=rehearsal, settle=False)
-        plan, why = self.compile_best(mode_id)
+        if source not in RECOMPILE_SOURCES:
+            # a choice: an idle breath's run_s is gone (an idle return as a breath sets its own below)
+            self._breath_run_s = None
+        breath = self._idle_return_breathes(mode_id, source)
+        plan, why = self._pick(mode_id, source)
         if plan is None:
             if rehearsal is not None and self._runner is not None and self._runner.running:
                 self._runner.finish("the stepped rehearsal ended")  # never step on without it
@@ -699,13 +738,64 @@ class CanopyEngine:
             self.last_guest_input_mono = now
         if source not in ("reconciler", "recovery"):
             self.last_change_mono = now
-            self._chosen_mono = now  # a stepped look's run counts from here (guest dimming doesn't move it)
-        if source not in RECOMPILE_SOURCES:  # a mood was chosen: its designed brightness, and on (D60)
+        if source not in RECOMPILE_SOURCES:
+            # a stepped look's run counts from here (guest dimming doesn't move it, and neither does a re-pick of the
+            # look now showing — a tier change, new capabilities, a publish — so a run keeps its phase, D75)
+            self._chosen_mono = now
+            # a mood was chosen: its designed brightness, and on (D60)
             self._guest_brightness, self._guest_power = None, True
+        if breath and plan.program is not None:  # the idle return as one breath (motion.idle, D75)
+            self._breath_run_s = float(self.deps.settings.motion.idle.breathe_run_s)
+            self.last_breath_mono = now
         # The first look (start-up: `start()`, or the show's wiring once its capability reads are back) has no
         # picture to ripple from, so it is one burst whatever its source.
         self._show(plan, source, ripple=ripple and self._plan is not None)
         return self.state()
+
+    def _idle_return_breathes(self, mode_id: str, source: str) -> bool:
+        """D75: is this the idle return as one breath? `motion.idle` on, the idle source asking for the idle mode
+        while another look shows (never start-up: nothing shows yet)."""
+        return (
+            source == "idle"
+            and self.deps.settings.motion.idle is not None
+            and mode_id == self.deps.settings.kiosk.idle_mode
+            and self._plan is not None
+            and self._plan.mode_id != mode_id
+        )
+
+    def _pick(self, mode_id: str, source: str) -> tuple[ModePlan | None, str]:
+        """The plan a request from `source` shows (D75; see "Which plan a source shows" in the module docstring)."""
+        if source == "kiosk":  # a guest's choice runs the rung first, the idle scene included
+            return self.compile_best(mode_id, prefer=Tier.STEPPED)
+        if source in RECOMPILE_SOURCES:
+            return self._repick_best(mode_id)
+        if self._idle_return_breathes(mode_id, source):
+            return self.compile_best(mode_id, prefer=Tier.STEPPED)
+        if source == "ops":  # ladder order (D65): Golden Hour's canvas first, Coastal Tides' rung first
+            return self.compile_best(mode_id)
+        # start-up and the idle return (motion.idle off), the try-on, the checklist's change back, anything new
+        return self.compile_best(mode_id, skip=STILL_ONLY)
+
+    def _repick_best(self, mode_id: str) -> tuple[ModePlan | None, str]:
+        """A re-pick of `mode_id`: a stepped plan of it now showing stays stepped while its run goes (it keeps its
+        phase); once the run is over it is lifted to the mode's canvas or slot where that can run now (a T1 hold
+        lifted, commissioning), else it stays stepped and only holds (`over`: nothing re-sent); otherwise a still tier.
+        A re-pick never starts a run (D75)."""
+        plan = self._plan
+        if plan is not None and plan.mode_id == mode_id and plan.tier is Tier.STEPPED:
+            runner = self._runner
+            if runner is None or not runner.running:
+                still = self._best_still(mode_id)
+                if still is not None:
+                    return still, ""
+            return self.compile_best(mode_id, prefer=Tier.STEPPED)
+        return self.compile_best(mode_id, skip=STILL_ONLY)
+
+    def _best_still(self, mode_id: str) -> ModePlan | None:
+        """The mode's best still tier when it is a canvas or slot (T1/T2: what a run settles onto), else None (the
+        run's own hold, its module-level design, stays)."""
+        plan, _ = self.compile_best(mode_id, skip=STILL_ONLY)
+        return plan if plan is not None and plan.tier in (Tier.T1, Tier.T2) else None
 
     def _refusal(self, source: str, now: float) -> CanopyState | None:
         """A refused state when a request from `source` can't be taken now, else None. Nothing goes through while
@@ -736,8 +826,8 @@ class CanopyEngine:
 
     # ---- guest brightness and power (D60) ---------------------------------------------------------------------
     async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
-        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100]. Turns
-        the canopy on. One write per module (the full state vector with this brightness row; never a frame)."""
+        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (during a
+        breath the breath swings around it, inside that range: `_guest_rows`, D75). Turns the canopy on. One write per module (the full state vector with this brightness row; never a frame)."""
         floor = self.deps.settings.kiosk.guest_brightness_min
         # True, 0.5, NaN, "30": refused, not coerced.
         if isinstance(level, bool) or not isinstance(level, int):
@@ -796,6 +886,14 @@ class CanopyEngine:
             self._last_kiosk_mono, self._kiosk_gap_s = now, self.guest_gap_s(self._plan)
         self.last_guest_input_mono = now
         self.last_change_mono = now  # the idle hold waits for guest activity too
+        if self.breathing and self._plan is not None:
+            # D75: the idle breath yields at once, with no write of its own; this burst carries the still look (its
+            # best still tier where that is a canvas or slot) with the guest's settings
+            mode_id = self._plan.mode_id
+            self._runner.yield_to_guest()
+            still = self._best_still(mode_id)
+            if still is not None:
+                self._install(still, SETTLE_SOURCE)
         self._apply_guest(source, action)
 
     def _apply_guest(self, source: str, action: str) -> None:
@@ -811,10 +909,11 @@ class CanopyEngine:
             source=source,
         )
         if plan is not None and self._outage is None:
-            # A stepped look whose next step is due within moments carries a new level itself, one PUT per module.
+            # A stepped look whose next step is due within moments carries a new level itself, one PUT per module,
+            # unless the cap would hold that step back: then it goes now (B-R3-1, `ProgramRunner.fold_guest`).
             # (Back on: the runner kept its step current while the canopy was off, so this sends that step.)
             runner = self._runner
-            folded = runner is not None and action == "brightness" and runner.fold_guest()
+            folded = runner is not None and action == "brightness" and runner.fold_guest(source)
             if not folded:
                 self._early_counts.clear()  # a silent drop of this change gets its early re-sends too
                 self.send(None, source=source, label=f"guest {action}: {plan.mode_id}")
@@ -827,24 +926,54 @@ class CanopyEngine:
         if plan is None:
             return []
         mt = plan.modules[device_id]
-        step = self._runner.rows_for(device_id) if self._runner is not None else None
-        return self._guest_rows(list(step if step is not None else mt.rows), mt)
+        runner = self._runner
+        step = runner.rows_for(device_id) if runner is not None else None
+        if step is not None:  # a stepped look's step: its breath keeps its swing around a guest's level (D75)
+            return self._guest_rows(list(step), mt, swing=runner.swing(device_id))
+        return self._guest_rows(list(mt.rows), mt)
 
-    def _guest_rows(self, rows: list[StateRow], mt: ModuleTarget) -> list[StateRow]:
+    def _guest_rows(
+        self, rows: list[StateRow], mt: ModuleTarget, *, swing: tuple[int, int] | None = None
+    ) -> list[StateRow]:
+        """`rows` with the guest's settings: off, or the guest's level (D60). Within the device's own range and never
+        below `kiosk.guest_brightness_min`, as the compiler clamps a designed level; the brightness row is replaced in
+        place, so the row order inside the PUT is kept.
+
+        A breath's step (`swing`: how far that module's steps go below and above its hold, D75) keeps its offset from
+        the hold around the guest's level, and that centre moves so the whole swing fits the range: at 100 a swing
+        of 4 breathes 92–100, at the minimum of 10 it breathes 10–18. So every step still changes something, as the
+        moving copy says, whatever the guest picks. Every other plan's offset is 0: the guest's level is absolute."""
         if not self._guest_power:
             return [R.power(False)]
         if self._guest_brightness is None:
             return rows
-        # Within the device's own range, as the compiler clamps a designed level; the brightness row is replaced in
-        # place, so the row order inside the PUT is kept.
         lo, hi = mt.brightness_range or (1, 100)
-        level = R.brightness(max(lo, min(hi, self._guest_brightness)))
+        floor = max(lo, self.deps.settings.kiosk.guest_brightness_min)
+        step, hold = _brightness_of(rows), _brightness_of(mt.rows)
+        offset = step - hold if step is not None and hold is not None else 0
+        centre = self._guest_brightness
+        if swing is not None and floor + swing[0] <= hi - swing[1]:
+            centre = max(floor + swing[0], min(hi - swing[1], centre))
+        level = R.brightness(max(floor, min(hi, centre + offset)))
         return [level if r.key == BRIGHTNESS_KEY else r for r in rows]
 
+    def level_sent(
+        self, device_id: str, rows: Sequence[StateRow], *, swing: tuple[int, int] | None = None
+    ) -> int | None:
+        """The brightness `rows` are sent at to `device_id` now, the guest's level applied (D75: the guest panel
+        draws it as that panel's opacity): a step's with its `swing` (`ProgramRunner.swing`), the hold's without.
+        None when the canopy is off or the rows carry no level."""
+        plan = self._plan
+        mt = plan.modules.get(device_id) if plan is not None else None
+        if mt is None:
+            return _brightness_of(rows)
+        return _brightness_of(self._guest_rows(list(rows), mt, swing=swing))
+
     def _desired_expect(self, device_id: str, mt: ModuleTarget, plan: ModePlan) -> list[StateRow]:
-        step = self._runner.rows_for(device_id) if self._runner is not None and plan is self._plan else None
+        runner = self._runner if plan is self._plan else None
+        step = runner.rows_for(device_id) if runner is not None else None
         if step is not None:  # a stepped look's step: a full state vector, read back as sent
-            return self._guest_rows(list(step), mt)
+            return self._guest_rows(list(step), mt, swing=runner.swing(device_id))
         return self._guest_rows(self._expect(device_id, mt, plan), mt)
 
     def _desired_label(self, plan: ModePlan) -> str:
@@ -905,10 +1034,11 @@ class CanopyEngine:
         on, at its designed brightness: it clears the guest's settings (D60)."""
         # First: with a Lowcountry Calm try-on still set, the show would compile the draft's solid as the safe look.
         cleared = self._clear_trial("the safe look")
+        self._breath_run_s = None
         try:
             plan = self.deps.compile(SAFE_MODE, Tier.STRAND)
         except (PlanError, KeyError, LookupError) as e:
-            plan, why = self.compile_best(SAFE_MODE)
+            plan, why = self.compile_best(SAFE_MODE, skip=STILL_ONLY)  # the safe look never steps
             if plan is None:
                 self._restore_approved(cleared)
                 return self._refused(f"The safe look can't be compiled: {e}; {why}", None)
@@ -1312,10 +1442,6 @@ class CanopyEngine:
                 "Guest input is paused, which holds every step. Resume guest input first: the rehearsal keeps the "
                 "kiosk out by itself while it runs."
             )
-        if mode_id == self.deps.settings.kiosk.idle_mode:
-            raise RehearsalRefused(
-                f"{mode_id} is the idle mode, which never steps (D65); rehearse one of the other looks."
-            )
 
     def rehearsal_preview(self, mode_id: str, minutes: int) -> dict:
         """What a rehearsal of `mode_id` for `minutes` would do, and the sentence ops confirms before it starts (it
@@ -1379,6 +1505,7 @@ class CanopyEngine:
         # A hysteresis floor indexes the mode's own ladder; the rehearsal's has the stepped rung in front of it.
         rehearsal.saved_floor = self.floors.pop(mode_id, None)
         self._rehearsal = rehearsal  # from here the show opens the stepped tier for this mode
+        self._breath_run_s = None  # the rehearsal's run is its minutes, never an idle breath's
         plan, why = self.compile_best(mode_id, floor=0)
         if plan is None or plan.program is None:
             self._rehearsal = None
@@ -1465,16 +1592,24 @@ class CanopyEngine:
         self._settle_later(rehearsal.mode, self._plan, cooloff)
         self._publish_soon()
 
-    def _settle_later(self, mode_id: str, plan: ModePlan | None, delay: float) -> None:
-        """`_settle` after `delay` (a 403's cool-off), while `plan` is still the one showing. Not one of the engine's
-        burst tasks (`wait_idle` doesn't wait for it); `stop()` cancels it."""
+    def _settle_later(
+        self,
+        mode_id: str,
+        plan: ModePlan | None,
+        delay: float,
+        *,
+        source: str = "reconciler",
+        label: str = "after the stepped rehearsal",
+    ) -> None:
+        """`_settle` after `delay` (a 403's cool-off; a busy run's end, D75), while `plan` is still the one showing.
+        Not one of the engine's burst tasks (`wait_idle` doesn't wait for it); `stop()` cancels it."""
         if self._settle_task is not None:
             self._settle_task.cancel()
 
         async def later() -> None:
             await self.clock.sleep(delay)
             self._settle_task = None
-            self._settle(mode_id, plan)
+            self._settle(mode_id, plan, source=source, label=label)
 
         self._settle_task = asyncio.get_running_loop().create_task(later(), name=f"canopy:settle:{mode_id}")
 
@@ -1501,22 +1636,124 @@ class CanopyEngine:
         if rehearsal.saved_floor is not None:
             self.floors[rehearsal.mode] = rehearsal.saved_floor
 
-    def _settle(self, mode_id: str, plan: ModePlan | None) -> None:
-        """After a rehearsal (once its report is written): while its plan is still the one showing, the mode at the
-        best tier of its own ladder that isn't stepped (`compile_best`: from its floor, allowed, compiling), sent
-        only to the modules whose rows differ from what was last sent (the run's hold is the module-level design
-        already, so on hardware at T3 nothing goes out)."""
+    def _settle(
+        self,
+        mode_id: str,
+        plan: ModePlan | None,
+        *,
+        source: str = "reconciler",
+        label: str = "after the stepped rehearsal",
+    ) -> None:
+        """After a rehearsal (once its report is written), or a busy run's end once it has cooled off (D75): while its
+        plan is still the one showing, the mode at the best tier of its own ladder that isn't stepped (`compile_best`:
+        from its floor, allowed, compiling), sent only to the modules whose rows differ from what was last sent (the
+        run's hold is the module-level design already, so on hardware at T3 nothing goes out) — every module for a
+        motion plan (07 §6: all or none)."""
         if plan is None or self._plan is not plan or self._stopped:
             return
-        still, _ = self.compile_best(mode_id, skip=frozenset({Tier.STEPPED}))  # its floor, if any, holds
+        still, _ = self.compile_best(mode_id, skip=STILL_ONLY)  # its floor, if any, holds
         if still is None:
             return  # the run's own hold stays
-        self._install(still, "reconciler")
+        self._install(still, source)
         if self._outage is None and not self.quiet:
+            if still.motion:
+                self.send(None, source=source, label=f"{label}: {mode_id}")
+            else:
+                changed = [d for d in still.modules if self.desired_rows(d) != self.sent_rows.get(d)]
+                if changed:
+                    self.send(changed, source=source, label=f"{label}: {mode_id}")
+        self._publish_soon()
+
+    # ---- a run's end (D75) ----------------------------------------------------------------------------------------
+    def note_run_over(self, runner: ProgramRunner) -> None:
+        """The runner's run is over (it ended, or yielded to a guest): this choice has run, so a re-pick only holds
+        (the next runner of it is built `over`), and any idle breath's run_s is spent. A runner that can't run when
+        it is installed marks its choice the same way (`_install`)."""
+        if runner is not self._runner:
+            return
+        self._ran_for = runner.t0
+        self._breath_run_s = None
+
+    def settle_after_run(self, runner: ProgramRunner) -> bool:
+        """The run of `runner` ended on its own (or was stopped) and can send now: move the look to the mode's best
+        still tier when that is a canvas or slot — installed with SETTLE_SOURCE, one write per module that changes
+        (all of them for a motion plan) — and return True. False when the runner should send its own hold instead:
+        not the look showing, the rehearsal's (it settles after its report), no canvas or slot, or the account is
+        busy (a governor trip or its cool-off, held steps), when the settle waits (`_settle_later`). D72's fast
+        back-off isn't busy here: it paces guests at the budget rule, which the run already kept."""
+        plan = self._plan
+        if runner is not self._runner or plan is not runner.plan:
+            return False
+        # a rehearsal's run (ending or just ended): it settles after its report, or not at all
+        if any(r.runner is runner for r in (self._rehearsal, *self._rehearsals) if r is not None):
+            return False
+        mode_id = plan.mode_id
+        still = self._best_still(mode_id)
+        if still is None:
+            return False
+        stepped = self.deps.settings.motion.stepped
+        accounts = list(runner._accounts())
+        now = self.clock.monotonic()
+        cooling = max((self.stepped_cooloff.get(a, float("-inf")) for a in accounts), default=float("-inf"))
+        delay = None
+        if runner.tripped or cooling > now:
+            delay = float(stepped.governor_cooloff_s)
+        elif runner.held_steps >= HELD_STEPS_END:
+            delay = 60.0  # one cap window
+        if delay is not None:
+            self._settle_later(mode_id, plan, delay, source=SETTLE_SOURCE, label="after the run")
+            return False
+        self._install(still, SETTLE_SOURCE)
+        if still.motion:  # 07 §6: a motion look re-triggers every module, all or none
+            self.send(None, source=SETTLE_SOURCE, label=f"after the run: {mode_id}")
+        else:
             changed = [d for d in still.modules if self.desired_rows(d) != self.sent_rows.get(d)]
             if changed:
-                self.send(changed, source="reconciler", label=f"after the stepped rehearsal: {mode_id}")
+                self.send(changed, source=SETTLE_SOURCE, label=f"after the run: {mode_id}")
         self._publish_soon()
+        return True
+
+    # ---- the idle breath (D75, motion.idle) -----------------------------------------------------------------------
+    @property
+    def breathing(self) -> bool:
+        """Is an idle breath running now?"""
+        return self._breath_run_s is not None and self._runner is not None and self._runner.running
+
+    async def idle_breath(self) -> CanopyState:
+        """`motion.idle`: the idle look breathes once (its stepped rung for `breathe_run_s`), when it is the look
+        showing with nothing else in force — no run, no refusal, not paused, resting, rehearsing or trying on, no
+        guest setting. Through `compile_best` and `tier_allowed`, so never on live hardware until
+        `motion.stepped.live_enabled`, and never under a floor. It moves neither idle clock nor the guest settings,
+        and sends only the modules whose rows differ from what they were sent (normally none: step 0 is the hold)."""
+        idle = self.deps.settings.motion.idle
+        idle_mode = self.deps.settings.kiosk.idle_mode
+        plan = self._plan
+        now = self.clock.monotonic()
+        if (
+            idle is None
+            or plan is None
+            or plan.mode_id != idle_mode
+            or (self._runner is not None and self._runner.running)
+            or self._refusal("idle", now) is not None
+            or self._paused
+            or self._outage is not None
+            or self._trial is not None
+            or self._rehearsal is not None
+            or self.guest_overrides_active
+        ):
+            return self.state()
+        breath, _ = self.compile_best(idle_mode, prefer=Tier.STEPPED)
+        if breath is None or breath.tier is not Tier.STEPPED or breath.program is None:
+            return self.state()  # the live gate is shut, a floor is set, or the rung can't run here
+        run_s = self._breath_run_s = float(idle.breathe_run_s)
+        self._chosen_mono = self.last_breath_mono = now
+        installed = self._install(breath, "idle")
+        changed = [d for d in installed.modules if self.desired_rows(d) != self.sent_rows.get(d)]
+        if changed:
+            self.send(changed, source="idle", label=f"idle breath: {idle_mode}")
+        self.telemetry.record("program", action="idle_breath", mode=idle_mode, run_s=run_s)
+        self._publish_soon()
+        return self.state()
 
     def _rehearsal_left(self) -> float | None:
         runner = self._runner
@@ -1697,7 +1934,7 @@ class CanopyEngine:
         plan = self._plan
         if trial is None or self._stopped or plan is None or plan.mode_id != trial.mode_id:
             return
-        approved, why = self.compile_best(trial.mode_id, skip=skip)
+        approved, why = self.compile_best(trial.mode_id, skip=skip | STILL_ONLY)  # put back still (D75)
         if approved is None:
             self.telemetry.record(
                 "alert",
@@ -2320,10 +2557,19 @@ class CanopyEngine:
 
     # ---- compiling --------------------------------------------------------------------------------------------
     def compile_best(
-        self, mode_id: str, *, floor: int | None = None, skip: frozenset[Tier] = frozenset()
+        self,
+        mode_id: str,
+        *,
+        floor: int | None = None,
+        skip: frozenset[Tier] = frozenset(),
+        prefer: Tier | None = None,
     ) -> tuple[ModePlan | None, str]:
         """The best plan for `mode_id`: the first allowed tier that compiles, from the floor down, then above it
-        (never a tier in `skip`). While a Design Lab try-on of `mode_id` stands, only module level or strand (D66)."""
+        (never a tier in `skip`). While a Design Lab try-on of `mode_id` stands, only module level or strand (D66).
+
+        `prefer` (D75: a guest's choice prefers the stepped rung) is tried first when it is on the ladder, not
+        skipped, no floor is given and none is in force for the mode; the walk then runs without it. With a floor it
+        is skipped altogether: a floored look never steps (D65)."""
         if self._trial is not None and mode_id == self._trial.mode_id:
             skip = skip | TRIAL_SKIP
         # its slots don't hold the live design yet (D68): module level, truthfully
@@ -2339,6 +2585,17 @@ class CanopyEngine:
         start = min(max(0, start), len(ladder) - 1)
         order = list(range(start, len(ladder))) + list(range(start))
         reasons = []
+        if prefer is not None:
+            if prefer in ladder and prefer not in skip and floor is None and mode_id not in self.floors:
+                allowed, why = self.deps.tier_allowed(mode_id, prefer)
+                if not allowed:
+                    reasons.append(f"{prefer}: {why or 'not allowed'}")
+                else:
+                    try:
+                        return self.deps.compile(mode_id, prefer), ""
+                    except PlanError as e:
+                        reasons.append(f"{prefer}: {e}")
+            skip = skip | {prefer}
         for i in order:
             tier = ladder[i]
             if tier in skip:
@@ -2436,7 +2693,10 @@ class CanopyEngine:
         return device_id is not None and device_id in self._pending
 
     def _install(self, plan: ModePlan, source: str) -> ModePlan:
-        """Make `plan` the current look (the plan installed is returned: a rehearsal's run is its minutes long)."""
+        """Make `plan` the current look (the plan installed is returned: a rehearsal's run is its minutes long, an
+        idle breath's its breathe_run_s; a stepped plan that won't run — its choice already ran, a cool-off, a step
+        too long — counts as that choice's run and is swapped for the mode's best still tier when that is a canvas
+        or slot, D75). Nothing is sent here: the caller sends the plan returned."""
         rehearsal = self._rehearsal
         ending = None
         if rehearsal is not None:
@@ -2444,6 +2704,37 @@ class CanopyEngine:
                 plan = replace(plan, program=replace(plan.program, run_s=rehearsal.run_s))
             else:  # another look replaced the rehearsal's (ops, a downgrade): it ends with what it measured
                 ending = f"{plan.label} ({plan.tier}) replaced it ({source})"
+        rehearsing = rehearsal is not None and ending is None
+        if (
+            self._breath_run_s is not None
+            and not rehearsing
+            and plan.program is not None
+            and plan.mode_id == self.deps.settings.kiosk.idle_mode
+        ):  # the idle breath (motion.idle): one run of breathe_run_s
+            plan = replace(plan, program=replace(plan.program, run_s=self._breath_run_s))
+        for device_id in plan.modules:  # the runner sizes its step from the targets' accounts
+            self._resolve(device_id)
+        runner: ProgramRunner | None = None
+        if plan.program is not None:
+            # t0 = when the look was last chosen: a mood just chosen starts a run; a re-pick of the look now showing
+            # (a tier change, new capabilities, a publish) keeps the run's phase. A guest's brightness or on/off
+            # (which does count as a change for the idle hold) never restarts a run, and a choice whose run is over
+            # only holds (`over`, D75), lifted to its canvas or slot where it has one.
+            if rehearsing:
+                runner = ProgramRunner(self, plan, t0=self._chosen_mono)
+            else:
+                runner = ProgramRunner(
+                    self, plan, t0=self._chosen_mono, over=self._ran_for == self._chosen_mono
+                )
+                if not runner.running:
+                    # it can't run now (its choice already ran, a cool-off, a step too long, its run over): that
+                    # counts as this choice's run, so no later re-pick of it starts the steps, and an idle breath's
+                    # run_s is spent (review B-R2-1)
+                    self._ran_for, self._breath_run_s = self._chosen_mono, None
+                    if (still := self._best_still(plan.mode_id)) is not None:
+                        plan, runner = still, None
+                        for device_id in plan.modules:
+                            self._resolve(device_id)
         self._end_ripple()  # the old look's rings not sent yet are dropped
         self._generation += 1
         self._plan = plan
@@ -2451,17 +2742,27 @@ class CanopyEngine:
         self._changed_at = self.clock.now()
         self._early_counts.clear()
         self.last_status.clear()
-        for device_id in plan.modules:
-            self._resolve(device_id)
         if self._runner is not None:
             self._runner.cancel()  # the old look's steps stop here
-            self._runner = None
-        if plan.program is not None:
-            # t0 = when the look was last chosen: a mood just chosen starts a run; a re-pick of the look now showing
-            # (a tier change, new capabilities) keeps the run's phase, or only holds once the run is over. A guest's
-            # brightness or on/off (which does count as a change for the idle hold) never restarts a run.
-            self._runner = ProgramRunner(self, plan, t0=self._chosen_mono)
-            self._runner.start()
+        self._runner = runner
+        if runner is not None:
+            # a module already showing (and verified) what step 0 sends never reads "Changing the light…" (a breath
+            # starting on the hold, a re-pick mid-run). A module whose only problem is a flagged note with its look
+            # confirmed counts as verified too (D73, `tracker.flagged_only`): no write goes to it at a breath's start,
+            # so nothing would verify it until its first breath write, and the guest panel would say "changing"
+            # while nothing is being sent (review B-R4-C1)
+            for device_id in plan.modules:
+                target = self._targets.get(device_id)
+                if (
+                    target is not None
+                    and self.desired_rows(device_id) == self.sent_rows.get(device_id)
+                    and (
+                        self.tracker.status(target.address) is DeviceStatus.READY
+                        or self.tracker.flagged_only(target.address)
+                    )
+                ):
+                    runner.note_verified(device_id)
+            runner.start()
         if ending is not None and rehearsal is not None:
             self._end_rehearsal(ending, rehearsal=rehearsal, settle=False)
         elif rehearsal is not None:
@@ -2756,6 +3057,12 @@ class CanopyEngine:
         self.reconciler.on_recovery()
         if self._runner is not None:
             self._runner.sync()  # a stepped look comes back at the step its run is at now
+            plan = self._plan
+            if not self._runner.running and plan is not None and plan.tier is Tier.STEPPED:
+                # its run ended inside the outage: it settles onto its canvas or slot, carried by the burst below
+                still = self._best_still(plan.mode_id)
+                if still is not None:
+                    self._install(still, "recovery")
         if self._plan is not None:
             self.send(None, source="recovery", label=f"recovery: {self._plan.mode_id}")
         for listener in list(self.recovery_listeners):
@@ -2822,7 +3129,7 @@ class CanopyEngine:
             lifted.append(mode_id)
         plan = self._plan
         if plan is not None and plan.mode_id in lifted:
-            better, _ = self.compile_best(plan.mode_id)
+            better, _ = self._repick_best(plan.mode_id)  # a re-pick: it never starts a run (D75)
             if better is not None and better.tier != plan.tier:
                 self._tier_change(plan.mode_id, plan.tier, better.tier, reason, "up")
                 self._show(better, "reconciler")
@@ -3168,7 +3475,7 @@ class CanopyEngine:
                 self._replan_handle = loop.call_later(REPLAN_DELAY_S, fire)
                 return
             plan = self._plan
-            better, _ = self.compile_best(plan.mode_id)
+            better, _ = self._repick_best(plan.mode_id)  # a re-pick: it never starts a run (D75)
             if better is None or (better.tier, better.feature, better.motion) == (
                 plan.tier,
                 plan.feature,
@@ -3382,6 +3689,11 @@ class CanopyEngine:
         if data != self._last_published:
             self._last_published = data
             hub.publish(TOPIC, data)
+
+
+def _brightness_of(rows: Iterable[StateRow]) -> int | None:
+    """The brightness row's level in `rows` (None without one)."""
+    return next((r.value for r in rows if r.key == BRIGHTNESS_KEY and isinstance(r.value, int)), None)
 
 
 def _current_task() -> asyncio.Task | None:

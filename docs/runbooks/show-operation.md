@@ -20,12 +20,30 @@ Oct 29. **How long:** the whole show; each action below takes seconds.
 - **Change** (mode picker) — show a mode yourself (no guest cooldown).
 - **Commission slots…** — rewrites the painted looks into the modules (install day, a controller swap, or when the
   7 am check says a slot drifted). Not during a busy moment: guest input waits for it (about a minute).
+- **On the iPad** (D76) — a "Show on the iPad" switch per scene takes its card off the guest panel (and off the
+  attract screen); the next poll, within about 2 s, shows it. Ops can still choose it with **Change** (the picker
+  says "(off the iPad)"), the Design Lab still edits it, and if it is showing the iPad still names it. The idle scene
+  (Lowcountry Calm) is always on. The list is kept in `<data>/overrides/settings.yaml` and survives a restart;
+  **Download ops edits** folds it into `config/conductor.yaml` (`kiosk.hidden_scenes`) as a diff to commit back.
+  More than six scenes on the iPad gives guests the review menu: one row per scene with its options side by side,
+  and only the scene list scrolls.
 
-What guests see on the kiosk: six moods; after a choice the canopy changes in a few seconds ("Changing the light…"
+What guests see on the kiosk: the scenes on the iPad (six moods, unless /ops hid some or the review options are on);
+after a choice the canopy changes in a few seconds ("Changing the light…"
 → "Ready"); the next choice (or brightness, or on/off) waits a moment, 2 s (D72's
 fast pacing; with `kiosk.fast_pacing: false`, the write budget: 7.5 s once all nine are driven), longer for two
 minutes after Hubspace throttles the account (an info alert on /ops says so) ("New scene in N s"); after 3 minutes with nobody
 touching it the canopy goes back to Lowcountry Calm.
+
+**Client review (18 options, after PR D).** Run it from the Design Lab and `/ops`: try each option on, tweak the
+winner, then on the winning option press **Make this the scene** (its design goes into the base scene's working
+draft; Undo brings the old one back; nothing is published yet), then **Publish** the base. Switch the other options
+off on `/ops` (On the iPad), then **export** the version at the end of the day. If the client chose it, write who
+chose it and when into the export's "Made the scene on site" decision line: that is the D59 sign-off, and the export
+never fills it in for you.
+
+**After a deploy** of a change to `/ops` or the Design Lab, hard-reload `/ops` and `/ops/showcase` once (they are
+served without revalidation, so an open tab can keep the old page).
 
 ## "Needs attention" — what it means per module, and what to do
 

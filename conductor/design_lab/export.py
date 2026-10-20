@@ -21,7 +21,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,6 +76,13 @@ STEPPED_STILL = "nine strands on one account would hold the still design: {why}"
 _STEP_COMMENT = re.compile(r"step every [0-9.]+ s|hold the still design \([^)]*\)")
 STEP_COMMENT_STEP = "step every {step:g} s"
 STEP_COMMENT_STILL = "hold the still design ({why})"
+# D76 "Make this the scene": a fact plus a prompt. It never asserts the client's sign-off (07 §9): only the person
+# exporting knows whether the client chose it, so the line asks them to write who and when.
+PROMOTION_LINE = (
+    "Made the scene on site (D76 “Make this the scene”): {base} now has {option}'s palette and layout "
+    "({option_id} → {base_id}). If the client chose it at the review, add who chose it and when before merging: "
+    "that choice is the D59 sign-off for its colours."
+)
 # the D65 section's live state (the Lab never sets motion.stepped.live_enabled; it says where it stands)
 STEPPED_SECTION_OFF = "live off until Gate R"
 STEPPED_SECTION_ON = "live on (motion.stepped.live_enabled)"
@@ -503,6 +510,9 @@ def rewrite_modes_yaml(
         direction_changed = (
             a_mode.techniques.stepped is not None and p_mode.techniques.stepped is not None
         ) and (a_mode.techniques.stepped.direction != p_mode.techniques.stepped.direction)
+        motion_changed = (  # D75: travel ↔ breathe ↔ shimmer
+            a_mode.techniques.stepped is not None and p_mode.techniques.stepped is not None
+        ) and (a_mode.techniques.stepped.mode != p_mode.techniques.stepped.mode)
         solid_changed = a_scene.solid.model_dump() != p_scene.solid.model_dump()
         # the step_s comment's pace clause, when the timing or the nine-strand pace moved (the D65 line's own
         # `canopy_pace`, at these settings)
@@ -575,7 +585,7 @@ def rewrite_modes_yaml(
                 # "nine strands on one account step every 7.5 s" was the runner's pace for the OLD timing
                 comment = _STEP_COMMENT.sub(lambda _m, clause=pace_moved: clause, comment, count=1)
             stepped_comment = path in (("techniques", "stepped"), ("techniques", "stepped", "direction"))
-            if stepped_comment and (field_changed or direction_changed):
+            if stepped_comment and (field_changed or direction_changed or motion_changed):
                 comment = ""  # "rays move out from the left edge" no longer describes the run
             if path == ("techniques", "strand", "look"):
                 if old != new or solid_changed:
@@ -604,7 +614,7 @@ def rewrite_modes_yaml(
             elif isinstance(new, Mapping | list):
                 value = _flow(new) if path[-1] != "preview" else _flow(new, plain=False)
             else:
-                plain = path[-1] in ("at", "direction", "kind", "recipe", "slot")
+                plain = path[-1] in ("at", "direction", "kind", "mode", "recipe", "slot")
                 value = _scalar(new, plain=plain)
             edits[ln.index] = [f"{' ' * ln.indent}{ln.key}: {value}{comment}"]
         # the design's anchor line and the comments inside it
@@ -622,8 +632,46 @@ def rewrite_modes_yaml(
                             edits[i] = []
         if not anchors and design_paths:
             raise LocateError(f"couldn't find mode {scene_id!r}'s design in {MODES_FILE}")
+        if a_st is not None and p_st is not None:
+            _add_stepped_keys(lines, walked, edits, before, after, scene_id)
         lines = _apply_edits(lines, edits)
     return _join(lines, newline), notes
+
+
+# D75: a stepped rung's keys a block written before them may have no line for (travel never needs them)
+STEPPED_ADDED_KEYS = ("mode", "shift", "brightness_swing", "lag_steps", "seed")
+
+
+def _add_stepped_keys(
+    lines: Sequence[str],
+    walked: Sequence[_Line],
+    edits: dict[int, list[str]],
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    scene_id: str,
+) -> None:
+    """Each of STEPPED_ADDED_KEYS whose value the edit changes and that has no line under techniques → stepped gets
+    one, after the block's last child line at the children's indent (composed with an edit already on that line).
+    LocateError when the stepped rung isn't a block mapping."""
+    at = ("techniques", "stepped")
+    have = {ln.path[-1] for ln in walked if len(ln.path) == 3 and ln.path[:2] == at}
+    missing = [
+        k for k in STEPPED_ADDED_KEYS if k not in have and _get(before, (*at, k)) != _get(after, (*at, k))
+    ]
+    if not missing:
+        return
+    header = next((ln for ln in walked if ln.path == at), None)
+    children = [ln for ln in walked if len(ln.path) == 3 and ln.path[:2] == at]
+    if header is None or header.rest or not children:
+        raise LocateError(
+            f"{MODES_FILE}: mode {scene_id!r}'s techniques → stepped isn't a block mapping, so "
+            f"{', '.join(missing)} can't be added to it"
+        )
+    indent = children[0].indent
+    last = _block_end(lines, header.index, header.indent) - 1
+    new = [f"{' ' * indent}{k}: {_scalar(_get(after, (*at, k)), plain=k == 'mode')}" for k in missing]
+    # an edit already on that line (the regenerated moving copy, or a dropped comment) keeps its own lines first
+    edits[last] = (edits[last] if last in edits else [lines[last]]) + new
 
 
 # ---- config/recipes.yaml -------------------------------------------------------------------------------------------
@@ -936,7 +984,17 @@ def _changes(
                 ch.copy.append(f'{name}: {rung} copy now reads "{after}"')
         a_st, p_st = am.techniques.stepped, pm.techniques.stepped
         if a_st is not None and p_st is not None:
-            fields = ("direction", "steps_per_cycle", "step_s", "run_s")
+            fields = (
+                "mode",
+                "direction",
+                "steps_per_cycle",
+                "step_s",
+                "run_s",
+                "shift",
+                "brightness_swing",
+                "lag_steps",
+                "seed",
+            )
             moved = [
                 f"{f} {getattr(a_st, f)} → {getattr(p_st, f)}"
                 for f in fields
@@ -944,7 +1002,8 @@ def _changes(
             ]
             if moved:
                 line = f"{name}: stepped run {', '.join(moved)}"
-                timing = fields[1:]  # the pace changes with these, never with the direction
+                # the pace changes with these, never with the direction or the kind of motion
+                timing = ("steps_per_cycle", "step_s", "run_s")
                 if any(getattr(a_st, f) != getattr(p_st, f) for f in timing):
                     pace = _stepped_pace(patched, scene_id, canopy, settings or ConductorSettings())
                     line += f" ({pace})"
@@ -977,6 +1036,53 @@ def _painted(trio: ConfigTrio, canvas: Any) -> dict:
     return dumped
 
 
+def _design_of(trio: ConfigTrio, scene_id: str) -> tuple[list[tuple[str, str]], dict] | None:
+    """A scene's palette [(name, HEX)] and its module-level design's field (a FieldCanvas), or None without one."""
+    try:
+        scene, mode = trio.scenes.get(scene_id), trio.modes.mode(scene_id)
+    except KeyError:
+        return None
+    modules = mode.techniques.modules
+    canvas = modules.sample.canvas if modules is not None and modules.sample is not None else None
+    if not isinstance(canvas, FieldCanvas):
+        return None
+    return [(c.name, c.hex.upper()) for c in scene.palette], canvas.field.model_dump(mode="json")
+
+
+def promotions(
+    patched: ConfigTrio, scene_ids: Iterable[str], *, approved: ConfigTrio | None = None
+) -> list[tuple[str, str]]:
+    """(base id, option id) for each base scene in `scene_ids` that now carries one of its options' designs: the
+    first option (catalog order) whose palette [(name, hex)] and module-level field both equal the base's — what the
+    Lab's "Make this the scene" leaves (D76). Inferred, never recorded: a later tweak of the base drops the pair.
+    With `approved`, a base that already had that design in git is no promotion (nothing was made the scene)."""
+    out: list[tuple[str, str]] = []
+    for base_id in scene_ids:
+        try:
+            base = patched.scenes.get(base_id)
+        except KeyError:
+            continue
+        if base.option_of is not None:
+            continue
+        design = _design_of(patched, base_id)
+        if design is None:
+            continue
+        if approved is not None and _design_of(approved, base_id) == design:
+            continue
+        for option in patched.scenes.options_of(base_id):
+            if _design_of(patched, option.id) == design:
+                out.append((base_id, option.id))
+                break
+    return out
+
+
+def _name_of(approved: ConfigTrio, patched: ConfigTrio, scene_id: str) -> str:
+    try:
+        return approved.scenes.get(scene_id).name
+    except KeyError:
+        return patched.scenes.get(scene_id).name
+
+
 def _next_decision(root: Path) -> str:
     path = root / "docs" / "DECISIONS.md"
     try:
@@ -1006,6 +1112,15 @@ def decision_draft(
             "Approved colour changes (D59; needs the client's sign-off and a D59 update): "
             + "; ".join(changes.approved)
             + "."
+        )
+    for base_id, option_id in promotions(patched, scene_ids, approved=approved):
+        parts.append(
+            PROMOTION_LINE.format(
+                base=_name_of(approved, patched, base_id),
+                option=_name_of(approved, patched, option_id),
+                option_id=option_id,
+                base_id=base_id,
+            )
         )
     if changes.solid:
         parts.append("Strand solid (a draft default, not a D59 colour): " + "; ".join(changes.solid) + ".")
@@ -1181,6 +1296,7 @@ __all__ = [
     "field_flow",
     "fixture_for",
     "frames_fixture",
+    "promotions",
     "reread",
     "rewrite_modes_yaml",
     "rewrite_recipes_yaml",

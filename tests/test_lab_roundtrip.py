@@ -4,8 +4,10 @@ tree, passes the whole suite there with only the patch's own changes.
 Slow (one full suite per case, minutes each), so it is gated: CI's plain `pytest` skips it and
 `make lab-roundtrip` (LAB_ROUNDTRIP=1) runs it. The cases are the three canonical edits in one patch (Golden Hour:
 Sunset pink → #FF8FBF, linear 30°, brightness 90; Coastal Tides: 60°, Aqua → #6FD0D8; Lowcountry Calm: Sea glass
-→ #CDEBE6) and a rename, an added colour, a removed colour and a reorder (each changes recipes.yaml's keys). A
-failure here is an approved-value pin still in a test: move it onto the fixture's `_pins` (§3.7).
+→ #CDEBE6) and a rename, an added colour, a removed colour and a reorder (each changes recipes.yaml's keys), and
+(D75) Coastal Tides turned into a breath (swing 6, lag 2, the generated copy), whose export adds the stepped rung's
+mode / brightness_swing / lag_steps lines. A failure here is an approved-value pin still in a test: move it onto the
+fixture's `_pins` (§3.7).
 
 The scratch copy is `git init`ed and committed first, so `git apply` and any `git ls-files` work there.
 The suite runs with this interpreter (`python -m pytest`; pytest's `pythonpath = ["."]` makes the copy's own
@@ -25,7 +27,21 @@ import pytest
 pytestmark = pytest.mark.skipif(os.environ.get("LAB_ROUNDTRIP") != "1", reason="slow: make lab-roundtrip")
 
 ROOT = Path(__file__).resolve().parent.parent
-CASES = ["canonical", "rename", "add", "remove", "reorder"]
+CASES = ["canonical", "rename", "add", "remove", "reorder", "breathe"]
+
+
+def _breathe(trio):
+    """Coastal Tides → mode breathe, brightness_swing 6, lag_steps 2 (85 ± 6 fits), through S1's apply_drafts with
+    copy auto, so its moving sentence is the generated breath one."""
+    from test_lab_export import CANOPY
+
+    from conductor.config import ConductorSettings
+    from conductor.design_lab.draft import SceneDraft, apply_drafts, seed_draft
+
+    data = seed_draft(trio, "coastal-tides").model_dump()
+    data["stepped"].update(mode="breathe", brightness_swing=6, lag_steps=2)
+    draft = SceneDraft.model_validate(data)
+    return apply_drafts(trio, {"coastal-tides": draft}, canopy=CANOPY, settings=ConductorSettings())
 
 
 def _run(cwd: Path, *args: str, env: dict | None = None, timeout: float = 120) -> subprocess.CompletedProcess:
@@ -59,7 +75,12 @@ def test_an_edited_export_passes_the_whole_suite(case, tmp_path):
 
     # the edits are written for the approved config of 2026-10-16 (tests/fixtures_lab_baseline/), applied to the
     # working tree's: run this before the scenes change
-    patched = canonical_edits(LIVE) if case == "canonical" else structural(case, LIVE)
+    if case == "canonical":
+        patched = canonical_edits(LIVE)
+    elif case == "breathe":
+        patched = _breathe(LIVE)
+    else:
+        patched = structural(case, LIVE)
     result = export_patch(LIVE, patched, root=ROOT, canopy=CANOPY, version=None, now=NOW)
     assert result.problem == "" and result.patch, result.problem
     repo = _working_tree_copy(tmp_path / "tree")

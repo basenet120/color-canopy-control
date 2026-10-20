@@ -77,6 +77,18 @@
           canopy back on, at the look's designed brightness (it also happens on its own after a few idle minutes).</p>
       </section>
 
+      <!-- The iPad's scene menu (D76): which scenes guests can choose -->
+      <section class="card" id="ipad-card" aria-labelledby="ipad-h">
+        <h2 id="ipad-h">On the iPad</h2>
+        <p class="muted small" id="ipad-summary">Loading…</p>
+        <p class="error" id="ipad-error" role="status" hidden></p>
+        <ul class="list ipad-scenes" id="ipad-scenes"></ul>
+        <p class="notice" id="ipad-notes" role="status" hidden></p>
+        <p class="notice" id="ipad-result" role="status" hidden></p>
+        <p class="muted small">A scene off the iPad keeps its look: ops can still choose it above, the Design Lab
+          still edits it, and it can still be showing. The idle scene is always on the iPad.</p>
+      </section>
+
       <!-- 7 am checklist (07 §10) -->
       <section class="card" id="checklist-card" aria-labelledby="checklist-h">
         <h2 id="checklist-h" class="bar">7 am checklist
@@ -133,7 +145,8 @@
             <label for="enroll-name">Name</label>
             <input id="enroll-name" name="name" maxlength="80" placeholder="e.g. Guest iPad" required>
           </div>
-          <p class="muted small" id="enroll-kiosk-note">The kiosk only ever drives the canopy's six modes.</p>
+          <p class="muted small" id="enroll-kiosk-note">The kiosk only ever drives the scenes the iPad offers (the On the
+            iPad card).</p>
           <fieldset class="checks" id="enroll-devices" hidden>
             <legend>Devices they may test</legend>
           </fieldset>

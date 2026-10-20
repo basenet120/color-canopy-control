@@ -112,6 +112,42 @@ def _moving_copy_names_another_flow(scenes: dict, modes: dict, recipes: dict) ->
     stepped["moving_feature"] = stepped["moving_feature"].replace("diagonally", "row by row")
 
 
+def _stepped_above_the_canvas(scenes: dict, modes: dict, recipes: dict) -> None:
+    modes["modes"]["golden-hour"]["ladder"] = ["stepped", "canvas", "slot", "modules", "strand"]
+
+
+LEVEL_BREATH_COPY = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter "
+    "or softer level every few seconds, so the canopy swells and softens."
+)
+
+
+def _breathe_tides(**params) -> Mutation:
+    """Coastal Tides' rung as a level breath (D75): no colour shift, every strand together (lag 0)."""
+
+    def mutate(scenes: dict, modes: dict, recipes: dict) -> None:
+        stepped = _technique(modes, "coastal-tides")["stepped"]
+        stepped.update(mode="breathe", shift=0.0, lag_steps=0, moving_feature=LEVEL_BREATH_COPY, **params)
+
+    return mutate
+
+
+SHIMMER_COPY = (
+    "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter "
+    "or softer level every few seconds, so the strands glow and soften on their own."
+)
+
+
+def _shimmer_tides(**params) -> Mutation:
+    """Coastal Tides' rung as a level shimmer (D75): each module on its own seeded start."""
+
+    def mutate(scenes: dict, modes: dict, recipes: dict) -> None:
+        stepped = _technique(modes, "coastal-tides")["stepped"]
+        stepped.update(mode="shimmer", shift=0.0, moving_feature=SHIMMER_COPY, **params)
+
+    return mutate
+
+
 MUTATIONS: dict[
     str, tuple[str, Mutation, bool]
 ] = {  # id → (rule, mutation, check against the approved modes)
@@ -125,6 +161,11 @@ MUTATIONS: dict[
     "stop-at-0.4": ("one-design", _stop_at_0_4, False),
     "blend-with-white": ("recipes", _blend_with_white, False),
     "moving-copy-another-flow": ("stepped", _moving_copy_names_another_flow, False),
+    "stepped-above-the-canvas": ("ladder-end", _stepped_above_the_canvas, False),
+    # levels 85, 86, 86, 85, 84, 85: steps 1 and 2 send nothing new
+    "breath-repeats-a-step": ("stepped", _breathe_tides(brightness_swing=1, steps_per_cycle=6), False),
+    # seed 183 at lag_steps 1 starts all nine modules together: one breath, under "on their own" (review B-R6-1)
+    "shimmer-starts-together": ("stepped", _shimmer_tides(brightness_swing=6, lag_steps=1, seed=183), False),
     "linear-0": ("two-d", _layout("rainbow-row-sunset", {"kind": "linear", "angle_deg": 0}), False),
     "kits-equal": (
         "kits-differ",
@@ -150,6 +191,48 @@ def test_each_rule_catches_its_mutation(case):
     scenes, modes, recipes = _mutated(mutation)
     found = R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules={rule}, approved=MODES)
     assert found and all(p.rule == rule and str(p).startswith(f"mode {p.mode!r} → ") for p in found)
+
+
+def test_the_new_d75_mutations_say_why():
+    scenes, modes, recipes = _mutated(MUTATIONS["stepped-above-the-canvas"][1])
+    (ladder,) = R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules={"ladder-end"})
+    assert ladder.mode == "golden-hour" and "must sit just before [modules, strand]" in ladder.message
+    scenes, modes, recipes = _mutated(MUTATIONS["breath-repeats-a-step"][1])
+    (stepped,) = R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules={"stepped"})
+    assert stepped.mode == "coastal-tides" and "steps 1 and 2 show the same picture" in stepped.message
+    levels = [p["r1c1"][1] for p in R.step_pictures(modes.mode("coastal-tides"), recipes, CANOPY)]
+    assert levels == [85, 86, 86, 85, 84, 85]
+
+
+def test_a_shimmer_whose_modules_all_start_together_is_blamed_on_its_seed():
+    """Review B-R6-1: the blocking rules refuse a lagged breath whose nine starts are equal (parse_modes' check, run
+    here over a trio built without it), on the field that collapses them; another seed is the control."""
+    scenes, modes, recipes = _mutated(MUTATIONS["shimmer-starts-together"][1])
+    (together,) = R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules=R.BLOCKING)
+    assert (together.rule, together.mode, together.path) == (
+        "stepped",
+        "coastal-tides",
+        "techniques → stepped → seed",
+    )
+    assert together.message.startswith("lag_steps 1 with seed 183 starts every module together")
+    # every step shows all nine at one level: the canopy breathes as one
+    pictures = R.step_pictures(modes.mode("coastal-tides"), recipes, CANOPY)
+    assert all(len({level for _, level in step.values()}) == 1 for step in pictures)
+    spread = _mutated(_shimmer_tides(brightness_swing=6, lag_steps=1, seed=7))
+    assert R.scene_mode_problems(*spread, CANOPY, rules=R.BLOCKING) == []
+
+
+def test_a_breathe_variant_steps_its_brightness_and_keeps_its_colours():
+    scenes, modes, recipes = _mutated(_breathe_tides(brightness_swing=6, steps_per_cycle=6))
+    assert R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules=R.BLOCKING) == []
+    mode = modes.mode("coastal-tides")
+    pictures = R.step_pictures(mode, recipes, CANOPY)
+    colours = R.module_colours(mode, recipes, CANOPY)
+    assert [{p[1] for p in step.values()} for step in pictures] == [{85}, {88}, {91}, {85}, {79}, {82}]
+    assert all({pos: rgb for pos, (rgb, _) in step.items()} == colours for step in pictures)
+    assert R.step_frames(mode, recipes, CANOPY) == [
+        {pos: rgb for pos, (rgb, _) in s.items()} for s in pictures
+    ]
 
 
 def test_moved_slots_need_the_approved_modes_to_be_seen():
@@ -252,5 +335,16 @@ def test_the_pins_are_the_committed_fixtures():
     assert golden["t3"] == {
         p: list(c) for p, c in R.module_colours(MODES.mode("golden-hour"), RECIPES, CANOPY).items()
     }
-    assert set(golden["stepped"]) == {"direction", "steps_per_cycle", "step_s", "run_s"}
+    # keys only: no approved "travel" value is pinned outside _pins (the Lab round-trip rule)
+    assert set(golden["stepped"]) == {
+        "direction",
+        "mode",
+        "steps_per_cycle",
+        "step_s",
+        "run_s",
+        "shift",
+        "brightness_swing",
+        "lag_steps",
+        "seed",
+    }
     assert "stepped" not in pins["lowcountry-calm"] and "flow_words" not in pins["lowcountry-calm"]

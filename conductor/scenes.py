@@ -1,5 +1,10 @@
-"""The six approved Color Canopy scenes (config/scenes.yaml, D59): one catalog for the guest panel, the show's modes
-and Paris's Studio.
+"""The approved scenes (config/scenes.yaml, D59) and, from D76, options grouped under them by option_of: one catalog
+for the guest panel, the show's modes and Paris's Studio.
+
+A scene may name `option_of: <base id>` (D76): it is one of that base scene's options for the client review, and the
+iPad's review menu shows the base and its options side by side in one row. One level deep (an option's base is never
+itself an option), and the base must be a scene in the same catalog. The key is left out of every dump while it is
+unset, so a catalog without options dumps exactly as before (`trio_sha`, published looks).
 
 A scene is a named palette. On one strand of `heads` lights its look is a static gradient: head i sits at
 t = i / (heads - 1), the palette's stops are evenly spaced over 0..1, each RGB channel is interpolated linearly and
@@ -15,7 +20,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    field_validator,
+    model_serializer,
+)
 
 from conductor.config import CONFIG_DIR, ConfigError, _explain, _read_yaml, _Strict
 
@@ -48,6 +59,23 @@ class Scene(_Strict):
     brightness_draft: int = Field(ge=1, le=100)
     default_solid: int = Field(ge=0)
     palette: list[PaletteColor] = Field(min_length=2, max_length=8)
+    # The scene this one is an option of (D76): set in git only, never by the Lab. Left out of every dump while None.
+    option_of: str | None = Field(None, pattern=r"^[a-z][a-z0-9-]{1,40}$")
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_option(self, handler: SerializerFunctionWrapHandler) -> dict:
+        """Drop `option_of` while it is None, so a catalog without options dumps byte-identically to before D76:
+        `ConfigTrio.dump()` feeds `trio_sha` and the stored publication, and an older Conductor's strict Scene would
+        refuse a file that carries `option_of: null`."""
+        data = handler(self)
+        if isinstance(data, dict) and "option_of" in data and data["option_of"] is None:
+            del data["option_of"]
+        return data
+
+    @property
+    def group(self) -> str:
+        """The scene group this scene belongs to on the iPad's review menu: its base's id, or its own."""
+        return self.option_of or self.id
 
     @field_validator("default_solid")
     @classmethod
@@ -89,11 +117,40 @@ class SceneCatalog(_Strict):
             raise ValueError("scene ids must be unique")
         return v
 
+    @field_validator("scenes")
+    @classmethod
+    def _options(cls, v: list[Scene]) -> list[Scene]:
+        """`option_of` names a base scene in this catalog, one level deep (D76). Runs after `_unique`, so a duplicate
+        id is reported first. No ordering rule and no cap on options per base: the iPad wraps more than three."""
+        by_id = {s.id: s for s in v}
+        for s in v:
+            base_id = s.option_of
+            if base_id is None:
+                continue
+            if base_id == s.id:
+                raise ValueError(f"scene {s.id!r} → option_of: a scene can't be an option of itself")
+            base = by_id.get(base_id)
+            if base is None:
+                raise ValueError(
+                    f"scene {s.id!r} → option_of: {base_id!r} isn't a scene in this catalog; name the id of the "
+                    "scene it is an option of"
+                )
+            if base.option_of is not None:
+                raise ValueError(
+                    f"scene {s.id!r} → option_of: {base_id!r} is itself an option of {base.option_of!r}; options "
+                    "group under a base scene, one level deep"
+                )
+        return v
+
     def get(self, scene_id: str) -> Scene:
         for s in self.scenes:
             if s.id == scene_id:
                 return s
         raise KeyError(scene_id)
+
+    def options_of(self, base_id: str) -> list[Scene]:
+        """The scenes that name `base_id` as their option_of, in catalog order (D76)."""
+        return [s for s in self.scenes if s.option_of == base_id]
 
 
 def _round(x: float) -> int:

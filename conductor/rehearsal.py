@@ -100,18 +100,19 @@ def confirm_sentence(
     planned: float,
 ) -> str:
     """What ops confirms before a rehearsal starts: the look, the minutes and every module it writes to, and the
-    write rate as the runner enforces it (steps paced at `planned` a minute; a step that would take the account past
-    `cap` in 60 s is held back; Gate R fails when retries and re-sends take it past `cap` anyway)."""
+    write rate as the runner enforces it (steps paced at `planned` a minute; a step that would leave the account
+    less than one write per module of room under `cap` in 60 s is held back, D75; Gate R fails when retries and
+    re-sends take it past `cap` anyway)."""
     n = len(modules)
     where = f"account {accounts[0]}" if len(accounts) == 1 else f"accounts {_names(accounts)}"
     sim = " (simulator: no real lights)" if simulated else ""
     return (
         f"Rehearse {label} stepped for {minutes} {'minute' if minutes == 1 else 'minutes'} on "
         f"{_names(modules)} ({n} {'module' if n == 1 else 'modules'} on {where}){sim}? Each step writes every "
-        f"module whose colour changes, paced at up to {planned:g} writes a minute; a step that would take the "
-        f"account past {cap:g} writes in a minute is held back, and the report fails if retries take it past "
-        f"{cap:g}. The run stops at the first 403 or if the throttle governor trips, then the still look holds. "
-        "Guests can't change the canopy meanwhile."
+        f"module whose colour or level changes, paced at up to {planned:g} writes a minute; a step that would "
+        f"leave the account less than one write per module of room under {cap:g} writes in a minute is held "
+        f"back, and the report fails if retries take it past {cap:g}. The run stops at the first 403 or if the "
+        "throttle governor trips, then the still look holds. Guests can't change the canopy meanwhile."
     )
 
 

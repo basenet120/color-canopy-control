@@ -97,6 +97,44 @@ def test_state_lists_the_modes_for_the_picker(app_client):
     ids = [m["id"] for m in body["modes"]]
     assert ids[0] == "lowcountry-calm" and "golden-hour" in ids and len(ids) == 6
     assert all(m["label"] for m in body["modes"])
+    assert all(m["on_ipad"] is True for m in body["modes"])
+
+
+def test_the_mode_picker_marks_scenes_off_the_ipad(app_client):
+    """A scene off the iPad (D76) is still in the ops picker: ops can choose it; the picker says guests can't."""
+    _install(app_client, RecordingEngine)
+    _services(app_client).settings.kiosk.hidden_scenes = ["golden-hour"]
+    modes = app_client.get("/api/canopy/state").json()["modes"]
+    assert {m["id"]: m["on_ipad"] for m in modes} == {m["id"]: m["id"] != "golden-hour" for m in modes}
+    assert len(modes) == 6
+    script = app_client.get("/ops/ops.js").text
+    assert "(off the iPad)" in script and "m.on_ipad" in script
+
+
+def test_the_ops_page_draws_the_ipad_card_from_the_served_model(app_client):
+    page = app_client.get("/ops/").text
+    for el in (
+        'id="ipad-card"',
+        'id="ipad-scenes"',
+        'id="ipad-summary"',
+        'id="ipad-error"',  # a load that failed (cleared by the next fresh answer); ipad-result is a switch's own
+        'id="ipad-notes"',
+        'id="ipad-result"',
+    ):
+        assert el in page, el
+    assert "The idle scene is always on the iPad." in page
+    assert "six modes" not in page
+    script = app_client.get("/ops/ops.js").text
+    assert 'from "/ops/ipad-model.mjs"' in script
+    assert "ipadRows(" in script and "ipadKey(" in script and "ipadSummary(" in script
+    assert "/api/ops/ipad-scenes" in script and 'role: "switch"' in script and '"aria-checked"' in script
+    assert "all nine" not in script
+    model = app_client.get("/ops/ipad-model.mjs")
+    assert model.status_code == 200 and "javascript" in model.headers["content-type"]
+    assert "export function ipadRows" in model.text and "export const GRID_MAX = 6;" in model.text
+    assert "http://" not in model.text and "https://" not in model.text
+    css = app_client.get("/ops/ops.css").text
+    assert ".ipad-row" in css and ".is-option" in css and "min-height: 44px" in css
 
 
 def test_unknown_mode_and_engine_refusals_are_plain(app_client):
@@ -385,7 +423,9 @@ def test_test_mode_change_restores_the_previous_mode(app_client):
     result = app_client.post("/api/ops/checklist/test-mode-change", json={}).json()
     assert result["mode"] == "goodnight-glow" and result["ok"] is True
     assert result["restored_to"] == "lowcountry-calm"
-    assert engine.calls[-1] == ("request_mode", {"mode_id": "lowcountry-calm", "source": "ops"})
+    # D75: the change back puts the look back still (its own source never starts a run); the test's choice is ops
+    assert engine.calls[-2] == ("request_mode", {"mode_id": "goodnight-glow", "source": "ops"})
+    assert engine.calls[-1] == ("request_mode", {"mode_id": "lowcountry-calm", "source": "ops-restore"})
 
 
 def test_test_mode_change_reports_modules_that_miss_the_window(app_client, monkeypatch):
@@ -952,7 +992,8 @@ def test_the_rehearsal_starts_only_with_the_confirm_sentence_and_never_past_ten_
     assert [name for name, _ in engine.calls] == ["rehearsal_preview", "rehearsal_preview"]
     engine.calls.clear()
     preview = app_client.get(route, params={"mode": "golden-hour", "minutes": 2}).json()
-    assert preview["preview"]["confirm"] == sentence and "lowcountry-calm" not in [
+    # D75: any look can be rehearsed, the idle look included
+    assert preview["preview"]["confirm"] == sentence and "lowcountry-calm" in [
         m["id"] for m in preview["modes"]
     ]
     started = app_client.post(route, json={"mode": "golden-hour", "minutes": 2, "confirm": sentence})

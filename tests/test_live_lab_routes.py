@@ -86,7 +86,7 @@ def test_the_fixtures_are_the_planned_shapes():
         "git_changed",
         "version_exists",
     }
-    assert set(live["scenes"][0]) == {"id", "name", "source", "palette", "mood", "held"}
+    assert set(live["scenes"][0]) == {"id", "name", "source", "palette", "mood", "held", "on_ipad"}
     assert set(live["history"][0]) >= {
         "id",
         "kind",
@@ -164,6 +164,39 @@ def test_every_answer_has_the_fixtures_shape(no_threads):
     assert shape_problems(scene_example["show_looks"], out["catalog"]["show_looks"]) == []
     assert shape_problems(scene_example["state_show_looks"], out["state"]["show_looks"]) == []
     assert next(s for s in out["catalog"]["scenes"] if s["id"] == TIDES)["repaint"] is None  # not painted
+
+
+def test_the_catalog_and_live_say_which_scenes_are_on_the_ipad(app_client):
+    """D76: the Lab reads /ops's "Show on the iPad" switches (never sets them): CatalogJSON carries each scene's
+    option_of, group and on_ipad, LiveJSON its on_ipad, so "On the iPad now" follows /ops."""
+    app_client.app.state.services.settings.kiosk.hidden_scenes = [GOLDEN]  # as the /ops switch does: in place
+    catalog = app_client.get("/api/lab/catalog")
+    assert catalog.status_code == 200, catalog.text
+    scenes = {s["id"]: s for s in catalog.json()["scenes"]}
+    assert (scenes[GOLDEN]["on_ipad"], scenes[GOLDEN]["option_of"], scenes[GOLDEN]["group"]) == (
+        False,
+        None,
+        GOLDEN,
+    )
+    assert all(s["on_ipad"] is True and s["group"] == sid for sid, s in scenes.items() if sid != GOLDEN)
+    live = app_client.get("/api/lab/live")
+    assert live.status_code == 200, live.text
+    on = {s["id"]: s["on_ipad"] for s in live.json()["scenes"]}
+    assert on[GOLDEN] is False and all(v is True for k, v in on.items() if k != GOLDEN)
+    # the examples the Lab page builds against carry the keys too
+    assert {"option_of", "group", "on_ipad"} <= set(fixture("catalog_scene.json")["scene"])
+    for name in (
+        "live",
+        "live_approved",
+        "live_published",
+        "live_held",
+        "live_repainting",
+        "live_fallback",
+    ):
+        assert all(s["on_ipad"] is True for s in fixture(f"{name}.json")["scenes"]), name
+    assert all(s["on_ipad"] is True for s in fixture("publish_ok.json")["live"]["scenes"])
+    app_client.app.state.services.settings.kiosk.hidden_scenes = []
+    assert all(s["on_ipad"] for s in app_client.get("/api/lab/catalog").json()["scenes"])
 
 
 def test_the_live_routes_are_ops_only_and_same_origin(app_client_auth):

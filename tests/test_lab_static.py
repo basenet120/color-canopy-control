@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SHOWCASE = ROOT / "web" / "ops" / "showcase"
 LAB_FILES = ("lab.js", "lab.css", "lab-model.mjs")
 DEMO_MODEL_URL = (
-    "./demo-model.mjs?v=show-design-3"  # the URL studio.js imports: one module instance on the page
+    "./demo-model.mjs?v=show-design-4"  # the URL studio.js imports: one module instance on the page
 )
 # demo-model's handoff palette and the painters that fall back to it (demo-model.mjs scenePainters): under a Draft
 # label they would show Paris's handoff colours, not the draft's
@@ -67,14 +67,16 @@ def test_only_the_page_model_paints():
 
 def test_the_studio_has_the_four_hooks_and_still_loads_studio_js():
     html = _text("index.html")
-    assert '<link rel="stylesheet" href="./lab.css?v=lab-9">' in html
+    assert '<link rel="stylesheet" href="./lab.css?v=lab-11">' in html
     assert html.index("studio.css") < html.index("lab.css")
     assert '<a class="text-link" href="#lab" id="lab-link">Design Lab</a>' in html
     assert '<section id="lab" class="lab" aria-label="Design Lab" hidden></section>' in html
-    assert '<script type="module" src="./studio.js?v=screen-2"></script>' in html
-    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-9"')
+    assert '<script type="module" src="./studio.js?v=screen-3"></script>' in html
+    assert html.index('src="./studio.js') < html.index('src="./lab.js?v=lab-11"')
     # one module instance of the page model: lab.js imports it at the same version the page loads lab.js
-    assert 'from "./lab-model.mjs?v=lab-9"' in _text("lab.js")
+    assert 'from "./lab-model.mjs?v=lab-11"' in _text("lab.js")
+    # ... and of demo-model: the Studio and the Lab import it at one tag (D75 bumped it with paintCanopy's levels)
+    assert f"from '{DEMO_MODEL_URL}'" in _text("studio.js")
 
 
 def test_the_lab_has_one_alert_region_and_the_simulator_badge():
@@ -198,6 +200,33 @@ def test_the_lab_calls_only_its_own_routes_and_never_sends_a_live_setting():
     ]
 
 
+def test_make_this_the_scene_is_a_working_draft_never_a_request():
+    """D76: "Make this the scene" swaps the base's working draft for the option's design, in the browser (Undo brings
+    it back); the base's Publish saves and publishes it. No new route, no new switch."""
+    js = _code(_text("lab.js"))
+    promote = _function(js, "promoteToBase")
+    for needle in ("M.promoteDraft(", "persist(base)", "M.undoPush(L.undo[base]", "window.confirm("):
+        assert needle in promote, needle
+    assert "api(" not in promote
+    assert "M.draftEquals(draft, L.working[base])" in promote  # nothing to make: say so, change nothing
+    assert promote.index("window.confirm(") < promote.index("L.working[base] = draft")
+    # the confirm and the done notice say when the option's stepped timing replaces the base's (C-R2-4)
+    took = 'notes.includes("took-motion")'
+    assert f"M.PROMOTE_COPY.question(optionName, baseName, {{ motion: {took} }})" in promote
+    assert "M.promoteNotes(notes, optionName, baseName)" in promote
+    assert "text: M.PROMOTE" in js and "scene.option_of ?" in js
+    editor = _function(js, "rebuildEditor")
+    assert "M.promoteTakesMotion(d, { baseStepped: !!(baseScene && baseScene.stepped) })" in editor
+    assert "M.PROMOTE_COPY.title(d.name, sceneName(scene.option_of), { motion: promoteMotion })" in editor
+    assert "onclick: promoteToBase" in js
+    # an option sits under its base in the list, and a scene /ops took off the iPad says so
+    scenes = _function(js, "renderSceneList")
+    assert '" is-option"' in scenes and "on_ipad === false" in scenes and '"lab-badge off-ipad"' in scenes
+    css = _code(_text("lab.css"))
+    assert ".lab-scene.is-option {" in css and ".lab-badge.off-ipad {" in css
+    assert "export const PROMOTE = " in _text("lab-model.mjs")
+
+
 def test_the_lab_offers_every_field_kind():
     """The layout picker's kinds are the server's field kinds (D74 adds fins), lab.js builds its buttons from the page
     model's list, and Mirror is disabled wherever the page model says the kind has no transform (fins)."""
@@ -230,6 +259,44 @@ def test_the_motion_lines_come_from_the_page_model():
     assert "M.rippleLine(schedule, liveStagger)" in render and "M.sentence(st.stepsWhen)" in render
     assert "M.steppedSectionClause(x, L.catalog.live)" in js and "live off until Gate R" not in js
     assert "M.sentence(shownSt.stepsWhen)" in _function(js, "renderPresent")
+
+
+def test_the_motion_hints_follow_the_kind_of_motion():
+    """Review B-R3-2: the Motion section's layout and lag hints come from the page model's controls for the draft's
+    kind of motion (travel moves the layout; a breath keeps it in place; a shimmer's lag is its seed's spread), drawn
+    when the section is built and swapped by syncMotionEditor whenever the kind changes."""
+    js = _code(_text("lab.js"))
+    section = _function(js, "motionSection")
+    assert 'h("span", { id: "lab-design-how", text: c.designHow })' in section
+    assert 'h("p", { id: "lab-lag-how", class: "lab-muted lab-tight", text: c.lagHow })' in section
+    assert "MOTION_COPY.design" not in section and "MOTION_COPY.lag" not in section
+    sync = _function(js, "syncMotionEditor")
+    assert 'const designHow = $("#lab-design-how");' in sync
+    assert "if (designHow) designHow.textContent = c.designHow;" in sync
+    assert 'const lagHow = $("#lab-lag-how");' in sync
+    assert "if (lagHow) lagHow.textContent = c.lagHow;" in sync
+
+
+def test_the_breath_preview_plays_the_paces_own_steps_with_their_levels():
+    """D75 (review B-R5-TS-5): the page model's `paceSteps` and `viewPainter` are pinned in lab-model.test.mjs; this pins
+    that lab.js calls them. motionPaint plays the pace's own steps (at "Show box today" the show box's program over the
+    modules it drives, review B-R1-3, not the nine-module one) and hands each step's per-module levels to the painter;
+    paintStage passes a per-head level function through to paintCanopy as it is, else the one level."""
+    js = _code(_text("lab.js"))
+    motion = _function(js, "motionPaint")
+    assert "const step = M.paceSteps(st, tl.pace)[at.index];" in motion
+    assert "st.steps[" not in motion  # never the nine-module program whatever the pace
+    assert (
+        "paint: { step: { colours: step.colours, positions: where.positions, levels: step.levels || null } }"
+        in motion
+    )
+    stage = _function(js, "paintStage")
+    assert "const painter = M.viewPainter(preview, view, paint);" in stage
+    assert (
+        'const level = typeof p.level === "function" ? p.level : Number.isFinite(Number(p.level)) ? Number(p.level) : 100;'
+        in stage
+    )
+    assert "paintCanopy(st.view, p.head, p.spill, level);" in stage
 
 
 def test_the_tier_lists_moving_lines_show_only_while_the_steps_play():

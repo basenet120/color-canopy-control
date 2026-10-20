@@ -243,6 +243,21 @@ def test_the_shows_own_load_checks_hold_a_published_trio_too(tmp_path, why, sett
         L.validate_trio(PINK.dump(), git=GIT, settings=settings, canopy=CANOPY)
 
 
+def test_a_published_trio_that_regroups_a_scene_is_refused():
+    """option_of (the iPad's scene groups, D76) is git's, like the ids and ladders: a publication that moves a scene
+    under another base is unusable, and a scene that keeps git's (None, left out of the dump) validates."""
+    dump = GIT.dump()
+    assert all("option_of" not in s for s in dump["scenes"]["scenes"])  # left out while unset: byte-identical
+    L.validate_trio(dump, git=GIT, settings=SETTINGS, canopy=CANOPY)
+    regrouped = GIT.dump()
+    regrouped["scenes"]["scenes"][1]["option_of"] = "lowcountry-calm"
+    with pytest.raises(
+        ConfigError, match=r"scene 'rainbow-row-sunset' → option_of: 'lowcountry-calm' isn't"
+    ) as exc:
+        L.validate_trio(regrouped, git=GIT, settings=SETTINGS, canopy=CANOPY)
+    assert "config/scenes.yaml's None" in str(exc.value) and "the Lab never changes it" in str(exc.value)
+
+
 def test_an_oversized_file_is_never_read(tmp_path, monkeypatch):
     path = write_document(tmp_path, publication_document(PINK))
     monkeypatch.setattr(L, "MAX_BYTES", 100)

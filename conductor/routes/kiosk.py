@@ -3,7 +3,8 @@
 Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principals to `/kiosk`, `/api/kiosk/*`,
 `/api/ws-ticket`, `/api/version` and `/static/*`.
 
-- `GET  /api/kiosk/modes`   the six modes: `[{id, label, blurb, preview, pattern, feature, tier, module_colours}]`.
+- `GET  /api/kiosk/modes`   the modes the iPad offers (kiosk.hidden_scenes left out, D76):
+                            `[{id, label, blurb, preview, pattern, feature, tier, module_colours}]`.
                             `preview` is the mode's colour swatch (config/modes.yaml); `pattern` says how the kiosk's
                             illustrated canopy spreads those colours *at the tier the engine would use now* ("modules"
                             at T3 and stepped — a stepped plan's colours are its still design, the hold — and for a
@@ -19,7 +20,7 @@ Who: an enrolled kiosk, or ops. The auth middleware already keeps kiosk principa
                             While the engine commissions slots, the kiosk sees "resting" ("being set up"): no look is
                             changing, so it never says "Changing the light…".
 - `POST /api/kiosk/select`  `{"mode": "<id>"}` (JSON only) → `engine.request_mode(mode, source="kiosk")` → state.
-                            200 only when the engine accepted the choice.
+                            200 only when the engine accepted the choice. A hidden mode is unknown here (404).
 
 Plain refusals (never an error code on the guest's screen — the page turns these into calm copy):
   cooldown → 429 {detail, retry_after_s} (+ Retry-After) · guest input paused → 423 · unknown mode → 404 ·
@@ -478,6 +479,17 @@ def _modes_or_503(services: Any) -> list[dict[str, Any]]:
         raise HTTPException(status_code=503, detail=RESTING) from None
 
 
+def _hidden(services: Any) -> frozenset[str]:
+    """The ids kiosk.hidden_scenes takes off the iPad (D76, conductor/ipad_menu.py); none when it can't be read."""
+    try:
+        from conductor import ipad_menu  # lazily: guest_panel imports this module
+
+        return frozenset(ipad_menu.live_menu(services).hidden)
+    except Exception:  # the listing still serves; ops sees the log line
+        log.exception("The kiosk couldn't read the iPad's scene menu; it hides nothing.")
+        return frozenset()
+
+
 # ---- routes ------------------------------------------------------------------------------------------------------
 def _likely_plan(engine: Any, mode_id: str, current: ModePlan | None) -> ModePlan | None:
     """The plan the engine shows (or would pick now) for `mode_id`: the tier decides how the kiosk draws it."""
@@ -496,7 +508,8 @@ def _likely_plan(engine: Any, mode_id: str, current: ModePlan | None) -> ModePla
 @router.get("/api/kiosk/modes")
 def modes(request: Request) -> JSONResponse:
     services = services_of(request)
-    listing = _modes_or_503(services)
+    hidden = _hidden(services)
+    listing = [m for m in _modes_or_503(services) if m["id"] not in hidden]
     engine = services.extras.get(ENGINE_KEY)
     if engine is not None:
         try:
@@ -541,7 +554,7 @@ async def select(request: Request) -> JSONResponse:
         raise HTTPException(status_code=422, detail='Send {"mode": "<mode id>"}.') from None
     services = services_of(request)
     engine = _engine(request)
-    if body.mode not in {m["id"] for m in _modes_or_503(services)}:
+    if body.mode not in {m["id"] for m in _modes_or_503(services)} or body.mode in _hidden(services):
         raise HTTPException(status_code=404, detail=UNKNOWN)
     # The published state first: a paused kiosk or a running cooldown is refused whatever the engine does.
     current = _engine_state(engine)

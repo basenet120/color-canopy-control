@@ -1108,6 +1108,187 @@ orientation question: **p14** (all 270 drawn lights sit on the p14 lattice; 150 
   stays outside `live.config_sha` on purpose (widening it would flag every saved Lab version and publication at
   deploy; published trios are re-validated against the loaded canopy at every start).
 
+## 2026-10-18 — motion on every scene
+
+**D75 — Any scene may move: breathe and shimmer beside travel, a guest's choice runs first and then settles on the
+best still tier, and the idle look may breathe (off); live stays off until Gate R (supersedes D65's "the idle look
+never steps" and, for a guest's choice, "Golden Hour steps only where its canvas and slot can't run").** The
+preset-options plan (`docs/plans/preset-options/README.md` §5.2, PR B) asked for motion on every scene without
+changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are untouched (PR D adds the options), so
+`config_sha` and a Lab publication already on the show box stay valid. What is decided:
+- **What moves.** Any scene may carry one stepped rung, placed just before `[modules, strand]`. `SteppedTechnique`
+  gains `mode: travel | breathe | shimmer` (travel is D65's, unchanged, and the default). A breath keeps the design
+  in place: each module's colour moves up to `shift` (0–0.5) along the design's own t (before mirror and invert,
+  clamped, never wrapped, so a rim module never jumps to the centre's colour) and its brightness up to
+  `brightness_swing` (0–20) points either side of the rung's brightness. The waveform is one breath of
+  `steps_per_cycle` steps per module: up to a peak on a whole step, back, down, back (`compile.breath_wave`; no two
+  consecutive steps equal). `lag_steps` (0–6) makes the design's start lead the breath; a shimmer picks each
+  module's start from `seed` (sha256, the same on every run). A lagged breath (a shimmer, or a breathe with
+  `lag_steps` > 0) whose nine starts all come out equal (a seed such as 183 at lag 1, or a design whose t rounds to
+  one step at every module centre) is refused wherever a canopy is checked (the load, the scene rules, the Lab's
+  apply), on its `seed` or `lag_steps`: it would breathe as one under "on their own" or its lead words (review
+  B-R6-1). Lags are counted over the modules the plan drives, so
+  the two live kits never rest together under copy that says they move, and a breath whose driven strands would get
+  nothing for a whole step refuses to compile there (the still look holds). Step 0 is the still design in every
+  mode; the program's cycle is a breath plus its largest lag. Travel takes none of the breath's parameters ("set"
+  means not the default, so `shift: 0` on a travel rung loads).
+- **Copy says what changes.** A swing's copy says `swells and softens` / `glow and soften`; a colour-only breath
+  says `drifts and settles`; "next colour" is refused when `shift` is 0, "brighter"/"softer" when the swing is 0; a
+  breath names no flow except a lagged breathe's own start ("from the centre out"). The partial canopy's sentence
+  says "a brighter or softer level" where only levels change. The Lab's generated breath sentence names only the
+  colours the breath reaches.
+- **Brightness rides in the step's own PUT.** One full-state PUT per changed module per step, never split (07 §6).
+  A guest's brightness during a breath is **relative**: the breath swings around the guest's level, and its centre
+  moves so the whole swing fits `[kiosk.guest_brightness_min, 100]` (at 100 a swing of 4 breathes 92–100, at the
+  minimum of 10 it breathes 10–18), so every step still changes something under the moving copy; clamped level by
+  level, half a level-only breath went silent at 100 (review B-R1-1). The hold after the run is at the guest's own
+  level. This amends D60's "absolute" for breaths only (0 offset for every other plan).
+- **Which plan a source shows.** A guest's (kiosk) choice runs the rung first; an /ops choice keeps the ladder order
+  (D65: Golden Hour's canvas at once, Coastal Tides' rung); a re-pick (`reconciler`, `recovery`, `startup`, a
+  publish) never starts a run and keeps a running one's phase; start-up, the idle return, the safe look, a try-on
+  and the checklist's change back (`ops-restore`) show a still tier. "Show after publish" is an /ops choice. A floor
+  never steps. **A choice runs once:** once its run is over, a re-pick builds the runner over (DONE at once) and
+  lifts it to the best still tier (the never-ran swap); a publish with a longer `run_s` never restarts a finished run.
+  A choice whose runner can't run when it is installed (a governor cool-off, a step too long) counts as run too, so
+  a re-pick after the cool-off lifts never starts its steps mid-way (review B-R2-1; an idle breath's `run_s` is
+  spent the same way).
+- **The settle.** At a run's end the look moves to the mode's canvas or slot when that can run (one write per module
+  that changes, source `settle`; a motion plan re-triggers all nine), else the runner's module-level hold stays.
+  After a governor trip or two held steps the hold goes out now and the settle waits (the cool-off, or one cap
+  window). D72's fast back-off does **not** hold it (a build deviation from the spec): the back-off only puts guest
+  pacing back on the budget rule the run already kept, and its 120 s after a 90 s run landed past the 180 s idle
+  return, so under the soak's pinned 5% throttling Golden Hour never reached its per-head sun.
+- **Held steps.** A budget-held step is drawn as the step last sent (frames and levels frozen), and two held steps in
+  a row (`HELD_STEPS_END`) end the run on the still look and the still copy; a sent step resets the count. (Review
+  round 3: only a step that writes something resets it. A breath's step after a held one, back at the level shown,
+  writes nothing; counted as sent it let a breath whose every changing step was held run on under moving copy.)
+- **A step keeps a guest's room** (review B-R1-1). A guest's mood chosen mid-run now runs too, so a 60 s window could
+  hold the old run's steps, the mood's burst and the new run's steps: nine sends, 81 writes before any retry, and the
+  old check (the window plus the step within the cap) admitted the new run's first step at exactly 90. A step is now
+  held when the writes still in the window it shares (the executor's count less those older than 60 s less the
+  1 s per-device gap, at most one per device, which leave before the step's own are out) plus its own plus one write
+  per module on the account (a guest's burst, the share of `budget_reserve` a mood chosen mid-run needs) would pass
+  `account_writes_per_min`. In a run's steady state that is the same threshold as before (the discounted second is
+  the oldest step, one per module); a run that starts on top of another holds its first step until the room is back.
+  What no runner check can hold back (a guest's burst after the steps, 429 retries, re-asserts) lands in the rest of
+  the reserve. The rehearsal's confirm says so.
+- **The idle breath (`motion.idle`, off: `null`).** `{breathe_run_s, every_s}`: while the idle look holds with nothing
+  else in force, it breathes once for `breathe_run_s` every `every_s`, and an idle return lands as one breath. It
+  never moves the idle clocks or the guest settings, yields at once to any guest input, waits while paused, resting,
+  rehearsing, trying on or while a guest's brightness or off is in force, and runs only through `tier_allowed` (never
+  on live hardware until `live_enabled`). The show refuses `motion.idle` when the idle look has no stepped rung or
+  `breathe_run_s` fits fewer than two paced steps. Alon turns it on only after a 30-minute live soak (live_enabled
+  on, then motion.idle on, watched on /ops, `null` to revert). A breath sends nothing at its start (step 0 is the
+  hold), so a module already showing the hold counts as verified then, whether it reads ready or carries only a
+  flagged note with its look confirmed (D73, `tracker.flagged_only`: Modules 1–2's D54 note); the guest panel never
+  says "Changing the light…" while nothing is sent (review B-R4-C1).
+- **Any look can be rehearsed**, the idle look included: its own rung, or its module-level design at the D65 defaults.
+- **"This scene moves" is `Mode.moves`** (a stepped rung in the ladder). `Mode.motion` keeps its 07 §6 meaning (the
+  on-device all-or-none burst flag): it stays false, and the schema now refuses `motion: true` beside a stepped rung
+  (`scene_rules` "static" and `live.validate_trio` would refuse it anyway). PR D's brief must write no `motion:` key
+  and assert `mode.moves and not mode.motion`.
+- **Resting modules keep their rolling reads** during a run (a lagged breath leaves modules unwritten for several
+  steps), so the true-up still heals an out-of-band change on a resting module within 10 s.
+- **The Lab and the panels.** The Lab edits the kind of motion and the breath's parameters (lab-10), previews each
+  step's per-module levels, exports added `mode` / `brightness_swing` / `lag_steps` lines under `techniques →
+  stepped`, and says when a rung under higher rungs runs ("When a guest chooses …"). Its "Show box today" pace plays
+  the show box's own program (`today_steps`: lags over the two kits, so its cycle differs from the nine's) and, when
+  that compile refuses (a breath resting on both kits for a step), says the show box holds still (`today_error`)
+  instead of playing the nine-module steps (review B-R1-3). The try-on stays still at module
+  level (D66, unchanged). The guest panel's `steps` motion carries per-panel `levels`, drawn as opacity
+  (breathe-1).
+- **Live off.** `motion.stepped.live_enabled` stays false and `motion.idle` null: nothing changes on real lights
+  until Gate R (recommended on nine with a breathe look) and Alon's PRs.
+- **Superseded:** D65's "the idle look never steps (the show refuses to load otherwise)" and "Golden Hour steps only
+  where its canvas and slot can't run" for a guest's choice; the plan §5.2 names `lag_per_ring` / `steps_per_breath`
+  are built as `lag_steps` / `steps_per_cycle` (steps per breath).
+- **Soak deltas** (`make soak`, seed 0, `docs/reports/sim-acceptance.md`; `config/sim/acceptance.yaml` untouched;
+  against `origin/claude/flagged-not-changing`'s report). Main run: a guest's Golden Hour now steps first, so
+  accepted changes by tier went canvas 73 → 51, stepped 19 → 40 (modules 78 → 77), 16 runs then settled onto their
+  canvas or slot, and the simulator took 5129 writes (3133). The settle row's p95 is 4.49 s on this seed (5.19 s,
+  FAIL since D72): the random path moved with the cap rule below; it is not a fix of D72's known cost, which fails on
+  most seeds. Every pinned row passes. **Ripple delta:** 60 of 60 changes landed ring by ring (48 + 12 one-burst
+  before), because a guest's Golden Hour lands at module level and steps instead of as T1's SIMULATED motion burst;
+  settled p95 6.41 s (7.09; ≤ 7.4), per-ring spread p95 2.50 s (2.20; reported). Stepped scenario: six scenes and
+  all three kinds (Garden a SIMULATED breathe, Sunset a shimmer, Goodnight a level-only breathe, Calm travel), 153
+  steps landed (124), 0 superseded, failed or skipped, one PUT per changed module per step, at most 72 program PUTs
+  and **82 writes of any kind** in any 60 s (87; 91 before the review's cap fix), 9 finished runs settled canvas 5 /
+  stepped 4, the idle return still at 180.5 s, no governor trip or downgrade. Over seeds 0–15 of that scenario the
+  most writes in 60 s is 80–89 (86–92 before the cap fix, above 90 on seeds 0 and 7), with no run ended by held
+  steps (31 single holds over the 16 seeds, mostly a run's first steps on top of another run's). The 89 is eight
+  steps already sent plus a guest's mood burst: the reserve's case, which no runner check can hold back.
+- **A step a pinned fault made a module miss is counted on its own** (review B-R1-2). When Hubspace answers 429 on
+  every attempt of a module's step write (the executor gives up) or the simulator silently drops it (or its
+  re-send), the next step carries that module, by design (the reconciler re-sends a failed write only while the
+  next step is more than 2 s away). The soak's landing row gates on 0 steps superseded otherwise and bounds the
+  fault-carried ones by the writes those faults hit. The faults' random path moves with any config change: a Lab
+  export of Coastal Tides as a breath had failed `test_short_soak` on two such steps (each a module answered 429
+  three times). Over seeds 0–15 one step (seed 6: a 429, then a silent drop) was carried that way and none was
+  superseded otherwise.
+
+**D76 — The iPad review menu: options grouped in rows, cards drawn at the tier in use, hide without a deploy, "Make
+this the scene" (Oct 18, preset-options PR C; plan docs/plans/preset-options/README.md §6).** A scene may name
+`option_of: <base id>` (config/scenes.yaml): one level deep, and the base must be a scene in the same catalog. While
+more than six scenes are visible (`GRID_MAX`, one number in conductor/ipad_menu.py, web/kiosk/panel-model.mjs and
+web/ops/ipad-model.mjs), the iPad shows the review menu: one row per scene group with its options side by side, each
+group starting at the left, and only the scene list scrolls under a pinned Now Showing and brightness. At six or
+fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the live iPad until PR D adds options.
+- **The cards draw each scene at the tier the engine would show it at now.** Every visible scene's likely plan, the
+  rule /api/kiosk/modes already uses for every listed mode (`routes.kiosk._likely_plan`: the plan showing now when it
+  is that scene's, else `compile_best`, which honours the reconciler's hysteresis floor). Per light only when that
+  plan is canvas or slot (T1/T2); its nine module colours at module level and the stepped hold; and for a
+  whole-strand look, including a modules- or stepped-first scene the reconciler has eased down to its strand rung
+  (the idle Lowcountry Calm among them), the one colour that plan puts on each panel it drives (`basis: "strand"`,
+  `ipad_menu.plan_thumb` over `canopy_view.plan_picture`, which shares `lit_state`'s colour rule, so the card is the
+  claim Now Showing makes for that plan; every strand look in git is one rgb colour). Review round 3 (C-R3-1) chose
+  this over keeping the palette strip there: the strip's 30-colour gradient in the box where the other cards show
+  the ceiling is a picture the ceiling never shows. A look the strand plays on its own (a preset or program; none in
+  git) makes no colour claim on Now Showing, so its card has no thumbnail and keeps the palette strip, the scene's
+  colours rather than a picture of the ceiling. This is part of question 1: a labelled design view would change it
+  too. A card lights only the positions that plan drives, as Now Showing does
+  (`guest_panel.driven_positions`; with no plan, the positions with a device registered): a position with no device
+  is left out of every look (D62), so on the two-kit show box every card shows two lit panels and seven dark ones,
+  never nine. That is one compile per visible scene per poll, as /api/kiosk/modes pays (22–28 ms for 18 scenes on
+  the sim engine). Plan §5.4 said the iPad picture shows the per-light design, but
+  CLAUDE.md's copy rule and the panel's own rule ("a picture is copy too") say the card must be what the lights can
+  show; on the show box that is module level until per-light is commissioned. Alon's question 1 in the PR: keep the
+  tier-true cards, or add a labelled per-light design view (new client copy). Thumbnails appear only in the review
+  menu; the six-card grid keeps its palette strips (the question for PR E is in STATUS).
+- **Card thumbnails draw no fins** and use a thumbnail dot radius (`DOT_R_IN` × the card's scale; integration
+  conflict C12, option b): the nine panels as hairlines and the heads as dots, still, brightness as opacity. They are
+  computed on the server (`ipad_menu.catalog_thumbs`, from `routes.design.mode_design`), cached per scene, per
+  live-looks generation and basis, and drawn on a rebuild or resize only (D69). The card key carries the thumbnail's
+  `sig` (its full-strength colours) and the scene's `brightness_draft` (its opacity), so a brightness-only publish
+  repaints the card too.
+- **`kiosk.hidden_scenes`** (git default `[]`, one foldable line in config/conductor.yaml) has an ops overlay,
+  `<data>/overrides/settings.yaml` (`{kiosk: {hidden_scenes: [ids]}}`), written by the /ops "On the iPad" switches
+  atomically at 0600 with a history copy. The overlay replaces git's list; it never fails a start (a file that can't
+  be used leaves git's list in force with an /ops "Needs attention" line, as 07 §8 asks). Ids that aren't scenes now
+  and the idle scene's id hide nothing, are named on /ops, and the next switch drops them. The /ops overlay download
+  folds the list in force back into config/conductor.yaml as a `git apply` hunk, so 07 §8 needs no edit. The
+  setting is changed in place (`services.settings` is never rebound: the engine keeps the object).
+- **A hidden scene** leaves the cards, the attract screen and both kiosk choose routes (the calm 404). It stays in
+  the catalog: ops can still choose it (the picker says "(off the iPad)"), the Design Lab still edits it, and while
+  it is showing the iPad still names it in Now Showing (the panel's `showing`). The idle scene (`kiosk.idle_mode`, and
+  `kiosk.idle_scene` when set) can never be hidden: git's list refuses it at load, the switch answers 409.
+- **"Make this the scene"** is client-side in the Lab, with no new route: `promoteDraft` copies the option's palette,
+  layout, sample, brightness, solid colour and description into the base's working draft (the description is the
+  option's, so the base's Now-showing line stays true of the design it now has), keeps the base's id, name and mood,
+  never adds or drops a stepped rung, and resets the copy choices to auto. When the base has a stepped rung and the
+  option has stepped timing, the option's motion is copied too (direction, steps per cycle, step time and run
+  length), and the button's title, the confirm question and the done notice say so (`promoteTakesMotion`, the
+  "took-motion" note). Undo brings the base's draft back; the base's Publish saves and publishes it. The base's
+  name keeps any "#1" until PR E or a Lab rename at the session (C27).
+- **The export prompts for the sign-off instead of claiming it.** A base whose palette and module-level field equal
+  one of its options' (and differ from its own design in git) gets a "Made the scene on site" line directly after
+  the D59 line, asking whoever exports to add who chose it and when: that choice is the D59 sign-off for its colours.
+  The record is inferred, never stored (Version and SceneDraft are extra=forbid, so older Conductors still read saved
+  versions); a later tweak of the base drops the line, and the D59 line still asks for the sign-off.
+- **`option_of` is left out of every dump while unset**, so a catalog with no options dumps exactly as before
+  (`trio_sha`, published looks, the scene pins). It is pinned like the ids: a published trio or a Lab draft can never
+  regroup a scene (validate_trio, the Lab's shape check).
+- Lab exports made before D77 lands propose a reserved D-number (`_next_decision` is max + 1); renumber by hand.
+
 **D78 — A module whose only problem is a flagged note shows its look on the iPad's picture (Oct 19; follows D73).**
 D73 makes such a module "stuck" at once, and `canopy_view.lit_state` drew every stuck module as `unknown` (an outline,
 no colour), so the live iPad drew Modules 1–2 as outlines right after every confirmed scene (before D73, 10 s later)

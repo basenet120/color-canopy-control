@@ -49,16 +49,23 @@ Rules implemented:
   a new colour still arrives in the design's order. The order is the design's geometry before `cycles`, `mirror` and
   `invert`: a ripple starts where the layout words say the design starts ("from the centre out" stays centre first
   when the palette runs inwards). A mode with no design, or a module with no canopy position, gets None (one burst).
-- **A stepped look (Tier.STEPPED, D65).** The plan's `modules` are the hold: the mode's static module-level
-  look (`_modules`), which the schema makes the stepped design's own canvas at the module centres. `program.steps[n]`
-  is that design with its field shifted by n / `steps_per_cycle` of one repeat (`field.value` phase; `forward` flows
-  the way the layout words read, `reverse` back), one full state vector per driven module (power, colour mode, RGB,
-  brightness, speed, party off — never a slot object), so step 0 is the hold, checked. `motion` stays False: the
-  Conductor holds the phase, so one module's re-send of the current step is correct (07 §6's one burst is for
-  on-device motion). `feature` is the hold's sentence (nothing moves until a runner steps it); the moving copy is
+- **A stepped look (Tier.STEPPED, D65, D75).** The plan's `modules` are the hold: the mode's static module-level
+  look (`_modules`), which the schema makes the stepped design's own canvas at the module centres. Every step is one
+  full state vector per driven module (power, colour mode, RGB, brightness, speed, party off — never a slot object),
+  colour and brightness in the same vector (`ProgramStep.levels` records the level), so step 0 is the hold, checked.
+  The steps are `step_looks`: `mode: travel` (D65) shifts the design's field by n / `steps_per_cycle` of one repeat
+  (`field.value` phase; `forward` flows the way the layout words read, `reverse` back); `mode: breathe` / `shimmer`
+  (D75) keep it in place and give each module one breath (`breath_wave`) of `steps_per_cycle` steps at its own lag
+  (`module_lags`, counted over the driven strands, so the earliest driven strand starts at once), its colour offset
+  along the design's t (clamped) and its level swung around the rung's brightness; the cycle is steps_per_cycle plus
+  the largest lag (`program_cycle`). A breath with a step where every driven strand would be sent nothing (they all
+  rest) doesn't compile: its moving copy wouldn't be true, so the ladder lands on the still rung. `motion` stays
+  False: the Conductor holds the phase, so one module's re-send of the current step is correct (07 §6's one burst is
+  for on-device motion). `feature` is the hold's sentence (nothing moves until a runner steps it); the moving copy is
   `program.moving_feature`: the mode's own on the full canopy, a count of the driven strands with no canopy pattern
-  on a partial one, "set to one colour" when every step is one colour across the strands, and the hold's sentence
-  when no step differs from the hold (nothing would move).
+  on a partial one, "set to one colour" when every step is one colour across the strands — each saying what the
+  strands are sent (their next colour, a brighter or softer level, or both, from the plan's own steps) — and the
+  hold's sentence when no step differs from the hold (nothing would move).
 - `ModuleTarget.preview` is `render.head_colors` of the intended result, per head in wire order (read through the
   kit's map when it has one); `ModuleTarget.colors` is the same render with the brightness row at 100 (full-strength
   colours for the guest panel, which shows the level on its own).
@@ -66,6 +73,7 @@ Rules implemented:
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -891,17 +899,19 @@ def _half_up(x: float) -> int:
 
 
 def _sampled_rgb(
-    sample: ModuleSample, entry: DeviceEntry, ctx: CompileContext, phase: float = 0.0
+    sample: ModuleSample, entry: DeviceEntry, ctx: CompileContext, phase: float = 0.0, offset: float = 0.0
 ) -> tuple[int, int, int]:
     """The sample's one RGB colour for this module: the canvas at the module's centre, or its heads' mean. `phase`
-    shifts a field canvas's design (a stepped look's steps)."""
+    shifts a field canvas's design (a travel look's steps); `offset` moves its colour along the design's t, clamped
+    (a breathe/shimmer look's steps, `composer.evaluate`)."""
     assert ctx.canopy is not None and ctx.recipes is not None
     if sample.at == "centre":
         points = list(F.module_centres(ctx.canopy, [str(entry.module)]).values())
     else:
         points = head_positions(ctx.canopy, placement_for(ctx.canopy, entry, frame_length=None))
     colours = [
-        evaluate(sample.canvas, x, y, canopy=ctx.canopy, recipes=ctx.recipes, phase=phase) for x, y in points
+        evaluate(sample.canvas, x, y, canopy=ctx.canopy, recipes=ctx.recipes, phase=phase, offset=offset)
+        for x, y in points
     ]
     # rgb_only (the schema insists): a colour level dims the RGB itself, since a strand look has one brightness
     channels = [
@@ -968,31 +978,118 @@ def _hex(rgb: Sequence[int]) -> str:
     return "#" + "".join(f"{c:02X}" for c in rgb)
 
 
+def breath_wave(k: int, n: int) -> float:
+    """Where a module is in its breath of `n` steps at its own step `k` (D75): 0 at rest, up to +1, back through 0
+    to −1 and back up, peaking on a whole step (p = ⌊n/4 + ½⌋ steps up). 0 before (k < 0) and after (k ≥ n) the
+    breath; no two consecutive steps of a breath are equal and its last step isn't 0, so every step changes."""
+    if k < 0 or k >= n:
+        return 0.0
+    p = math.floor(n / 4 + 0.5)
+    if k <= p:
+        return k / p
+    if k <= n - p:
+        return 1.0 - 2.0 * (k - p) / (n - 2 * p)
+    return -1.0 + (k - (n - p)) / p
+
+
+def module_lags(
+    tech: SteppedTechnique, positions: Sequence[str], canopy: Mapping[str, Any]
+) -> dict[str, int]:
+    """Each position's breath start in steps (D75), counted over the positions given (the plan's driven modules;
+    all nine in the scene rules and the Lab), so the earliest is 0. travel, or lag_steps 0: all 0. breathe: the
+    design's start leads (lag_steps × the design's own t at the module centre, before repeat, mirror and invert).
+    shimmer: each position's own seeded start, 0…lag_steps (the same on every run)."""
+    if tech.mode == "travel" or tech.lag_steps == 0:
+        return {pos: 0 for pos in positions}
+    if tech.mode == "breathe":
+        plain = tech.canvas.field.model_copy(update={"cycles": 1, "transform": "linear", "invert": False})
+        raw = {
+            pos: _half_up(tech.lag_steps * F.value(plain, x, y, canopy))
+            for pos, (x, y) in F.module_centres(canopy, positions).items()
+        }
+    else:
+        raw = {
+            pos: int(hashlib.sha256(f"{tech.seed}:{pos}".encode()).hexdigest(), 16) % (tech.lag_steps + 1)
+            for pos in positions
+        }
+    low = min(raw.values(), default=0)
+    return {pos: lag - low for pos, lag in raw.items()}
+
+
+def program_cycle(tech: SteppedTechnique, lags: Mapping[str, int]) -> int:
+    """How many steps a program repeats after: travel's steps_per_cycle; a breath's steps_per_cycle plus the largest
+    lag (every module breathes once per cycle, at its own lag)."""
+    if tech.mode == "travel":
+        return tech.steps_per_cycle
+    return tech.steps_per_cycle + max(lags.values(), default=0)
+
+
+def step_looks(
+    tech: SteppedTechnique, entries: Sequence[DeviceEntry], ctx: CompileContext
+) -> list[dict[str, LookSpec]]:
+    """Every step of the program, each a position → strand look (one RGB colour at one brightness), lags over the
+    entries' positions. Travel (D65): the design shifted n / steps_per_cycle of a repeat, at the rung's brightness.
+    Breathe/shimmer (D75): w = `breath_wave`(n − the module's lag); the colour offset by sign·shift·w along the
+    design's t (clamped) and the brightness + ½-up(swing·w). `forward` is sign −1 (a colour moves on to higher t,
+    as travel's does). Step 0 is the still design in every mode."""
+    assert ctx.canopy is not None
+    sample = ModuleSample(canvas=tech.canvas, at="centre", brightness=tech.brightness)
+    sign = -1.0 if tech.direction == "forward" else 1.0
+    lags = module_lags(tech, [str(e.module) for e in entries], ctx.canopy)
+    out: list[dict[str, LookSpec]] = []
+    for n in range(program_cycle(tech, lags)):
+        step: dict[str, LookSpec] = {}
+        for e in entries:
+            pos = str(e.module)
+            if tech.mode == "travel":
+                rgb = _sampled_rgb(sample, e, ctx, phase=sign * n / tech.steps_per_cycle)
+                level = tech.brightness
+            else:
+                w = breath_wave(n - lags[pos], tech.steps_per_cycle)
+                rgb = _sampled_rgb(sample, e, ctx, offset=sign * tech.shift * w)
+                level = tech.brightness + _half_up(tech.brightness_swing * w)
+            step[pos] = LookSpec(kind="rgb", rgb=rgb, brightness=level)
+        out.append(step)
+    return out
+
+
 def _stepped(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEntry]) -> ModePlan:
     tech: SteppedTechnique | None = mode.techniques.stepped
     assert tech is not None and ctx.canopy is not None
     # The hold: the static module-level look (its copy, notes, previews and checks — every module takes RGB).
     plan = _modules(mode_id, mode, ctx, devices)
-    sample = ModuleSample(canvas=tech.canvas, at="centre", brightness=tech.brightness)
-    sign = -1.0 if tech.direction == "forward" else 1.0  # forward: a colour moves on to higher t (outwards)
     # An RGB look clamps nothing a note would report (its brightness is the hold's, checked below).
     unused = _Notes()
     steps = []
-    for n in range(tech.steps_per_cycle):
+    for n, by_pos in enumerate(step_looks(tech, devices, ctx)):
         rows: dict[str, list[StateRow]] = {}
         colours: dict[str, str] = {}
+        levels: dict[str, int] = {}
         for d in devices:
             c = ctx.caps(d.id)
-            rgb = _sampled_rgb(sample, d, ctx, phase=sign * n / tech.steps_per_cycle)
-            look = _to_look(LookSpec(kind="rgb", rgb=rgb, brightness=tech.brightness), c, unused, d.id)
+            pos = str(d.module)
+            spec = by_pos[pos]
+            look = _to_look(spec, c, unused, d.id)  # the device's brightness range clamps the level
             rows[d.id] = _vector(look, c)
-            colours[str(d.module)] = _hex(rgb)
-        steps.append(ProgramStep(index=n, rows=rows, colours=colours))
+            assert spec.rgb is not None
+            colours[pos] = _hex(spec.rgb)
+            levels[pos] = look.brightness
+        steps.append(ProgramStep(index=n, rows=rows, colours=colours, levels=levels))
     if steps[0].rows != {d: t.rows for d, t in plan.modules.items()}:
         raise PlanError(
             f"{mode.label} (stepped) can't run: its first step isn't the static module-level look it holds "
             "(techniques → stepped needs the modules sample's canvas and brightness)"
         )
+    if tech.mode != "travel":
+        # a breath whose driven strands all rest for a step would show moving copy while nothing is sent
+        for n in range(len(steps)):
+            m = (n + 1) % len(steps)
+            if steps[m].rows == steps[n].rows:
+                raise PlanError(
+                    f"{mode.label} (stepped) can't run on the {len(devices)} strand(s) it drives: step {m} would "
+                    "send none of them anything (the breath rests there), so its moving copy wouldn't be true; it "
+                    "holds its still look"
+                )
     plan.tier = Tier.STEPPED
     plan.program = Program(
         kind="stepped",
@@ -1002,38 +1099,57 @@ def _stepped(mode_id: str, mode: Mode, ctx: CompileContext, devices: list[Device
         run_s=tech.run_s,
         steps=steps,
         moving_feature=tech.moving_feature,  # `_moving_feature` settles it once the driven modules are known
+        mode=tech.mode,
     )
-    plan.notes.append(
-        f"Stepped: {tech.steps_per_cycle} steps of {tech.step_s:g} s, a run of {tech.run_s:g} s, then the static "
-        "look holds (the first step is that look)"
-    )
+    if tech.mode == "travel":
+        plan.notes.append(
+            f"Stepped: {tech.steps_per_cycle} steps of {tech.step_s:g} s, a run of {tech.run_s:g} s, then the "
+            "static look holds (the first step is that look)"
+        )
+    else:
+        cycle = len(steps)
+        plan.notes.append(
+            f"Stepped, {'breathing' if tech.mode == 'breathe' else 'shimmering'}: {tech.steps_per_cycle} steps a "
+            f"breath of {tech.step_s:g} s (up to {cycle - tech.steps_per_cycle} steps apart), a cycle of {cycle} "
+            f"steps, a run of {tech.run_s:g} s, then the still look holds (the first step is that look)"
+        )
     return plan
 
 
 def _moving_feature(mode: Mode, plan: ModePlan, *, partial: bool) -> str:
-    """The copy shown while a stepped run is going, true of the strands the plan drives (see the module docstring)."""
+    """The copy shown while a stepped run is going, true of the strands the plan drives (see the module docstring):
+    what each strand is sent is what the plan's own steps change (its colour, its level, or both)."""
     assert plan.program is not None and mode.techniques.stepped is not None
     steps = plan.program.steps
     if all(s.rows == steps[0].rows for s in steps[1:]):
         plan.notes.append(STEPPED_STILL)
         return plan.feature
+    colours = any(s.colours != steps[0].colours for s in steps)
+    levels = any(s.levels != steps[0].levels for s in steps)
+    level = "a brighter or softer level"
+    if colours and levels:
+        what, what_one = f"its next colour and {level}", f"the next colour and {level}"
+    elif levels:
+        what = what_one = level
+    else:  # a travel look always: its strings are byte-identical to D65's
+        what, what_one = "its next colour", "the next colour"
     n = len(plan.modules)
     if partial:
         if n == 1:
             return (
                 "Colour and dimming through the Hubspace cloud: one Hubspace strand showing one colour from the "
-                "scene, sent its next colour every few seconds."
+                f"scene, sent {what} every few seconds."
             )
         count = "both" if n == 2 else _count_words(n)
         return (
             f"Colour and dimming through the Hubspace cloud: {count} Hubspace strands, each showing one colour from "
-            "the scene and sent its next colour every few seconds."
+            f"the scene and sent {what} every few seconds."
         )
     if all(len(set(s.colours.values())) < 2 for s in steps):
         # every strand shows the same colour at every step: there is no layout for the copy's words to describe
         return _small_counts(
             f"Colour and dimming through the Hubspace cloud: all {_count_words(n)} Hubspace strands set to one "
-            "colour from the scene, sent the next colour every few seconds.",
+            f"colour from the scene, sent {what_one} every few seconds.",
             n,
         )
     return mode.techniques.stepped.moving_feature

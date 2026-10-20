@@ -1,8 +1,9 @@
 """/api/lab/* — the Design Lab's API (ops only; docs/design-lab/PLAN.md §4). Slice A is screen only: no route here
 writes to a device, starts a look, flips `live_enabled` or the ripple, or writes into `config/`.
 
-- `GET    /api/lab/catalog`                  the six scenes as the Lab starts from them (approved drafts, designs,
-                                             copy, state vs the current version, the T1 lock), limits, live flags
+- `GET    /api/lab/catalog`                  the scenes as the Lab starts from them (approved drafts, designs,
+                                             copy, state vs the current version, the T1 lock, the option group and
+                                             whether the iPad offers it, D76), limits, live flags
 - `GET    /api/lab/state`                    the store (ok / error / set aside / read-only), the current version, the
                                              engine's flags, the try-on (null in Slice A)
 - `POST   /api/lab/preview`                  `{scene_id, draft}` → the draft through the real compiler, every tier,
@@ -71,6 +72,7 @@ from conductor.design_lab import stepped as ST
 from conductor.design_lab import store as S
 from conductor.design_lab import trial as T
 from conductor.design_lab.service import KEY, LabService, lab_of
+from conductor.ipad_menu import live_menu
 from conductor.looks import CompileContext
 from conductor.looks import field as F
 from conductor.looks import scene_rules as R
@@ -301,6 +303,8 @@ def catalog_json(lab: LabService) -> dict:
     trial = getattr(lab.engine(), "trial", None)
     trying_on = trial.mode_id if trial is not None else None
     looks = live_looks(lab.services)
+    # D76: whether the iPad offers each scene (/ops's "Show on the iPad" switches; the Lab only reads it)
+    hidden = set(live_menu(lab.services).hidden)
     scenes = []
     for scene in approved.scenes.scenes:
         mode = approved.modes.mode(scene.id)
@@ -336,6 +340,12 @@ def catalog_json(lab: LabService) -> dict:
                 "live_look": live_seed.model_dump(mode="json"),
                 "live_source": live_source,
                 "repaint": P.repaint_info(lab, scene.id),
+                # D76: the base scene this one is an option of (git's), its group, and whether the iPad offers it
+                "option_of": scene.option_of,
+                "group": scene.group,
+                "on_ipad": scene.id not in hidden,
+                # D75: when the idle look runs (the idle look with a stepped rung only; else null)
+                "idle_note": ST.idle_note(settings, scene.id, mode),
             }
         )
     driver = lab.services.engine_driver
@@ -356,6 +366,12 @@ def catalog_json(lab: LabService) -> dict:
                 "run_s_min": "step_s",  # a run is at least one step (SteppedTechnique)
                 "run_s_max": ST.run_s_max(settings),
                 "directions": ["forward", "reverse"],
+                # D75: the kind of motion and a breath's ranges (= SteppedTechnique's bounds)
+                "modes": ["travel", "breathe", "shimmer"],
+                "shift": [0.0, 0.5],
+                "shift_increment": 0.05,
+                "brightness_swing": [0, 20],
+                "lag_steps": [0, 6],
             },
             "ripple": {"stagger_s": [0.0, ST.RIPPLE_STAGGER_MAX_S], "max_rings": RIPPLE_MAX_WAVES},
             "canopy": {"width_in": lab.canopy["width_in"], "height_in": lab.canopy["height_in"]},
@@ -372,6 +388,10 @@ def catalog_json(lab: LabService) -> dict:
             ),
             "ripple_note": ST.ripple_note(settings),
             "effects_note": ST.EFFECTS_OFF,
+            # D75: the idle look's breath (motion.idle; null = off, the shipped value), shown, never a control
+            "idle_breath": (
+                settings.motion.idle.model_dump(mode="json") if settings.motion.idle is not None else None
+            ),
         },
         "scenes": scenes,
         "show_looks": PUB.show_looks_brief(lab),

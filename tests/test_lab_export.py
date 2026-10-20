@@ -559,6 +559,85 @@ def test_the_decision_draft_lists_d59_and_d63_changes():
         assert note in result.review_notes and note in decision
 
 
+# ---- D76 "Make this the scene": the promotion line --------------------------------------------------------------------------
+def _with_scene(trio: ConfigTrio, scene_id: str, **fields: Any) -> ConfigTrio:
+    """`trio` with scene `scene_id`'s fields replaced (palette as [(name, hex)])."""
+    dump = trio.scenes.model_dump(mode="json")
+    for scene in dump["scenes"]:
+        if scene["id"] == scene_id:
+            for key, value in fields.items():
+                scene[key] = [{"name": n, "hex": h} for n, h in value] if key == "palette" else value
+    return ConfigTrio(scenes=SceneCatalog.model_validate(dump), modes=trio.modes, recipes=trio.recipes)
+
+
+def _promoted(trio: ConfigTrio, base: str, option: str) -> ConfigTrio:
+    """`trio` with `base` given `option`'s palette and its module-level, stepped and painted design (what promoting
+    the option in the Lab and publishing leaves)."""
+    from conductor.looks.schema import Mode
+
+    o_scene = trio.scenes.get(option)
+    trio = _with_scene(trio, base, palette=[(c.name, c.hex) for c in o_scene.palette])
+    modes = dict(trio.modes.modes)
+    b = modes[base].model_dump(mode="json", exclude_unset=True)
+    o = modes[option].model_dump(mode="json", exclude_unset=True)
+    b["techniques"]["modules"] = o["techniques"]["modules"]
+    if "stepped" in o["techniques"] and "stepped" in b["techniques"]:
+        b["techniques"]["stepped"] = o["techniques"]["stepped"]
+    if "canvas" in b["techniques"]:
+        b["techniques"]["canvas"]["canvas"]["field"] = o["techniques"]["modules"]["sample"]["canvas"]["field"]
+    modes[base] = Mode.model_validate(b)
+    return ConfigTrio(
+        scenes=trio.scenes, modes=trio.modes.model_copy(update={"modes": modes}), recipes=trio.recipes
+    )
+
+
+def test_a_promotion_is_recorded_with_a_sign_off_prompt():
+    from tests.review_fixture import REVIEW_IDS, review_trio
+
+    review = review_trio(APPROVED)
+    patched = _promoted(review, "golden-hour", "golden-hour-2")
+    assert X.promotions(patched, ["golden-hour"]) == [
+        ("golden-hour", "golden-hour-2")
+    ]  # one pair, never #3 too
+    assert X.promotions(patched, REVIEW_IDS) == [("golden-hour", "golden-hour-2")]  # options themselves: none
+    assert X.promotions(patched, ["golden-hour"], approved=patched) == []  # already the base's design in git
+    # negatives: the review catalog as built (each option's design differs from its base's) ...
+    assert X.promotions(review, REVIEW_IDS) == []
+    # ... the option's field with the base's palette changed to another colour ...
+    recoloured = [(c.name, c.hex) for c in patched.scenes.get("golden-hour").palette]
+    recoloured[0] = (recoloured[0][0], "#123456")
+    assert X.promotions(_with_scene(patched, "golden-hour", palette=recoloured), ["golden-hour"]) == []
+    # ... and the option's palette with the base keeping its own field
+    same_palette = _with_scene(review, "golden-hour-2", palette=recoloured)
+    same_palette = _with_scene(same_palette, "golden-hour", palette=recoloured)
+    assert X.promotions(same_palette, ["golden-hour"]) == []
+
+    scene_ids = X.changed_scenes(review, patched)
+    assert scene_ids == ["golden-hour"]
+    changes = X._changes(review, patched, scene_ids, CANOPY)
+    decision = X.decision_draft(review, patched, scene_ids, changes, root=ROOT, version=_version(), now=NOW)
+    assert "Made the scene on site (D76" in decision
+    assert "Golden Hour now has Golden Hour #2's palette and layout (golden-hour-2 → golden-hour)" in decision
+    assert "If the client chose it at the review, add who chose it and when before merging" in decision
+    for line in decision.splitlines():
+        if "sign-off" in line:
+            assert "needs the client's sign-off" in line or "If the client chose it" in line, line
+    # with a D59 colour change too, the promotion line follows the D59 line, and still asserts no approval
+    both = _with_scene(patched, "golden-hour-2", palette=recoloured)
+    both = _with_scene(both, "golden-hour", palette=recoloured)
+    changes = X._changes(review, both, X.changed_scenes(review, both), CANOPY)
+    lines = X.decision_draft(
+        review, both, ["golden-hour"], changes, root=ROOT, version=None, now=NOW
+    ).splitlines()
+    d59 = next(i for i, line in enumerate(lines) if line.startswith("Approved colour changes (D59"))
+    assert lines[d59 + 1].startswith("Made the scene on site (D76")
+    # a later tweak of the base drops the line (the D59 line, which asks for the sign-off, stays)
+    tweaked = _with_scene(both, "golden-hour", palette=[*recoloured[:-1], (recoloured[-1][0], "#654321")])
+    changes = X._changes(review, tweaked, ["golden-hour"], CANOPY)
+    decision = X.decision_draft(review, tweaked, ["golden-hour"], changes, root=ROOT, version=None, now=NOW)
+    assert "Made the scene on site" not in decision and "needs the client's sign-off" in decision
+
+
 def test_a_brightness_only_edit_changes_no_approved_colour_and_no_layout():
     result = export(edit_scene(APPROVED, "goodnight-glow", brightness=30))
     assert result.problem == "" and result.approved_changes == [] and result.layout_changes == []
@@ -785,6 +864,90 @@ def test_an_export_of_applied_drafts_rereads_as_the_patched_trio(tmp_path):
     result = export(patched, version=_version())
     assert result.problem == ""
     assert X.reread(after_texts(result, tmp_path), CANOPY).dump() == patched.dump()
+
+
+def _breathe_golden(trio: ConfigTrio) -> ConfigTrio:
+    """Golden Hour → breathe (swing 5, lag 2) through S1's apply_drafts, copy auto (the generated breath sentence)."""
+    from conductor.config import ConductorSettings
+    from conductor.design_lab.draft import SceneDraft, apply_drafts, seed_draft
+
+    data = seed_draft(trio, "golden-hour").model_dump()
+    data["stepped"].update(mode="breathe", brightness_swing=5, lag_steps=2)
+    draft = SceneDraft.model_validate(data)
+    return apply_drafts(trio, {"golden-hour": draft}, canopy=CANOPY, settings=ConductorSettings())
+
+
+def test_a_change_of_motion_kind_exports_inserted_lines_that_re_read_equal(tmp_path):
+    """D75: the baseline's stepped block has no mode / brightness_swing / lag_steps lines (travel never needs them), so
+    the export adds them under techniques → stepped, at its children's indent, and the re-read trio is the patched
+    one. Going back to travel then rewrites those lines in place (explicit zeros load on a travel rung, C6)."""
+    patched = _breathe_golden(APPROVED)
+    result = export(patched, version=_version())
+    assert result.problem == ""
+    added = [x[1:] for x in result.patch.splitlines() if x.startswith("+") and not x.startswith("+++")]
+    for line in ("        mode: breathe", "        brightness_swing: 5", "        lag_steps: 2"):
+        assert line in added
+    after = after_texts(result, tmp_path)
+    assert X.reread(after, CANOPY).dump() == patched.dump()
+    lines = after[X.MODES_FILE].splitlines()
+    block = [lines[i] for i in _block(lines, "golden-hour")]
+    stepped = block[block.index("      stepped:") :]
+    assert stepped[1:9] == [
+        "        canvas: *golden-design",
+        "        direction: forward",  # the old "outwards from the sun" no longer describes the run
+        "        steps_per_cycle: 6",
+        stepped[4],  # step_s and its pace comment, unchanged
+        "        run_s: 90",
+        "        brightness: 95",
+        f"        moving_feature: {json.dumps(patched.modes.mode('golden-hour').techniques.stepped.moving_feature)}",
+        "        mode: breathe",
+    ]
+    assert stepped[9:11] == ["        brightness_swing: 5", "        lag_steps: 2"]
+    assert stepped[4].startswith("        step_s: 6")
+    assert any("Golden Hour: stepped run mode travel → breathe" in c for c in result.stepped_changes)
+    assert "mode travel → breathe, brightness_swing 0 → 5, lag_steps 0 → 2" in result.decision
+    # and back: the lines are there now, so they are rewritten where they stand
+    root = tmp_path / "breathing"
+    shutil.copytree(ROOT, root)
+    for path, text in after.items():
+        (root / path).write_text(text, encoding="utf-8")
+    breathing = X.reread(after, CANOPY)
+    travel = X.export_patch(breathing, APPROVED, root=root, canopy=CANOPY, version=None, now=NOW)
+    assert travel.problem == "", travel.problem
+    back = applied(scratch_repo_of(root, tmp_path / "back"), travel.patch)
+    assert X.reread(back, CANOPY).dump() == APPROVED.dump()
+    block = back[X.MODES_FILE].splitlines()
+    for line in ("        mode: travel", "        brightness_swing: 0", "        lag_steps: 0"):
+        assert line in block
+
+
+def scratch_repo_of(root: Path, repo: Path) -> Path:
+    """A git repo holding `root`'s config/ and fixture, committed."""
+    shutil.copytree(root / "config", repo / "config")
+    (repo / "tests").mkdir()
+    shutil.copy(root / X.FIXTURE_FILE, repo / X.FIXTURE_FILE)
+    assert _git(repo, "init", "-q").returncode == 0
+    assert _git(repo, "add", "-A").returncode == 0
+    commit = _git(repo, "-c", "user.name=lab", "-c", "user.email=lab@localhost", "commit", "-qm", "base")
+    assert commit.returncode == 0, commit.stderr
+    return repo
+
+
+def test_a_stepped_rung_written_as_a_flow_mapping_offers_no_patch_for_new_keys():
+    """The breathe keys need a line each under techniques → stepped; a flow-mapped stepped rung has no place for
+    them, so the export refuses rather than guessing (LocateError → no patch)."""
+    lines = ["    techniques:", "      stepped: {canvas: *golden-design, direction: forward}"]
+    walked = list(X._walk(lines, 0, len(lines)))
+    travel = {"mode": "travel", "shift": 0.0, "brightness_swing": 0, "lag_steps": 0, "seed": None}
+    before = {"techniques": {"stepped": travel}}
+    after = {"techniques": {"stepped": {**travel, "mode": "breathe", "brightness_swing": 5}}}
+    with pytest.raises(
+        X.LocateError, match="isn't a block mapping, so mode, brightness_swing can't be added"
+    ):
+        X._add_stepped_keys(lines, walked, {}, before, after, "golden-hour")
+    edits: dict[int, list[str]] = {}
+    X._add_stepped_keys(lines, walked, edits, before, before, "golden-hour")  # nothing new: nothing to place
+    assert edits == {}
 
 
 # ---- make scene-pins ----------------------------------------------------------------------------------------------------

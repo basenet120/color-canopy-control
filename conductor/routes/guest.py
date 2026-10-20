@@ -3,10 +3,21 @@
 Who: an enrolled kiosk or ops, with the kiosk router's own checks (kiosk role or ops; writes are JSON-only and
 same-site) — except `/api/kiosk/debug`, which is ops only (a kiosk gets 403).
 
-- `GET  /api/kiosk/panel`       `{target, target_label, simulated, viewer, scenes, capabilities, brightness_range, canopy,
-                                state, server_now}`. `target` is always "canopy" (the engine, D67; the field stays
-                                so the iPad's code is unchanged). Each scene is `{id, name, mood, description, palette: [{name, hex}],
-                                frame: [[r, g, b] × 30], solid: "#RRGGBB", brightness_draft}`. `state` is `{power,
+- `GET  /api/kiosk/panel`       `{target, target_label, simulated, viewer, scenes, showing, capabilities,
+                                brightness_range, canopy, state, server_now}`. `target` is always "canopy" (the engine,
+                                D67; the field stays so the iPad's code is unchanged). `scenes` are the scenes the iPad
+                                offers, in catalog order (kiosk.hidden_scenes left out, D76). Each scene is `{id, name,
+                                mood, description, palette: [{name, hex}], frame: [[r, g, b] × 30], solid: "#RRGGBB",
+                                brightness_draft, option_of: id | null, group: id, thumb}`: `group` is the scene's base
+                                (its `option_of`) or its own id; `thumb` is null, or — only while more than six scenes
+                                are visible (the review menu) — the card's still picture at the tier the engine would
+                                show it at now: `{sig: 12 hex, basis: "heads" | "modules" | "strand", modules: [{pos,
+                                color: "#RRGGBB" | null, colors: ["#RRGGBB" × 30] | null} × 9]}` ("heads": per light,
+                                for a scene the engine would show as canvas or slot; "modules": its nine module
+                                colours; "strand": a whole-strand plan's colour on each panel it drives; null for a
+                                look the strand plays on its own, so the card keeps its palette strip).
+                                `showing` is null, or the scene showing now when it is hidden (Now Showing still
+                                names it; `state.scene` is checked against the whole catalog). `state` is `{power,
                                 brightness, scene, look, phase, message, feature, cooldown_remaining_s, lit,
                                 waiting, next}`:
                                 power/brightness/scene are null when unknown; look is null (the engine's techniques
@@ -38,7 +49,8 @@ and the panel then draws its 30-light serpentine instead). A fixed contract:
                  modules: [{pos, state: off|dark|unknown|lit|changing,
                             color: "#RRGGBB" | null, colors: ["#RRGGBB" × 30 in lattice order] | null} × 9],
                  motion: null | {kind: "ripple", t0, stagger_s, rings}
-                              | {kind: "steps", t0, step_s, frames: [[hex | null × 9]], ends_at}}
+                              | {kind: "steps", t0, step_s, frames: [[hex | null × 9]],
+                                 levels?: [[int | null × 9]], ends_at}}
 
 Colours are full strength (the level is drawn separately); `color` is set when every head is the same, else `colors`;
 `off`, `dark` and `unknown` carry no colour. `off` is claimed only once a panel reads back off; a locked or stuck panel,
@@ -50,13 +62,15 @@ a device id, label, reason or the vendor's name.
                                 → `{ok, level, state, server_now}`
 - `POST /api/kiosk/power`       `{"on": true|false}` → `{ok, state, server_now}`
 - `GET  /api/kiosk/debug`       ops only: target internals, capabilities, lease holders, the last 50 commands
-                                `{at, action, params, outcome, target, latency_ms, error}`, the last state served.
+                                `{at, action, params, outcome, target, latency_ms, error}`, the last state served, and
+                                `menu: {hidden, ignored}` (kiosk.hidden_scenes: what it hides, and what it names that
+                                hides nothing).
 
 Writes are accepted and then applied in the background (`state.phase` is "changing" until the lights confirm), so a
 200 means "accepted", never "the lights changed". Refusals are the kiosk's — `{"detail": "<calm sentence>",
 "retry_after_s"?}`, never an error code on the guest's screen: 429 cooldown (+ Retry-After) · 423 guest input paused ·
-404 not one of the six scenes · 409 not available right now, or someone is using the module page · 503 resting ·
-415/422/403 a malformed or cross-site request.
+404 not one of the scenes the iPad offers (unknown, or hidden: kiosk.hidden_scenes) · 409 not available right now,
+or someone is using the module page · 503 resting · 415/422/403 a malformed or cross-site request.
 """
 
 from __future__ import annotations
@@ -76,6 +90,7 @@ from conductor.guest_panel import (
     GuestRefused,
     scene_json,
 )
+from conductor.ipad_menu import Menu
 from conductor.roles_api import Principal
 from conductor.routes.deps import principal_of, require_ops, services_of
 from conductor.routes.kiosk import NO_STORE, RESTING, _json_same_site, _refuse, require_kiosk
@@ -107,19 +122,30 @@ async def _parse(request: Request, model: type[_Body], hint: str) -> Any:
         raise HTTPException(status_code=422, detail=hint) from None
 
 
-def _catalog(panel: GuestPanel) -> Any:
+def _menu(panel: GuestPanel) -> Menu:
     try:
-        return panel.scenes()
+        return panel.menu()
     except (OSError, ConfigError) as exc:
         log.error("The guest panel couldn't read config/scenes.yaml: %s", exc)
         raise HTTPException(status_code=503, detail=RESTING) from None
 
 
-def _state(panel: GuestPanel, target: Any, *, remember: bool = True) -> dict:
-    state = target.state({s.id for s in _catalog(panel).scenes})
+def _state(panel: GuestPanel, target: Any, menu: Menu | None = None, *, remember: bool = True) -> dict:
+    # The WHOLE catalog's ids: a hidden scene that is showing is still `state.scene` (Now Showing names it).
+    menu = menu if menu is not None else _menu(panel)
+    state = target.state({s.id for s in menu.catalog.scenes})
     if remember:  # the last state a guest-facing response carried (the debug view shows it)
         panel.last_state = state
     return state
+
+
+def _thumbs(panel: GuestPanel, menu: Menu) -> dict[str, dict | None]:
+    """The review cards' thumbnails; a thumbnail that can't be worked out is none, never a failed panel."""
+    try:
+        return panel.thumbs(menu)
+    except Exception:
+        log.exception("The guest panel couldn't draw the review cards' pictures.")
+        return {}
 
 
 def _ok(panel: GuestPanel, target: Any, **extra: Any) -> JSONResponse:
@@ -138,18 +164,23 @@ async def panel_view(request: Request) -> JSONResponse:
     services = services_of(request)
     panel = GuestPanel.of(services)
     target = await panel.target()
-    catalog = _catalog(panel)
+    menu = _menu(panel)
+    state = _state(panel, target, menu)
+    thumbs = _thumbs(panel, menu)
+    sid = state["scene"]
+    showing = scene_json(menu.catalog.get(sid), thumbs.get(sid)) if sid in menu.hidden else None
     return JSONResponse(
         {
             "target": target.kind,
             "target_label": target.label,
             "simulated": target.simulated,
             "viewer": principal_of(request).role.value,
-            "scenes": [scene_json(s) for s in catalog.scenes],
+            "scenes": [scene_json(s, thumbs.get(s.id)) for s in menu.visible.scenes],
+            "showing": showing,
             "capabilities": target.capabilities(),
             "brightness_range": [GUEST_FLOOR, 100],
             "canopy": target.canopy(),
-            "state": _state(panel, target),
+            "state": state,
             "server_now": services.clock.now(),
         },
         headers=NO_STORE,
@@ -162,12 +193,14 @@ async def choose_scene(request: Request) -> JSONResponse:
     panel = GuestPanel.of(services_of(request))
     target = await panel.target()
     params = {"scene": body.scene}
+    menu = _menu(panel)
     try:
-        scene = _catalog(panel).get(body.scene)
+        scene = menu.visible.get(body.scene)
     except KeyError:
-        return _refused(
-            panel, target, "scene", params, GuestRefused(404, UNKNOWN_SCENE, why="not in scenes.yaml")
+        why = (
+            "hidden on the iPad (kiosk.hidden_scenes)" if body.scene in menu.hidden else "not in scenes.yaml"
         )
+        return _refused(panel, target, "scene", params, GuestRefused(404, UNKNOWN_SCENE, why=why))
     try:
         await target.scene(scene)
     except GuestRefused as e:
@@ -214,6 +247,7 @@ async def debug(request: Request, _ops: Annotated[Principal, Depends(require_ops
     services = services_of(request)
     panel = GuestPanel.of(services)
     target = await panel.target()
+    menu = _menu(panel)
     return JSONResponse(
         {
             "target": target.kind,
@@ -223,9 +257,10 @@ async def debug(request: Request, _ops: Annotated[Principal, Depends(require_ops
             "capabilities": target.capabilities(),
             "lease_holders": target.lease_holders(),
             "internals": target.debug(),
-            "state": _state(panel, target, remember=False),
+            "state": _state(panel, target, menu, remember=False),
             "last_state": panel.last_state,
             "commands": panel.log.recent(),
+            "menu": {"hidden": list(menu.hidden), "ignored": list(menu.ignored)},
             "server_now": services.clock.now(),
         },
         headers=NO_STORE,

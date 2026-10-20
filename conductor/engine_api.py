@@ -55,18 +55,23 @@ class ModuleTarget:
 
 @dataclass
 class ProgramStep:
-    """One step of a stepped program: one full state vector per driven module (one PUT each, never a slot object)."""
+    """One step of a stepped program: one full state vector per driven module (one PUT each, never a slot object),
+    colour and brightness together."""
 
     index: int
     rows: dict[str, list[StateRow]]  # logical device id → the full state vector this step sends
     # canopy position ("r0c0") → "#RRGGBB" at full strength (the level is shown on its own)
     colours: dict[str, str]
+    # canopy position → the device brightness this step sends (after the device's range clamp, before any guest
+    # level): the rung's brightness on every step of a travel look, the breath's level on a breathe/shimmer one (D75)
+    levels: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
             "index": self.index,
             "rows": {d: [r.to_json() for r in rows] for d, rows in self.rows.items()},
             "colours": self.colours,
+            "levels": self.levels,
         }
 
 
@@ -76,7 +81,12 @@ class Program:
     shifted by n / len(steps) of one repeat, sampled at each module's centre. The Conductor holds the phase, so a
     single-module re-send of the current step is correct (07 §6's one-burst rule is for on-device motion):
     `ModePlan.motion` stays False. `moving_feature` is the copy shown only while a run is going; the plan's
-    `feature` is the hold's (the static design), true before and after a run."""
+    `feature` is the hold's (the static design), true before and after a run.
+
+    `mode` is the technique's kind of motion (D75): "travel" shifts the design as above; for "breathe" and
+    "shimmer", step n is each module's breath at its own lag (`looks.compile.step_looks`: the design in place, its
+    colour offset and its level swung), and `steps` is one whole cycle (`looks.compile.program_cycle`). Every step's
+    brightness is in its rows (one full state vector per module, colour and level in the same PUT)."""
 
     kind: str
     field: dict[str, Any]  # the design field spec (conductor/looks/field.py) as data
@@ -85,10 +95,12 @@ class Program:
     run_s: float  # how long one run lasts before the hold is sent again
     steps: list[ProgramStep]
     moving_feature: str
+    mode: str = "travel"  # last: tests build Program by position
 
     def to_json(self) -> dict:
         return {
             "kind": self.kind,
+            "mode": self.mode,
             "field": self.field,
             "direction": self.direction,
             "step_s": self.step_s,
@@ -210,8 +222,11 @@ class CanopyState:
     # A stepped run in progress (Tier.STEPPED, conductor/sequence.py): {t0: wall time step 0 was sent, step_s (the
     # runner's step, which may be longer than the design's), step: the step number showing now, ends_at: wall time
     # the still look is sent again, frames: [[hex | None] × 9 in grid order r0c0…r2c2] — frame n is step n's colours
-    # at full strength, the last frame the still look; None where no module is driven}. None while nothing steps
-    # (no run, the run is over, or its writes are held: paused, resting, set-up, the guest turned the canopy off).
+    # at full strength, the last frame the still look; None where no module is driven, levels: [[int | None] × 9]
+    # alongside frames — the brightness each position is sent at that frame, guest level applied (D75)}. Frames (and
+    # levels) after the step last sent, up to the schedule's step, repeat the step last sent: a budget-held step is
+    # never drawn. None while nothing steps (no run, the run is over, or its writes are held: paused, resting,
+    # set-up, the guest turned the canopy off).
     program: dict[str, Any] | None = None
 
     def to_json(self) -> dict:
@@ -255,8 +270,9 @@ class CanopyEngineAPI(Protocol):
         via state()/WS)."""
 
     async def set_guest_brightness(self, level: int, *, source: str) -> CanopyState:
-        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (D60). It
-        becomes part of the desired state (the reconciler keeps it); it turns the canopy on; one write per module (the
+        """Absolute device brightness for every canopy module, clamped to [kiosk.guest_brightness_min, 100] (D60);
+        during a breath (D75) the breath swings around it instead, its centre moved so the whole swing fits that
+        range. It becomes part of the desired state (the reconciler keeps it); it turns the canopy on; one write per module (the
         brightness row of the full state vector, never a frame). Kiosk requests are refused like `request_mode`
         (cooldown, paused, resting); the refusal comes back as a state with `refused=True`."""
 

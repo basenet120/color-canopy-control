@@ -65,7 +65,8 @@ body.ops [hidden] { display: none !important; }
 .dash-cols { display: flex; flex-direction: column; gap: var(--gap); }
 .dash-col { display: contents; }
 .dash-cols .card { margin-top: 0; }
-#canopy-card { order: 1; } #controls-card { order: 2; } #attention-card { order: 3; } #checklist-card { order: 4; }
+#canopy-card { order: 1; } #controls-card { order: 2; } #ipad-card { order: 2; } #attention-card { order: 3; }
+#checklist-card { order: 4; }
 #budget-card { order: 5; } #accounts-card { order: 6; } #logs-card { order: 7; } #enroll-card { order: 8; }
 #devices-card { order: 9; } #links-card { order: 10; }
 @media (min-width: 900px) {
@@ -115,6 +116,14 @@ button.big { min-height: 64px; font-size: 1.02rem; line-height: 1.2; padding: 6p
 .mode-picker { margin-top: 14px; }
 .mode-picker select { flex: 1 1 auto; }
 #control-result, #test-result { margin: 12px 0 0; }
+
+/* On the iPad (D76): one row per scene, its options indented under it, each with its "Show on the iPad" switch */
+.ipad-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.list > li.ipad-row { padding: 6px 0; }
+.list > li.ipad-row.is-option { padding-left: 20px; }
+.ipad-name { min-width: 0; overflow-wrap: anywhere; }
+.ipad-switch { flex: none; min-height: 44px; min-width: 9.5rem; padding: 4px 14px; }
+#ipad-notes, #ipad-result { margin: 12px 0 0; }
 
 /* checklist */
 .checklist > li { padding: 10px 0; }

@@ -53,3 +53,70 @@ def test_a_bad_catalog_names_the_file_and_the_problem(tmp_path):
     )
     with pytest.raises(ConfigError, match="scenes.yaml"):
         load_scenes.__wrapped__(tmp_path)
+
+
+# ---- options (D76) -------------------------------------------------------------------------------------------------
+def test_an_option_names_its_base_and_groups_under_it():
+    from tests.review_fixture import REVIEW_IDS, review_scenes
+
+    catalog = review_scenes(load_scenes())
+    assert [s.id for s in catalog.scenes] == REVIEW_IDS
+    option = catalog.get("golden-hour-2")
+    assert option.option_of == "golden-hour" and option.group == "golden-hour"
+    assert option.name == "Golden Hour #2"
+    base = catalog.get("golden-hour")
+    assert base.option_of is None and base.group == "golden-hour"
+    assert [s.id for s in catalog.options_of("golden-hour")] == ["golden-hour-2", "golden-hour-3"]
+    assert catalog.options_of("golden-hour-2") == []
+
+
+def _scene_line(scene_id: str, option_of: str | None = None) -> str:
+    extra = f", option_of: {option_of!r}" if option_of is not None else ""
+    return (
+        f"  - {{id: {scene_id}, name: N, mood: m, description: d, brightness_draft: 50, default_solid: 0,"
+        f" palette: [{{name: a, hex: '#FFFFFF'}}, {{name: b, hex: '#000000'}}]{extra}}}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "lines, message",
+    [
+        ([("golden-hour", None), ("golden-hour-2", "golden-hours")], "isn't a scene in this catalog"),
+        ([("a1", None), ("a1-2", "a1"), ("a1-3", "a1-2")], "one level deep"),
+        ([("a1", "a1")], "can't be an option of itself"),
+        ([("a1", None), ("a1-2", "Golden Hour")], "option_of"),
+    ],
+    ids=["unknown base", "two levels", "itself", "not an id"],
+)
+def test_option_of_must_name_a_base_scene_one_level_deep(tmp_path, lines, message):
+    (tmp_path / "scenes.yaml").write_text("scenes:\n" + "".join(_scene_line(i, o) for i, o in lines))
+    with pytest.raises(ConfigError, match=message) as caught:
+        load_scenes.__wrapped__(tmp_path)
+    assert "scenes.yaml" in str(caught.value)
+
+
+def test_a_duplicate_id_is_reported_before_an_option_problem(tmp_path):
+    (tmp_path / "scenes.yaml").write_text(
+        "scenes:\n" + _scene_line("a1") + _scene_line("a1") + _scene_line("a1-2", "nope")
+    )
+    with pytest.raises(ConfigError, match="scene ids must be unique"):
+        load_scenes.__wrapped__(tmp_path)
+
+
+def test_option_of_is_left_out_of_every_dump_while_unset():
+    """`ConfigTrio.dump()` feeds trio_sha and the stored publication: a catalog without options dumps exactly as it
+    did before D76 (an older Conductor's strict Scene would refuse `option_of: null`)."""
+    from conductor.scenes import SceneCatalog
+    from tests.review_fixture import review_scenes
+
+    catalog = load_scenes()
+    keys = {"id", "name", "mood", "description", "transform", "brightness_draft", "default_solid", "palette"}
+    assert all(set(s) == keys for s in catalog.model_dump(mode="json")["scenes"])
+    assert all(set(s) == keys for s in catalog.model_dump()["scenes"])
+    assert '"option_of"' not in catalog.model_dump_json()
+    review = review_scenes(catalog)
+    dumped = review.model_dump(mode="json")
+    for scene in dumped["scenes"]:
+        assert ("option_of" in scene) == scene["id"].endswith(("-2", "-3")), scene["id"]
+    assert SceneCatalog.model_validate(dumped) == review
+    assert SceneCatalog.model_validate(catalog.model_dump(mode="json")) == catalog

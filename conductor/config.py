@@ -7,12 +7,17 @@ Files:
 - `config/devices.yaml`   → the device registry defaults
 - `<data>/overrides/registry.yaml` → ops edits per device (real metadevice ids, calibration, bench flags,
   slot hashes) and extra devices (spares). Written atomically; every version kept under `overrides/history/`.
+- `<data>/overrides/settings.yaml` → the iPad's scene menu (D76): `{kiosk: {hidden_scenes: [ids]}}`, written by the
+  /ops "Show on the iPad" switches, replacing conductor.yaml's `kiosk.hidden_scenes`. Never a failed start: a file
+  that can't be used leaves git's list in force with an /ops line (`load_settings_overlay`). Written atomically at
+  0600 with a history copy under `overrides/history/`.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +33,9 @@ CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 # first ((rings − 1) × kiosk.ripple_stagger_s), so every module is still sent within 05's 2.4 s spread.
 RIPPLE_MAX_WAVES = 3
 RIPPLE_SPAN_MAX_S = 2.4
+# A scene id, as config/scenes.yaml spells one (conductor/scenes.py's Scene.id pattern).
+SCENE_ID = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+HIDDEN_SCENES_MAX = 64
 
 
 class ConfigError(ValueError):
@@ -137,6 +145,11 @@ class KioskSettings(_Strict):
     guest_brightness_min: int = Field(10, ge=1, le=100)
     idle_reset_s: float = Field(300, gt=0)
     idle_scene: str | None = None
+    # The iPad's scene menu (D76): scene ids the guest panel leaves out of its cards, its attract screen and both kiosk
+    # choose routes. Git's default; <data>/overrides/settings.yaml (written by /ops "Show on the iPad") replaces it.
+    # Ops can still choose a hidden scene and the Lab still edits it; the idle scene can never be hidden. Changed at
+    # runtime in place (services.settings is shared with the engine and is never rebound).
+    hidden_scenes: list[str] = Field(default_factory=list, max_length=HIDDEN_SCENES_MAX)
     preview: PreviewSettings = Field(default_factory=PreviewSettings)
     # The ripple (D64): a mood chosen on the kiosk, by ops or by the idle return lands ring by ring in its design's
     # order, this many seconds between rings (each module still gets one PUT). 0 = one burst (today's behaviour).
@@ -158,6 +171,50 @@ class KioskSettings(_Strict):
             )
         return v
 
+    @field_validator("hidden_scenes")
+    @classmethod
+    def _hidden_ids(cls, v: list[str]) -> list[str]:
+        return _scene_ids(v)
+
+    @model_validator(mode="after")
+    def _idle_is_never_hidden(self) -> KioskSettings:
+        idle = idle_keys(self)
+        for sid in self.hidden_scenes:
+            if sid in idle:
+                raise ValueError(
+                    f"kiosk.hidden_scenes can't hide {sid!r}: it is the idle scene ({idle[sid]}), which the iPad "
+                    "always offers"
+                )
+        return self
+
+
+def _scene_ids(values: list[str]) -> list[str]:
+    """`hidden_scenes` entries are scene ids, each listed once (KioskSettings and the settings overlay)."""
+    seen: set[str] = set()
+    for v in values:
+        if not SCENE_ID.match(v):
+            raise ValueError(
+                f"hidden_scenes: {v!r} isn't a scene id (lower-case letters, digits and hyphens, as in "
+                "config/scenes.yaml)"
+            )
+        if v in seen:
+            raise ValueError(f"hidden_scenes lists {v!r} twice")
+        seen.add(v)
+    return values
+
+
+def idle_keys(kiosk: Any) -> dict[str, str]:
+    """The idle scene id(s) → the setting that names them: `kiosk.idle_mode` (the idle return's look) and, when set
+    and different, `kiosk.idle_scene` (the idle reset's). The iPad always offers these (D76)."""
+    out: dict[str, str] = {}
+    idle_mode = getattr(kiosk, "idle_mode", None)
+    if idle_mode:
+        out[idle_mode] = "kiosk.idle_mode"
+    idle_scene = getattr(kiosk, "idle_scene", None)
+    if idle_scene and idle_scene not in out:
+        out[idle_scene] = "kiosk.idle_scene"
+    return out
+
 
 class ModulePageSettings(_Strict):
     lock_idle_timeout_s: float = 600
@@ -177,8 +234,9 @@ class SteppedMotionSettings(_Strict):
     `account_writes_per_min` is the account's cap on writes of any kind in any 60 s. The runner plans its steps at
     the cap less `budget_reserve` (the room left for 429 retries, silent-drop re-sends and a mood chosen mid-run), so
     its step is never shorter than `min_step_s`, nor than the account's share of that planned rate (9 modules at
-    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would take the
-    account past the cap (`sequence.ProgramRunner._step`); above `max_step_s` the look holds still. The governor stops a run when, within
+    90/min less 20 % → 72/min → 7.5 s), and it holds a step back rather than send one that would leave the account
+    less than a guest's burst of room under the cap (one write per module, D75; `sequence.ProgramRunner._over_cap`);
+    above `max_step_s` the look holds still. The governor stops a run when, within
     `governor_window_s`, at least `governor_min_throttled` of the run's write attempts on one account came back 429/403
     and they are at least `governor_throttled_share` of its attempts; stepped runs on that account then wait
     `governor_cooloff_s`. A guest brightness change within `fold_guest_within_s` of the next step goes out with it."""
@@ -208,8 +266,31 @@ class SteppedMotionSettings(_Strict):
         return self
 
 
+class IdleMotionSettings(_Strict):
+    """The idle look's breath (D75, `motion.idle`): one run of the idle mode's stepped rung, `breathe_run_s` long."""
+
+    breathe_run_s: float = Field(60.0, gt=0, le=180.0)
+    every_s: float = Field(300.0, gt=0, le=3600.0)
+
+    @model_validator(mode="after")
+    def _rests(self) -> IdleMotionSettings:
+        if self.every_s <= self.breathe_run_s:
+            raise ValueError(
+                f"every_s ({self.every_s:g} s) must be longer than breathe_run_s ({self.breathe_run_s:g} s), or the "
+                "idle look would never rest between breaths"
+            )
+        return self
+
+
 class MotionSettings(_Strict):
+    """Motion through the cloud. `stepped`: the stepped runner's pacing and gates (D65). `idle` (D75, off = null, the
+    shipped value; only Alon turns it on): while the idle look (`kiosk.idle_mode`) shows, on, with no guest setting in
+    force, it breathes once for `breathe_run_s` every `every_s` after the last change or breath, and an idle return
+    to it lands as one breath. It runs only through `tier_allowed`, so never on live hardware until
+    `motion.stepped.live_enabled`, and it yields at once to any guest input."""
+
     stepped: SteppedMotionSettings = Field(default_factory=SteppedMotionSettings)
+    idle: IdleMotionSettings | None = None
 
 
 class LabSettings(_Strict):
@@ -261,6 +342,135 @@ def load_settings(config_dir: Path = CONFIG_DIR) -> ConductorSettings:
         return ConductorSettings.model_validate(_read_yaml(path))
     except ValidationError as e:
         raise ConfigError(_explain(path, e)) from None
+
+
+# ---- the settings overlay (D76) ----------------------------------------------------------------------------------
+# <data>/overrides/settings.yaml: the iPad's scene menu as /ops last set it. It replaces conductor.yaml's
+# kiosk.hidden_scenes and holds nothing else. Like the published looks (07 §8), a file that can't be used is never a
+# failed start: git's list stays in force, the file is left as it was, and /ops says so until the next switch writes it
+# again. Unknown and idle ids in it are ignored with an /ops line (conductor/ipad_menu.py), never refused at load.
+SETTINGS_OVERLAY_FILE = "settings.yaml"
+SETTINGS_OVERLAY_PATH = f"overrides/{SETTINGS_OVERLAY_FILE}"
+SETTINGS_OVERLAY_KEY = "settings_overlay"  # services.extras: the SettingsOverlayState
+SETTINGS_OVERLAY_MAX_BYTES = 65_536
+SETTINGS_OVERLAY_HEADER = (
+    '# The iPad\'s scene menu (D76), written by /ops "Show on the iPad". It replaces config/conductor.yaml → kiosk → '
+    "hidden_scenes.\n"
+)
+
+
+class KioskOverlay(_Strict):
+    # The default makes `kiosk: {}` valid; `model_fields_set` then says the list wasn't given (git's stays).
+    hidden_scenes: list[str] = Field(default_factory=list, max_length=HIDDEN_SCENES_MAX)
+
+    @field_validator("hidden_scenes")
+    @classmethod
+    def _hidden_ids(cls, v: list[str]) -> list[str]:
+        return _scene_ids(v)
+
+
+class SettingsOverlay(_Strict):
+    """The whole file: `{kiosk: {hidden_scenes: [ids]}}` and nothing else."""
+
+    kiosk: KioskOverlay
+
+
+@dataclass
+class SettingsOverlayState:
+    """The settings overlay as loaded (or last saved). `path` None: no data directory (saving is refused)."""
+
+    path: Path | None
+    overlay: SettingsOverlay | None = None
+    problem: str | None = None  # why the file couldn't be used (git's list is in force)
+
+
+def _validation_reason(err: ValidationError, limit: int = 3) -> str:
+    parts = []
+    for e in err.errors()[:limit]:
+        where = " → ".join(str(p) for p in e["loc"]) or "(top level)"
+        parts.append(f"{where}: {e['msg']}")
+    return "; ".join(parts)
+
+
+def load_settings_overlay(data: Path | None) -> SettingsOverlayState:
+    """Read <data>/overrides/settings.yaml. Never raises and never writes: missing → no overlay and no problem; a
+    file that can't be used → no overlay and a `problem` in plain words."""
+    if data is None:
+        return SettingsOverlayState(None)
+    path = Path(data) / SETTINGS_OVERLAY_PATH
+    state = SettingsOverlayState(path)
+    try:
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return state
+        if size > SETTINGS_OVERLAY_MAX_BYTES:
+            state.problem = f"it is {size} bytes, over the {SETTINGS_OVERLAY_MAX_BYTES}-byte limit"
+            return state
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return state
+    except OSError as exc:
+        state.problem = f"it can't be read ({exc.strerror or type(exc).__name__})"
+        return state
+    if len(raw) > SETTINGS_OVERLAY_MAX_BYTES:
+        state.problem = f"it is {len(raw)} bytes, over the {SETTINGS_OVERLAY_MAX_BYTES}-byte limit"
+        return state
+    try:
+        document = yaml.safe_load(raw)
+    except Exception:  # noqa: BLE001 - YAMLError, a bad encoding, a nesting too deep: never a failed start
+        state.problem = "it isn't valid YAML"
+        return state
+    if not isinstance(document, dict) or "kiosk" not in document:
+        state.problem = "it isn't a mapping with a kiosk section"
+        return state
+    try:
+        state.overlay = SettingsOverlay.model_validate(document)
+    except ValidationError as exc:
+        state.problem = _validation_reason(exc)
+    return state
+
+
+def apply_settings_overlay(settings: ConductorSettings, state: SettingsOverlayState) -> None:
+    """Put the overlay's list in force: `settings.kiosk.hidden_scenes` is set in place (the settings object is shared
+    with the engine; it is never rebound), and only when the file gave the list (`kiosk: {}` keeps git's)."""
+    overlay = state.overlay
+    if overlay is not None and "hidden_scenes" in overlay.kiosk.model_fields_set:
+        settings.kiosk.hidden_scenes = list(overlay.kiosk.hidden_scenes)
+
+
+def _history_name(directory: Path, stem: str) -> Path:
+    """`<stem>.yaml`, or `<stem>-2.yaml`, `-3`, … when a write in the same second already took the name."""
+    candidate = directory / f"{stem}.yaml"
+    n = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}-{n}.yaml"
+        n += 1
+    return candidate
+
+
+def save_settings_overlay(state: SettingsOverlayState, hidden: Sequence[str], *, now: float) -> None:
+    """Validate and write the iPad's scene list: a history copy under overrides/history/ first, then the file, both
+    atomically at 0600. On success `state` holds the new overlay and no problem. ConfigError with no data directory
+    or a list that isn't scene ids; OSError propagates (nothing was changed in memory)."""
+    if state.path is None:
+        raise ConfigError(
+            "No data directory is configured, so the iPad's scene list can't be saved (set CONDUCTOR_DATA_DIR)."
+        )
+    try:
+        overlay = SettingsOverlay(kiosk=KioskOverlay(hidden_scenes=list(hidden)))
+    except ValidationError as exc:
+        raise ConfigError(f"The iPad's scene list can't be saved: {_validation_reason(exc)}") from None
+    text = (
+        SETTINGS_OVERLAY_HEADER
+        + yaml.safe_dump(overlay.model_dump(mode="json"), sort_keys=True, allow_unicode=True)
+    ).encode()
+    stamp = datetime.fromtimestamp(now, UTC).strftime("%Y%m%dT%H%M%SZ")
+    history = state.path.parent / "history"
+    atomic_write(_history_name(history, f"settings-{stamp}"), text, mode=0o600)
+    atomic_write(state.path, text, mode=0o600)
+    state.overlay = overlay
+    state.problem = None
 
 
 # ---- registry ----------------------------------------------------------------------------------------------------
@@ -621,8 +831,6 @@ def overlay_diff(registry: Registry, config_dir: Path = CONFIG_DIR) -> OverlayDi
     """Apply the overlay's device edits to devices.yaml's own lines: a one-line `- {id: …}` entry is rewritten in
     place as one line, a block entry as a block, a new device is appended to the list. Fields in NOT_FOR_GIT are left
     out. The result is re-read and checked against the merged registry before it is offered."""
-    import re
-
     path = config_dir / "devices.yaml"
     before = path.read_text(encoding="utf-8") if path.exists() else ""
     raw = _read_yaml(path)

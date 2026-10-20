@@ -28,7 +28,15 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
 - `GET  /api/ops/overlay[?part=all|yaml|diff]`  the ops overlay (07 §8), as an attachment: the overlay's YAML (to
   restore under <data>/overrides/registry.yaml) plus a unified diff folding it into config/devices.yaml, to commit
   back to git. The YAML keeps real metadevice ids (ops only; tester and kiosk never reach it); the diff
-  leaves them out, because devices.yaml never holds real ids.
+  leaves them out, because devices.yaml never holds real ids. The diff also folds the iPad's scene menu
+  (<data>/overrides/settings.yaml, D76) into config/conductor.yaml's one-line `kiosk.hidden_scenes`, as a second
+  hunk, only when the list in force differs from git's: one `git apply`-able patch.
+- `GET  /api/ops/ipad-scenes`        the iPad's scene menu (D76, conductor/ipad_menu.py): every scene with its
+                                     "Show on the iPad" switch (`on_ipad`, `idle`), the counts, the notes
+- `POST /api/ops/ipad-scenes`        `{scene, show}` show or hide one scene on the iPad: written to
+                                     <data>/overrides/settings.yaml before it takes effect (a failed save changes
+                                     nothing); the idle scene is always on (409). No engine needed. A hidden scene
+                                     keeps its look: ops can still choose it, the Design Lab still edits it.
 
 Every POST must be JSON from this site (same rule as the module page, D17): a cross-site form can't pause the
 canopy with the ops password cached in someone's browser. Every control publishes `{"kind": "control", ...}` on
@@ -68,6 +76,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from conductor import ipad_menu
+from conductor.canopy import RESTORE_SOURCE
 from conductor.config import NOT_FOR_GIT, overlay_diff, overlay_text
 from conductor.drivers.base import StateRow
 from conductor.engine_api import PlanError
@@ -164,6 +174,11 @@ class RehearsalBody(_Body):
     confirm: str | None = Field(None, max_length=2000)
 
 
+class IpadSceneBody(_Body):
+    scene: str = Field(min_length=1, max_length=64)
+    show: bool = Field(strict=True)
+
+
 # ---- helpers -------------------------------------------------------------------------------------------------
 def engine_or_none(services: Any) -> Any | None:
     return services.extras.get(ENGINE_KEY)
@@ -185,15 +200,22 @@ def engine_of(services: Any) -> Any:
 
 
 def mode_list(services: Any) -> list[dict]:
-    """The six modes (id, label, blurb, slot) as the show runs them: the live looks (D68), approved or published."""
-    from conductor.looks.live import live_trio
-
+    """The modes (id, label, blurb, slot, on_ipad) as the show runs them: the live looks (D68), approved or
+    published. `on_ipad` is False for a scene kiosk.hidden_scenes takes off the iPad (D76): ops can still choose it."""
     try:
-        modes = live_trio(services).modes.modes
+        m = ipad_menu.live_menu(services)
     except (OSError, ValueError):
         return []
+    hidden = set(m.hidden)
     return [
-        {"id": mode_id, "label": m.label, "blurb": m.blurb, "slot": m.slot} for mode_id, m in modes.items()
+        {
+            "id": mode_id,
+            "label": mode.label,
+            "blurb": mode.blurb,
+            "slot": mode.slot,
+            "on_ipad": mode_id not in hidden,
+        }
+        for mode_id, mode in m.trio.modes.modes.items()
     ]
 
 
@@ -540,9 +562,9 @@ def _rehearsal_status(engine: Any) -> dict | None:
 
 
 def _rehearsal_modes(services: Any) -> list[dict]:
-    """The looks a rehearsal can run: every mode but the idle one (D65: the resting look never steps)."""
-    idle = services.settings.kiosk.idle_mode
-    return [{"id": m["id"], "label": m["label"]} for m in mode_list(services) if m["id"] != idle]
+    """The looks a rehearsal can run: every mode (D75: the idle look may be rehearsed with its own rung, or its
+    module-level design stepped at the D65 defaults)."""
+    return [{"id": m["id"], "label": m["label"]} for m in mode_list(services)]
 
 
 def _rehearsal_engine(services: Any) -> Any:
@@ -1641,7 +1663,9 @@ async def test_mode_change(request: Request, body: TestModeBody, _ops: Ops) -> J
     restored_to = None
     if body.restore and before.mode and before.mode != target and target != services.settings.kiosk.idle_mode:
         try:
-            back = await engine.request_mode(before.mode, source="ops")
+            # D75: the change back puts the previous look back still; it never starts a run (RESTORE_SOURCE is ops
+            # in every other respect)
+            back = await engine.request_mode(before.mode, source=RESTORE_SOURCE)
             if getattr(back, "refused", False):
                 message += f" (Couldn't change back to {before.label or before.mode}: {back.message})"
             else:
@@ -1687,10 +1711,34 @@ async def logs(request: Request, _ops: Ops, since: int | None = None, limit: int
     )
 
 
+# ---- the iPad's scene menu (D76) ---------------------------------------------------------------------------------
+@router.get("/api/ops/ipad-scenes")
+async def ipad_scenes(request: Request, _ops: Ops) -> JSONResponse:
+    """Every scene with its "Show on the iPad" switch, the counts and the notes (no engine needed)."""
+    return JSONResponse(ipad_menu.menu_json(services_of(request)), headers=NO_STORE)
+
+
+@router.post("/api/ops/ipad-scenes")
+async def ipad_scenes_set(request: Request, body: IpadSceneBody, _ops: Ops) -> JSONResponse:
+    """Show or hide one scene on the iPad. `async def` with no await around the switch, so two flips run one after
+    the other on the loop (a threadpool `def` could let both read the old list)."""
+    services = services_of(request)
+    try:
+        change = ipad_menu.set_on_ipad(services, body.scene, body.show)
+    except ipad_menu.MenuRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from None
+    if change.changed:
+        _publish(services, "ipad_scenes", scene=body.scene, show=body.show)
+    return JSONResponse(
+        {"ok": True, "message": change.message, **ipad_menu.menu_json(services)}, headers=NO_STORE
+    )
+
+
 # ---- the ops overlay, to commit back to git (07 §8) --------------------------------------------------------------
 @router.get("/api/ops/overlay")
 async def overlay_download(request: Request, _ops: Ops, part: str = "all") -> PlainTextResponse:
-    """The overlay's YAML and a unified diff against config/devices.yaml, as a download (ops only)."""
+    """The overlay's YAML and a unified diff against config/devices.yaml, as a download (ops only). The diff also
+    carries the iPad's scene menu folded into config/conductor.yaml (D76) when it differs from git's."""
     if part not in ("all", "yaml", "diff"):
         raise HTTPException(status_code=422, detail="part is all, yaml or diff.")
     services = services_of(request)
@@ -1706,10 +1754,23 @@ async def overlay_download(request: Request, _ops: Ops, part: str = "all") -> Pl
             "b/config/devices.yaml",
         )
     )
+    if diff and not diff.endswith("\n"):
+        diff += "\n"  # the conductor.yaml hunk below starts on its own line
+    # The iPad's scene menu (D76): only ids that hide a scene, never ignored ones. The registry download never fails
+    # over it: a catalog that can't be read is a "No diff" line.
+    try:
+        hidden = ipad_menu.live_menu(services).hidden
+        fold = ipad_menu.conductor_yaml_diff(Path(services.config_dir), hidden)
+    except (OSError, ValueError) as exc:
+        log.exception("The overlay download couldn't read the iPad's scene menu.")
+        hidden = ()
+        fold = ipad_menu.ConductorYamlDiff(
+            "", None, f"the live scene catalog couldn't be read ({type(exc).__name__})"
+        )
     if part == "yaml":
         body, name, media = overlay, f"registry-overlay-{stamp}.yaml", "application/x-yaml"
     elif part == "diff":
-        body, name, media = diff, f"devices-yaml-{stamp}.diff", "text/x-diff"
+        body, name, media = diff + fold.diff, f"canopy-config-{stamp}.diff", "text/x-diff"
     else:
         history = registry.overlay_path.parent / "history" if registry.overlay_path is not None else None
         versions = (
@@ -1734,7 +1795,21 @@ async def overlay_download(request: Request, _ops: Ops, part: str = "all") -> Pl
             head.append(f"   No diff: {folded.problem}. Copy the edits from part 1 by hand.")
         elif not diff:
             head.append("   Nothing to commit: every edit is a real id, or there are no edits.")
-        body = "\n".join(head) + "\n\n" + diff
+        listed = f"[{', '.join(hidden)}]" if hidden else "none"
+        head += [
+            "",
+            f"3. The iPad's scene menu (<data>/overrides/settings.yaml, D76): kiosk.hidden_scenes: {listed}.",
+        ]
+        if fold.problem:
+            head.append(f"   No diff: {fold.problem}.")
+        elif fold.diff:
+            head.append(
+                "   To make it git's default, `git apply` this file (config/conductor.yaml → kiosk → hidden_scenes, "
+                "below)."
+            )
+        else:
+            head.append("   Nothing to commit: config/conductor.yaml already says the same.")
+        body = "\n".join(head) + "\n\n" + diff + fold.diff
         name, media = f"canopy-overlay-{stamp}.patch", "text/x-diff"
     return PlainTextResponse(
         body,

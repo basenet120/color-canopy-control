@@ -23,22 +23,30 @@ ripple:
   ring_spread_p95_s: 2.0
   settle_extra_s: 5.0
 
-# The stepped scenario (D65), also soak-only and SIMULATED: Coastal Tides and Golden Hour have a stepped rung in
-# config/modes.yaml (the simulator steps them; motion.stepped.live_enabled stays false, so live hardware doesn't), but
-# in sim Golden Hour shows its commissioned canvas first. So a separate, shorter run of the show's own wiring moves the
-# stepped rung first in each of `modes`' ladders, in the soak's config copy only: the mode's own stepped technique, or
-# for a mode without one a SIMULATED rung from its own module-level design (the modules sample's canvas and brightness,
-# so the still look it holds is that rung) with the `technique` fields below and copy naming the design's flow.
-# `runs` kiosk choices `hold_s` (+ up to 2 s, seeded) after the last run ends, alternating the modes; every
-# `interrupt_every`-th run is cut short by a still mood chosen mid-run. Then no input until the idle return. Targets
-# (proposed, not in the pinned acceptance.yaml until Alon signs them off): each step on all its modules before the
-# next, one PUT per changed module per step, ≤ motion.stepped's account_writes_per_min writes in any 60 s on the
-# account, no governor trip and no downgrade at 5% throttling, the still look after each run, the idle return
-# idle_return_s to idle_return_s + `idle_return_slack_s` after the last choice. Each step's landing spread
-# (p95 ≤ `step_spread_p95_s`) is reported, not gating.
+# The stepped scenario (D65, D75), also soak-only and SIMULATED: a separate, shorter run of the show's own wiring that
+# steps every scene with all three kinds of motion (motion.stepped.live_enabled stays false, so live hardware doesn't).
+# Coastal Tides and Golden Hour bring their own stepped rung (config/modes.yaml), which stays where the show has it:
+# since D75 a guest's (kiosk) choice runs a mode's rung first and then settles onto its best still tier (Golden Hour's
+# commissioned canvas). Every other mode in `modes` gets a SIMULATED rung just before `modules`, in the soak's config
+# copy only, from its own module-level design (the modules sample's canvas and brightness, so the still look it holds is
+# that rung), with the `technique` fields below and its `simulated:` overrides (a breathe, a shimmer, a level-only
+# breath; Lowcountry Calm keeps travel), and copy that says what changes. Golden Hour comes first, so a short run
+# settles it onto its canvas; the idle mode is never the last choice (interrupts fire at runs 4, 8 and 12).
+# `runs` kiosk choices `hold_s` (+ up to 2 s, seeded) after the last run ends, cycling the modes; every
+# `interrupt_every`-th run is cut short by another mood chosen mid-run (never the idle look). Then no input until the
+# idle return. Targets (proposed, not in the pinned acceptance.yaml until Alon signs them off): each step on all its
+# modules before the next, one PUT per changed module per step, <= motion.stepped's account_writes_per_min writes in
+# any 60 s on the account, no governor trip and no downgrade at 5% throttling, the still look after each run (counted
+# by the tier it settled on), the idle return idle_return_s to idle_return_s + `idle_return_slack_s` after the last
+# choice and still (no run: motion.idle is off). Each step's landing spread (p95 <= `step_spread_p95_s`) is reported,
+# not gating.
 stepped:
-  modes: [golden-hour, coastal-tides]
+  modes: [golden-hour, coastal-tides, lowcountry-calm, garden-gathering, rainbow-row-sunset, goodnight-glow]
   technique: {direction: forward, steps_per_cycle: 6, step_s: 6, run_s: 90}
+  simulated:   # each swing fits its scene's brightness (modes.yaml: garden 75, sunset 85, goodnight 28)
+    garden-gathering: {mode: breathe, brightness_swing: 6, lag_steps: 2}
+    rainbow-row-sunset: {mode: shimmer, brightness_swing: 6, lag_steps: 3, seed: 7}
+    goodnight-glow: {mode: breathe, brightness_swing: 4}
   runs: 12
   hold_s: 20
   interrupt_every: 4
