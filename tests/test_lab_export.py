@@ -21,13 +21,14 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from conductor.config import CONFIG_DIR, RecipesFile
 from conductor.design_lab import export as X
-from conductor.design_lab.draft import ConfigTrio, load_trio
+from conductor.design_lab.draft import ConfigTrio, DraftStepped, generated_copy, load_trio
 from conductor.design_lab.store import Version
 from conductor.geometry import load_canopy_config
 from conductor.looks import field as F
@@ -88,6 +89,25 @@ def _phrase(names: list[str]) -> str:
     return f"{low[0]}, then {rest}"
 
 
+def _lab_copy(
+    trio: ConfigTrio, scene_id: str, canvas: FieldCanvas, scene: dict, stepped: dict | None
+) -> dict[str, str]:
+    """The sentences the Lab generates for an edited scene (`draft.generated_copy`): the T3 one names only the colours
+    module level reaches, in the layout's order (review TS-1: a stand-in that named every colour wrote untrue copy,
+    e.g. a colour added at Goodnight's inverted rim that no strand shows), and a breathe/shimmer rung's (D75) what each
+    strand is sent, the breath's verb and only the colours it reaches. A stand-in draft carries just what those
+    sentences read (the layout, the colour names, the solid and the rung's motion values)."""
+    draft = SimpleNamespace(
+        layout=canvas.field,
+        palette=[SimpleNamespace(name=c["name"]) for c in scene["palette"]],
+        solid=scene["default_solid"],
+        stepped=None
+        if stepped is None
+        else DraftStepped.model_validate({k: stepped[k] for k in DraftStepped.model_fields if k in stepped}),
+    )
+    return generated_copy(trio.modes.mode(scene_id), draft, CANOPY)
+
+
 def edit_scene(
     trio: ConfigTrio,
     scene_id: str,
@@ -104,7 +124,10 @@ def edit_scene(
 ) -> ConfigTrio:
     """`trio` with one scene edited across every rung in lockstep (a stand-in for apply_drafts): palette (with its
     recipe keys; the old keys it no longer names are removed), layout, brightness, solid, client copy, stepped timing.
-    The module-level and moving copy are regenerated when the layout or the colour names change."""
+    The module-level and moving copy are regenerated when the layout or the colour names change: the module level
+    gets the Lab's own T3 sentence (`draft.generated_copy`: only the colours it reaches), a travel rung the travel
+    sentence, a breathe or shimmer rung (D75, D77) the Lab's own generated breath sentence, since the schema refuses
+    travel copy on a breath."""
     scenes = trio.scenes.model_dump(mode="json")
     modes = trio.modes.model_dump(mode="json")
     recipes = trio.recipes.model_dump(mode="json")
@@ -156,12 +179,11 @@ def edit_scene(
     names = [c["name"] for c in scene["palette"]]
     canvas = FieldCanvas.model_validate(design)
     if layout is not None or names != old_names or (stepped and "direction" in stepped):
-        words = F.layout_words(canvas.field, CANOPY)
-        t["modules"]["feature"] = (
-            "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out "
-            f"{words}: {_phrase(names)}."
-        )
-        if t.get("stepped") is not None:
+        lab = _lab_copy(trio, scene_id, canvas, scene, t.get("stepped"))
+        t["modules"]["feature"] = lab["modules"]
+        if t.get("stepped") is not None and t["stepped"].get("mode", "travel") != "travel":
+            t["stepped"]["moving_feature"] = lab["stepped"]
+        elif t.get("stepped") is not None:
             flow = motion_words(canvas, CANOPY, t["stepped"]["direction"])
             t["stepped"]["moving_feature"] = (
                 "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and "

@@ -65,6 +65,7 @@ QUIET_S = 70.0  # start-up (capability reads, simulator commissioning, the idle 
 TRIAL_LABEL = " (try-on)"
 CALM = "lowcountry-calm"
 GOLDEN = "golden-hour"
+NAME = {s.id: s.name for s in TRIO.scenes.scenes}  # D77: "Golden Hour #1"; PR E renames in one place
 
 
 def draft(scene_id: str, **changes: Any) -> D.SceneDraft:
@@ -1161,7 +1162,7 @@ def test_the_server_side_apply_gap_holds(no_threads):
         and body["cost"] == "sends 9 writes now, up to ~36 over the next 10 s"
     )
     assert body["confirm"].startswith(
-        "Try on your draft of Golden Hour at module level on 9 modules (Module 1,"
+        f"Try on your draft of {NAME[GOLDEN]} at module level on 9 modules (Module 1,"
     )
     assert body["confirm"].endswith("for up to 150 s. The painted design isn't on the lights.")
     assert asked.headers["cache-control"] == "no-store"
@@ -1447,12 +1448,12 @@ def test_the_confirm_sentence_names_the_driven_modules_and_the_cost_line():
     modules = T.driven_modules(lab)
     assert [m.id for m in modules] == ["canopy-r0c0", "canopy-r0c1"]
     assert T.confirm_sentence(lab, golden_pink(), modules, 150) == (
-        "Try on your draft of Golden Hour at module level on 2 modules (Module 1, Module 2) for up to 150 s. "
+        f"Try on your draft of {NAME[GOLDEN]} at module level on 2 modules (Module 1, Module 2) for up to 150 s. "
         "The painted design isn't on the lights."
     )
     renamed = draft(CALM, name="Calm evening")
     assert T.confirm_sentence(lab, renamed, modules[:1], 90) == (
-        "Try on Calm evening for Lowcountry Calm at module level on 1 module (Module 1) for up to 90 s."
+        f"Try on Calm evening for {NAME[CALM]} at module level on 1 module (Module 1) for up to 90 s."
     )
     assert T.cost_line(2) == "sends 2 writes now, up to ~8 over the next 10 s"
     assert T.cost_line(1) == "sends 1 write now, up to ~4 over the next 10 s"
@@ -1471,7 +1472,7 @@ def test_a_renamed_drafts_trial_json_names_the_approved_scene_and_the_draft():
 
     body, plan_label = run_virtual(main)
     assert plan_label == "Pinker Hour"  # why `label` can't be the installed plan's
-    assert (body["label"], body["draft_name"], body["tier"]) == ("Golden Hour", "Pinker Hour", "modules")
+    assert (body["label"], body["draft_name"], body["tier"]) == (NAME[GOLDEN], "Pinker Hour", "modules")
 
 
 def test_the_apply_gate_reserves_and_releases():
@@ -1777,14 +1778,14 @@ def test_a_reapplys_confirm_and_cost_name_the_time_left(no_threads):
         and math.ceil(least) <= int(left.group(1)) <= math.ceil(most)
     ), sentence
     assert "150 s" not in sentence and "(a re-apply never extends it)" in sentence
-    assert sentence.startswith("Try on your draft of Golden Hour at module level on 9 modules (Module 1,")
+    assert sentence.startswith(f"Try on your draft of {NAME[GOLDEN]} at module level on 9 modules (Module 1,")
     assert (
         cost.startswith("sends 9 writes now, up to ~36 over the next 10 s")
         and f"ends in {left.group(1)} s" in cost
     )
     calm = other.json()["confirm"]
     assert other.status_code == 409 and "of the running try-on (a re-apply never extends it)." in calm
-    assert calm.startswith("Try on your draft of Lowcountry Calm at module level on 9 modules")
+    assert calm.startswith(f"Try on your draft of {NAME[CALM]} at module level on 9 modules")
     assert ok.status_code == 200, ok.text
     assert after.session == trial.session and after.applies == 2 and after.ends_mono == trial.ends_mono
 

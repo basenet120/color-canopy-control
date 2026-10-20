@@ -102,3 +102,17 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     be per IP, the
     stepped cap would have to count every account's writes from the box, and stepped stays off until it does. Never
     rotate accounts or IPs to get around a limit.
+
+## The client review (D77; owner: Alon)
+29. **Review options' palettes, names and module-level read.**
+    - The 12 options' colours and the "#n" names (and Calm #1's description) need the client's on-site sign-off
+      (D59).
+    - "Home Depot orange" (Golden Hour #2) as a guest-visible colour name needs the brand check (with #22).
+    - The eight fin-ring options (Lowcountry Calm #2, Rainbow Row Sunset #3, Garden Gathering #2, Coastal Tides #1,
+      Golden Hour #2, The Goodnight Glow #1, #2 and #3) read as three rings on the real lights at module
+      level: the centre, the edge-middles and the corners. The alternative is the tilted ring Calm #1 and Garden #1
+      use (4–8 visible module colours, "from one spot"), at the cost of the per-light picture following the fins.
+    - The dark Goodnight options at 25–26% (night blue, deep moss) may read near-black under the fins; preview them
+      on a kit before the session.
+
+    *Default:* ship as drafted (fin rings kept, D1); change in the Design Lab at the session, then export (PR E).

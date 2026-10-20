@@ -22,7 +22,7 @@
 // Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
 // browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, connectLive, setSimBadge } from "/static/app.js?v=review-3";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=catalog-1";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -65,7 +65,7 @@ import {
   switchView,
   thumbDots,
   waitToastOver,
-} from "/kiosk/panel-model.mjs?v=review-3";
+} from "/kiosk/panel-model.mjs?v=catalog-1";
 import {
   DOT_R_IN,
   ariaSummary,
@@ -77,7 +77,7 @@ import {
   motionActive,
   motionColors,
   paintFor,
-} from "/kiosk/canopy-preview.mjs?v=review-3";
+} from "/kiosk/canopy-preview.mjs?v=catalog-1";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";

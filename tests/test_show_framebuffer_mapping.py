@@ -135,27 +135,41 @@ def test_an_unmapped_60_entry_module_refuses_t1_with_the_d54_text_and_takes_whol
         services, wiring, engine = await _boot(tmp_path, before_start=_sixty)
         assert await _until(services.clock, lambda: wiring.last_commission is not None, 120) is not None
         refused = _refusal(wiring, CANVAS_MODE, Tier.T1)
+
+        def past_the_run(
+            mode_id: str,
+        ) -> float:  # D77: every scene's stepped rung runs first in sim, then settles
+            tech = wiring.modes_file.mode(mode_id).techniques.stepped
+            return tech.run_s + 2 * tech.step_s + 20
+
         await engine.request_mode(CANVAS_MODE, source="ops")
-        await _hold(services, engine, 20)
+        firsts = [engine.current_plan().tier]
+        await _hold(services, engine, past_the_run(CANVAS_MODE))
         canvas_mode = engine.current_plan()
         canvas_ok = not R.compare(canvas_mode.modules[MODULE].expect, services.sim.device_view(ADDRESS))
         await engine.request_mode("lowcountry-calm", source="ops")
-        await _hold(services, engine, 20)
+        firsts.append(engine.current_plan().tier)
+        await _hold(services, engine, past_the_run("lowcountry-calm"))
         calm = engine.current_plan()
         calm_ok = not R.compare(calm.modules[MODULE].expect, services.sim.device_view(ADDRESS))
-        out = (refused, canvas_mode.tier, canvas_ok, calm.tier, calm_ok)
+        calm_ok = calm_ok and not engine.stepping  # the run is over: its hold (module level) is what shows
+        out = (refused, firsts, canvas_mode.tier, canvas_ok, calm.tier, calm_ok)
         out += (services.tracker.snapshot(ADDRESS), wiring.last_commission)
         await wiring.close()
         await services.close()
         return out
 
-    refused, canvas_tier, canvas_ok, calm_tier, calm_ok, snapshot, commission = run_virtual(main)
+    refused, firsts, canvas_tier, canvas_ok, calm_tier, calm_ok, snapshot, commission = run_virtual(main)
     assert refused == f"{MODULE}: {NO_MAP}"
+    # on purpose: in sim each choice runs its stepped rung first (one colour per strand, no map needed)
+    assert firsts == [Tier.STEPPED, Tier.STEPPED]
     assert "missing" not in NO_MAP and "pucks" not in NO_MAP
     assert (
         canvas_tier is not Tier.T1 and canvas_ok
     )  # the mode fell to a whole-strand tier, shown on the module
-    assert calm_tier is Tier.T3 and calm_ok  # a module-level look (one colour per strand) needs no map
+    # a module-level look (one colour per strand) needs no map: Calm's stepped plan holds its still design after the
+    # run (no canvas or slot to settle onto, D75), every module sent its hold
+    assert calm_tier is Tier.STEPPED and calm_ok
     assert snapshot["problems"] == [NO_MAP] and snapshot["status"] == "needs_attention"
     skipped = {s["mode"]: s["reason"] for s in commission["skipped"]}
     assert skipped[CANVAS_MODE] == f"{MODULE}: {NO_MAP}"

@@ -218,7 +218,8 @@ def test_every_unusable_file_falls_back_to_approved_and_is_left_byte_for_byte(tm
     before = path.read_bytes()
     started = time.perf_counter()
     looks = load(tmp_path)
-    assert time.perf_counter() - started < 1.0  # an alias bomb or a deep file can't hang the lifespan
+    # an alias bomb or a deep file can't hang the lifespan (0.45 s here with 18 scenes, 1.12 s on GitHub's runner)
+    assert time.perf_counter() - started < 3.0
     assert looks.source == "approved" and looks.problem, cause
     assert len(looks.problem) <= L.REASON_MAX and "\n" not in looks.problem
     if cause in WHO_SAYS:  # the guard meant for it says so (the scene rules would catch some of these too)
@@ -247,15 +248,23 @@ def test_a_published_trio_that_regroups_a_scene_is_refused():
     """option_of (the iPad's scene groups, D76) is git's, like the ids and ladders: a publication that moves a scene
     under another base is unusable, and a scene that keeps git's (None, left out of the dump) validates."""
     dump = GIT.dump()
-    assert all("option_of" not in s for s in dump["scenes"]["scenes"])  # left out while unset: byte-identical
+    # left out while unset (the six bases): byte-identical; D77's options carry it
+    for scene in dump["scenes"]["scenes"]:
+        assert ("option_of" in scene) == (GIT.scenes.get(scene["id"]).option_of is not None), scene["id"]
     L.validate_trio(dump, git=GIT, settings=SETTINGS, canopy=CANOPY)
+    # D77's Rainbow Row Sunset #2 moved under another base, then taken out of its group: both unusable
     regrouped = GIT.dump()
-    regrouped["scenes"]["scenes"][1]["option_of"] = "lowcountry-calm"
+    option = next(s for s in regrouped["scenes"]["scenes"] if s["id"] == "rainbow-row-sunset-2")
+    option["option_of"] = "lowcountry-calm"
     with pytest.raises(
-        ConfigError, match=r"scene 'rainbow-row-sunset' → option_of: 'lowcountry-calm' isn't"
+        ConfigError, match=r"scene 'rainbow-row-sunset-2' → option_of: 'lowcountry-calm' isn't"
     ) as exc:
         L.validate_trio(regrouped, git=GIT, settings=SETTINGS, canopy=CANOPY)
-    assert "config/scenes.yaml's None" in str(exc.value) and "the Lab never changes it" in str(exc.value)
+    assert "config/scenes.yaml's 'rainbow-row-sunset'" in str(exc.value)
+    assert "the Lab never changes it" in str(exc.value)
+    option.pop("option_of")
+    with pytest.raises(ConfigError, match=r"scene 'rainbow-row-sunset-2' → option_of: None isn't"):
+        L.validate_trio(regrouped, git=GIT, settings=SETTINGS, canopy=CANOPY)
 
 
 def test_an_oversized_file_is_never_read(tmp_path, monkeypatch):

@@ -53,15 +53,25 @@ def _technique(modes: dict, mode_id: str) -> dict:
     return modes["modes"][mode_id]["techniques"]
 
 
-def _layout(mode_id: str, field: dict) -> Mutation:
-    """One design (every rung that draws it) moved to another layout."""
+def _designs(modes: dict, mode_id: str) -> list[dict]:
+    """Every canvas that draws the mode's one design (its canvas, stepped and modules rungs share it, D63/D65)."""
+    t = _technique(modes, mode_id)
+    return [t[rung]["canvas"] for rung in ("canvas", "stepped") if t.get(rung)] + [
+        t["modules"]["sample"]["canvas"]
+    ]
+
+
+def _layout(mode_id: str, field: dict, moving: tuple[str, str] | None = None) -> Mutation:
+    """One design (every rung that draws it) moved to another layout; `moving` (old, new) keeps its stepped rung's
+    copy naming the new flow, so only the rule the layout breaks fires."""
 
     def mutate(scenes: dict, modes: dict, recipes: dict) -> None:
-        t = _technique(modes, mode_id)
-        for rung in ("canvas", "stepped"):
-            if t.get(rung):
-                t[rung]["canvas"]["field"] = field
-        t["modules"]["sample"]["canvas"]["field"] = field
+        for canvas in _designs(modes, mode_id):
+            canvas["field"] = field
+        if moving is not None:
+            stepped = _technique(modes, mode_id)["stepped"]
+            assert moving[0] in stepped["moving_feature"]
+            stepped["moving_feature"] = stepped["moving_feature"].replace(*moving)
 
     return mutate
 
@@ -79,11 +89,14 @@ def _slot_speed(scenes: dict, modes: dict, recipes: dict) -> None:
 
 
 def _two_cycles(scenes: dict, modes: dict, recipes: dict) -> None:
-    _technique(modes, "lowcountry-calm")["modules"]["sample"]["canvas"]["field"]["cycles"] = 2
+    for canvas in _designs(
+        modes, "lowcountry-calm-3"
+    ):  # every rung: a stepped rung must step its modules design
+        canvas["field"]["cycles"] = 2
 
 
 def _no_strand_rung(scenes: dict, modes: dict, recipes: dict) -> None:
-    modes["modes"]["rainbow-row-sunset"]["ladder"] = ["canvas", "slot", "modules"]
+    modes["modes"]["rainbow-row-sunset"]["ladder"] = ["canvas", "slot", "stepped", "modules"]
 
 
 def _strand_not_the_solid(scenes: dict, modes: dict, recipes: dict) -> None:
@@ -100,7 +113,8 @@ def _slots_swapped(scenes: dict, modes: dict, recipes: dict) -> None:
 
 
 def _stop_at_0_4(scenes: dict, modes: dict, recipes: dict) -> None:
-    _technique(modes, "goodnight-glow")["modules"]["sample"]["canvas"]["stops"][1]["at"] = 0.4
+    for canvas in _designs(modes, "garden-gathering-2"):  # its four stops: 1/3 → 0.4, on every rung
+        canvas["stops"][1]["at"] = 0.4
 
 
 def _blend_with_white(scenes: dict, modes: dict, recipes: dict) -> None:
@@ -108,7 +122,9 @@ def _blend_with_white(scenes: dict, modes: dict, recipes: dict) -> None:
 
 
 def _moving_copy_names_another_flow(scenes: dict, modes: dict, recipes: dict) -> None:
-    stepped = _technique(modes, "coastal-tides")["stepped"]
+    stepped = _technique(modes, "rainbow-row-sunset")[
+        "stepped"
+    ]  # a travel rung (Coastal Tides #1 breathes, D77)
     stepped["moving_feature"] = stepped["moving_feature"].replace("diagonally", "row by row")
 
 
@@ -166,10 +182,18 @@ MUTATIONS: dict[
     "breath-repeats-a-step": ("stepped", _breathe_tides(brightness_swing=1, steps_per_cycle=6), False),
     # seed 183 at lag_steps 1 starts all nine modules together: one breath, under "on their own" (review B-R6-1)
     "shimmer-starts-together": ("stepped", _shimmer_tides(brightness_swing=6, lag_steps=1, seed=183), False),
-    "linear-0": ("two-d", _layout("rainbow-row-sunset", {"kind": "linear", "angle_deg": 0}), False),
+    "linear-0": (
+        "two-d",
+        _layout("rainbow-row-sunset", {"kind": "linear", "angle_deg": 0}, ("diagonally", "column by column")),
+        False,
+    ),
     "kits-equal": (
         "kits-differ",
-        _layout("garden-gathering", {"kind": "radial", "centre_in": [75, 0]}),
+        _layout(
+            "garden-gathering",
+            {"kind": "radial", "centre_in": [75, 0]},
+            ("toward one spot", "toward one edge"),
+        ),
         False,
     ),
 }
@@ -347,4 +371,7 @@ def test_the_pins_are_the_committed_fixtures():
         "lag_steps",
         "seed",
     }
-    assert "stepped" not in pins["lowcountry-calm"] and "flow_words" not in pins["lowcountry-calm"]
+    # D77: every scene moves, the idle look's breath included (its pin is its own rung's, not an approved value)
+    assert all("stepped" in pin and "flow_words" in pin for pin in pins.values())
+    calm = MODES.mode("lowcountry-calm").techniques.stepped
+    assert pins["lowcountry-calm"]["stepped"]["mode"] == calm.mode

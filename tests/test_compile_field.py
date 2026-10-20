@@ -88,7 +88,8 @@ def _brightness(target) -> int:
     return int(row.value)
 
 
-@pytest.mark.parametrize("mode_id", [s.id for s in SCENES.scenes])
+# D59's anchor is about the six scenes the fixture holds (D77's options aren't in tests/fixtures_modes_field.yaml)
+@pytest.mark.parametrize("mode_id", list(D59_COLUMNS))
 def test_an_x_linear_field_at_the_module_centres_is_d59s_literal_columns(mode_id):
     sampled = compile_mode(mode_id, Tier.T3, _ctx())
     literal = compile_mode(mode_id, Tier.T3, _ctx(modes=LITERAL))
@@ -102,7 +103,7 @@ def test_an_x_linear_field_at_the_module_centres_is_d59s_literal_columns(mode_id
         assert R.color_rgb(*D59_COLUMNS[mode_id][int(m.module[3])]) in sampled.modules[m.id].rows
 
 
-@pytest.mark.parametrize("mode_id", [s.id for s in SCENES.scenes])
+@pytest.mark.parametrize("mode_id", list(D59_COLUMNS))
 def test_d59s_columns_are_each_scenes_x_gradient_at_the_column_centres(mode_id):
     """The pinned anchor is no typo: each column is the scene catalog's own gradient at its centre (the palette is
     the fixture's own preview, so a Design Lab colour change in config/ can't move this pin)."""

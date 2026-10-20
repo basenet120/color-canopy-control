@@ -131,7 +131,8 @@ palettes, at the scene's brightness, at every tier.
   module-level colour every few seconds, in 90 s runs, and then holds the still design. This replaces D59's "no scene
   moves" for these two scenes only. Lowcountry Calm (the idle look) and The Goodnight Glow stay still. It runs in the
   simulator only. On real lights it stays **off until the stepped rehearsal (Gate R)** passes and Alon sets
-  `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still.
+  `motion.stepped.live_enabled`. Until then, real lights show Golden Hour's sun still. (Since D77 every option moves,
+  Calm and Goodnight included: see below.)
 - **D75 (Oct 18): any scene may move.** A scene may carry one stepped rung of three kinds: travel (D65's: the design
   moves), breathe (the design stays put and each strand's colour and/or level swells and softens in place, the
   design's start leading) and shimmer (each strand breathes on its own rhythm). A guest's choice runs it first and
@@ -145,7 +146,41 @@ palettes, at the scene's brightness, at every tier.
   Lab's layout picker offers "Fins", so a fins design can be published to the live show from now on (D68's path).
   The iPad's Now-showing picture draws the fins. No shipped scene uses the kind until D77.
 
-See `04` "Canopy control model" for how each scene runs at each tier.
+*Superseded again (D76, D77):*
+- **D76: options and the review menu.** A scene may name `option_of: <base id>`. While more than six scenes are
+  visible, the iPad shows one row per scene with its options side by side, and /ops can take a card off the iPad
+  without a deploy. In the Lab, "Make this the scene" copies an option onto its base.
+- **D77 (Oct 19): 18 options, three per scene, every one moving.** For the client review the six scenes become
+  "#1" (the approved palette, re-fitted to the fins) plus two drafted options each. Every option has a stepped rung
+  (D75), which live hardware refuses until Gate R and `motion.stepped.live_enabled`. The palettes and descriptions are
+  in `config/scenes.yaml`.
+
+  | Id | Name | Design (module level) | Motion |
+  |---|---|---|---|
+  | `lowcountry-calm` | Lowcountry Calm #1 (idle, safe look) | rings tilted along the current: an inverted radial centred 12.5″ off the middle, radius 130″ | breathe: the sea glass drifts and settles |
+  | `lowcountry-calm-2` | Lowcountry Calm #2 | fin rings | breathe: the level, the centre leading |
+  | `lowcountry-calm-3` | Lowcountry Calm #3 | the current (linear 22°, mirrored) | travel, 8 steps |
+  | `rainbow-row-sunset` | Rainbow Row Sunset #1 (custom-1) | the current (linear 18°) | travel |
+  | `rainbow-row-sunset-2` | Rainbow Row Sunset #2 | the current (linear 18°), six facade colours | travel |
+  | `rainbow-row-sunset-3` | Rainbow Row Sunset #3 | fin rings | travel, in toward the centre |
+  | `garden-gathering` | Garden Gathering #1 (custom-2) | rings tilted along the current (inverted radial, 12.5″ off the middle) | travel, in toward one spot |
+  | `garden-gathering-2` | Garden Gathering #2 | fin rings | travel, from the centre out |
+  | `garden-gathering-3` | Garden Gathering #3 | along the current, folded (warm pools: Edison amber through the middle, fern green at the two far corners) | shimmer: the level |
+  | `coastal-tides` | Coastal Tides #1 | fin rings | breathe: the ocean blue drifts and settles |
+  | `coastal-tides-2` | Coastal Tides #2 | a channel along the current (linear 140°, mirrored, inverted: the gradient runs across it) | travel |
+  | `coastal-tides-3` | Coastal Tides #3 | a sweep around a spot near the middle (107.5″, 55″), mirrored | travel, 8 steps |
+  | `golden-hour` | Golden Hour #1 (custom-3) | a radial sun at the middle of the left edge, radius 225″ (sunset pink on the deep centre) | travel: rays from the sun |
+  | `golden-hour-2` | Golden Hour #2 | fin rings: warm white on the deep centre, Home Depot orange on the corners | travel, from the centre out |
+  | `golden-hour-3` | Golden Hour #3 | the current (linear 18°) | travel |
+  | `goodnight-glow` | The Goodnight Glow #1 | fin rings, inverted (moonlight blue on the deep centre) | breathe: the level |
+  | `goodnight-glow-2` | The Goodnight Glow #2 | fin rings | shimmer: colour and level, firefly hopping between the strands one or two at a time |
+  | `goodnight-glow-3` | The Goodnight Glow #3 | fin rings | breathe: the level, the centre leading |
+
+  The current is field angle 18° (31.4° in true inches: field angles are measured in the canopy's proportions).
+  **The eight fin-ring options show three rings at module level** (the centre, the edge-middles, the corners). Their
+  rim colour shows light by light on the apron, and on a whole strand only during a run. The other ten show 4–9
+  module colours. The #1s keep their palettes, moods, slots and the idle/safe role; only the placement changed (and
+  Calm #1's description). This supersedes D59's "six scenes, names never change" for the review only, until PR E.
 
 ## Hubspace control strategy (client direction, verbatim intent)
 - Client prioritizes a visible **"bulb" lighting effect** over LED strip lighting.

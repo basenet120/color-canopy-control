@@ -200,6 +200,23 @@ def test_the_lab_calls_only_its_own_routes_and_never_sends_a_live_setting():
     ]
 
 
+def test_the_lab_offers_every_field_kind():
+    """The layout picker's kinds are the server's field kinds (D74 adds fins), lab.js builds its buttons from the page
+    model's list, and Mirror is disabled wherever the page model says the kind has no transform (fins)."""
+    from conductor.looks import field as F
+
+    model = _code(_text("lab-model.mjs"))
+    m = re.search(r"LAYOUT_KINDS = Object\.freeze\(\[([^\]]*)\]\)", model)
+    assert m, "lab-model.mjs has no frozen LAYOUT_KINDS"
+    assert re.findall(r'"(\w+)"', m.group(1)) == list(F.FIELD_KINDS)
+    js = _code(_text("lab.js"))
+    assert "M.LAYOUT_KINDS.map(" in js
+    assert not re.search(r'\[\s*"linear",\s*"radial",\s*"sweep"\s*\]', js), "a literal kind list in lab.js"
+    controls = _function(js, "renderLayoutControls")
+    assert '$("#lab-mirror").disabled = locked || !c.transform;' in controls
+    assert 'if (c.note) parts.push(h("p", { class: "lab-muted", text: c.note }));' in controls
+
+
 def test_make_this_the_scene_is_a_working_draft_never_a_request():
     """D76: "Make this the scene" swaps the base's working draft for the option's design, in the browser (Undo brings
     it back); the base's Publish saves and publishes it. No new route, no new switch."""
@@ -225,23 +242,6 @@ def test_make_this_the_scene_is_a_working_draft_never_a_request():
     css = _code(_text("lab.css"))
     assert ".lab-scene.is-option {" in css and ".lab-badge.off-ipad {" in css
     assert "export const PROMOTE = " in _text("lab-model.mjs")
-
-
-def test_the_lab_offers_every_field_kind():
-    """The layout picker's kinds are the server's field kinds (D74 adds fins), lab.js builds its buttons from the page
-    model's list, and Mirror is disabled wherever the page model says the kind has no transform (fins)."""
-    from conductor.looks import field as F
-
-    model = _code(_text("lab-model.mjs"))
-    m = re.search(r"LAYOUT_KINDS = Object\.freeze\(\[([^\]]*)\]\)", model)
-    assert m, "lab-model.mjs has no frozen LAYOUT_KINDS"
-    assert re.findall(r'"(\w+)"', m.group(1)) == list(F.FIELD_KINDS)
-    js = _code(_text("lab.js"))
-    assert "M.LAYOUT_KINDS.map(" in js
-    assert not re.search(r'\[\s*"linear",\s*"radial",\s*"sweep"\s*\]', js), "a literal kind list in lab.js"
-    controls = _function(js, "renderLayoutControls")
-    assert '$("#lab-mirror").disabled = locked || !c.transform;' in controls
-    assert 'if (c.note) parts.push(h("p", { class: "lab-muted", text: c.note }));' in controls
 
 
 def test_the_motion_lines_come_from_the_page_model():

@@ -9,6 +9,10 @@ account — 33% over the planning cap.
 **Who runs it:** Alon (the ops password is yours to type; it is never stored). **When:** not during a client demo —
 the kits flip between two looks once a second for 3 minutes. **Where:** on the Mac (the show box).
 
+**Run it before `motion.stepped.live_enabled` is on.** The probe flips `garden-gathering` and `lowcountry-calm`
+through ops. Both have stepped rungs now (D77), so with `live_enabled` on, a flip may start a stepped run instead of
+sending one PUT per kit, and the count below no longer measures what it says.
+
 ## Run
 ```
 read -s "P?ops password: "; echo

@@ -23,6 +23,7 @@ import pytest
 import yaml
 from live_lab import (
     DEV,
+    GIT,
     GOLDEN,
     TIDES,
     ask,
@@ -192,8 +193,8 @@ def test_a_painted_publish_repaints_each_module_once_and_the_reconciler_never_re
         first["confirm_required"] and first["repaint"][0]["writes"] == 9 and first["repaint"][0]["in_s"] == 0
     )
     assert (
-        "Golden Hour's painted design is repainted into custom-3 on 9 modules (one slot write each)."
-        in first["confirm"]
+        f"{GIT.scenes.get(GOLDEN).name}'s painted design is repainted into custom-3 on 9 modules (one slot write "
+        "each)." in first["confirm"]
     )
     assert first["cost"].endswith(
         "repaints custom-3 on 9 modules: up to 27 slot writes (one each unless a write doesn't land), 9 reads, then "

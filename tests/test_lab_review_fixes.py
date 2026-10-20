@@ -260,7 +260,8 @@ def _app_painted_golden(monkeypatch):
 def test_the_t1_lock_refuses_a_save_naming_the_field(app_client, monkeypatch):
     _app_painted_golden(monkeypatch)
     sentence = (
-        "Golden Hour's slot is hand-painted in the Hubspace app on 1 module (Module 1); publishing a new design would "
+        f"{LIVE.scenes.get('golden-hour').name}'s slot is hand-painted in the Hubspace app on 1 module (Module 1); "
+        "publishing a new design would "
         "make the iPad describe colours the lights don't show. Repaint it in the app and record it on the module "
         "page's Slots tab first, or publish only its brightness, copy or timing."
     )

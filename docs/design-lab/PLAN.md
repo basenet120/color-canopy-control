@@ -280,7 +280,9 @@ class SceneDraft(_Strict):
     # (it is the blurb, shown at every tier: schema.py Mode._ladder).
 ```
 Ids, ladders and slots are **not** fields: a draft can't create a scene, rename an id, add/drop a rung or move a slot.
-`lowcountry-calm` can be drafted (colours, layout, brightness, copy) but its id never changes and it never steps.
+`lowcountry-calm` can be drafted (colours, layout, brightness, copy) but its id never changes. *(Superseded by
+D75/D77: "and it never steps". Calm #1 has a breathe rung, which the Lab edits like any other rung; the show never
+starts its run on its own while `motion.idle` is off.)*
 
 **Locked to D63 in v1** (carried in the draft, refused by the validator if changed, shown read-only in the UI with
 the reason): `layout.cycles` must be 1 and `sample_at` must be `centre` — `tests/test_modes_match_scenes.py` pins both
@@ -375,7 +377,9 @@ back — the purity rule of §3.0; its `ladder`, `slot` and `motion` are never t
    `_check_idle_scene(settings.kiosk.idle_scene, list(patched.modes.modes))` (show.py:77, :59; imported, not edited;
    **`.modes`** — `list()` of a `ModesFile` yields pydantic field tuples, so with any `idle_scene` set every draft
    would be refused; test with `settings_with(kiosk={"idle_scene": "golden-hour"})`): no run outlasts
-   `idle_return_s`, the idle mode never steps.
+   `idle_return_s`, the idle mode never steps. *(Superseded by D75/D77: the idle mode may carry a stepped rung, and
+   `_check_stepped` refuses `motion.idle` only when it has none; the engine never starts a run on start-up or an
+   idle return unless `motion.idle` is on.)*
 5. `scene_mode_problems(scenes, modes, recipes, canopy, approved=trio.modes, rules=BLOCKING)` (§3.4) → problems;
    then `rules=WARNINGS` → `warnings` (returned on a 200, never a 422; §3.4).
 6. Copy resolution (§3.3).
@@ -476,7 +480,7 @@ What moves out of `tests/test_modes_match_scenes.py` (the invariants; each rule 
 | brightness | `test_every_tier_uses_the_scenes_brightness_and_nothing_moves` (levels) | canvas/slot/modules/stepped/strand brightness == `brightness_draft` |
 | static | same test (motion part) | no `motion_effect`/`motion_feature`, slot `speed == 0`, `mode.motion is False`, design `cycles == 1` |
 | ladder-end | `test_every_ladder_ends_on_the_solid_colour` | ladder ends `[modules, strand]`; strand rgb == solid; no `fallback_look`; feature ends `set to <solid lower>.` |
-| slots | `test_three_modes_are_painted_one_per_slot_and_the_rest_start_at_module_level` | with `approved`: same mode ids, same ladder, same slot per mode; canvas technique ⇔ slot |
+| slots | `test_three_modes_are_painted_one_per_slot_and_every_mode_steps_before_module_level` | with `approved`: same mode ids, same ladder, same slot per mode; canvas technique ⇔ slot |
 | one-design | `test_each_scene_is_one_design_whose_stops_are_its_palette` (not its layout pin) | `FieldCanvas`, `rgb_only`, `at == "centre"`, stops at i/(n−1), stop recipes' hex/label == palette, canvas == sample design |
 | recipes | `test_every_design_recipe_is_rgb_only_with_no_white` | each design key: `rgb_only` == hex at 100, no white; `blend == rgb_only`; `strand.rgb` == hex; one key per palette colour |
 | two-d | `test_module_level_is_the_design_at_each_modules_centre` (count), `test_the_module_level_copy_names_the_designs_layout` (uniform rows/cols), `test_no_scene_reads_as_three_columns_at_module_level` | 4–9 distinct T3 colours; no uniform rows/columns; max column ΔE76 ≥ max row ΔE76 / 3 |
@@ -695,7 +699,7 @@ builds its palettes from the fixture YAML's own `preview` hexes instead of `load
 
 S3 converts, reading `_pins` (or the scene catalog / `RECIPES`, or the live mode, where the value is just a palette
 colour, a recipe or plumbing):
-- `test_modes_match_scenes.py`: `LAYOUTS`; the words dict in `test_the_d63_layouts_name_where_each_design_sits`;
+- `test_modes_match_scenes.py`: `LAYOUTS`; the words dict in `test_the_layouts_name_where_each_design_sits`;
   Calm's `(209, 234, 227)` and Goodnight's `(196, 214, 243)`; `test_golden_hours_sun_shows_at_module_level` runs
   only while `_pins["golden-hour"]["layout"]` is D63's sun, else `pytest.skip("Golden Hour's sun was redesigned in
   the Design Lab; see DECISIONS")`.
@@ -1316,7 +1320,8 @@ def ripple_rings(patched: ConfigTrio, scene_id: str, canopy: dict) -> list[list[
   counter; the moving sentence shows only while it plays. `effective_step_s` is pinned equal to a real
   `ProgramRunner.step_s` for 9 and 2 modules (`test_lab_stepped.py`).
 - **Live:** the Lab shows `STEPPED_LIVE_OFF` (show.py:70) + "Alon sets motion.stepped.live_enabled after Gate R"
-  and has no control for it. The idle scene has no stepped rung (no editor); a trial never steps (6.2).
+  and has no control for it. A trial never steps (6.2). *(Superseded by D75/D77: "The idle scene has no stepped
+  rung (no editor)". Calm #1's breathe rung has the stepped editor like every other option.)*
 - **Ripple (D64):** screen-only animation of `ripple_rings` at a stagger slider 0–1.2 s
   (`RIPPLE_SPAN_MAX_S / (RIPPLE_MAX_WAVES − 1)`), labelled "Screen preview only — the canopy's ripple is off
   (kiosk.ripple_stagger_s: 0) until Alon signs off (D64)". Never sent anywhere.

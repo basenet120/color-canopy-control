@@ -18,6 +18,7 @@ from conductor.config import CONFIG_DIR, load_recipes
 from conductor.engine_api import Tier
 from conductor.looks import parse_modes
 from conductor.rehearsal import MAX_MINUTES, RehearsalRefused
+from conductor.scenes import load_scenes
 from conductor.show import REHEARSAL_FEATURE, STEPPED_LIVE_OFF, ShowWiring
 from conductor.sim.settings import SimSettings
 
@@ -123,6 +124,23 @@ def engine_moving(mode_id: str) -> str:
     from conductor.looks import load_modes
 
     return load_modes(CONFIG_DIR).mode(mode_id).techniques.stepped.moving_feature
+
+
+def without_rung(wiring, *mode_ids: str) -> None:
+    """The show's modes with `mode_ids`' own stepped rungs taken off (D77 gives every scene one, a Lab edit could take
+    one off): the path where the rehearsal steps a look's module-level design at the D65 defaults."""
+    raw = wiring.modes_file.model_dump(mode="json", exclude_unset=True)
+    for mode_id in mode_ids:
+        entry = raw["modes"][mode_id]
+        entry["ladder"] = [t for t in entry["ladder"] if t != "stepped"]
+        entry["techniques"].pop("stepped", None)
+        entry.pop("motion", None)
+    ctx = wiring.context()
+    modes = parse_modes(raw, recipes=ctx.recipes, canopy=ctx.canopy, path="a test without a rung")
+    wiring.install_looks(modes, ctx.recipes)
+
+
+SCENE_NAME = {s.id: s.name for s in load_scenes(CONFIG_DIR).scenes}  # D77: "Lowcountry Calm #1"
 
 
 # ---- the acceptance: a 2-minute rehearsal in sim -------------------------------------------------------------------
@@ -231,7 +249,8 @@ def test_the_tier_gate_opens_for_the_rehearsals_mode_only_and_only_while_it_runs
 def test_the_rehearsal_design_is_the_modes_module_level_design_stepped_and_modes_yaml_is_untouched():
     async def main():
         w = await show()
-        # Rainbow Row Sunset has no stepped rung (D65 steps only Coastal Tides and Golden Hour)
+        # Rainbow Row Sunset #1 without its own stepped rung (D77 gives it one; a Lab edit could take it off)
+        without_rung(w.wiring, "rainbow-row-sunset")
         modes = w.wiring.rehearsal_modes("rainbow-row-sunset")
         plan = w.wiring.rehearsal_plan("rainbow-row-sunset")
         shipped = w.wiring.modes_file.modes["rainbow-row-sunset"]
@@ -371,7 +390,7 @@ def test_ops_choosing_another_look_ends_it_with_what_it_measured():
         w = await show()
         await w.engine.rehearse("golden-hour", 3, source="ops")
         await w.run_for(16)  # the hold and steps 1 and 2 (7.5 s apart)
-        await w.engine.request_mode("goodnight-glow", source="ops")  # a still mood (D65)
+        await w.engine.request_mode("goodnight-glow", source="ops")  # another mood
         await w.ended()
         out = (w.report(), w.engine.current_plan(), w.engine.rehearsal_mode)
         await w.close()
@@ -380,7 +399,9 @@ def test_ops_choosing_another_look_ends_it_with_what_it_measured():
     report, plan, mode = run_virtual(main)
     assert report["ended"] == "ops chose goodnight-glow" and not report["completed"]
     assert report["verdict"] == "fail" and report["attempts"] >= 9 * 3
-    assert plan.mode_id == "goodnight-glow" and plan.program is None and mode is None
+    assert plan.mode_id == "goodnight-glow" and mode is None
+    # on purpose: in sim an ops choice keeps the ladder order, so The Goodnight Glow #1 runs its own breath (D77)
+    assert plan.tier is Tier.STEPPED and plan.program.moving_feature == engine_moving("goodnight-glow")
 
 
 def test_ops_can_stop_it_and_a_pause_stops_it():
@@ -460,10 +481,9 @@ def test_stopping_the_engine_ends_it_and_still_writes_the_report():
     assert report["ended"] == "the canopy engine stopped" and not report["completed"] and mode is None
 
 
-def test_the_idle_look_can_be_rehearsed_with_the_d65_default_rung(monkeypatch):
-    """D75: the idle look may be rehearsed (its refusal is gone). Lowcountry Calm has no stepped rung of its own, so
-    it rehearses its module-level design stepped at the D65 defaults, with the staff copy; the live gate opens for
-    that mode only, while it runs."""
+def test_the_idle_look_can_be_rehearsed_with_its_own_rung(monkeypatch):
+    """D75: the idle look may be rehearsed (its refusal is gone). Lowcountry Calm #1 has its own breath since D77, so
+    it rehearses that rung, with the copy guests would see; the live gate opens for that mode only, while it runs."""
 
     async def main():
         w = await show(live=True, monkeypatch=monkeypatch)
@@ -485,7 +505,8 @@ def test_the_idle_look_can_be_rehearsed_with_the_d65_default_rung(monkeypatch):
 
     preview, plan, result, during, after = run_virtual(main)
     assert preview["mode"] == "lowcountry-calm" and result["ok"], result
-    assert plan.program.moving_feature.startswith(REHEARSAL_FEATURE.split("{")[0])
+    assert plan.program.moving_feature == engine_moving("lowcountry-calm")
+    assert plan.program.mode == "breathe"
     assert during == ((True, ""), (False, STEPPED_LIVE_OFF), Tier.STEPPED, "lowcountry-calm")
     assert after == (False, STEPPED_LIVE_OFF)
 
@@ -506,7 +527,7 @@ def test_the_idle_look_can_be_rehearsed_with_the_d65_default_rung(monkeypatch):
         ("golden-hour", 2, "commissioning", "Commissioning is writing"),
         ("golden-hour", 2, "flat", "has no stepped design to rehearse"),
         ("golden-hour", 2, "gate", "would show canvas, not a stepped look"),
-        # (a mode without its own stepped rung: D65 gives Golden Hour and Coastal Tides one)
+        # (a mode without its own stepped rung: D77 gives every scene one, so the setup takes Garden's off first)
         ("garden-gathering", 2, "no-sample", "no module-level design sampled at the module centres"),
         ("garden-gathering", 2, "mean", "no module-level design sampled at the module centres"),
     ],
@@ -534,6 +555,9 @@ def test_it_refuses_plainly_and_sends_nothing(mode, minutes, setup, says):
         elif setup in ("no-sample", "mean"):
             raw = w.wiring.modes_file.model_dump(mode="json", exclude_unset=True)
             gh = raw["modes"][mode]
+            gh["ladder"] = [t for t in gh["ladder"] if t != "stepped"]  # its own rung off (D77 gives it one)
+            gh["techniques"].pop("stepped", None)
+            gh.pop("motion", None)
             if setup == "mean":
                 gh["techniques"]["modules"]["sample"]["at"] = "mean"
             else:
@@ -599,7 +623,10 @@ def test_the_safe_look_ends_it_and_a_look_that_cant_step_never_starts_one():
         return out
 
     first, result, second, mode, state = run_virtual(main)
-    assert first["ended"] == "Lowcountry Calm (strand) replaced it (ops)" and not first["completed"]
+    assert (
+        first["ended"] == f"{SCENE_NAME['lowcountry-calm']} (strand) replaced it (ops)"
+        and not first["completed"]
+    )
     assert not result["ok"] and result["message"].startswith(
         "The rehearsal didn't start: the look holds still"
     )
@@ -742,15 +769,18 @@ def test_a_report_that_cant_be_saved_says_so():
 
 def test_the_runbook_says_which_feature_line_the_kiosk_shows_during_a_rehearsal():
     """Step 5 of docs/runbooks/stepped-rehearsal.md tells the observer what the kiosk reads: a scene with its own
-    stepped rung (D65) rehearses with its guest-facing moving copy; only a look without one gets REHEARSAL_FEATURE."""
+    stepped rung (every scene and option since D77) rehearses with its guest-facing moving copy; only a look without
+    one gets REHEARSAL_FEATURE."""
     from conductor.looks import load_modes
 
     text = (Path(__file__).resolve().parent.parent / "docs" / "runbooks" / "stepped-rehearsal.md").read_text()
     step5 = " ".join(text.split("\n5. ", 1)[1].split("\n\n", 1)[0].split())
     stepping = {i: m for i, m in load_modes(CONFIG_DIR).modes.items() if m.techniques.stepped is not None}
-    assert stepping  # Golden Hour and Coastal Tides
-    for mode in stepping.values():
-        assert mode.label in step5
-        assert mode.techniques.stepped.moving_feature.split(", so ")[0] in step5
+    assert len(stepping) == 18  # D77
+    for prefix in {m.techniques.stepped.moving_feature.split(", so ")[0] for m in stepping.values()}:
+        assert prefix in step5  # every kind of sentence a rehearsal can show
+    for scene in load_scenes(CONFIG_DIR).scenes:
+        if scene.option_of is None:  # the six scenes by name; their options are "#2" and "#3"
+            assert scene.name.removesuffix(" #1") in step5, scene.name
     staff = REHEARSAL_FEATURE.split(", so ")[0]
     assert f'without a stepped rung of its own shows "{staff}' in step5

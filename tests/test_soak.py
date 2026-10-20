@@ -10,10 +10,9 @@ from conductor.sim.settings import SimSettings
 
 def test_short_soak_passes_and_writes_the_report(tmp_path):
     report = tmp_path / "sim-acceptance.md"
-    stepped = {
-        **soak.load_soak_stepped(),
-        "runs": 4,
-    }  # Golden Hour, Coastal Tides, Lowcountry Calm, then Garden Gathering cut short by another mood (interrupt_every 4)
+    # Golden Hour, Coastal Tides, Lowcountry Calm, then Garden Gathering cut short by another mood (interrupt_every 4),
+    # which runs its own rung too (every mood steps since D77)
+    stepped = {**soak.load_soak_stepped(), "runs": 4}
     cfg = soak.SoakConfig(hours=1 / 3, changes=6, seed=3, report_path=report, stepped=stepped)
     results, verdicts, meta = soak.run_soak(cfg)
     failed = [v["name"] for v in verdicts if not v["pass"] and v.get("gating", True)]
@@ -26,36 +25,28 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     # out-of-band changes (the Hubspace app) found by the rolling true-up and undone within 10 s (review gap)
     assert results["drift_heals"] and max(results["drift_heals"]) <= 10 and results["drift_timeouts"] == 0
     assert results["read_load"]["true_up_interval_s"] == 5 and "GET/s on the canopy account" in text
-    # the ripple scenario (D64): its own run at 1.2 s, ring by ring, one PUT per module, none early
+    # the ripple scenario (D64): its own run at 1.2 s, ring by ring, one PUT per module, none early. Every mood has a
+    # stepped rung since D77, and the ripple's config copy strips them (the live path until Gate R), so the moods land
+    # still, ring by ring (only the SIMULATED on-device motion plan goes out as one burst)
     ripple = results["ripple"]
     assert ripple["stagger_s"] == 1.2 and ripple["changes"] >= 10 and ripple["rings_max"] == 3
     assert set(ripple["puts_per_module"]) == {1} and ripple["early"] == 0 and ripple["downgrades"] == 0
     assert len(ripple["ring_spreads"]) >= 3 * ripple["changes"] - ripple["changes"]  # rings of 1–3
     assert "Ripple, SIMULATED 1.2 s stagger: each ring's landing spread" in text
     assert "`kiosk.ripple_stagger_s` 1.2 (the show's setting stays 0" in text
-    # the stepped scenario (D65, D75): every scene steps (its own rung in place, else a SIMULATED one before modules),
-    # each step measured from the lights, each run's end by the tier it settled on
+    assert "and every stepped rung stripped from its config copy (each mood lands still" in text
+    # the stepped scenario (D65, D75, D77): every candidate steps on its own rung, in place; each step measured from the
+    # lights, each run's end by the tier it settled on
     st = results["stepped"]
-    # the two own rungs exactly as config/modes.yaml has them (no approved value pinned here: make lab-roundtrip)
+    # every rung exactly as config/modes.yaml has it (no approved value pinned here: make lab-roundtrip)
     keys = ("steps_per_cycle", "step_s", "run_s", "mode", "brightness_swing", "lag_steps")
-    own = {m: load_modes(CONFIG_DIR).mode(m).techniques.stepped for m in ("golden-hour", "coastal-tides")}
-    timing = {"steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0}  # the scenario's SIMULATED technique
-    kinds = {
-        "lowcountry-calm": ("travel", 0, 0),
-        "garden-gathering": ("breathe", 6, 2),
-        "rainbow-row-sunset": ("shimmer", 6, 3),
-        "goodnight-glow": ("breathe", 4, 0),
-    }
-    assert st["techniques"] == {
-        **{m: {"own": True, **{k: getattr(t, k) for k in keys}} for m, t in own.items()},
-        **{
-            m: {"own": False, **timing, "mode": mode, "brightness_swing": swing, "lag_steps": lag}
-            for m, (mode, swing, lag) in kinds.items()
-        },
-    }
+    own = {m: load_modes(CONFIG_DIR).mode(m).techniques.stepped for m in st["modes"]}
+    assert st["techniques"] == {m: {"own": True, **{k: getattr(t, k) for k in keys}} for m, t in own.items()}
     assert st["tiers"] == {"stepped": 4} and st["runs"] == 4 and st["interrupted"] == 1
-    # 7.5 s steps: the design's 6 s stretched to 9 modules at 72 a minute (the cap of 90 less the 20 % reserve)
-    assert st["ended"] == {"the run is over": 3, "replaced": 1} and set(st["step_s"]) == {7.5}
+    # each design's step, stretched to 7.5 s where shorter: 9 modules at 72 a minute (the cap of 90 less the 20 %
+    # reserve)
+    assert st["ended"] == {"the run is over": 3, "replaced": 1}
+    assert set(st["step_s"]) == {max(own[m].step_s, 9 * 60 / 72) for m in st["modes"][:4]}
     assert st["steps_landed"] >= 3 * 11 and st["step_spreads"] and st["step_landings"]  # the metrics exist
     # B-R1-2: none superseded by the runner's own pacing. One a module missed because a pinned fault hit its write
     # (429 on every attempt, or a silent drop; the next step carries it) is the faults' luck, whose random path moves
@@ -73,14 +64,22 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     assert len(st["holds"]) == 3 and st["holds_unsettled"] == 0
     # Golden Hour's run settles onto its commissioned canvas; Coastal Tides and the idle look hold their own rung's
     assert st["settled"] == {"canvas": 1, "stepped": 2}
-    assert st["idle_return"]["mode"] == "lowcountry-calm" and 180 <= st["idle_return"]["after_s"] <= 190
-    assert st["idle_return"]["ran"] is False  # the idle return shows the idle look still (motion.idle off)
+    idle = st["idle_return"]
+    assert idle["mode"] == "lowcountry-calm" and 180 <= idle["after_s"] <= 190
+    # the idle return installs the idle look still (motion.idle off), though it has a rung of its own (D77): no run,
+    # no runner, its module-level design
+    assert idle["ran"] is False and idle["runner"] is False and idle["tier"] == "modules"
     assert (
         "Stepped, SIMULATED: each step's landing spread" in text
-        and "Stepped scenario (D65, D75, SIMULATED)" in text
+        and "Stepped scenario (D65, D75, D77, SIMULATED)" in text
     )
-    assert "garden-gathering: a SIMULATED breathe (swing 6, lag 2), 6 steps a breath" in text
-    assert soak._technique_words("coastal-tides", st["techniques"]["coastal-tides"]) in text
+    assert (
+        "cut short by another mood chosen mid-run (which starts its own run, D77; never the idle look)"
+        in text
+    )
+    assert "the idle return showed the idle look still at modules." in text
+    for mode_id, technique in st["techniques"].items():
+        assert soak._technique_words(mode_id, technique) in text
     # the main run steps Coastal Tides (its stepped rung is first, D65) and every pinned row above still holds
     assert results["wiring"]["tiers"].get("stepped", 0) > 0
 
@@ -258,20 +257,21 @@ def _stepped(**kw) -> dict:
 def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
     settings = soak.load_soak_stepped()
     assert soak.SoakConfig().stepped == settings
-    assert settings["modes"] == [  # every scene (D75), Golden Hour first, the idle look never last
+    # every kind of motion on its own rung (D77): travel, a colour breath, a shimmer (Garden Gathering #3, in Rainbow
+    # Row Sunset's place) and a level-only breath; Golden Hour first, the idle look never last
+    assert settings["modes"] == [
         "golden-hour",
         "coastal-tides",
         "lowcountry-calm",
         "garden-gathering",
-        "rainbow-row-sunset",
+        "garden-gathering-3",
         "goodnight-glow",
     ]
+    # a SIMULATED rung's cadence, for a candidate without one of its own; no overrides (every scene has a rung, D77)
     assert settings["technique"] == {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 90}
-    assert settings["simulated"] == {
-        "garden-gathering": {"mode": "breathe", "brightness_swing": 6, "lag_steps": 2},
-        "rainbow-row-sunset": {"mode": "shimmer", "brightness_swing": 6, "lag_steps": 3, "seed": 7},
-        "goodnight-glow": {"mode": "breathe", "brightness_swing": 4},
-    }
+    assert settings["simulated"] == {}
+    show = load_modes(CONFIG_DIR)
+    assert all(show.mode(m).techniques.stepped is not None for m in settings["modes"])
     # the module's defaults mirror config/sim/soak.yaml
     assert {k: settings[k] for k in soak.STEPPED_DEFAULTS} == soak.STEPPED_DEFAULTS
     rows = soak._stepped_rows(_stepped())
@@ -309,8 +309,18 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
         _stepped(idle_return={"after_s": 180.3, "mode": "lowcountry-calm", "settled_s": None}),
         # D75: the idle return started a run (motion.idle is off: it shows the idle look still)
         _stepped(idle_return={"after_s": 180.3, "mode": "lowcountry-calm", "settled_s": 2.0, "ran": True}),
+        # D77: or installed its stepped rung at all (a runner, even one that never moved)
+        _stepped(
+            idle_return={
+                "after_s": 180.3,
+                "mode": "lowcountry-calm",
+                "settled_s": 2.0,
+                "ran": False,
+                "runner": True,
+            }
+        ),
     ]
-    rows_failing = (0, 1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 7, 8, 8, 8, 8, 8)
+    rows_failing = (0, 1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 7, 8, 8, 8, 8, 8, 8)
     for index, stepped in zip(rows_failing, failing, strict=True):
         rows = soak._stepped_rows(stepped)
         assert [i for i, r in enumerate(rows) if not r["pass"]] == [index], stepped
@@ -319,6 +329,10 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
         _stepped(steps_cut=2, interrupted=1, steps_superseded_faults=1, step_writes_faulted=2)
     )
     assert "2 cut by a newer mood" in line and "`config/sim/acceptance.yaml` is pinned" in line
+    assert (
+        "1 cut short by another mood chosen mid-run (which starts its own run, D77; never the idle look)"
+        in line
+    )
     assert (
         "1 carried by the next step after a pinned fault hit a module's write (429 on every attempt, or a "
         "silent drop; of 2 step writes hit that way)" in line
@@ -355,44 +369,141 @@ def test_most_in_60s_counts_a_half_open_window():
     assert soak._most_in_60s([0.0, 59.9, 60.0, 119.95]) == 2
 
 
-def test_the_soak_config_copy_keeps_own_rungs_in_place_and_puts_simulated_ones_before_modules(tmp_path):
-    """D75: Golden Hour and Coastal Tides bring their own stepped rung (design, cadence and copy as the show has them)
-    and keep it where the show has it (a guest's choice runs it first anyway); every other scene gets a SIMULATED rung
-    just before `modules`, of its own kind (travel, breathe, shimmer), whose copy says what changes."""
+def _parse_copy(config) -> tuple[dict, object]:
+    """The config copy's modes.yaml, raw and parsed (the show's own loader rules: recipes, the canopy with its fins)."""
     import yaml
 
-    from conductor.config import CONFIG_DIR, ConductorSettings, load_recipes
+    from conductor.config import load_recipes
     from conductor.geometry import load_canopy_config
     from conductor.looks import parse_modes
+
+    raw = yaml.safe_load((config / "modes.yaml").read_text(encoding="utf-8"))
+    canopy = load_canopy_config(config / "canopy.yaml")
+    return raw, parse_modes(raw, recipes=load_recipes(config), canopy=canopy, path=config)
+
+
+def test_the_soak_config_copy_keeps_every_candidates_own_rung_in_place():
+    """D75/D77: every candidate brings its own stepped rung (design, cadence and copy as the show has them) and keeps it
+    where the show has it (a guest's choice runs it first anyway); nothing SIMULATED is added, and the copy's modes.yaml
+    is the show's own."""
+    import shutil
+
+    import yaml
+
+    from conductor.config import ConductorSettings
     from conductor.show import _check_stepped
 
-    config = soak._soak_config_dir(None, stepped=soak.load_soak_stepped())
+    settings = soak.load_soak_stepped()
+    config = soak._soak_config_dir(None, stepped=settings)
     try:
-        raw = yaml.safe_load((config / "modes.yaml").read_text(encoding="utf-8"))
-        parsed = parse_modes(raw, recipes=load_recipes(config), canopy=load_canopy_config(), path=config)
+        raw, parsed = _parse_copy(config)
     finally:
-        import shutil
-
         shutil.rmtree(config.parent, ignore_errors=True)
     show = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text(encoding="utf-8"))
-    for mode_id in ("golden-hour", "coastal-tides"):
+    assert raw == show  # every rung where config/modes.yaml puts it, none added
+    for mode_id in settings["modes"]:
         mode = raw["modes"][mode_id]
-        assert mode["ladder"] == show["modes"][mode_id]["ladder"]  # in place
-        assert mode["techniques"]["stepped"] == show["modes"][mode_id]["techniques"]["stepped"]
+        assert "stepped" in mode["ladder"]
         assert not mode["techniques"]["stepped"]["moving_feature"].startswith("SIMULATED")
-    assert raw["modes"]["golden-hour"]["ladder"] == ["canvas", "slot", "stepped", "modules", "strand"]
-    ladders = {m: v["ladder"] for m, v in raw["modes"].items()}
+    assert all(parsed.modes[m].moves and not parsed.modes[m].motion for m in raw["modes"])
+    _check_stepped(ConductorSettings(), parsed)  # every run ends before the idle return; motion.idle is off
+
+
+def test_the_ripple_config_copy_strips_every_stepped_rung():
+    """D77: every scene has a stepped rung and a guest's choice runs it first (D75), so the ripple scenario's config copy
+    strips them all: each mood lands as its still look, ring by ring, as on live hardware until Gate R. The rest of each
+    ladder is the show's, in order; the show's own config is untouched."""
+    import shutil
+
+    import yaml
+
+    from conductor.config import load_settings
+
+    config = soak._soak_config_dir(None, ripple_stagger_s=1.2)
+    try:
+        raw, parsed = _parse_copy(config)
+        stagger = load_settings(config).kiosk.ripple_stagger_s
+    finally:
+        shutil.rmtree(config.parent, ignore_errors=True)
+    show = yaml.safe_load((CONFIG_DIR / "modes.yaml").read_text(encoding="utf-8"))
+    assert list(raw["modes"]) == list(show["modes"]) and stagger == 1.2
+    for mode_id, mode in raw["modes"].items():
+        assert mode["ladder"] == [t for t in show["modes"][mode_id]["ladder"] if t != "stepped"]
+        assert "stepped" not in mode["techniques"] and "motion" not in mode
+        assert not parsed.modes[mode_id].moves
+    assert all("stepped" in m["ladder"] for m in show["modes"].values())  # the show's own config keeps them
+
+
+def _without_rungs(tmp_path, *mode_ids: str):
+    """A copy of config/ whose modes.yaml has no stepped rung on `mode_ids` (ladder and technique)."""
+    import shutil
+
+    import yaml
+
+    config = tmp_path / "config"
+    shutil.copytree(CONFIG_DIR, config)
+    modes = yaml.safe_load((config / "modes.yaml").read_text(encoding="utf-8"))
+    for mode_id in mode_ids:
+        mode = modes["modes"][mode_id]
+        mode["ladder"] = [t for t in mode["ladder"] if t != "stepped"]
+        mode["techniques"].pop("stepped")
+    (config / "modes.yaml").write_text(
+        yaml.safe_dump(modes, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return config
+
+
+def test_a_candidate_without_its_own_rung_gets_a_simulated_one_from_its_module_level_design(tmp_path):
+    """The scenario still takes a candidate the show doesn't step (none since D77; Garden Gathering with its rung taken
+    out here): a SIMULATED rung just before `modules`, its own module-level design (the hold is that rung), the
+    scenario's cadence, copy that names the flow."""
+    from pydantic import TypeAdapter
+
+    from conductor.geometry import load_canopy_config
+    from conductor.looks.schema import FieldCanvas, motion_words
+
+    config = _without_rungs(tmp_path, "garden-gathering")
+    # the scenario's travel technique only (no per-mode override)
+    soak._apply_stepped(config, {**soak.load_soak_stepped(), "modes": ["garden-gathering"], "simulated": {}})
+    raw, parsed = _parse_copy(config)
+    mode = raw["modes"]["garden-gathering"]
+    stepped, sample = mode["techniques"]["stepped"], mode["techniques"]["modules"]["sample"]
+    assert mode["ladder"] == ["canvas", "slot", "stepped", "modules", "strand"]  # D75: just before modules
+    assert stepped["canvas"] == sample["canvas"] and stepped["brightness"] == sample["brightness"]
+    words = motion_words(
+        TypeAdapter(FieldCanvas).validate_python(sample["canvas"]),
+        load_canopy_config(config / "canopy.yaml"),
+        "forward",
+    )
+    assert stepped["moving_feature"].startswith("SIMULATED")
+    assert stepped["moving_feature"].endswith(f"so the palette moves {words}.")
+    assert (stepped["step_s"], stepped["run_s"], stepped["steps_per_cycle"]) == (6, 90, 6)
+    assert parsed.modes["garden-gathering"].techniques.stepped is not None
+
+
+def test_a_simulated_rung_takes_its_kind_of_motion_from_the_overrides(tmp_path):
+    """D75's `simulated:` overrides (none needed since D77, but kept): with the rungs taken out, a candidate gets a
+    breathe, a shimmer or a level-only breath of its own design, whose copy says what changes and loads under the
+    schema's rules; one with no override keeps the scenario's travel."""
+    from conductor.config import ConductorSettings
+    from conductor.show import _check_stepped
+
+    modes = ["garden-gathering", "rainbow-row-sunset", "goodnight-glow", "lowcountry-calm"]
+    config = _without_rungs(tmp_path, *modes)
+    simulated = {  # each swing fits its scene's brightness
+        "garden-gathering": {"mode": "breathe", "brightness_swing": 6, "lag_steps": 2},
+        "rainbow-row-sunset": {"mode": "shimmer", "brightness_swing": 6, "lag_steps": 3, "seed": 7},
+        "goodnight-glow": {"mode": "breathe", "brightness_swing": 4},
+    }
+    soak._apply_stepped(config, {**soak.load_soak_stepped(), "modes": modes, "simulated": simulated})
+    raw, parsed = _parse_copy(config)
+    ladders = {m: raw["modes"][m]["ladder"] for m in modes}
     assert ladders["garden-gathering"] == ["canvas", "slot", "stepped", "modules", "strand"]
     assert ladders["rainbow-row-sunset"] == ["canvas", "slot", "stepped", "modules", "strand"]
     assert ladders["lowcountry-calm"] == ["stepped", "modules", "strand"]
     assert ladders["goodnight-glow"] == ["stepped", "modules", "strand"]
-    techs = {m: parsed.modes[m].techniques.stepped for m in raw["modes"]}
-    garden, sunset, goodnight, calm = (
-        techs["garden-gathering"],
-        techs["rainbow-row-sunset"],
-        techs["goodnight-glow"],
-        techs["lowcountry-calm"],
-    )
+    techs = {m: parsed.modes[m].techniques.stepped for m in modes}
+    garden, sunset, goodnight, calm = (techs[m] for m in modes)
     assert (garden.mode, garden.brightness_swing, garden.lag_steps) == ("breathe", 6, 2)
     assert garden.moving_feature.startswith("SIMULATED") and "swells and softens" in garden.moving_feature
     assert (sunset.mode, sunset.brightness_swing, sunset.lag_steps, sunset.seed) == ("shimmer", 6, 3, 7)
@@ -400,44 +511,14 @@ def test_the_soak_config_copy_keeps_own_rungs_in_place_and_puts_simulated_ones_b
     assert (goodnight.mode, goodnight.brightness_swing, goodnight.lag_steps) == ("breathe", 4, 0)
     assert goodnight.moving_feature.endswith("so the palette swells and softens.")  # no lag: no start named
     assert calm.mode == "travel" and calm.moving_feature.startswith("SIMULATED")
-    assert all(parsed.modes[m].moves and not parsed.modes[m].motion for m in raw["modes"])
+    assert all(parsed.modes[m].moves and not parsed.modes[m].motion for m in modes)
     _check_stepped(ConductorSettings(), parsed)  # every run ends before the idle return; motion.idle is off
 
 
-def test_a_candidate_without_its_own_rung_gets_a_simulated_one_from_its_module_level_design():
-    """The scenario still takes a candidate the show doesn't step (Garden Gathering here): a SIMULATED rung, its own
-    module-level design (the hold is that rung), the scenario's cadence, copy that names the flow."""
-    import yaml
-
-    from conductor.config import load_recipes
-    from conductor.geometry import load_canopy_config
-    from conductor.looks import parse_modes
-
-    # the scenario's travel technique only (no per-mode override)
-    settings = {**soak.load_soak_stepped(), "modes": ["garden-gathering"], "simulated": {}}
-    config = soak._soak_config_dir(None, stepped=settings)
-    try:
-        raw = yaml.safe_load((config / "modes.yaml").read_text(encoding="utf-8"))
-        parsed = parse_modes(raw, recipes=load_recipes(config), canopy=load_canopy_config(), path=config)
-    finally:
-        import shutil
-
-        shutil.rmtree(config.parent, ignore_errors=True)
-    mode = raw["modes"]["garden-gathering"]
-    stepped, sample = mode["techniques"]["stepped"], mode["techniques"]["modules"]["sample"]
-    assert mode["ladder"] == ["canvas", "slot", "stepped", "modules", "strand"]  # D75: just before modules
-    assert stepped["canvas"] == sample["canvas"] and stepped["brightness"] == sample["brightness"]
-    assert (
-        stepped["moving_feature"].startswith("SIMULATED")
-        and "moves from one edge." in stepped["moving_feature"]
-    )
-    assert (stepped["step_s"], stepped["run_s"], stepped["steps_per_cycle"]) == (6, 90, 6)
-    assert parsed.modes["garden-gathering"].techniques.stepped is not None
-
-
 def test_the_interrupting_mood_is_never_the_idle_mode():
-    """Every scene steps in the scenario (D75), so a run is cut short by another of its modes: never the running one
-    and never the idle look (an interrupt with the idle look would hide the idle return the scenario measures)."""
+    """A run is cut short by a mood outside the scenario, else another of its modes: never the running one and never
+    the idle look (an interrupt with the idle look would hide the idle return the scenario measures). Every mood steps
+    since D77, so the one chosen starts its own run."""
     import random
 
     from conductor.config import ConductorSettings
@@ -450,7 +531,13 @@ def test_the_interrupting_mood_is_never_the_idle_mode():
             mood = soak._interrupting_mood(rng, [], settings["modes"], mode_id, idle)
             assert mood is not None and mood not in (idle, mode_id)
             assert mood in settings["modes"]
-    # a still mood, when there is one, is still the one chosen
+    # a mood outside the scenario, when there is one, is the one chosen (the soak's pool: every other mood of the
+    # catalog but the idle look)
+    others = [m for m in load_modes(CONFIG_DIR).modes if m not in settings["modes"] and m != idle]
+    assert others and idle not in others
+    for seed in range(20):
+        mood = soak._interrupting_mood(random.Random(seed), others, settings["modes"], "golden-hour", idle)
+        assert mood in others
     chosen = soak._interrupting_mood(
         random.Random(1), ["goodnight-glow"], settings["modes"], "golden-hour", idle
     )

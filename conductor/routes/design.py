@@ -18,10 +18,10 @@ are 2-D designs now (D63), so it asks the Conductor for the design instead and p
   - `modules`: the module-level (T3) colour of each of the nine positions (r0c0 … r2c2) through the compiler's own
     `module_look` (the sample at the module's centre or its heads' mean, `sample_at`), or None when the mode's
     module level isn't one RGB colour per module.
-  - `ladder`: the mode's techniques in order; its first is what the show tries first (`modules` for the
-    modules-first scenes, so the Studio opens those at module level).
+  - `ladder`: the mode's techniques in order; its first is what the show tries first (the Studio opens a scene
+    whose ladder starts at `modules` or `stepped` at module level).
 
-- `GET /api/canopy/scenes` → the six scenes' palette, name, mood, description and brightness as the show runs them
+- `GET /api/canopy/scenes` → every scene's palette, name, mood, description and brightness as the show runs them
   (the live looks), with the install `generation` (the Studio's chips, tiles and copy; see `scenes_json`).
 
 It reads config only: no engine, no device, no registry (a position draws the design whether or not a device is
@@ -153,7 +153,7 @@ def design(
 
 
 def scenes_json(services: Any) -> dict:
-    """The six scenes as the show runs them now (the live looks, D68: approved or published), for the Studio's
+    """The scenes as the show runs them now (the live looks, D68: approved or published), for the Studio's
     palette chips, scene tiles and copy: `{generation, live_id, scenes: [{id, name, mood, description, brightness,
     default_solid, palette: [{name, hex}], source}]}`. `generation` moves on every install of new looks, so an open
     Studio knows its cached designs are stale. A read of config only: no engine, no device."""

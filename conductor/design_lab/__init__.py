@@ -1,4 +1,4 @@
-"""The Design Lab (D66, docs/design-lab/PLAN.md): edit the six scenes on screen, save named versions, compare them,
+"""The Design Lab (D66, docs/design-lab/PLAN.md): edit the scenes on screen, save named versions, compare them,
 present them, and export the approved result as a reviewed git patch.
 
 Slice A is screen only: nothing here writes to a device, flips `motion.stepped.live_enabled` or

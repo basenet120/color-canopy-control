@@ -9,14 +9,17 @@ Two groups:
   the real canopy geometry and a `state.lit`, and the page draws its 270 lights and the 650 fins under them (full and
   partial canopy, a tap's pulse, power off, unknown panels' dashed fins, a turned view, no rebuild per poll).
   Screenshots: docs/screenshots/kiosk-*.png at the three iPad sizes (the canopy pictures are not tracked).
-  The review stub (`review=True`, D76) serves the 18-scene review fixture (tests/review_fixture.py: fixture data only,
-  07 §9) with the server's own menu rule (`ipad_menu.menu`, `hide` = kiosk.hidden_scenes) and thumbnails
+  The plain stub is the six-card menu: since D77 the catalog has 18 options, and the stub hides the 12 `-2`/`-3`
+  options through the server's own menu rule (`ipad_menu.menu`, `hide` = kiosk.hidden_scenes), so the 3×2 tests keep
+  testing six cards with no scroll. The review stub (`review=True`, D76) serves the real 18-option catalog with nothing
+  hidden (tests/review_fixture.py's synthetic catalog yields to a catalog with its own options) and thumbnails
   (`ipad_menu.catalog_thumbs`): grouped rows, the scrolling scene list under a pinned side, painted card pictures, a
   whole-strand card's one colour (`ipad_menu.plan_thumb`) beside a card with none (the strip) and the six-option
-  grid. Its screenshots (kiosk-review-*.png, kiosk-six-options-1180x820.png) are left untracked: PR D
-  takes them from the real catalog.
+  grid. Its screenshots (kiosk-review-*.png at the three iPad sizes, kiosk-six-options-1180x820.png) are of the real
+  catalog (D77).
 - **Against the real engine** (skips until GET /api/kiosk/panel serves a non-resting canopy): tap a scene, the state
-  goes changing then steady, the feature line shows the server's sentence and the 270 dots show the server's picture.
+  goes changing then steady, the feature line shows the server's sentence and the 270 dots show the server's picture
+  (since D77 every scene steps in the simulator, so that picture is one of its run's frames, or the still look).
 """
 
 from __future__ import annotations
@@ -45,6 +48,8 @@ RINGS = [["r1c1"], ["r0c1", "r1c0", "r1c2", "r2c1"], ["r0c0", "r0c2", "r2c0", "r
 FEATURE = "Every light set individually as a Hubspace custom pattern on both strands."
 SOLID_FEATURE = "Each Hubspace strand set to one colour from the scene."
 POLL_MS = 2000  # web/kiosk/panel-model.mjs POLL_MS: the panel reads its state at least this often
+NAME = {s.id: s.name for s in load_scenes().scenes}  # the catalog's names ('#n' since D77), never a literal
+OPTIONS = frozenset(s.id for s in load_scenes().scenes if s.option_of is not None)  # the 12 '-2'/'-3' options
 
 
 def _wait(predicate, timeout=20.0, interval=0.2):
@@ -65,10 +70,12 @@ PER_LIGHT = ("canvas", "slot")
 class StubPanel:
     """Answers /api/kiosk/panel and the three writes like the guest panel backend would, on wall time.
 
-    `review=True` serves the 18-scene review fixture; `hide` is kiosk.hidden_scenes. Which scenes are visible comes
-    from the server's own rule (`ipad_menu.menu`, idle scene included), so the stub can't drift from it. Thumbnails
-    are sent only while the review menu shows, on the basis the sim engine gives at T1: per light for a canvas- or
-    slot-first scene, else its nine module colours."""
+    `hide` is kiosk.hidden_scenes: by default the 12 options (D77), so the plain stub is the six-card menu, and
+    nothing with `review=True`, which serves the review menu on the real 18-option catalog (the review fixture yields
+    to a catalog with its own options). Which scenes are visible comes from the server's own rule (`ipad_menu.menu`,
+    idle scene included), so the stub can't drift from it. Thumbnails are sent only while the review menu shows, on
+    the basis the sim engine gives at T1: per light for a canvas- or slot-first scene, else its nine module
+    colours."""
 
     def __init__(
         self,
@@ -79,12 +86,16 @@ class StubPanel:
         driven: set[str] | None = None,
         view: PreviewSettings | None = None,
         ripple_s: float | None = None,
-        review: bool = False,
-        hide: frozenset[str] = frozenset(),
         unknown: set[str] | None = None,
         steps: dict | None = None,
+        review: bool = False,
+        hide: frozenset[str] | None = None,
     ) -> None:
         catalog = review_scenes(load_scenes()) if review else load_scenes()
+        if (
+            hide is None
+        ):  # the plain stub hides the options through the menu rule, never a second scene filter
+            hide = frozenset() if review else OPTIONS
         kiosk = load_settings().kiosk.model_copy(update={"hidden_scenes": sorted(hide)})
         self.menu = ipad_menu.menu(catalog, kiosk)
         thumbs: dict[str, dict | None] = {}
@@ -292,7 +303,7 @@ def test_panel_ready_changing_cooldown(design_context_factory, screenshots):
     assert page.text_content("h1") == "The Color Canopy"
     assert page.get_attribute(".scene[data-scene='lowcountry-calm']", "data-state") == "selected"
     assert page.text_content("#feature-text") == FEATURE
-    assert page.text_content("#now-name") == "Lowcountry Calm"
+    assert page.text_content("#now-name") == NAME["lowcountry-calm"]
     assert page.eval_on_selector_all("#snake rect", "els => els.length") == 30
     for card in page.locator(".scene").all():  # big targets for fingers at arm's length
         box = card.bounding_box()
@@ -315,7 +326,7 @@ def test_panel_ready_changing_cooldown(design_context_factory, screenshots):
         "document.querySelector(\"[data-scene='coastal-tides']\").dataset.state === 'selected'"
     )
     page.wait_for_selector("#chip:not([hidden])")
-    assert page.text_content("#now-name") == "Coastal Tides"
+    assert page.text_content("#now-name") == NAME["coastal-tides"]
     assert page.get_attribute(".scene[data-scene='golden-hour']", "aria-disabled") == "true"
 
     # a tap on a disabled card sends nothing and explains, never silently
@@ -798,6 +809,8 @@ def test_review_menu_groups_each_scenes_options_in_one_row(
     assert page.get_attribute("#app", "data-review") == "true"
     cards = _cards(page)
     assert [c["id"] for c in cards] == [s["id"] for s in stub.scenes] and len(cards) == 18
+    # the real catalog (D77): each scene's #1, #2 and #3 in one row, the six scenes in catalog order
+    assert [c["id"] for c in cards] == [x for b in BASES for x in (b, f"{b}-2", f"{b}-3")]
     row = page.evaluate(
         "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--review-row'))"
     )
@@ -919,7 +932,7 @@ def test_review_cards_draw_their_own_design(design_context_factory):
     assert by_id["golden-hour-2"]["thumb"]["basis"] == "modules"  # an option: its nine module colours
     got = page.evaluate(
         """async (scenes) => {
-          const P = await import('/kiosk/canopy-preview.mjs?v=review-3');
+          const P = await import('/kiosk/canopy-preview.mjs?v=catalog-1');
           const panel = await (await fetch('/api/kiosk/panel')).json();
           const out = {};
           for (const s of scenes) {
@@ -972,7 +985,7 @@ def test_a_whole_strand_review_card_draws_its_one_colour_and_a_card_with_none_ke
     targets = {
         ids[p]: ModuleTarget(ids[p], [], [], colors=[dict(aqua) for _ in range(30)]) for p in ("r0c0", "r0c1")
     }
-    plan = ModePlan("coastal-tides", "Coastal Tides", Tier.STRAND, "", False, targets)
+    plan = ModePlan("coastal-tides", NAME["coastal-tides"], Tier.STRAND, "", False, targets)
     strand = ipad_menu.plan_thumb("coastal-tides", load_canopy(str(CONFIG_DIR)), registry, plan)
     assert strand is not None and strand["basis"] == "strand"
     by_id["coastal-tides"]["thumb"] = strand
@@ -984,7 +997,7 @@ def test_a_whole_strand_review_card_draws_its_one_colour_and_a_card_with_none_ke
     )
     got = page.evaluate(
         """async (scene) => {
-          const P = await import('/kiosk/canopy-preview.mjs?v=review-3');
+          const P = await import('/kiosk/canopy-preview.mjs?v=catalog-1');
           const panel = await (await fetch('/api/kiosk/panel')).json();
           const card = document.querySelector(`.scene[data-scene="${scene.id}"]`);
           const other = document.querySelector('.scene[data-scene="coastal-tides-2"]');
@@ -1027,7 +1040,7 @@ def test_review_thumbnails_follow_a_quarter_turned_view(design_context_factory):
     _ready(page)
     outside = page.evaluate(
         """async () => {
-          const P = await import('/kiosk/canopy-preview.mjs?v=review-3');
+          const P = await import('/kiosk/canopy-preview.mjs?v=catalog-1');
           const panel = await (await fetch('/api/kiosk/panel')).json();
           const bad = [];
           for (const canvas of document.querySelectorAll('#grid canvas.thumb')) {
@@ -1073,7 +1086,7 @@ def test_a_hidden_scene_that_is_showing_is_named_in_now_showing(design_context_f
     stub = StubPanel(scene="golden-hour-3", review=True, canopy=True, hide=frozenset({"golden-hour-3"}))
     _ctx, page, errors = _open(design_context_factory, LANDSCAPE, stub)
     _ready(page)
-    assert page.text_content("#now-name") == "Golden Hour #3"
+    assert page.text_content("#now-name") == NAME["golden-hour-3"]
     assert page.locator(".scene[data-scene='golden-hour-3']").count() == 0
     assert page.locator(".scene[data-state='selected']").count() == 0
     assert len(_dots(page)) == 270
@@ -1127,19 +1140,41 @@ def test_panel_scene_reaches_the_simulator(context_factory, api, screenshots):
         f"document.querySelector('#feature-text').textContent === {json.dumps(after['feature'])}",
         timeout=10000,
     )
-    # the 270 dots are the server's picture of what the engine installed
+    # the 270 dots are the server's picture of what the engine installed: its still look, or (D77: every scene steps
+    # in the simulator, D75: a guest's choice runs the rung first) whichever frame of the run the page is at
     body = api("/api/kiosk/panel")
     lit = {m["pos"]: m for m in body["state"]["lit"]["modules"]}
     unlit = {"off": UNLIT, "dark": UNLIT, "unknown": "none"}  # unknown: an outline, no colour claim
-    want = [
-        unlit.get(lit[m["pos"]]["state"])
-        or (lit[m["pos"]]["colors"] or [lit[m["pos"]]["color"]] * len(m["heads"]))[k]
-        for m in body["canopy"]["modules"]
-        for k in range(len(m["heads"]))
+    heads = [(m["pos"], len(m["heads"])) for m in body["canopy"]["modules"]]
+
+    def fill(value: str) -> str:  # canopy-preview.mjs paintFor upper-cases a hex
+        return value.upper() if value.startswith("#") else value
+
+    pictures = [
+        [
+            fill(unlit.get(lit[pos]["state"]) or (lit[pos]["colors"] or [lit[pos]["color"]] * n)[k])
+            for pos, n in heads
+            for k in range(n)
+        ]
     ]
+    motion = body["state"]["lit"].get("motion") or {}
+    if motion.get("kind") == "steps":  # canopy-preview.mjs motionColors: one colour per lit panel, else dark
+        grid = [f"r{r}c{c}" for r in range(3) for c in range(3)]
+        for frame in motion["frames"]:
+            pictures.append(
+                [
+                    fill(
+                        unlit.get(lit[pos]["state"])
+                        or (frame[grid.index(pos)] if isinstance(frame[grid.index(pos)], str) else UNLIT)
+                    )
+                    for pos, n in heads
+                    for _ in range(n)
+                ]
+            )
+    wanted = json.dumps([json.dumps(p, separators=(",", ":")) for p in pictures])
     page.wait_for_function(
-        f"JSON.stringify([...document.querySelectorAll('#canopy-preview circle.dot')].map((e) => "
-        f"e.getAttribute('fill'))) === {json.dumps(json.dumps(want, separators=(',', ':')))}",
+        f"{wanted}.includes(JSON.stringify([...document.querySelectorAll('#canopy-preview circle.dot')].map((e) => "
+        "e.getAttribute('fill'))))",
         timeout=10000,
     )
     page.screenshot(path=str(screenshots / "kiosk-live-1180x820.png"))

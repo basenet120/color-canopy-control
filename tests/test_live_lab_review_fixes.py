@@ -12,7 +12,7 @@ virtual clock over the shipped config/ (tests/live_lab.py's show):
 - LL-PUB-5: a later good publish resolves the rollback warn; a scene shown again resolves its can't-be-shown warn.
 - UI-1: the "Show <scene>" box is part of what ops confirms (sentence, notes and cost follow it).
 - UI-4: "today" at T1 paints what the slots hold under the live looks, and never T1 while the scene is held.
-- UI-5: GET /api/canopy/scenes is the six scenes as the show runs them, with the install generation.
+- UI-5: GET /api/canopy/scenes is the scenes as the show runs them (18 since D77), with the install generation.
 - B1-5: the no-data-folder refusal and Undo's checksum check.
 """
 
@@ -504,7 +504,8 @@ def test_the_show_box_is_part_of_what_ops_confirms(no_threads):
         "sends nothing now"
     )
     assert shown["show_offer"] == TIDES
-    assert "The simulated canopy switches to Coastal Tides now on 9 modules (" in shown["confirm"], shown[
+    tides = GIT.scenes.get(TIDES).name  # D77: "Coastal Tides #1"
+    assert f"The simulated canopy switches to {tides} now on 9 modules (" in shown["confirm"], shown[
         "confirm"
     ]
     assert (
@@ -596,7 +597,7 @@ def test_the_studios_scenes_are_the_live_looks_with_their_generation(no_threads)
         "source",
     }
     old = next(s for s in before["scenes"] if s["id"] == TIDES)
-    assert old["name"] == "Coastal Tides" and old["source"] == "approved"
+    assert old["name"] == GIT.scenes.get(TIDES).name and old["source"] == "approved"
 
 
 # ---- B1-5: the no-data-folder row and Undo's checksum ---------------------------------------------------------------

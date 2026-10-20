@@ -1226,6 +1226,8 @@ changing any scene. `config/scenes.yaml`, `modes.yaml` and `recipes.yaml` are un
   three times). Over seeds 0–15 one step (seed 6: a 429, then a silent drop) was carried that way and none was
   superseded otherwise.
 
+## 2026-10-18 — the iPad review menu
+
 **D76 — The iPad review menu: options grouped in rows, cards drawn at the tier in use, hide without a deploy, "Make
 this the scene" (Oct 18, preset-options PR C; plan docs/plans/preset-options/README.md §6).** A scene may name
 `option_of: <base id>` (config/scenes.yaml): one level deep, and the base must be a scene in the same catalog. While
@@ -1288,6 +1290,115 @@ fewer it is the 3 × 2 grid, unchanged, so deploying this changes nothing on the
   (`trio_sha`, published looks, the scene pins). It is pinned like the ids: a published trio or a Lab draft can never
   regroup a scene (validate_trio, the Lab's shape check).
 - Lab exports made before D77 lands propose a reserved D-number (`_next_decision` is max + 1); renumber by hand.
+
+## 2026-10-19 — the 18-option catalog
+
+**D77 — The client-review catalog: 18 options, three per scene, every one moving (Oct 19, preset-options PR D; plan
+`docs/plans/preset-options/README.md` §4 and "§4 as built"). Supersedes D59's "six scenes, names never change" for
+the client review only, until PR E.**
+- **Ids and names.** `config/scenes.yaml` has 18 scenes in catalog order: each scene's #1 keeps its id
+  (`lowcountry-calm`, `rainbow-row-sunset`, `garden-gathering`, `coastal-tides`, `golden-hour`, `goodnight-glow`),
+  followed by `<id>-2` and `<id>-3`, which carry `option_of: <id>` (D76). Names are `"<Scene name> #n"`, quoted in
+  the YAML. The #1s are renamed "… #1" and keep the "#1" until PR E or a Lab rename at the session (C27; D76's
+  promote keeps the base's name). Moods stay the scene's own, and every mode's label is its scene's name.
+  `config/modes.yaml` lists the 18 modes in the same order. The 46 new colours have one recipe key each, using the
+  Lab's allocation (the slug, else `<option id>-<slug>`). The one exception is `rainbow-row-sunset-2-apricot`, kept
+  off the plain `apricot` that the Lab round trip's rename case writes. `home-depot-orange` is its own key beside the
+  colour-study `hd-orange`, which no scene uses.
+- **Unapproved until the session.** The 12 options' colours, names and descriptions, and Calm #1's description
+  ("a pale sea-glass heart", for the tilted rings) are drafts. They need D59's on-site sign-off at the client session,
+  and the recipes need the colour study. "Home Depot orange" as a guest-visible name also needs the brand check (06
+  #29).
+- **The #1s keep** their approved palettes, moods, the idle and safe role (`kiosk.idle_mode` and `compile.SAFE_MODES`
+  are `lowcountry-calm`) and the painted slots (custom-1 Sunset, custom-2 Garden, custom-3 Golden). **Their placement
+  is re-fitted to the fins** (plan §4):
+  - Calm #1 and Garden #1 are rings tilted along the current. `fins` takes no parameters, so the tilt is an inverted
+    canopy-metric radial centred 12.5 in off the middle along the current (`centre_in [122.5, 67.5]`). Calm also
+    gets `radius_in: 130`, so a fourth visible colour reads (its two colours are only ΔE76 11.8 apart). Their copy
+    says "from one spot just off the middle".
+  - Coastal Tides #1 and The Goodnight Glow #1 (inverted: the moon on the deep centre) sit on the fin rings.
+  - Rainbow Row Sunset #1 runs along the current: linear at field angle 18°, which is 31.4° in true inches, because
+    field angles are measured in the canopy's proportions.
+  - Golden Hour #1's sun is stretched (`radius_in: 225`), so the deep centre is exactly sunset pink. Its stops stay
+    evenly spaced, as the scene rules require; the plan asked to retune the stops.
+- **Every option steps:** 11 travel, 5 breathe, 2 shimmer. Calm #1 and Coastal Tides #1 breathe their colour
+  ("drifts and settles", shift 0.4 and 0.35, the start leading by one step). Calm #2 and Goodnight #1 and #3 breathe
+  their level. Garden #3 shimmers its level, with `lag_steps: 2` and seed 31: the corners differ, and the two kits
+  (r0c0, r0c1) start apart, so the show box's two kits visibly shimmer (seeds 3 and 11 gave them the same lag).
+  Goodnight #2's shimmer is the plan's firefly hop (review D-R2-3): a three-step breath of colour and level
+  (`direction: reverse`, `shift: 0.35`, swing 6), its starts up to six steps apart (`lag_steps: 6`, seed 107), so
+  after the still step one or two strands are at the top of their breath at a time, and each corner strand turns
+  full firefly as it brightens, at its own step; the centre takes deep moss, never firefly. Each `run_s` is a whole
+  number of program cycles at the nine-strand pace (D75's cycle is a breath plus its largest lag) and at most
+  `kiosk.idle_return_s`: Calm #1, Calm #2 and Garden #3 run 120 s, Tides #1 105 s, Goodnight #2 144 s (two cycles of
+  nine 8 s steps) and Goodnight #3 150 s. Ladders are `[stepped, modules, strand]`, and `[canvas, slot, stepped,
+  modules, strand]` for the painted three. There is no `motion:` key (D75: "this scene moves" is `Mode.moves`, and
+  `Mode.motion` stays false, so there is no T2 burst). Keys left at their default are left out, except `direction`,
+  which is written on every rung: the Lab export can add the other stepped lines but not that one, so a direction edit
+  on a rung without it is refused. **Live hardware refuses the rung** until Gate R and `motion.stepped.live_enabled`
+  (show.py's `tier_allowed`), so on the show box every option shows its still module-level design.
+- **Moving copy uses D75's words.** Prefix A ("… each Hubspace strand set to a single colour and sent its next colour
+  every few seconds, so …") is for travel and the colour breaths, which say "drifts and settles". Prefix B ("… set to a
+  single colour and sent a brighter or softer level every few seconds, so …") is for the level breaths and Garden #3's
+  shimmer. Goodnight #2's firefly shimmer changes both, so its copy is sent "its next colour and a brighter or softer
+  level". The plan's own prefix C ("the strands around the middle") is dropped. D75's waveform swings both ways, so Coastal Tides
+  #1's centre strand does change: at the bottom of the breath it takes some aqua. On a partial canopy the sentence
+  says "a brighter or softer level" where only levels change.
+- **Module level, stated plainly.** The eight fin-ring options (Calm #2, Sunset #3, Garden #2, Tides #1, Golden #2,
+  Goodnight #1, #2 and #3) read as **three rings** on the real lights: the centre, the edge-middles and the
+  corners. They pass the two-d warning's "4–9 colours" only on near-ties of ΔE76 0.33–1.23 (r0c0 and r2c2 at t 0.6745
+  against r0c2 and r2c0 at 0.6666), and a test pins them as three seen colours. Their rim colour (the last stop, or the
+  first when inverted) shows light by light on the apron, and at module level only during a run. The other ten show
+  4–9 module colours at least ΔE76 2.3 apart. A palette tweak at the session can collapse a near-tie; the two-d warning
+  then stands and the Lab refuses the export. Switching that option to the tilted radial clears it. Alon chooses
+  whether to keep the fin rings (STATUS question 1; the default keeps them, decision D1).
+- **Where the options differ from §4's prose** (review D-R2-3; each pinned by a test in tests/test_d77_catalog.py):
+  - Garden Gathering #3 is the plan's warm pools, not a ninth fin-ring option: the current folded at field angle 140°
+    (Coastal Tides #2's layout) puts Edison amber on the centre and on the two corners the current runs through,
+    lantern gold on the edge-middles and fern green on the two far corners.
+  - The Goodnight Glow #2 keeps its still look on the fin rings with a hint of firefly on the corners; the firefly hop
+    is its run (above). A still design can't light one or two strands alone without leaving the rings.
+  - Rainbow Row Sunset #2 stays on the current at 18°, not the plan's flatter 15°: the plan's angles are in true
+    inches (its current is 32°), and 15° there is 8.1° as a field angle, which reads as columns at module level (the
+    two-d warning fires at every field angle under 15°). At 18° all nine strands already show a different facade
+    colour, which is what "flatter" was for.
+  - Coastal Tides #3's beam is one side (the left column), not a narrow wedge: the stops are the palette evenly
+    spaced (a blocking rule), so lamp gold and beam white hold the top of t and the wedge can't be narrowed, and
+    without the fold (`transform: mirror`) the sweep's seam puts beam white on a strand beside night sea.
+- **Hand copy may hedge** on a colour at about a 35% mix ("a touch of haint blue", "a hint of firefly"; C28). The
+  Lab's generated copy names only the stops module level reaches, so a Lab edit or a promote regenerates those
+  sentences without the hedges.
+- **Golden Hour #2 reorders its stops** (decision D3) to warm white, honey, Home Depot orange and amber. The four
+  corner strands then show Home Depot orange at rest (module-centre t ≈ 0.67), amber sits on the apron light by
+  light, and the description names orange on the corner strands.
+- **Card thumbnails** draw no fins and use the thumbnail dot radius (C12 option b; D76).
+- **What PR D relies on**, checked on the merged A + B + C base before building:
+  - fins resolve on every loader (`load_modes`, the compiler's default canopy, `canopy_view`, the soak, the scene
+    pins, the Lab), and the raw canopy mapping refuses a fins design plainly;
+  - D75's relative guest brightness during a breath;
+  - start-up, the idle return and the safe look never start a run on the idle look (`motion.idle` off), while a
+    guest's choice of Calm #1 runs its breath;
+  - `Mode.motion` false, so there is no T2 burst;
+  - the partial-canopy copy;
+  - D75's "set" rule for travel rungs;
+  - forward is sign −1, applied before mirror and invert.
+- **The 7 am checklist's test change** now lands on The Goodnight Glow #1's breath in the simulator (ops keep the
+  ladder order) and restores Calm #1 still at module level. On live hardware it lands at module level until Gate R
+  and `live_enabled`. The rate probe flips Garden Gathering and Lowcountry Calm through ops, and both have rungs now,
+  so run it before `live_enabled` is on (the probe runbook says so).
+- **The soak.** The stepped scenario's candidates are D75's six with Garden Gathering #3 (the first shimmer) in
+  Rainbow Row Sunset's place, and there are no `simulated:` overrides. A mood chosen mid-run starts its own run. The
+  idle return must install Calm #1 with no runner. The ripple run strips every stepped rung from its config copy,
+  which is the live path until Gate R. In `make soak` (seed 0) on the final catalog the report reads PASS: every
+  pinned `acceptance.yaml` row passes (main run p95 4.70 s; out-of-band heal max 9.70 s against 10 s), and the
+  ripple's last-ring settle, a soak.yaml proposal that isn't pinned, is p95 7.05 s against 7.4 s. Seeds 1–5 give
+  5.65–7.00 s for it, all PASS. Only the two reported spreads fail, as before. Nothing was tuned.
+- **Deviations from plan §4's prose** are listed in the plan's "§4 as built".
+- **Deploy order.** First, export any live Lab publication (GET `/api/lab/export`): the ids, order and ladders differ
+  from git, so after D the show falls back to approved with an /ops warning. Second, deploy D before commissioning
+  custom-1 to custom-3 at the venue. Sunset's angle, Garden's rings and Golden's radius change the painted designs, so
+  every recorded slot hash goes stale, and a slot commissioned before D needs the operator repaint.
+- Lab exports made before D77 lands propose a reserved D-number; renumber by hand.
 
 **D78 — A module whose only problem is a flagged note shows its look on the iPad's picture (Oct 19; follows D73).**
 D73 makes such a module "stuck" at once, and `canopy_view.lit_state` drew every stuck module as `unknown` (an outline,

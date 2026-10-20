@@ -228,14 +228,18 @@ def test_a_first_step_that_isnt_the_static_look_is_refused():
         compile_mode("radial-outward", Tier.STEPPED, _ctx(modes=modes))
 
 
-def test_a_mode_without_a_stepped_rung_cant_compile_stepped_and_the_show_steps_only_two():
+def test_a_mode_without_a_stepped_rung_cant_compile_stepped_and_every_option_steps():
     shipped = load_modes()
+    stripped = shipped.model_copy(deep=True)
+    calm = stripped.modes["lowcountry-calm"]
+    calm.techniques.stepped = None
+    calm.ladder = [t for t in calm.ladder if t != "stepped"]
     with pytest.raises(PlanError, match="has no stepped technique"):
-        compile_mode("lowcountry-calm", Tier.STEPPED, _ctx(modes=shipped))  # the idle look never steps
-    # D65: only Coastal Tides and Golden Hour have a stepped rung (tests/test_d65_modes.py)
+        compile_mode("lowcountry-calm", Tier.STEPPED, _ctx(modes=stripped))
+    # D77: every scene and option has a stepped rung (tests/test_d77_catalog.py)
     stepping = [m for m, mode in shipped.modes.items() if mode.techniques.stepped is not None]
     assert stepping == [m for m, mode in shipped.modes.items() if "stepped" in mode.ladder]
-    assert stepping == ["coastal-tides", "golden-hour"]
+    assert stepping == list(shipped.modes) and len(stepping) == 18
 
 
 def test_ops_and_alerts_have_words_for_every_tier():

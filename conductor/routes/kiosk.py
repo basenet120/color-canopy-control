@@ -244,7 +244,7 @@ def _from_looks() -> dict[str, Any] | None:
 def load_kiosk_modes(
     path: Path = MODES_FILE, *, modes: Any = None, recipes: Any = None
 ) -> list[dict[str, Any]]:
-    """The six modes as the kiosk shows them, in config order. Raises ValueError with a plain message.
+    """The modes as the kiosk shows them, in config order. Raises ValueError with a plain message.
 
     `modes` (a validated ModesFile: the show's live looks, D68) replaces the file: the raw spec is its dump and the
     looks its modes, with `recipes` for the sampled colours. The `path=` form reads a file (tests pass one)."""

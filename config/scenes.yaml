@@ -1,22 +1,53 @@
-# The six approved Color Canopy scenes — the single scene catalog (D59).
-# Source: Paris's six-scene handoff (ALON-SIX-SCENES.json, 2026-10-07), generated from web/ops/showcase/demo-model.mjs
-# (sha256 a56cedcd…9c4d). Names, ids and palette colours are approved and must not change; brightness values are
-# editable drafts (physical mood approval pending). Gradient rule, per strand of 30 heads: t = head / 29, linear
-# interpolation between evenly spaced palette stops in RGB, rounded per channel; transform `mirror` replaces t with
-# 1 - |2t - 1| (Lowcountry Calm). Every scene is static (motionEffect 0, brightnessEffect 0).
+# The Color Canopy scene catalog: the six approved scenes (D59), each followed by its two review options (D77).
+# Source of the six: Paris's six-scene handoff (ALON-SIX-SCENES.json, 2026-10-07), generated from
+# web/ops/showcase/demo-model.mjs (sha256 a56cedcd…9c4d). Their ids and palette colours are approved and must not
+# change; for the client review their names carry "#1" (until PR E, or a Design Lab rename at the session) and
+# Lowcountry Calm #1's description is the preset-options plan's draft (needs the D59 sign-off).
+# The review options (D77; docs/plans/preset-options/README.md §4) are `<id>-2` and `<id>-3`, named "<name> #n", with
+# `option_of: <id>` on the line after `- id:` (the iPad groups them under their base, D76; the nickname after it is a
+# comment, not client copy). Their palettes, names and descriptions are drafts, unapproved until the client session
+# (D59) and Prototype 01's colour study. Brightness values are editable drafts (physical mood approval pending).
+# Gradient rule, per strand of 30 heads: t = head / 29, linear interpolation between evenly spaced palette stops in
+# RGB, rounded per channel; transform `mirror` replaces t with 1 - |2t - 1| (Lowcountry Calm #1). The options' strips
+# are linear: a palette strip, not a picture. No scene uses an on-device effect (motionEffect 0, brightnessEffect 0);
+# a scene moves only through its stepped rung in config/modes.yaml (D75, D77).
 scenes:
   - id: lowcountry-calm
-    name: "Lowcountry Calm"
+    name: "Lowcountry Calm #1"
     mood: "Settle in"
-    description: "Soft ivory with a pale sea-glass center for a calm, airy setting."
+    description: "Soft ivory with a pale sea-glass heart for a calm, airy setting."
     transform: mirror
     brightness_draft: 70
     default_solid: 0
     palette:
       - {name: "Soft ivory", hex: "#F7F2E7"}
       - {name: "Sea glass", hex: "#D1EAE3"}
+  - id: lowcountry-calm-2
+    option_of: lowcountry-calm   # "Haint blue porch"
+    name: "Lowcountry Calm #2"
+    mood: "Settle in"
+    description: "Haint blue, Charleston's porch-ceiling color, around a warm porch-light glow."
+    transform: linear
+    brightness_draft: 70
+    default_solid: 2
+    palette:
+      - {name: "Porch light", hex: "#FFF3DC"}
+      - {name: "Warm linen", hex: "#F3E6CF"}
+      - {name: "Haint blue", hex: "#BFE3DF"}
+  - id: lowcountry-calm-3
+    option_of: lowcountry-calm   # "Marsh morning"
+    name: "Lowcountry Calm #3"
+    mood: "Settle in"
+    description: "Oyster shell, spartina green and mist blue, like morning on the marsh."
+    transform: linear
+    brightness_draft: 70
+    default_solid: 2
+    palette:
+      - {name: "Oyster shell", hex: "#EEE6DA"}
+      - {name: "Spartina", hex: "#CFDDBE"}
+      - {name: "Mist blue", hex: "#D3E2EA"}
   - id: rainbow-row-sunset
-    name: "Rainbow Row Sunset"
+    name: "Rainbow Row Sunset #1"
     mood: "Stay a little longer"
     description: "Pastel coral, blush pink and lilac, inspired by Charleston’s colorful facades."
     transform: linear
@@ -26,8 +57,36 @@ scenes:
       - {name: "Pastel coral", hex: "#FF9E96"}
       - {name: "Blush pink", hex: "#FFD2E0"}
       - {name: "Lilac", hex: "#C4B3EC"}
+  - id: rainbow-row-sunset-2
+    option_of: rainbow-row-sunset   # "Facade row"
+    name: "Rainbow Row Sunset #2"
+    mood: "Stay a little longer"
+    description: "Six Rainbow Row facade colors: pink, butter, mint, sky, lavender and apricot."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 0
+    palette:
+      - {name: "Facade pink", hex: "#F6B8C8"}
+      - {name: "Butter yellow", hex: "#F8E39A"}
+      - {name: "Mint", hex: "#BFE6CF"}
+      - {name: "Sky blue", hex: "#AFD5F2"}
+      - {name: "Lavender", hex: "#CDB9EA"}
+      - {name: "Apricot", hex: "#F9C9A0"}
+  - id: rainbow-row-sunset-3
+    option_of: rainbow-row-sunset   # "Harbor dusk"
+    name: "Rainbow Row Sunset #3"
+    mood: "Stay a little longer"
+    description: "Apricot glow, coral, rose and dusk violet, like dusk over the harbor."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 1
+    palette:
+      - {name: "Apricot glow", hex: "#FFB98A"}
+      - {name: "Coral", hex: "#FF8A7A"}
+      - {name: "Rose", hex: "#E979A0"}
+      - {name: "Dusk violet", hex: "#9A86D6"}
   - id: garden-gathering
-    name: "Garden Gathering"
+    name: "Garden Gathering #1"
     mood: "Bring everyone together"
     description: "Sage green softens into pale lime and ivory for a fresh garden glow."
     transform: linear
@@ -37,8 +96,34 @@ scenes:
       - {name: "Sage green", hex: "#8FBF9D"}
       - {name: "Pale lime", hex: "#E6EED1"}
       - {name: "Ivory", hex: "#F7F2E7"}
+  - id: garden-gathering-2
+    option_of: garden-gathering   # "Magnolia garden"
+    name: "Garden Gathering #2"
+    mood: "Bring everyone together"
+    description: "Magnolia cream and blossom pink with leaf and moss greens."
+    transform: linear
+    brightness_draft: 75
+    default_solid: 1
+    palette:
+      - {name: "Magnolia cream", hex: "#FBF3E1"}
+      - {name: "Blossom pink", hex: "#F3C6D0"}
+      - {name: "Leaf green", hex: "#86B886"}
+      - {name: "Moss", hex: "#A9C49A"}
+  - id: garden-gathering-3
+    option_of: garden-gathering   # "String-light supper"
+    name: "Garden Gathering #3"
+    mood: "Bring everyone together"
+    description: "Edison amber and lantern gold over fern green, like supper under string lights."
+    transform: linear
+    brightness_draft: 75
+    default_solid: 1
+    palette:
+      - {name: "Edison amber", hex: "#FFC37F"}
+      - {name: "Lantern gold", hex: "#FFE1A3"}
+      - {name: "Fern green", hex: "#9DC89B"}
+      - {name: "Warm white", hex: "#FFF4E2"}
   - id: coastal-tides
-    name: "Coastal Tides"
+    name: "Coastal Tides #1"
     mood: "Find your coast"
     description: "Ocean blue, aqua, seafoam and foam white, inspired by the Lowcountry coastline."
     transform: linear
@@ -49,8 +134,34 @@ scenes:
       - {name: "Aqua", hex: "#79CED4"}
       - {name: "Seafoam", hex: "#B2E8D2"}
       - {name: "Foam white", hex: "#E9F3E7"}
+  - id: coastal-tides-2
+    option_of: coastal-tides   # "Marsh tide"
+    name: "Coastal Tides #2"
+    mood: "Find your coast"
+    description: "Deep teal and marsh green with tidewater blue and oyster white, like a tidal channel in the marsh."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 2
+    palette:
+      - {name: "Deep teal", hex: "#2F8F9D"}
+      - {name: "Marsh green", hex: "#8EBF8C"}
+      - {name: "Tidewater blue", hex: "#8FC3E6"}
+      - {name: "Oyster white", hex: "#EEE7D8"}
+  - id: coastal-tides-3
+    option_of: coastal-tides   # "Lighthouse night"
+    name: "Coastal Tides #3"
+    mood: "Find your coast"
+    description: "Night-sea blues with a beam of white and lamp gold, a nod to the Morris Island Lighthouse."
+    transform: linear
+    brightness_draft: 85
+    default_solid: 1
+    palette:
+      - {name: "Night sea", hex: "#34548F"}
+      - {name: "Harbor blue", hex: "#5B8FCB"}
+      - {name: "Lamp gold", hex: "#FFE4AE"}
+      - {name: "Beam white", hex: "#F3F6FF"}
   - id: golden-hour
-    name: "Golden Hour"
+    name: "Golden Hour #1"
     mood: "Let the evening glow"
     description: "Soft gold, peach, sunset pink, rose and lavender. Pinks lead the sunset."
     transform: linear
@@ -62,8 +173,34 @@ scenes:
       - {name: "Sunset pink", hex: "#FF9BC4"}
       - {name: "Rose", hex: "#E779B0"}
       - {name: "Lavender", hex: "#B59AE2"}
+  - id: golden-hour-2
+    option_of: golden-hour   # "Home Depot gold"
+    name: "Golden Hour #2"
+    mood: "Let the evening glow"
+    description: "Warm white, honey, Home Depot orange and amber, with orange on the corner strands for a golden evening glow."
+    transform: linear
+    brightness_draft: 95
+    default_solid: 1
+    palette:
+      - {name: "Warm white", hex: "#FFF1DA"}
+      - {name: "Honey", hex: "#FFD27A"}
+      - {name: "Home Depot orange", hex: "#F96302"}
+      - {name: "Amber", hex: "#FFAE45"}
+  - id: golden-hour-3
+    option_of: golden-hour   # "Marsh sunset"
+    name: "Golden Hour #3"
+    mood: "Let the evening glow"
+    description: "Deep amber, burnt orange, dusty rose and smoky violet, like a sunset over the marsh."
+    transform: linear
+    brightness_draft: 95
+    default_solid: 1
+    palette:
+      - {name: "Deep amber", hex: "#FFA040"}
+      - {name: "Burnt orange", hex: "#E8753A"}
+      - {name: "Dusty rose", hex: "#D98AA2"}
+      - {name: "Smoky violet", hex: "#8F7CC4"}
   - id: goodnight-glow
-    name: "The Goodnight Glow"
+    name: "The Goodnight Glow #1"
     mood: "Slow the night down"
     description: "Dim periwinkle, lavender and moonlight blue for a restful evening mood."
     transform: linear
@@ -73,3 +210,27 @@ scenes:
       - {name: "Periwinkle", hex: "#8B8BD1"}
       - {name: "Lavender", hex: "#BEA9E6"}
       - {name: "Moonlight blue", hex: "#C4D6F3"}
+  - id: goodnight-glow-2
+    option_of: goodnight-glow   # "Firefly night"
+    name: "The Goodnight Glow #2"
+    mood: "Slow the night down"
+    description: "Night blue and deep moss with soft firefly glints."
+    transform: linear
+    brightness_draft: 25
+    default_solid: 0
+    palette:
+      - {name: "Night blue", hex: "#4A5DA6"}
+      - {name: "Deep moss", hex: "#5B7A5A"}
+      - {name: "Firefly", hex: "#D9F07A"}
+  - id: goodnight-glow-3
+    option_of: goodnight-glow   # "Candle and lamp"
+    name: "The Goodnight Glow #3"
+    mood: "Slow the night down"
+    description: "A warm candle-amber heart with dusky mauve and night blue around it."
+    transform: linear
+    brightness_draft: 26
+    default_solid: 0
+    palette:
+      - {name: "Candle amber", hex: "#FFBF73"}
+      - {name: "Dusky mauve", hex: "#A487B3"}
+      - {name: "Night blue", hex: "#5C70AA"}

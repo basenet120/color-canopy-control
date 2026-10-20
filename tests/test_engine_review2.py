@@ -12,6 +12,7 @@ import dataclasses
 import time
 
 from fake_compiler import FakeCompiler, make_world, settings_with
+from live_path import refuse_stepped
 from technique_modes import TECHNIQUE_MODES as TM  # the pre-D59 recipes, a test fixture
 
 from conductor import rows as R
@@ -220,6 +221,8 @@ def test_f2_one_unread_module_leaves_the_other_eight_working(tmp_path):
             services.sim.fetch_profile = fetch_profile
 
         services, wiring, engine = await _boot(tmp_path, before_start=prepare)
+        # the subject is the unread module, not motion: Sunset's stepped rung (D77) refused as live hardware does
+        refuse_stepped(engine, "rainbow-row-sunset")
         clock = services.clock
         calm = await _until(clock, lambda: engine.current_plan() is not None, 30)
         calm_plan = engine.current_plan()
@@ -433,6 +436,9 @@ def test_d62_the_engine_drives_only_the_registered_modules_and_stops_asking_for_
             tmp_path, before_start=lambda s: box.setdefault("writes", _record_writes(s))
         )
         writes = box["writes"]
+        # the show box is live hardware: no stepped run until Gate R (D77 gives every scene a stepped rung), so each
+        # guest choice and the brightness are one command per driven module
+        refuse_stepped(engine)
         clock = services.clock
         assert await _until(clock, lambda: engine.current_plan() is not None and not engine.commissioning, 60)
         idle = engine.current_plan()

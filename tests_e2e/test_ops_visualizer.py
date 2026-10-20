@@ -14,10 +14,14 @@ import urllib.request
 import pytest
 from conftest import AUTH_HEADER
 
+from conductor.scenes import load_scenes
+
 PHONE = {"width": 390, "height": 844}
 TABLET = {"width": 1024, "height": 768}
 DESKTOP = {"width": 1280, "height": 800}
 HELD = "canopy-r1c1"  # Module 5, held on the module page to show a mismatch
+CATALOG = load_scenes()
+NAME = {s.id: s.name for s in CATALOG.scenes}  # the catalog's names ('#n' since D77), never a literal
 
 
 @pytest.fixture
@@ -104,7 +108,7 @@ def test_ops_phone_controls_checklist_and_test_mode_change(page_at, call, screen
     page = page_at(PHONE)
     _open_ops(page)
     assert page.locator(".sim-badge").inner_text().strip().lower() == "simulator"
-    assert page.inner_text("#canopy-mode") == "Rainbow Row Sunset"
+    assert page.inner_text("#canopy-mode") == NAME["rainbow-row-sunset"]
     assert "Hubspace strand" in page.inner_text("#canopy-feature")
     assert page.locator("#canopy-grid .cell.s-ready").count() == 9
     # every checklist row shows a status, and every non-pass row a fix
@@ -160,7 +164,9 @@ def test_ops_mode_picker_and_enrollment(page_at, call):
     _open_ops(page)
     page.select_option("#mode-select", "goodnight-glow")
     page.click("#mode-btn")
-    page.wait_for_function("document.querySelector('#canopy-mode').textContent === 'The Goodnight Glow'")
+    page.wait_for_function(
+        f"document.querySelector('#canopy-mode').textContent === {json.dumps(NAME['goodnight-glow'])}"
+    )
     _wait_mode(call, "goodnight-glow")
     # a kiosk link: no grants; the Copy row appears
     page.check("#enroll-role input[value='kiosk']")
@@ -177,24 +183,27 @@ def test_ops_mode_picker_and_enrollment(page_at, call):
 
 
 def test_ops_ipad_switch_takes_a_card_off_the_kiosk(page_at, call):
-    """D76: the "On the iPad" card's switch takes a scene's card off the guest panel; ops can still choose it."""
+    """D76: the "On the iPad" card's switch takes a scene's card off the guest panel; ops can still choose it. Since
+    D77 the catalog's 18 options are all on the iPad by default (the review menu)."""
+    total = len(CATALOG.scenes)
     page = page_at(TABLET)
     _open_ops(page)
-    page.wait_for_selector("#ipad-scenes li.ipad-row >> nth=5")
+    page.wait_for_selector(f"#ipad-scenes li.ipad-row >> nth={total - 1}")
     rows = page.eval_on_selector_all(
         "#ipad-scenes li.ipad-row button",
         "els => els.map((b) => ({id: b.dataset.scene, on: b.getAttribute('aria-checked'), disabled: b.disabled}))",
     )
-    assert len(rows) == 6 and all(r["on"] == "true" for r in rows), rows
+    assert [r["id"] for r in rows] == [s.id for s in CATALOG.scenes] and total == 18, rows
+    assert all(r["on"] == "true" for r in rows), rows
     assert next(r for r in rows if r["id"] == "lowcountry-calm")["disabled"] is True  # the idle scene
-    assert page.text_content("#ipad-summary").startswith("6 of 6 scenes are on the iPad.")
+    assert page.text_content("#ipad-summary").startswith(f"{total} of {total} scenes are on the iPad.")
     switch = 'button[data-scene="garden-gathering"]'
     try:
         page.click(switch)
         page.wait_for_function(
             f"document.querySelector({json.dumps(switch)}).getAttribute('aria-checked') === 'false'"
         )
-        assert "Garden Gathering is off the iPad" in page.text_content("#ipad-result")
+        assert f"{NAME['garden-gathering']} is off the iPad" in page.text_content("#ipad-result")
         assert "garden-gathering" not in [s["id"] for s in call("/api/kiosk/panel")["scenes"]]
         page.wait_for_function(
             "document.querySelector(\"#mode-select option[value='garden-gathering']\").textContent"

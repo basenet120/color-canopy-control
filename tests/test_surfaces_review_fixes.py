@@ -12,8 +12,10 @@ exception — the fakes elsewhere raise ModeRefused, which is how these slipped 
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+from pathlib import Path
 
 import pytest
 from conftest import _env
@@ -85,13 +87,16 @@ def stuck_show(monkeypatch, tmp_path):
 
 @pytest.fixture
 def t3_show(monkeypatch, tmp_path):
-    """The real engine as live runs before Gate B/C: canvas and slot tiers not allowed, so Sunset is T3."""
+    """The real engine as live runs before Gate B/C and Gate R: canvas, slot and stepped tiers not allowed (as
+    tests/partial_canopy.py's t3_only), so Sunset is T3 (D77 gives every scene a stepped rung)."""
     from conductor.app import app
-    from conductor.show import ShowWiring
+    from conductor.show import STEPPED_LIVE_OFF, ShowWiring
 
     def only_t3(self, mode_id, tier):
         if tier in (Tier.T1, Tier.T2):
             return False, "Gate C isn't proven on this kit (test)"
+        if tier is Tier.STEPPED:
+            return False, STEPPED_LIVE_OFF
         return True, ""
 
     monkeypatch.setattr(ShowWiring, "tier_allowed", only_t3)
@@ -408,10 +413,15 @@ def test_f8_t3_state_and_modes_carry_one_colour_per_module(t3_show):
     listing = {m["id"]: m for m in client.get("/api/kiosk/modes").json()}
     assert listing[SUNSET]["tier"] == "modules" and listing[SUNSET]["pattern"] == "modules"
     assert len(listing[SUNSET]["module_colours"]) == 9
-    calm = listing[CALM]  # Lowcountry Calm starts at module level too (D59), radial from the centre (D63)
+    # Lowcountry Calm at module level too (D59), its tilted rings (D77) as the pins hold them
+    calm = listing[CALM]
     assert calm["tier"] == "modules" and calm["pattern"] == "modules"
-    corners = {calm["module_colours"][i] for i in (0, 2, 6, 8)}
-    assert len(corners) == 1 and calm["module_colours"][4] not in corners  # 4 corners alike, centre not
+    shown = calm["module_colours"]  # the module colours at Calm's brightness (each module's preview)
+    corners = {shown[i] for i in (0, 2, 6, 8)}
+    assert len(shown) == 9 and shown[4] not in corners  # sea glass near the centre, not at a corner
+    pin = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"][CALM]
+    if pin["layout_words"] == "from one spot":  # D77's rings tilted along the current: the corners differ
+        assert len(corners) > 1
 
     assert client.post("/api/canopy/mode", json={"mode": SUNSET}).status_code == 200
     _settled(client, SUNSET)

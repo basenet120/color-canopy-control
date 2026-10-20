@@ -35,6 +35,7 @@ from live_lab import (
     save,
     show,
 )
+from live_path import refuse_stepped
 
 from conductor import rows as R
 from conductor.canopy import LOOKS_SOURCE, ONE_BURST_SOURCES, RECOMPILE_SOURCES
@@ -49,6 +50,8 @@ from conductor.looks import live as L
 
 SLOT = "custom-3"
 GOODNIGHT = "goodnight-glow"
+# git's names (D77: "Golden Hour #1"; PR E renames in one place)
+NAME = {s.id: s.name for s in GIT.scenes.scenes}
 
 
 @pytest.fixture
@@ -183,7 +186,7 @@ def _checklist(mp) -> dict[str, tuple[bool, Any]]:
                 (plan.label, plan.tier),
             )
             out["7"] = (engine.trial is None, engine.trial)
-            out["8"] = (C._default_modes(str(CONFIG_DIR)).mode(GOLDEN).label == "Golden Hour", None)
+            out["8"] = (C._default_modes(str(CONFIG_DIR)).mode(GOLDEN).label == NAME[GOLDEN], None)
             panel = (await c.get("/api/kiosk/panel")).json()
             golden = next(s for s in panel["scenes"] if s["id"] == GOLDEN)
             out["9"] = (golden["name"] == PINKER and golden["palette"][2]["hex"] == NEW_PINK, golden["name"])
@@ -195,7 +198,7 @@ def _checklist(mp) -> dict[str, tuple[bool, Any]]:
                 golden_mode["label"] == PINKER
                 and golden_mode["module_colours"] is not None
                 and PINKER in patterns
-                and "Golden Hour" not in patterns,
+                and NAME[GOLDEN] not in patterns,
                 (golden_mode["label"], sorted(patterns)),
             )
             state = (await c.get("/api/canopy/state")).json()
@@ -227,7 +230,7 @@ def _checklist(mp) -> dict[str, tuple[bool, Any]]:
             out["16"] = (
                 scene["live_look"]["name"] == PINKER
                 and scene["live_source"] == "published"
-                and scene["approved"]["name"] == "Golden Hour"
+                and scene["approved"]["name"] == NAME[GOLDEN]
                 and T.show_trio(lab).scenes.get(GOLDEN).name == PINKER
                 and all(k[0] == looks.generation for k in lab._live_seeds),
                 (scene["live_look"]["name"], scene["live_source"]),
@@ -366,7 +369,10 @@ def test_the_repick_is_one_burst_that_keeps_the_guests_brightness(no_threads, st
 
     async def main():
         w = await show(settings=settings)
-        await w.engine.request_mode(GOODNIGHT, source="ops")  # a still look (a stepped one sends its steps)
+        # a still look (a stepped one sends its steps): D77 gives every scene a stepped rung, so the live path's
+        # refusal of it (live hardware until Gate R) keeps The Goodnight Glow at its still module level
+        refuse_stepped(w.engine, GOODNIGHT)
+        await w.engine.request_mode(GOODNIGHT, source="ops")
         await w.engine.wait_idle()
         await w.engine.set_guest_brightness(40, source="ops")
         await w.engine.wait_idle()
@@ -541,7 +547,7 @@ def test_after_a_restart_the_show_compiles_the_published_trio_with_no_slot_write
         return out
 
     source, compiled_ok, slots, alerts, label, _stale = run_virtual(main)
-    assert source == "published" and compiled_ok and label == "Coastal Tides"
+    assert source == "published" and compiled_ok and label == NAME[TIDES]
     assert slots == [] and alerts == []
 
 
@@ -579,7 +585,7 @@ def test_a_painted_design_change_over_a_hand_painted_slot_is_refused(no_threads)
     assert slot_writes(writes) == []
     assert status == 409 and body["field"].startswith(f"{GOLDEN}.")
     assert body["detail"].startswith(
-        "Golden Hour's slot is hand-painted in the Hubspace app on 1 module (Module 1)"
+        f"{NAME[GOLDEN]}'s slot is hand-painted in the Hubspace app on 1 module (Module 1)"
     )
     assert live == "p0001"  # the brightness publish stands; the design one wrote nothing
 
@@ -900,7 +906,7 @@ def test_revert_to_approved_follows_git_after_a_restart(no_threads):
         return asked.json()["confirm"], back.status_code, current, again
 
     sentence, status, current, again = run_virtual(main)
-    assert sentence.startswith("Revert this simulator to the approved looks: Coastal Tides changes back.")
+    assert sentence.startswith(f"Revert this simulator to the approved looks: {NAME[TIDES]} changes back.")
     assert status == 200 and current.kind == "approved" and current.trio is None
     assert again.source == "approved" and L.trio_sha(again.trio) == L.trio_sha(GIT)
 
@@ -1151,38 +1157,66 @@ def test_a_refused_repick_during_a_try_on_puts_the_safe_look_up_never_the_draft(
 
 
 # ---- the fins' rings (D74): a fins design publishes to the simulated show -----------------------------------------
-def test_a_fins_design_publishes_to_the_simulated_show(no_threads):
-    """The Lab's Fins layout, published with Show: one burst of Coastal Tides on the fins' rings, nine look writes,
-    the copy from the centre out, and the installed trio carries the fins field (D68 validate → install → compile)."""
+def off_the_fins() -> str:
+    """An unpainted scene with a travel rung whose approved design isn't on the fins, so a Fins layout edit to it is
+    a real change of design (integration C25: D77 ships Coastal Tides #1 on the fins, where that edit changes
+    nothing). Golden Hour #3 (along the current, linear 18°) on D77's catalog; after the session's exports, the
+    first such scene in catalog order."""
     from conductor.looks import field as F
+
+    def qualifies(scene_id: str) -> bool:
+        tech = GIT.modes.mode(scene_id).techniques
+        return (
+            tech.canvas is None
+            and tech.stepped is not None
+            and tech.stepped.mode == "travel"
+            and not isinstance(tech.modules.sample.canvas.field, F.FinsField)
+        )
+
+    return next(x for x in ("golden-hour-3", *(s.id for s in GIT.scenes.scenes)) if qualifies(x))
+
+
+def test_a_fins_design_publishes_to_the_simulated_show(no_threads):
+    """The Lab's Fins layout on a scene that isn't on the fins (off_the_fins), published with Show: the installed
+    trio's design moves onto the fins' rings (D68 validate → install → compile), the copy is regenerated from the
+    centre out, and the show sends one burst of it, nine look writes."""
+    from conductor.looks import field as F
+
+    scene_id = off_the_fins()
+    approved = GIT.modes.mode(scene_id).techniques
 
     async def main():
         w = await show()
+        before = w.looks.trio.modes.mode(scene_id).techniques.modules.sample.canvas.field
         writes = spy_writes(w)
         async with client_of(w) as c:
-            draft = edited(
-                TIDES, layout={"kind": "fins"}, copy={"modules": "generated", "stepped": "generated"}
-            )
-            vid = await save(c, {TIDES: draft})
+            vid = await save(c, {scene_id: edited(scene_id, layout={"kind": "fins"})})
             r = await publish(c, vid, show=True)
             await w.engine.wait_idle()
         plan = w.engine.current_plan()
-        field = w.looks.trio.modes.mode(TIDES).techniques.modules.sample.canvas.field
-        out = r.status_code, r.text, plan.mode_id, plan.feature, list(writes), field
+        tech = w.looks.trio.modes.mode(scene_id).techniques
+        fields = before, tech.modules.sample.canvas.field, tech.stepped.canvas.field
+        out = r.status_code, r.text, plan.mode_id, plan.feature, list(writes), fields, tech
         await w.close()
         return out
 
-    status, text, mode, feature, writes, field = run_virtual(main)
+    status, text, mode, feature, writes, fields, tech = run_virtual(main)
+    before, after, stepped = fields
     assert status == 200, text
-    assert mode == TIDES and "from the centre out" in feature
+    assert not isinstance(before, F.FinsField)  # the show had the approved, off-the-fins design
+    assert isinstance(after, F.FinsField) and isinstance(stepped, F.FinsField)
+    # the copy is regenerated for the rings (the approved sentence named the old layout)
+    assert tech.modules.feature != approved.modules.feature and "from the centre out" in tech.modules.feature
+    assert tech.stepped.moving_feature != approved.stepped.moving_feature
+    assert mode == scene_id and "from the centre out" in feature
     looks = look_writes(writes)
     assert len(looks) == 9 and len({a for _t, a, _r in looks}) == 9  # one per module
-    assert isinstance(field, F.FinsField)
 
 
 def test_fins_drafts_pass_the_published_trio_checks():
-    """A trio with Coastal Tides (stepped) and Golden Hour (painted, T1) on the fins passes everything a published
-    trio is held to at every start (the blocking scene rules and the stepped run limit included), and compiles."""
+    """A trio with a stepped scene (off_the_fins) and Golden Hour (painted, T1) moved onto the fins passes everything
+    a published trio is held to at every start (the blocking scene rules and the stepped run limit included), and
+    compiles on the fins."""
     from conductor.capabilities import detect
     from conductor.config import load_registry, load_settings
     from conductor.geometry import load_canopy_config
@@ -1190,9 +1224,12 @@ def test_fins_drafts_pass_the_published_trio_checks():
     from conductor.looks import field as F
     from conductor.sim.profiles import profile_parts
 
-    tides = edited(TIDES, layout={"kind": "fins"})
+    scene_id = off_the_fins()
+    for x in (scene_id, GOLDEN):  # both are real changes of design: neither is on the fins in git
+        assert not isinstance(GIT.modes.mode(x).techniques.modules.sample.canvas.field, F.FinsField), x
+    stepped = edited(scene_id, layout={"kind": "fins"})
     golden = edited(GOLDEN, layout={"kind": "fins"})
-    trio = patched_trio(tides, golden)
+    trio = patched_trio(stepped, golden)
     canopy = load_canopy_config(CONFIG_DIR / "canopy.yaml")
     validated = L.validate_trio(trio.dump(), git=GIT, settings=load_settings(CONFIG_DIR), canopy=canopy)
     assert validated.dump() == trio.dump()
@@ -1205,7 +1242,7 @@ def test_fins_drafts_pass_the_published_trio_checks():
         recipes=trio.recipes,
         canopy=canopy,
     )
-    assert compile_mode(TIDES, Tier.STEPPED, ctx).program.field["kind"] == "fins"
+    assert compile_mode(scene_id, Tier.STEPPED, ctx).program.field["kind"] == "fins"
     assert compile_mode(GOLDEN, Tier.T3, ctx).tier is Tier.T3
     # Golden Hour is painted: its T1 canvas is the fins design too, so the operator repaint applies (D68 B2)
     assert isinstance(trio.modes.mode(GOLDEN).techniques.canvas.canvas.field, F.FinsField)

@@ -1,4 +1,5 @@
-"""`config/modes.yaml` as validated data: the kiosk copy block and the six Lowcountry Modes (02, 04, 06 #12–13).
+"""`config/modes.yaml` as validated data: the kiosk copy block and the Lowcountry Modes, one per scene in the catalog
+(02, 04, 06 #12–13; D77).
 
 Rules implemented:
 - Every field the file uses is modelled; unknown fields are refused (a typo must not silently do nothing).
@@ -829,7 +830,7 @@ def load_modes(config_dir: Path = CONFIG_DIR) -> ModesFile:
     config_dir = Path(config_dir)
     path = config_dir / "modes.yaml"
     if not path.exists():
-        raise ConfigError(f"{path} is missing. The six Lowcountry Modes live there; restore it from git.")
+        raise ConfigError(f"{path} is missing. The Lowcountry Modes live there; restore it from git.")
     recipes = load_recipes(config_dir)
     canopy = None
     canopy_path = config_dir / "canopy.yaml"

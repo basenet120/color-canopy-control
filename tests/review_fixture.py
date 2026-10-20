@@ -13,6 +13,10 @@ What it is and isn't:
 - The options' feature, description and mood copy is the base's, so it isn't true for the re-placed layout. It is
   fixture data only, as are any screenshots taken over it (07 §9).
 
+Once git carries its own options (D77: the 18-option catalog, every `<id>-2`/`<id>-3` with `option_of`), the git
+catalog is the review catalog: `review_scenes` and `review_trio` return it unchanged (integration C13), so the tests
+over this fixture run over the real 18 and never build `<id>-2-2` or chain `option_of`.
+
 Imports are `conductor.*` only, never a tests module: tests_e2e imports this file through pytest's
 `pythonpath = ["."]` (`from tests.review_fixture import …`), and tests/conftest.py — which puts tests/ on sys.path —
 is never loaded by `make e2e`.
@@ -46,9 +50,16 @@ def option_id(base_id: str, n: int) -> str:
     return f"{base_id}-{n}"
 
 
+def has_options(catalog: SceneCatalog) -> bool:
+    """True when the catalog already groups options under their bases (git's own since D77)."""
+    return any(scene.option_of for scene in catalog.scenes)
+
+
 def review_scenes(base: SceneCatalog) -> SceneCatalog:
     """`base` with two options after each scene: `<id>-n`, "<name> #n", `option_of` = the base's id. Validated, so
-    the catalog's option_of checks run."""
+    the catalog's option_of checks run. A catalog that already has its options (git's, D77) is returned as it is."""
+    if has_options(base):
+        return base
     scenes: list[dict[str, Any]] = []
     for scene in base.scenes:
         dump = scene.model_dump(mode="json")
@@ -61,12 +72,15 @@ def review_scenes(base: SceneCatalog) -> SceneCatalog:
 
 
 def _replace_fields(node: Any, n: int) -> None:
-    """Re-place every `kind: field` canvas's design in place: #2 flips `invert`, #3 toggles linear ↔ mirror."""
+    """Re-place every `kind: field` canvas's design in place: #2 flips `invert`, #3 toggles linear ↔ mirror (never on
+    a fins design, which refuses mirror, D74: it keeps its design)."""
     if isinstance(node, dict):
         if node.get("kind") == "field" and isinstance(node.get("field"), dict):
             spec = node["field"]
             if n == 2:
                 spec["invert"] = not spec.get("invert", False)
+            elif spec.get("kind") == "fins":
+                pass
             else:
                 spec["transform"] = "mirror" if spec.get("transform", "linear") == "linear" else "linear"
         for value in node.values():
@@ -89,7 +103,10 @@ def _varied(mode: Mode, n: int, name: str) -> Mode:
 
 
 def review_trio(git: ConfigTrio) -> ConfigTrio:
-    """`git` with the 18 review scenes and their modes (REVIEW_IDS order); the recipes are git's."""
+    """`git` with the 18 review scenes and their modes (REVIEW_IDS order); the recipes are git's. A trio whose
+    catalog already has its options (git's, D77) is returned as it is."""
+    if has_options(git.scenes):
+        return git
     scenes = review_scenes(git.scenes)
     modes: dict[str, Mode] = {}
     for base in git.scenes.scenes:
