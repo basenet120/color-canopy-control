@@ -133,6 +133,32 @@ def test_a_rate_test_can_run_its_own_paces_each_for_its_own_time():
     assert rate_schedule((2.0, 1.5, 1.0), 30.0) == [2.0] * 15 + [1.5] * 20 + [1.0] * 30
 
 
+def test_a_moving_per_light_look_loops_until_the_next_choice():
+    # Oct 21 (Alon): a guest's per-light choice keeps moving (whole cycles), not 2 minutes then a frozen frame
+    from tests.test_stepped_rehearsal import show
+
+    async def main():
+        w = await show()
+        await w.engine.request_mode("coastal-tides-5", source="kiosk")
+        await w.run_for(1)
+        runner = w.engine.runner
+        first = (runner.loop, runner.count, runner.cycle, runner.program.run_s, runner.t0)
+        await w.run_for(
+            runner.run_len_s * 1.4
+        )  # past the run's end, before the idle return (kiosk.idle_return_s)
+        later = (w.engine.runner is runner, runner.running, runner.steps_sent, runner.t0)
+        await w.engine.request_mode("golden-hour-5", source="kiosk")
+        await w.run_for(1)
+        after = (runner.running, w.engine.runner.plan.mode_id)
+        await w.close()
+        return first, later, after
+
+    (loop, count, cycle, run_s, t0), (same, running, sent, t0_later), (old_running, mode) = run_virtual(main)
+    assert loop and count % cycle == 0 and count * 2.0 >= run_s
+    assert same and running and sent > count and t0_later > t0  # into its second lap, still stepping
+    assert not old_running and mode == "golden-hour-5"
+
+
 def test_per_light_runs_pace_by_their_own_cap_and_module_level_keeps_its_own():
     """D81: on nine kits a per-light run steps every 2 s (motion.lights cap 337.5 less the 20 % reserve, Oct 21), while a
     module-level run keeps the stepped cap's 7.5 s (its nine-kit Gate R pace, what the soak validates)."""
