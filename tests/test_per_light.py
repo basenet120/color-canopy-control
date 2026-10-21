@@ -26,8 +26,12 @@ def _ctx(**kw) -> CompileContext:
 
 
 def test_eighteen_options_carry_a_per_light_rung():
-    assert len(PER_LIGHT) == 18
-    assert {m.rsplit("-", 1)[1] for m in PER_LIGHT} == {"4", "5", "6"}
+    # D80: the six scenes' #4-#6; then the Light Show scene (Oct 21), every one of its six looks per-light
+    light_show = [m for m in PER_LIGHT if m.rsplit("-", 1)[0] == "light-show" or m == "light-show"]
+    d80 = [m for m in PER_LIGHT if m not in light_show]
+    assert len(d80) == 18 and len(PER_LIGHT) == 24
+    assert {m.rsplit("-", 1)[1] for m in d80} == {"4", "5", "6"}
+    assert light_show == ["light-show", *(f"light-show-{n}" for n in range(2, 7))]
 
 
 def test_per_light_is_opt_in_and_falls_back_to_the_module_level_steps():
@@ -112,3 +116,41 @@ def test_per_light_runs_pace_by_their_own_cap_and_module_level_keeps_its_own():
     assert effective_step_s(1.5, 9, settings, lights=True) == 3.0
     assert effective_step_s(6.0, 9, settings) == 7.5
     assert effective_step_s(1.5, 1, settings, lights=True) == 1.5  # one kit: its designed pace
+
+
+def test_on_at_sends_each_light_at_peak_or_off():
+    # Oct 21 (venue): level 5 looks about as bright as 100, so a Light Show look sends a light fully on or off
+    lights = LightsMotion(
+        effect="ripple",
+        rings=1.0,
+        steps_per_cycle=8,
+        floor=0,
+        peak=100,
+        on_at=55,
+        moving_feature="Colour and dimming through the Hubspace cloud: every light set on its own, sent every few "
+        "seconds.",
+    )
+    levels = {light_level(lights, i / 20, p) for i in range(21) for p in (0.0, 0.25, 0.5)}
+    assert levels == {0, 100}
+    plan = compile_mode("light-show", Tier.STEPPED, _ctx(lights=True))
+    sent = {
+        e.colorBrightness
+        for step in plan.program.steps
+        for rows in step.rows.values()
+        for e in R.frame_entries(next(r.value for r in rows if r.key[0] == R.FRAME_CLASS))
+    }
+    assert sent == {0, 100}
+
+
+def test_on_at_needs_floor_zero():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="needs floor 0"):
+        LightsMotion(
+            effect="glow",
+            floor=10,
+            on_at=50,
+            moving_feature="Colour and dimming through the Hubspace cloud: every light set on its own, sent every "
+            "few seconds.",
+        )

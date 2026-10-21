@@ -1503,3 +1503,281 @@ modes:
         look: {kind: rgb, rgb: [191, 179, 230], brightness: 28}   # lavender haze
         feature: "Colour and dimming: all nine Hubspace strands set to lavender haze."
 
+  light-show:
+    label: "Light Show #1"
+    blurb: Feel the beat
+    preview: ["#00E5FF", "#2050FF", "#8A2BFF"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &light_show_design   # Oct 21 "Big drop"
+            kind: field
+            field: {kind: "linear", angle_deg: 35}
+            stops:
+              - {at: 0.0, color: electric-cyan}
+              - {at: 0.5, color: cobalt}
+              - {at: 1.0, color: ultraviolet}
+            recipe: rgb_only
+          at: centre
+          brightness: 90
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: electric cyan, then cobalt and ultraviolet."
+      stepped:   # Oct 21: per-light where the kits can take frames (lights on or off), else this module-level breath
+        canvas: *light_show_design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: electric cyan, then cobalt and ultraviolet."
+        lights:
+          effect: ripple
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          rings: 1.5
+          steps_per_cycle: 8
+          step_s: 1.5
+          run_s: 180
+          floor: 0
+          peak: 100
+          on_at: 55
+          brightness: 90
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so bright rings burst out from the centre of the canopy and roll to the edges, dark between them, like a big drop in still water."
+      strand:
+        look: {kind: rgb, rgb: [0, 229, 255], brightness: 90}   # electric cyan
+        feature: "Colour and dimming: all nine Hubspace strands set to electric cyan."
+
+  light-show-2:
+    label: "Light Show #2"
+    blurb: Feel the beat
+    preview: ["#FFB000", "#FF5A00", "#E00020"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &light_show_2_design   # Oct 21 "Lighthouse"
+            kind: field
+            field: {kind: "linear", angle_deg: 145}
+            stops:
+              - {at: 0.0, color: beacon-amber}
+              - {at: 0.5, color: flame-orange}
+              - {at: 1.0, color: signal-red}
+            recipe: rgb_only
+          at: centre
+          brightness: 90
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: beacon amber, then flame orange and signal red."
+      stepped:   # Oct 21: per-light where the kits can take frames (lights on or off), else this module-level breath
+        canvas: *light_show_2_design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: beacon amber, then flame orange and signal red."
+        lights:
+          effect: ripple
+          field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 0}
+          rings: 1.0
+          steps_per_cycle: 8
+          step_s: 1.5
+          run_s: 180
+          floor: 0
+          peak: 100
+          on_at: 70
+          brightness: 90
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so one wide beam of light turns around the centre of the canopy like a lighthouse, the rest of the lights dark."
+      strand:
+        look: {kind: rgb, rgb: [255, 176, 0], brightness: 90}   # beacon amber
+        feature: "Colour and dimming: all nine Hubspace strands set to beacon amber."
+
+  light-show-3:
+    label: "Light Show #3"
+    blurb: Feel the beat
+    preview: ["#FF2D95", "#FF6A3D", "#FFD000"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &light_show_3_design   # Oct 21 "Sunrise wipe"
+            kind: field
+            field: {kind: "linear", angle_deg: 20}
+            stops:
+              - {at: 0.0, color: hot-pink}
+              - {at: 0.5, color: bright-coral}
+              - {at: 1.0, color: sunbeam}
+            recipe: rgb_only
+          at: centre
+          brightness: 90
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: hot pink, then bright coral and sunbeam."
+      stepped:   # Oct 21: per-light where the kits can take frames (lights on or off), else this module-level breath
+        canvas: *light_show_3_design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: hot pink, then bright coral and sunbeam."
+        lights:
+          effect: glow
+          field: {kind: "linear", angle_deg: 0}
+          softness: 0.1
+          steps_per_cycle: 10
+          step_s: 1.5
+          run_s: 180
+          floor: 0
+          peak: 100
+          on_at: 50
+          brightness: 90
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so the canopy lights up from one short end to the other, then goes dark again the same way, like a sunrise and a sunset."
+      strand:
+        look: {kind: rgb, rgb: [255, 208, 0], brightness: 90}   # sunbeam
+        feature: "Colour and dimming: all nine Hubspace strands set to sunbeam."
+
+  light-show-4:
+    label: "Light Show #4"
+    blurb: Feel the beat
+    preview: ["#FF1744", "#FF8F00", "#FFE000", "#00C853", "#2962FF", "#AA00FF"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &light_show_4_design   # Oct 21 "Stadium wave"
+            kind: field
+            field: {kind: "linear", angle_deg: 60}
+            stops:
+              - {at: 0.0, color: ruby}
+              - {at: 0.2, color: tangerine}
+              - {at: 0.4, color: lemon}
+              - {at: 0.6, color: emerald}
+              - {at: 0.8, color: sapphire}
+              - {at: 1.0, color: violet}
+            recipe: rgb_only
+          at: centre
+          brightness: 90
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: ruby, then tangerine, lemon, emerald, sapphire and violet."
+      stepped:   # Oct 21: per-light where the kits can take frames (lights on or off), else this module-level breath
+        canvas: *light_show_4_design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: ruby, then tangerine, lemon, emerald, sapphire and violet."
+        lights:
+          effect: breathe
+          field: {kind: "linear", angle_deg: 0}
+          lag: 1.0
+          colour_travel: 1.0
+          steps_per_cycle: 12
+          step_s: 1.5
+          run_s: 180
+          floor: 0
+          peak: 100
+          on_at: 60
+          brightness: 90
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so a band of rainbow light rolls from one short end of the canopy to the other and around again, dark behind it, while the colours shift along."
+      strand:
+        look: {kind: rgb, rgb: [255, 23, 68], brightness: 90}   # ruby
+        feature: "Colour and dimming: all nine Hubspace strands set to ruby."
+
+  light-show-5:
+    label: "Light Show #5"
+    blurb: Feel the beat
+    preview: ["#A6FF00", "#FFD400", "#FF9500"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &light_show_5_design   # Oct 21 "Fireflies"
+            kind: field
+            field: {kind: "linear", angle_deg: 120}
+            stops:
+              - {at: 0.0, color: spark-lime}
+              - {at: 0.5, color: firefly-gold}
+              - {at: 1.0, color: ember-amber}
+            recipe: rgb_only
+          at: centre
+          brightness: 90
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: spark lime, then firefly gold and ember amber."
+      stepped:   # Oct 21: per-light where the kits can take frames (lights on or off), else this module-level breath
+        canvas: *light_show_5_design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: spark lime, then firefly gold and ember amber."
+        lights:
+          effect: twinkle
+          seed: 1021
+          steps_per_cycle: 12
+          step_s: 1.5
+          run_s: 180
+          floor: 0
+          peak: 100
+          on_at: 75
+          brightness: 90
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so lights blink on and off at random all over the canopy, each on its own rhythm, like fireflies on a summer night."
+      strand:
+        look: {kind: rgb, rgb: [255, 212, 0], brightness: 90}   # firefly gold
+        feature: "Colour and dimming: all nine Hubspace strands set to firefly gold."
+
+  light-show-6:
+    label: "Light Show #6"
+    blurb: Feel the beat
+    preview: ["#FF1493", "#E000E0", "#7A00FF"]
+    ladder: [stepped, modules, strand]
+    techniques:
+      modules:
+        sample:
+          canvas: &light_show_6_design   # Oct 21 "Heartbeat"
+            kind: field
+            field: {kind: "linear", angle_deg: 110}
+            stops:
+              - {at: 0.0, color: hot-magenta}
+              - {at: 0.5, color: orchid}
+              - {at: 1.0, color: royal-purple}
+            recipe: rgb_only
+          at: centre
+          brightness: 90
+        feature: "Colour and dimming: each Hubspace strand set to a single colour, so the palette is laid out diagonally: hot magenta, then orchid and royal purple."
+      stepped:   # Oct 21: per-light where the kits can take frames (lights on or off), else this module-level breath
+        canvas: *light_show_6_design
+        mode: breathe
+        direction: forward
+        brightness_swing: 10
+        lag_steps: 1
+        steps_per_cycle: 4
+        step_s: 8
+        run_s: 120
+        brightness: 90
+        moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the palette swells and softens diagonally: hot magenta, then orchid and royal purple."
+        lights:
+          effect: glow
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          softness: 0.1
+          steps_per_cycle: 8
+          step_s: 1.5
+          run_s: 180
+          floor: 0
+          peak: 100
+          on_at: 50
+          brightness: 90
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so light grows from the centre of the canopy out to the corners and shrinks back again, like a heartbeat."
+      strand:
+        look: {kind: rgb, rgb: [255, 20, 147], brightness: 90}   # hot magenta
+        feature: "Colour and dimming: all nine Hubspace strands set to hot magenta."

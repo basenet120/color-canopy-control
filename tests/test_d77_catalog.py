@@ -83,9 +83,15 @@ BASE_NAMES = {
 }
 CATALOG = [x for base in BASE_NAMES for x in (base, f"{base}-2", f"{base}-3")]
 OPTIONS = [x for x in CATALOG if x not in BASE_NAMES]
-# the whole git catalog: D77's eighteen, then D80's per-light #4-#6 after each scene's #3
-FULL = [x for base in BASE_NAMES for x in (base, *(f"{base}-{n}" for n in (2, 3, 4, 5, 6)))]
-BASE_OF = {x: x if x in BASE_NAMES else x.rsplit("-", 1)[0] for x in FULL}
+# the six D77 scenes: D77's eighteen, then D80's per-light #4-#6 after each scene's #3
+SIX = [x for base in BASE_NAMES for x in (base, *(f"{base}-{n}" for n in (2, 3, 4, 5, 6)))]
+# Oct 21: the Light Show scene follows them, its #1 and five per-light options (#2-#6), outside D77's rules
+LIGHT_SHOW_BASE = "light-show"
+LIGHT_SHOW = [LIGHT_SHOW_BASE, *(f"{LIGHT_SHOW_BASE}-{n}" for n in (2, 3, 4, 5, 6))]
+ALL_BASES = [*BASE_NAMES, LIGHT_SHOW_BASE]
+# the whole git catalog: the six D77 scenes as before, then the Light Show scene
+FULL = SIX + LIGHT_SHOW
+BASE_OF = {x: x if x in ALL_BASES else x.rsplit("-", 1)[0] for x in FULL}
 PAINTED = {"rainbow-row-sunset": "custom-1", "garden-gathering": "custom-2", "golden-hour": "custom-3"}
 IDLE = "lowcountry-calm"
 # /api/kiosk/panel, which the iPad polls every 2 s: 62.7 KB on D77's tree with no engine (PR A's canopy geometry
@@ -495,8 +501,11 @@ def test_eighteen_options_three_per_scene_in_catalog_order():
     for base in BASE_NAMES:
         i = CATALOG.index(base)
         assert CATALOG[i : i + 3] == [base, f"{base}-2", f"{base}-3"]
+    # the six D77 scenes come first, as before; the Light Show scene follows them with its five options
+    assert FULL[: len(SIX)] == SIX and len(SIX) == 36
+    assert FULL[len(SIX) :] == LIGHT_SHOW and len(FULL) == 42
     for scene in SCENES.scenes:
-        assert scene.option_of == (None if scene.id in BASE_NAMES else BASE_OF[scene.id]), scene.id
+        assert scene.option_of == (None if scene.id in ALL_BASES else BASE_OF[scene.id]), scene.id
         assert scene.group == BASE_OF[scene.id]
         mode = MODES.mode(scene.id)
         assert mode.blurb == scene.mood == SCENES.get(BASE_OF[scene.id]).mood
@@ -1131,14 +1140,14 @@ def test_the_review_menu_sees_the_real_catalog(app_client):
     body = r.json()
     assert [s["id"] for s in body["scenes"]] == FULL
     for s in body["scenes"]:
-        assert s["option_of"] == (None if s["id"] in BASE_NAMES else BASE_OF[s["id"]])
+        assert s["option_of"] == (None if s["id"] in ALL_BASES else BASE_OF[s["id"]])
         assert s["group"] == BASE_OF[s["id"]]
         assert s["thumb"] is not None  # the review menu: every card carries its picture
     # the iPad polls this every 2 s: PR A's fin geometry and PR C's 18 thumbnails together, pinned
     assert len(r.content) < PANEL_MAX_BYTES, len(r.content)
     for option in [
         x for x in FULL if x not in BASE_NAMES
-    ]:  # every option off the iPad: the six #1s, in order
+    ]:  # every option and the Light Show scene off the iPad: the six D77 #1s, in order
         hidden = app_client.post("/api/ops/ipad-scenes", json={"scene": option, "show": False})
         assert hidden.status_code == 200, hidden.text
     six = _panel(app_client)["scenes"]

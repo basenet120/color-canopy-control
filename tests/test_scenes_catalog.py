@@ -24,15 +24,18 @@ BASES = [
 APPROVED = [
     x for base in BASES for x in (base, *(f"{base}-{n}" for n in (2, 3, 4, 5, 6)))
 ]  # D77 #2-#3, D80 #4-#6
+# Oct 21: the Light Show scene follows the six, with its five per-light options
+LIGHT_SHOW = ["light-show", *(f"light-show-{n}" for n in (2, 3, 4, 5, 6))]
+CATALOG = APPROVED + LIGHT_SHOW
 
 
 def test_the_catalog_is_the_six_scenes_and_their_options_in_order():
     scenes = load_scenes().scenes
-    assert [s.id for s in scenes] == APPROVED
-    assert [s.id for s in scenes if s.option_of is None] == BASES
+    assert [s.id for s in scenes] == CATALOG  # the six scenes as before, then the Light Show scene
+    assert [s.id for s in scenes if s.option_of is None] == [*BASES, "light-show"]
 
 
-@pytest.mark.parametrize("scene_id", APPROVED)
+@pytest.mark.parametrize("scene_id", CATALOG)
 def test_each_scene_reproduces_the_handoff_frame_exactly(scene_id):
     frame = load_scenes().get(scene_id).frame(30)
     assert [list(c) for c in frame] == FRAMES[scene_id]

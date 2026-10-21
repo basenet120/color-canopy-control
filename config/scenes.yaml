@@ -452,3 +452,77 @@ scenes:
       - {name: "Lavender haze", hex: "#BFB3E6"}
       - {name: "Sleepy periwinkle", hex: "#9EA6DE"}
       - {name: "Dusk rose", hex: "#D9B3CF"}
+  - id: light-show
+    name: "Light Show #1"
+    mood: "Feel the beat"
+    description: "Electric cyan, cobalt and ultraviolet, bold and bright."
+    transform: linear
+    brightness_draft: 90
+    default_solid: 0
+    palette:
+      - {name: "Electric cyan", hex: "#00E5FF"}
+      - {name: "Cobalt", hex: "#2050FF"}
+      - {name: "Ultraviolet", hex: "#8A2BFF"}
+  - id: light-show-2
+    option_of: light-show   # "Lighthouse" (Oct 21, per-light, on or off)
+    name: "Light Show #2"
+    mood: "Feel the beat"
+    description: "Beacon amber, flame orange and signal red, bold and bright."
+    transform: linear
+    brightness_draft: 90
+    default_solid: 0
+    palette:
+      - {name: "Beacon amber", hex: "#FFB000"}
+      - {name: "Flame orange", hex: "#FF5A00"}
+      - {name: "Signal red", hex: "#E00020"}
+  - id: light-show-3
+    option_of: light-show   # "Sunrise wipe" (Oct 21, per-light, on or off)
+    name: "Light Show #3"
+    mood: "Feel the beat"
+    description: "Hot pink, coral and sunbeam yellow, bold and bright."
+    transform: linear
+    brightness_draft: 90
+    default_solid: 2
+    palette:
+      - {name: "Hot pink", hex: "#FF2D95"}
+      - {name: "Bright coral", hex: "#FF6A3D"}
+      - {name: "Sunbeam", hex: "#FFD000"}
+  - id: light-show-4
+    option_of: light-show   # "Stadium wave" (Oct 21, per-light, on or off)
+    name: "Light Show #4"
+    mood: "Feel the beat"
+    description: "Ruby, tangerine, lemon, emerald, sapphire and violet, a full rainbow."
+    transform: linear
+    brightness_draft: 90
+    default_solid: 0
+    palette:
+      - {name: "Ruby", hex: "#FF1744"}
+      - {name: "Tangerine", hex: "#FF8F00"}
+      - {name: "Lemon", hex: "#FFE000"}
+      - {name: "Emerald", hex: "#00C853"}
+      - {name: "Sapphire", hex: "#2962FF"}
+      - {name: "Violet", hex: "#AA00FF"}
+  - id: light-show-5
+    option_of: light-show   # "Fireflies" (Oct 21, per-light, on or off)
+    name: "Light Show #5"
+    mood: "Feel the beat"
+    description: "Lime, firefly gold and amber, bright sparks on a dark ceiling."
+    transform: linear
+    brightness_draft: 90
+    default_solid: 1
+    palette:
+      - {name: "Spark lime", hex: "#A6FF00"}
+      - {name: "Firefly gold", hex: "#FFD400"}
+      - {name: "Ember amber", hex: "#FF9500"}
+  - id: light-show-6
+    option_of: light-show   # "Heartbeat" (Oct 21, per-light, on or off)
+    name: "Light Show #6"
+    mood: "Feel the beat"
+    description: "Hot magenta, orchid and royal purple, bold and bright."
+    transform: linear
+    brightness_draft: 90
+    default_solid: 0
+    palette:
+      - {name: "Hot magenta", hex: "#FF1493"}
+      - {name: "Orchid", hex: "#E000E0"}
+      - {name: "Royal purple", hex: "#7A00FF"}
