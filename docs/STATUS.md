@@ -29,7 +29,7 @@ canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/
 ## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
 From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
 from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
-`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation`; the exact
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet); the exact
 commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
 merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
 (`uv run --with pytest-xdist pytest -q -n 8`): 3546 passed, 6 skipped in 3 min 32 s; ruff check + format clean.
@@ -60,6 +60,18 @@ rings drawn from the calibrated map: continuous across every seam (Alon's photo)
   "hiccups" are late cloud readbacks (D82 / PR #47), at the same rate as Modules 1, 2, 4, 7; Module 3 had 46 × 424
   today (Wi-Fi).
 - **Deploy:** after merge, the usual paste block; reload the iPad page once.
+## PR `claude/ops-heads-step` — /ops compares a stepped run's heads with the step sent → `main` (Oct 21 afternoon; on #47)
+**True on hardware (venue, Oct 21):** during the Lowcountry Calm #4 per-light rehearsal every kit took a full frame on
+all 144 steps (1162 applied, 1 mismatch, 142 superseded, 0 × 429), yet the /ops canopy grid showed most heads not
+matching the look for most of the run. Cause: `canopy_heads` compared readback with the plan's target, which for a
+stepped run is its first step (the hold); every later step differs from it. Also, with a write every 3 s and
+verification ~2.6 s, the readback on hand is usually the previous step's.
+- **Fix:** while the engine reports a program, desired is the tracker's (the step actually sent); while that write is
+  in flight or its readback hasn't come (tracker `updating` / `unknown`), heads are "unknown" (checking), not
+  "mismatch". Outside a run nothing changes (the plan's look).
+- **Verified:** two new tests in test_ops_routes (fail without the fix, pass with it); the heads tests pass.
+- Built on #47 (it touches the D82 lines): merge #47 first.
+
 ## PR `claude/stale-readback` — stale readback, slow re-sends, a re-send cap (D82) → `main` (Oct 21)
 Live today (Charleston, nine kits, `9e31dbe`): after the 13:40 rate test six modules' Hubspace readback stayed frozen
 for ~9 min (`individual`, brightness 85) while every write got a 200 and Alon saw the lights change; /ops showed "N
