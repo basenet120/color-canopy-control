@@ -195,7 +195,7 @@ from conductor.rehearsal import (
     rate_confirm_sentence,
     rate_minutes,
 )
-from conductor.sequence import HELD_STEPS_END, ProgramRunner, planned_writes_per_min
+from conductor.sequence import HELD_STEPS_END, ProgramRunner
 from conductor.state import DeviceStateTracker
 from conductor.telemetry import Telemetry
 from conductor.tokens import atomic_write
@@ -1486,6 +1486,12 @@ class CanopyEngine:
         simulated = self._simulated()
         stepped = self.deps.settings.motion.stepped
         lights = bool(plan.program is not None and plan.program.lights)
+        # D81: a per-light run paces by its own cap
+        cap = (
+            self.deps.settings.motion.lights.account_writes_per_min
+            if lights
+            else stepped.account_writes_per_min
+        )
         if ladder:
             confirm = rate_confirm_sentence(
                 label=plan.label,
@@ -1501,8 +1507,8 @@ class CanopyEngine:
                 modules=list(modules.values()),
                 accounts=accounts_sorted,
                 simulated=simulated,
-                cap=stepped.account_writes_per_min,
-                planned=planned_writes_per_min(stepped),
+                cap=cap,
+                planned=cap * (1.0 - stepped.budget_reserve),
             )
         return {
             "mode": mode_id,

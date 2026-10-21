@@ -2107,11 +2107,7 @@ def test_the_write_budget_can_not_be_set_below_one_second(tmp_path):
 def test_motion_stepped_settings_load_with_the_lead_defaults_and_refuse_nonsense(tmp_path):
     stepped = load_settings().motion.stepped
     assert stepped.live_enabled is True  # Alon turned it on after Gate R on one kit (Oct 19)
-    assert (stepped.min_step_s, stepped.max_step_s, stepped.account_writes_per_min) == (
-        4.0,
-        12.0,
-        450.0,
-    )  # D81
+    assert (stepped.min_step_s, stepped.max_step_s, stepped.account_writes_per_min) == (4.0, 12.0, 90.0)
     assert (stepped.governor_window_s, stepped.governor_min_throttled, stepped.governor_throttled_share) == (
         60.0,
         8,

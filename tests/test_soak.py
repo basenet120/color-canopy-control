@@ -43,10 +43,10 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     own = {m: load_modes(CONFIG_DIR).mode(m).techniques.stepped for m in st["modes"]}
     assert st["techniques"] == {m: {"own": True, **{k: getattr(t, k) for k in keys}} for m, t in own.items()}
     assert st["tiers"] == {"stepped": 4} and st["runs"] == 4 and st["interrupted"] == 1
-    # each design's step, stretched where shorter than 9 modules at the planned rate (the cap less the 20 % reserve:
-    # 450 → 360 a minute since D81, so 1.5 s)
+    # each design's step, stretched to 7.5 s where shorter: 9 modules at 72 a minute (the cap of 90 less the 20 %
+    # reserve)
     assert st["ended"] == {"the run is over": 3, "replaced": 1}
-    assert set(st["step_s"]) == {max(own[m].step_s, 9 * 60 / 360) for m in st["modes"][:4]}
+    assert set(st["step_s"]) == {max(own[m].step_s, 9 * 60 / 72) for m in st["modes"][:4]}
     assert st["steps_landed"] >= 3 * 11 and st["step_spreads"] and st["step_landings"]  # the metrics exist
     # B-R1-2: none superseded by the runner's own pacing. One a module missed because a pinned fault hit its write
     # (429 on every attempt, or a silent drop; the next step carries it) is the faults' luck, whose random path moves
@@ -57,11 +57,10 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
         set(st["puts_per_module_step"]) == {1} and st["missing"] == 0
     )  # one PUT per changed module per step
     assert st["governor_trips"] == 0 and st["downgrades"] == 0  # at the pinned 5% throttling
-    # the runner's pace (9 modules at the shortest design step, 6 s since D81 lifted the cap), and part of a burst
-    assert st["max_account_program_puts_60s"] <= 9 * 60 / min(st["step_s"]) + 9
+    assert st["max_account_program_puts_60s"] <= 72 + 9  # the runner's pace, and part of a ninth step's burst
     assert (
-        st["max_account_program_puts_60s"] <= st["max_account_writes_60s"] <= 450
-    )  # retries, re-sends: the cap (D81)
+        st["max_account_program_puts_60s"] <= st["max_account_writes_60s"] <= 90
+    )  # retries, re-sends: the cap
     assert len(st["holds"]) == 3 and st["holds_unsettled"] == 0
     # Golden Hour's run settles onto its commissioned canvas; Coastal Tides and the idle look hold their own rung's
     assert st["settled"] == {"canvas": 1, "stepped": 2}
@@ -585,8 +584,8 @@ def test_a_module_is_correct_when_it_shows_the_step_the_run_is_at():
 
 
 def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_path):
-    """The instruments can fail: with the lights taking 9–10 s to apply a write and 6 s steps (the design's own, under
-    the account cap since D81), every step is superseded by the next before it shows, and the verdict says so."""
+    """The instruments can fail: with the lights taking 9–10 s to apply a write and 7.5 s steps (the account cap's
+    pace less its reserve), every step is superseded by the next before it shows, and the verdict says so."""
     from conductor.clock import run_virtual
     from conductor.sim.settings import SimSettings
 
@@ -604,7 +603,7 @@ def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_
     )
     cfg = soak.SoakConfig(seed=1, report_path=None, stepped=stepped, sim_settings=slow)
     out = run_virtual(lambda: soak._stepped_soak(cfg))
-    assert out["runs"] == 1 and set(out["step_s"]) == {6.0}
+    assert out["runs"] == 1 and set(out["step_s"]) == {7.5}
     assert out["steps_superseded"] >= 4 and out["steps_landed"] <= 1  # only the last step (the hold) can land
     landing = soak._stepped_rows(out)[1]
     assert not landing["pass"] and f"{out['steps_superseded']} superseded" in landing["name"]

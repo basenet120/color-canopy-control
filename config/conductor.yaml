@@ -67,11 +67,8 @@ motion:
     live_enabled: true           # on since Gate R passed on one kit (String light 1, Oct 19); nine-kit Gate R at install
     min_step_s: 4.0              # never step faster than this
     max_step_s: 12.0             # a step the budget would stretch past this holds the still look instead
-    # D81: two nine-kit rate tests at the venue (Oct 21) took up to 540 writes a minute on one account with no 429/403;
-    # 450 less the 20% reserve plans 360 a minute, so nine modules can step every 1.5 s (per-light looks; module-level
-    # designs keep their own 6–8 s steps). The Gate R report fails above it.
-    account_writes_per_min: 450  # the account's cap: writes of any kind in any 60 s
-    budget_reserve: 0.2          # steps are planned at the cap less this share (retries, re-sends): 9 modules → 1.5 s
+    account_writes_per_min: 90   # the account's cap: writes of any kind in any 60 s (Gate R fails above it)
+    budget_reserve: 0.2          # steps are planned at the cap less this share (retries, re-sends): 9 modules → 7.5 s
     governor_window_s: 60        # the throttle governor counts a run's write attempts over this window, per account
     governor_min_throttled: 8    # ... and stops the run at ≥ this many 429/403 attempts
     governor_throttled_share: 0.25  # ... that are ≥ this share of the attempts
@@ -85,6 +82,9 @@ motion:
     live_enabled: false
     min_step_s: 1.0              # ≤ 1 write a second per module (Afero's per-device guidance)
     slot: custom-3               # the slot each step's frame is written to and selected
+    # D81: per-light runs pace by this cap (less the stepped budget_reserve): 225 → 180 a minute → nine kits every 3 s,
+    # where the venue rate test confirmed 93 % of per-light frames (~20 % at 2 s). Module-level runs keep the stepped 90.
+    account_writes_per_min: 225
   # D75: the idle look's breath. null = off (the shipped value). Alon sets it, e.g. {breathe_run_s: 60, every_s: 300},
   # only after a 30-minute live soak: live_enabled on, then this on, watched on /ops (budget, readbacks), back to
   # null to revert (a breath on nine ≈ 72 writes/min while it runs).

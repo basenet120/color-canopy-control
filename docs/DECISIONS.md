@@ -1450,15 +1450,18 @@ writes) and chose both layers plus a bench test, built so it can go live easily:
   the bench rehearsal's and the rate test's to answer. At nine kits our own 90-a-minute plan stretches per-light steps
   to 7.5 s until the rate test justifies more.
 
-**D81 — The account cap lets nine kits step every 1.5 s (Oct 21, Charleston; follows D65, D79, D80).** With the nine
-new kits registered on VWBD's account (bench) and online at the venue, Alon ran the rate test (D80) twice on all nine
-with Rainbow Row Sunset #2: 4, 3, 2, 1.5, 1 s steps, 60 s each. Both runs: **0 × 429 and 0 × 403** at up to 540 writes
-a minute on one account (`ratetest-20261021T162257Z-…`, `ratetest-20261021T163039Z-…`). The first run had 53 HTTP
-424s, 44 of them Module 3's (a device-reachability hiccup); the second only 2, both Module 3 at 1 s. Below about 3 s
-most writes are superseded before their ~2.6 s readback verifies them (they still go out); at 1 s none verify. Alon
-chose **1.5 s**: `motion.stepped.account_writes_per_min` 90 → 450 (less the 20 % reserve = 360 a minute = nine modules
-every 1.5 s). Per-light looks (D80) now step at their designed 1.5–3 s on nine kits instead of 7.5 s; module-level
-designs keep their own 6–8 s steps (their `step_s`, schema floor 4 s, unchanged). The rehearsal's pass criterion
-follows the cap. Not 1 s: no per-device headroom (Afero's ~1 write/s), no step ever verified, and the only errors
-came at 1 s.
-
+**D81 — Per-light looks step every 3 s on nine kits; module-level looks keep 7.5 s (Oct 21, Charleston; follows
+D65, D79, D80).** With the nine new kits registered on VWBD's account (bench), commissioned (Gate C + map on all nine)
+and online at the venue, Alon ran the rate test (D80) three times on all nine: twice with Rainbow Row Sunset #2
+(module level) and once with Coastal Tides #5 (per-light). All three: **0 × 429 and 0 × 403** at up to 540 writes a
+minute on one account. But Hubspace's ~1.5–2.6 s readback confirms only part of the steps when they come fast: module
+level ~75 % at 4 s and ~50 % at 1.5–2 s; per-light **97 % at 4 s, 93 % at 3 s**, 24 % at 2 s, 0 at 1 s. Module 3 (run
+1) and Module 9 (per-light, at 1.5 s) had a few HTTP 424s (device reachability). A first try (account cap 90 → 450,
+1.5 s) failed CI: in the soak (5 % simulated throttling, 1 % silent drops) unconfirmed steps piled up re-sends and a
+look was downgraded; any looser **stepped** cap degraded the module-level soak. So:
+- `motion.lights.account_writes_per_min: 225` — per-light runs pace by their own cap (less the 20 % reserve = 180 a
+  minute): nine kits every 3 s, one kit at its designed 1.5–3 s. The runner, the rehearsal report and the Lab use it.
+- `motion.stepped` unchanged (cap 90, 7.5 s on nine): the module-level looks keep their Gate R pace.
+- The soak counts a module as showing a per-light look when it shows any frame of the run (the look moves faster
+  than a slow module confirms), judges its write rows against the cap in force, and allows up to 5 % of steps
+  superseded before every module confirmed them (still 0 failed or skipped).

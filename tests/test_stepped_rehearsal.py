@@ -177,13 +177,13 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert result["ok"] and result["rehearsal"]["minutes"] == 2
     state, count, step_s, mode = during
     assert state.tier == "stepped" and mode == "golden-hour"
-    # run_s = minutes · 60, at the design's own 6 s: since D81 the account's cap (450 less the 20 % reserve = 360 a
-    # minute) lets 9 modules step every 1.5 s, so the design's pace stands
-    assert step_s == 6.0 and count == int(120 / step_s) == 20
+    # run_s = minutes · 60, at 7.5 s steps: the design's 6 s stretched to 9 modules at 72 writes a minute (the
+    # account's cap of 90 less the 20 % reserve)
+    assert step_s == 7.5 and count == int(120 / step_s) == 16
     # D65: Golden Hour has its own stepped rung, so the rehearsal runs it with its own moving copy (a mode without
     # one says staff are testing: test_the_rehearsal_design_is_the_modes_module_level_design_stepped_...)
     assert state.feature == engine_moving("golden-hour")
-    assert mid.program is not None and mid.program["step"] == 10  # moving, half way (60 s at 6 s)
+    assert mid.program is not None and mid.program["step"] == 8  # moving, half way
     # the report: every field, a pass in sim (no faults), labelled SIMULATED
     assert set(report) == REPORT_FIELDS
     assert [c["id"] for c in report["criteria"]] == CRITERIA and all(c["ok"] for c in report["criteria"])
@@ -191,21 +191,19 @@ def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_stil
     assert report["simulated"] and "SIMULATED" in report["note"]
     assert report["modules"] == preview["modules"] and len(report["modules"]) == 9
     assert report["accounts"] == ["canopy"] and report["minutes"] == 2 and report["run_s"] == 120.0
-    assert report["steps"] == {"step_s": 6.0, "design_step_s": 6.0, "planned": 20, "reached": 20, "sent": 20,
+    assert report["steps"] == {"step_s": 7.5, "design_step_s": 6.0, "planned": 16, "reached": 16, "sent": 16,
                                "skipped": 0, "budget_holds": 0}  # fmt: skip
-    # the hold, 19 steps and the hold again: one PUT per module each, all verified, nothing throttled
-    assert report["attempts"] == report["puts"] == 9 * 21
-    assert report["commands"] == {"applied": 189} and report["failed_throttled"] == report["superseded"] == 0
+    # the hold, 15 steps and the hold again: one PUT per module each, all verified, nothing throttled
+    assert report["attempts"] == report["puts"] == 9 * 17
+    assert report["commands"] == {"applied": 153} and report["failed_throttled"] == report["superseded"] == 0
     assert report["throttled_429"] == report["forbidden_403"] == 0 and report["throttled_share"] == 0.0
-    assert report["verification_s"]["count"] == 189 and 0 < report["verification_s"]["p50"] <= 3.0
-    # what ops confirmed is what happened: paced at 360 a minute, never past the cap of 450 in any 60 s (D81)
-    assert "paced at up to 360 writes a minute" in preview["confirm"]
-    room = "less than one write per module of room under 450 writes in a minute is held back"  # D75
+    assert report["verification_s"]["count"] == 153 and 0 < report["verification_s"]["p50"] <= 3.0
+    # what ops confirmed is what happened: paced at 72 a minute, never past the cap of 90 in any 60 s
+    assert "paced at up to 72 writes a minute" in preview["confirm"]
+    room = "less than one write per module of room under 90 writes in a minute is held back"  # D75
     assert room in preview["confirm"]
-    assert report["cap_writes_per_min"] == 450
-    assert (
-        set(report["max_writes_60s"]) == {"canopy"} and 90 <= report["max_writes_60s"]["canopy"] <= 99
-    )  # 9 modules × 10 steps of 6 s, + a burst
+    assert report["cap_writes_per_min"] == 90
+    assert set(report["max_writes_60s"]) == {"canopy"} and 72 <= report["max_writes_60s"]["canopy"] <= 81
     assert report["governor_trips"] == 0 and report["outages"] == 0
     assert "vignette" not in report  # the vignettes are outside this system (D67)
     assert name == f"{report['run_id']}.json" and report["run_id"].endswith("-golden-hour")
@@ -475,9 +473,7 @@ def test_guests_wait_the_idle_hold_waits_and_the_run_lasts_its_minutes():
     assert kiosk.refused and kiosk.message == REHEARSAL_MESSAGE and 230 < kiosk.retry_after_s <= 240
     assert dim.refused and dim.message == REHEARSAL_MESSAGE
     assert held == ("golden-hour", "golden-hour", True)
-    assert (
-        report["completed"] and report["steps"]["planned"] == 40 and report["run_s"] == 240.0
-    )  # 240 s at 6 s
+    assert report["completed"] and report["steps"]["planned"] == 32 and report["run_s"] == 240.0
 
 
 def test_stopping_the_engine_ends_it_and_still_writes_the_report():
