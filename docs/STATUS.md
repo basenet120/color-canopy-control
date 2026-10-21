@@ -26,6 +26,15 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
+From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
+from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation`; the exact
+commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
+merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
+(`uv run --with pytest-xdist pytest -q -n 8`): 3546 passed, 6 skipped in 3 min 32 s; ruff check + format clean.
+Rollback: `git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)"` then `canopy-mac install`.
+
 ## PR `claude/panel-own-orientation` — the guest panel draws each kit as it hangs → `main` (Oct 21 afternoon)
 **True on hardware (venue, Oct 21, Alon watching):** the kits hang far row 1-2-3, middle 4-5-6, near 7-8-9 (plan seen
 from below, Module 1 top-left), so the registry overlay was transposed: Module N's tag → `canopy-r{row}c{col}` with
