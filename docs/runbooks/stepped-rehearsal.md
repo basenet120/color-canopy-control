@@ -59,7 +59,8 @@ presses **Rehearse** in the confirm dialog on `/ops`.
 5. The canopy card shows "Stepped look: step n of N · every 7.5 s · writes/min on account … (cap 90)". The line
    under the controls says when it ends. The kiosk's feature line says what the canopy is doing. For every scene
    (Lowcountry Calm, Rainbow Row Sunset, Garden Gathering, Coastal Tides, Golden Hour and The Goodnight Glow, each
-   with its #2 and #3, D77) it is that look's own moving copy, the one guests would see. A travel look, or a breath
+   with its #2 and #3, D77, and their per-light #4-#6, D80; and Light Show with its #2-#6, Oct 21) it is that look's
+   own moving copy, the one guests would see. A travel look, or a breath
    that drifts its colours (Lowcountry Calm #1, Coastal Tides #1), says "Colour and dimming through the Hubspace
    cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so …".
    A level breath or a shimmer (D75) says what it sends instead: "Colour and dimming through the Hubspace cloud: each

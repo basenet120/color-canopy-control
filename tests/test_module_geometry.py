@@ -206,4 +206,6 @@ def test_catalog_lists_every_card_and_marks_t1_and_the_lowcountry_preview():
     assert "placeholder" not in preview and not preview["needs_t1"]
     assert preview["defaults"] == {"mode": "lowcountry-calm", "position": "r1c1"}
     assert [m["id"] for m in preview["options"]["modes"]] == list(load_modes().modes)  # catalog order (D77)
-    assert [m["id"] for m in preview["options"]["modes"]][-1] == "goodnight-glow-6"
+    assert [m["id"] for m in preview["options"]["modes"]][
+        -1
+    ] == "light-show-6"  # the Light Show scene follows the six

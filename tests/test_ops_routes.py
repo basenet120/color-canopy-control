@@ -96,8 +96,9 @@ def test_state_lists_the_modes_for_the_picker(app_client):
     assert body["mode"] == "lowcountry-calm" and body["guest_input"] is True
     ids = [m["id"] for m in body["modes"]]
     assert (
-        ids[0] == "lowcountry-calm" and "golden-hour" in ids and len(ids) == 36
-    )  # D77's catalog and D80's options
+        ids[0] == "lowcountry-calm" and "golden-hour" in ids and len(ids) == 36 + 6
+    )  # D77's catalog and D80's options, then the Light Show scene and its five options
+    assert ids[-6:] == ["light-show", *(f"light-show-{n}" for n in range(2, 7))]
     assert all(m["label"] for m in body["modes"])
     assert all(m["on_ipad"] is True for m in body["modes"])
 
@@ -108,7 +109,7 @@ def test_the_mode_picker_marks_scenes_off_the_ipad(app_client):
     _services(app_client).settings.kiosk.hidden_scenes = ["golden-hour"]
     modes = app_client.get("/api/canopy/state").json()["modes"]
     assert {m["id"]: m["on_ipad"] for m in modes} == {m["id"]: m["id"] != "golden-hour" for m in modes}
-    assert len(modes) == 36
+    assert len(modes) == 36 + 6  # the six scenes' 36, plus the Light Show scene's six
     script = app_client.get("/ops/ops.js").text
     assert "(off the iPad)" in script and "m.on_ipad" in script
 
