@@ -129,10 +129,10 @@ def test_a_rate_test_can_run_its_own_paces_each_for_its_own_time():
     async def main():
         w = await show()
         preview = w.engine.rehearsal_preview(
-            "garden-gathering", 1, ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
+            "garden-gathering-4", 1, ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
         )
         result = await w.engine.rehearse(
-            "garden-gathering", 1, source="ops", ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
+            "garden-gathering-4", 1, source="ops", ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
         )
         await w.run_for(90 + 30)
         await w.ended()

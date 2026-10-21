@@ -1004,7 +1004,11 @@ def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_l
     for sid in per_light:
         modules = by_id[sid]["thumb"]["modules"]
         heads = [c for m in modules for c in (m["colors"] or [])]
-        assert len(heads) == 270 and any(c is None for c in heads) and any(c for c in heads), sid
+        assert len(heads) == 270 and any(c for c in heads), sid
+    # a look cut into rings, rays or stripes leaves its dark lights out of the card
+    assert any(
+        any(c is None for m in by_id[sid]["thumb"]["modules"] for c in m["colors"] or []) for sid in per_light
+    )
     for base in PAINTED:
         plan = K._likely_plan(engine, base, current)
         tier = str(plan.tier) if plan is not None else None
@@ -1059,7 +1063,8 @@ def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_draws_the_whole
         for sid in eased:
             engine.floors.pop(sid, None)
     by_id = {s["id"]: s for s in _panel(app_client_show)["scenes"]}
-    assert all(by_id[sid]["thumb"]["basis"] == "modules" for sid in eased)
+    # the floor lifted: each card is back to the picture it had (a per-light look's own frame since Oct 21)
+    assert all(by_id[sid]["thumb"]["basis"] == before[sid]["thumb"]["basis"] for sid in eased)
 
 
 # ---- the guest panel ------------------------------------------------------------------------------------------------------

@@ -622,8 +622,11 @@ def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_
     cfg = soak.SoakConfig(seed=1, report_path=None, stepped=stepped, sim_settings=slow)
     out = run_virtual(lambda: soak._stepped_soak(cfg))
     pace = effective_step_s(lights.step_s, 9, load_settings(), lights=True)
-    assert out["runs"] == 1 and set(out["step_s"]) == {pace} == {3.0}
-    assert out["steps_superseded"] >= 4 and out["steps_landed"] <= 1  # only the last step (the hold) can land
+    assert out["runs"] == 1 and set(out["step_s"]) == {pace} == {2.0}  # per-light every 2 s on nine (Oct 21)
+    superseded = out["steps_superseded"] + out.get(
+        "steps_superseded_lights", 0
+    )  # a per-light run's own count
+    assert superseded >= 4 and out["steps_landed"] <= 1  # only the last step (the hold) can land
     landing = soak._stepped_rows(out)[1]
     assert not landing["pass"] and f"{out['steps_superseded']} superseded" in landing["name"]
 
