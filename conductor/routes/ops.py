@@ -82,6 +82,7 @@ from conductor.canopy import RESTORE_SOURCE
 from conductor.config import NOT_FOR_GIT, overlay_diff, overlay_text
 from conductor.drivers.base import StateRow
 from conductor.engine_api import PlanError
+from conductor.executor_api import DeviceStatus
 from conductor.framemap import frame_indices, head_check, module_heads
 from conductor.gate import Purpose
 from conductor.geometry import build_layout, load_canopy_config
@@ -772,6 +773,7 @@ def canopy_heads(services: Any) -> dict:
             reported: list[dict | None] = [None] * len(positions)
             desired_source, reported_at, lock_owner, simulated = None, None, None, None
             readback_stale = False
+            checking = False
         else:
             cal = calibration_for(cfg, entry)
             mmap = module_map(cfg, cal)
@@ -783,7 +785,10 @@ def canopy_heads(services: Any) -> dict:
             indices = _frame_indices(services, entry, address, n)
             desired, desired_source = [None] * n, None
             target = plan.modules.get(entry.id) if plan is not None else None
-            if target is not None and target.preview:
+            # A stepped run (D65/D80): the plan's target is the run's first step (its hold), so a later step would read
+            # as most heads differing although every write landed (Oct 21). Compare with the step actually sent.
+            stepping = bool((state or {}).get("program")) and bool(snap) and snap["desired"] is not None
+            if target is not None and target.preview and not stepping:
                 desired = [_rgb(c) for c in list(target.preview)[:n]]
                 desired += [None] * (n - len(desired))
                 desired_source = "plan"
@@ -809,10 +814,16 @@ def canopy_heads(services: Any) -> dict:
             readback_stale = bool(
                 (snap or {}).get("readback_stale")
             )  # D82: its "differ" counts may be the cloud's
+            # the readback on hand is the previous look's while a write is in flight or its readback hasn't come:
+            # nothing to compare yet (a stepped run sends every few seconds, so this is most of each step)
+            checking = desired_source == "tracker" and (snap or {}).get("status") in (
+                DeviceStatus.UPDATING,
+                DeviceStatus.UNKNOWN,
+            )
         m_counts = {"match": 0, "mismatch": 0, "unknown": 0}
         for i, (x, y) in enumerate(positions):
             d, r = desired[i], reported[i]
-            match = _matches(d, r)
+            match = None if checking else _matches(d, r)
             key = "unknown" if match is None else ("match" if match else "mismatch")
             m_counts[key] += 1
             heads_out.append(

@@ -263,6 +263,52 @@ def test_heads_flag_a_module_whose_readback_differs(app_client):
     assert body["counts"]["mismatch"] == 30 and body["counts"]["match"] == 240
 
 
+def test_heads_in_a_stepped_run_compare_with_the_step_sent_not_the_first(app_client, monkeypatch):
+    # Oct 21 (venue rehearsal): the plan's target is a stepped run's first step, so every later step read as most heads
+    # differing although each write landed. While a run steps, the step actually sent (the tracker's) is compared
+    engine = _install(app_client)
+    app_client.post("/api/canopy/mode", json={"mode": "lowcountry-calm"})
+    _wait_ready(app_client, "lowcountry-calm")
+    plan = engine.current_plan()
+    first_step = {"r": 0, "g": 0, "b": 255}  # unlike anything sent since
+    for target in plan.modules.values():
+        target.preview = [first_step] * len(target.preview)
+    monkeypatch.setattr(engine, "current_plan", lambda: plan)
+    real_state = ops_routes._state_json
+    monkeypatch.setattr(
+        ops_routes, "_state_json", lambda e: {**(real_state(e) or {}), "program": {"step": 5}}
+    )
+    body = app_client.get("/api/canopy/heads").json()
+    assert body["counts"]["match"] == 270 and body["counts"]["mismatch"] == 0
+    assert all(m["desired_source"] == "tracker" for m in body["modules"])
+    monkeypatch.setattr(ops_routes, "_state_json", real_state)  # no run: the plan's look, as before
+    assert app_client.get("/api/canopy/heads").json()["counts"]["mismatch"] == 270
+
+
+def test_heads_with_a_write_in_flight_are_checking_not_mismatched(app_client, monkeypatch):
+    _install(app_client)
+    app_client.post("/api/canopy/mode", json={"mode": "lowcountry-calm"})
+    _wait_ready(app_client, "lowcountry-calm")
+    services = _services(app_client)
+    real = services.tracker.snapshot
+
+    def in_flight(address):
+        snap = real(address)
+        if address == "sim-canopy-r1c1":
+            snap = {**snap, "status": "updating"}  # the next step sent, its readback not back yet
+        return snap
+
+    monkeypatch.setattr(services.tracker, "snapshot", in_flight)
+    real_state = ops_routes._state_json
+    monkeypatch.setattr(
+        ops_routes, "_state_json", lambda e: {**(real_state(e) or {}), "program": {"step": 5}}
+    )
+    body = app_client.get("/api/canopy/heads").json()
+    module = next(m for m in body["modules"] if m["id"] == "r1c1")
+    assert module["counts"] == {"match": 0, "mismatch": 0, "unknown": 30}
+    assert body["counts"]["match"] == 240 and body["counts"]["mismatch"] == 0
+
+
 def test_heads_honour_each_modules_calibration(app_client):
     services = _services(app_client)
     services.update_registry("canopy-r0c0", {"cable_path": "serpentine_rows", "start_corner": "top-right"})

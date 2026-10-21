@@ -26,6 +26,18 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## PR `claude/ops-heads-step` — /ops compares a stepped run's heads with the step sent → `main` (Oct 21 afternoon; on #47)
+**True on hardware (venue, Oct 21):** during the Lowcountry Calm #4 per-light rehearsal every kit took a full frame on
+all 144 steps (1162 applied, 1 mismatch, 142 superseded, 0 × 429), yet the /ops canopy grid showed most heads not
+matching the look for most of the run. Cause: `canopy_heads` compared readback with the plan's target, which for a
+stepped run is its first step (the hold); every later step differs from it. Also, with a write every 3 s and
+verification ~2.6 s, the readback on hand is usually the previous step's.
+- **Fix:** while the engine reports a program, desired is the tracker's (the step actually sent); while that write is
+  in flight or its readback hasn't come (tracker `updating` / `unknown`), heads are "unknown" (checking), not
+  "mismatch". Outside a run nothing changes (the plan's look).
+- **Verified:** two new tests in test_ops_routes (fail without the fix, pass with it); the heads tests pass.
+- Built on #47 (it touches the D82 lines): merge #47 first.
+
 ## PR `claude/stale-readback` — stale readback, slow re-sends, a re-send cap (D82) → `main` (Oct 21)
 Live today (Charleston, nine kits, `9e31dbe`): after the 13:40 rate test six modules' Hubspace readback stayed frozen
 for ~9 min (`individual`, brightness 85) while every write got a 200 and Alon saw the lights change; /ops showed "N
