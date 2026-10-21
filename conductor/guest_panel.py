@@ -389,8 +389,11 @@ class EngineTarget:
         return canopy_view.load_canopy(str(self.services.config_dir))
 
     def canopy(self) -> dict:
-        """The canopy's 270 lights in inches, per module in lattice order, with the install's view (kiosk.preview)."""
-        return canopy_view.canopy_geometry(self._canopy_cfg(), self.services.settings.kiosk.preview)
+        """The canopy's 270 lights in inches, per module in lattice order, each panel as it hangs (its calibrated
+        orientation), with the install's view (kiosk.preview)."""
+        return canopy_view.canopy_geometry(
+            self._canopy_cfg(), self.services.settings.kiosk.preview, registry=self.services.registry
+        )
 
     def _lit(self, engine: Any, st: CanopyState) -> dict | None:
         """What each canopy position truthfully shows (canopy_view.lit_state), or None before the first look."""

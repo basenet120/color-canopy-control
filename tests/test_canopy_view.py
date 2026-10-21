@@ -36,7 +36,7 @@ from conductor.config import CONFIG_DIR, ConductorSettings, ConfigError, Preview
 from conductor.engine_api import CanopyPhase, CanopyState, ModePlan, ModuleTarget, Tier
 from conductor.geometry import load_canopy_config
 from conductor.looks import CompileContext, compile_mode, module_look
-from conductor.looks.composer import evaluate
+from conductor.looks.composer import evaluate, head_positions, placement_for
 from conductor.scenes import load_scenes
 from conductor.sequence import GRID as RUNNER_GRID
 from conductor.sim.profiles import profile_parts
@@ -173,11 +173,25 @@ def test_a_b_modules_wire_0_lands_in_its_rotated_corner():
     assert LATTICE["r0c0"][lattice_slots(CFG, BY_POSITION["r0c0"])[0]] == [2.5, 5.0]
 
 
-def test_a_wiring_that_isnt_one_to_one_on_the_lattice_falls_back_to_one_flat_mean(caplog):
-    # an A-hung kit placed where the scheme hangs B: its heads don't sit on that position's lattice
-    entry = BY_POSITION["r0c1"].model_copy(update={"id": "flat-fallback-test", "orientation": "A"})
-    assert lattice_slots(CFG, entry) is None
-    colors = [{"r": 200, "g": 0, "b": 0}] * 15 + [{"r": 0, "g": 0, "b": 100}] * 15
+def test_a_kit_hung_the_other_way_round_is_drawn_where_it_hangs():
+    # Oct 21: the venue kits hang B-A-B where the scheme says A-B-A. An A-hung kit at a B position has 8 heads on top,
+    # not 7: with the registry, the picture turns that panel and every light maps one to one onto it
+    entry = BY_POSITION["r0c1"].model_copy(update={"id": "turned-test", "orientation": "A"})
+    registry = _Registry([entry if e.module == "r0c1" else e for e in MODULES])
+    hung = {m["pos"]: m["heads"] for m in canopy_geometry(CFG, registry=registry)["modules"]}
+    assert sum(1 for _, y in hung["r0c1"] if y == 5.0) == 8  # A on top: the scheme's B has 7 there
+    assert sum(1 for _, y in LATTICE["r0c1"] if y == 5.0) == 7
+    assert {p: h for p, h in hung.items() if p != "r0c1"} == {p: h for p, h in LATTICE.items() if p != "r0c1"}
+    slots = lattice_slots(CFG, entry)
+    assert sorted(slots) == list(range(30))
+    wire = head_positions(CFG, placement_for(CFG, entry, frame_length=None))
+    assert all(hung["r0c1"][j] == [*wire[i]] for i, j in enumerate(slots))
+    assert canopy_geometry(CFG)["modules"] == GEOMETRY["modules"]  # no registry: the scheme, as before
+
+
+def test_a_plan_with_the_wrong_number_of_heads_falls_back_to_one_flat_mean(caplog):
+    entry = BY_POSITION["r0c1"].model_copy(update={"id": "flat-fallback-test"})
+    colors = [{"r": 200, "g": 0, "b": 0}] * 16 + [{"r": 0, "g": 0, "b": 100}] * 16
     with caplog.at_level(logging.WARNING, logger="conductor.canopy_view"):
         out = module_colours(CFG, entry, colors)
     assert out == ["#640032"] * 30
