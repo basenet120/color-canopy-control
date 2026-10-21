@@ -206,14 +206,15 @@ modes:
         lights:
           effect: ripple
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          rings: 1.5
-          steps_per_cycle: 24
+          rings: 1.0
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 120
-          floor: 12
+          floor: 0
           peak: 100
+          on_at: 40
           brightness: 70
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so slow rings of light roll out from the centre like ripples on a tide pool."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so wide rings of light roll out from the centre, dark between them, like ripples on a quiet tide pool."
       strand:
         look: {kind: rgb, rgb: [205, 235, 226], brightness: 70}   # sea foam
         feature: "Colour and dimming: all nine Hubspace strands set to sea foam."
@@ -251,14 +252,15 @@ modes:
         lights:
           effect: glow
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          steps_per_cycle: 20
+          softness: 0.1
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 120
           floor: 0
           peak: 100
-          softness: 0.35
+          on_at: 50
           brightness: 70
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a lantern glow grows out from the centre to the edges and draws back in, the lights past it going dark."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so light spreads from the centre out to the corners and draws back again, like the tide coming in and going out."
       strand:
         look: {kind: rgb, rgb: [255, 231, 191], brightness: 70}   # lantern glow
         feature: "Colour and dimming: all nine Hubspace strands set to lantern glow."
@@ -296,14 +298,15 @@ modes:
         lights:
           effect: breathe
           field: {kind: "linear", angle_deg: 25}
-          steps_per_cycle: 20
+          lag: 1.0
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 120
-          floor: 20
+          floor: 0
           peak: 100
-          lag: 0.8
+          on_at: 45
           brightness: 70
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a slow breath rolls diagonally across the canopy, each light swelling and softening a moment after the last."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so a wide band of light drifts diagonally across the canopy and around again, like a sea breeze."
       strand:
         look: {kind: rgb, rgb: [243, 238, 227], brightness: 70}   # oak linen
         feature: "Colour and dimming: all nine Hubspace strands set to oak linen."
@@ -444,15 +447,16 @@ modes:
         lights:
           effect: ripple
           field: {kind: "linear", angle_deg: 0}
-          rings: 2.0
-          steps_per_cycle: 16
+          rings: 1.5
+          colour_travel: 0.5
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 15
+          floor: 0
           peak: 100
-          colour_travel: 0.5
+          on_at: 50
           brightness: 85
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new colour and level every few seconds, so bands of light roll along the canopy like sun across a row of pastel facades."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so bands of light roll from one short end of the canopy to the other while their colours shift along, like painted houses going by."
       strand:
         look: {kind: rgb, rgb: [255, 179, 207], brightness: 85}   # facade rose
         feature: "Colour and dimming: all nine Hubspace strands set to facade rose."
@@ -490,14 +494,15 @@ modes:
         lights:
           effect: glow
           field: {kind: "radial", centre_in: [112.5, 120.0], metric: "canopy"}
-          steps_per_cycle: 20
+          softness: 0.1
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 120
           floor: 0
           peak: 100
-          softness: 0.3
+          on_at: 50
           brightness: 85
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a warm glow rises from the middle of one long side across the canopy and back, the lights past it going dark."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so light rises from the middle of one long side, fills the canopy and sinks back again, like the sun going down over the rooftops."
       strand:
         look: {kind: rgb, rgb: [255, 185, 140], brightness: 85}   # apricot
         feature: "Colour and dimming: all nine Hubspace strands set to apricot."
@@ -536,13 +541,14 @@ modes:
           effect: ripple
           field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 0}
           rings: 2.0
-          steps_per_cycle: 16
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 10
+          floor: 0
           peak: 100
+          on_at: 60
           brightness: 85
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so two beams of light turn around the centre like a pinwheel."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so two beams of light turn around the centre of the canopy like a pinwheel, the rest of the lights dark."
       strand:
         look: {kind: rgb, rgb: [255, 201, 214], brightness: 85}   # pinwheel blush
         feature: "Colour and dimming: all nine Hubspace strands set to pinwheel blush."
@@ -685,14 +691,15 @@ modes:
         lights:
           effect: twinkle
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          steps_per_cycle: 16
+          seed: 1029
+          steps_per_cycle: 12
           step_s: 1.5
           run_s: 120
-          floor: 6
+          floor: 0
           peak: 100
-          seed: 1029
+          on_at: 70
           brightness: 75
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, each on its own rhythm, so lights brighten and dim across the garden like fireflies."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so lights blink on and off at random all over the canopy, each on its own rhythm, like fireflies in a garden."
       strand:
         look: {kind: rgb, rgb: [127, 183, 126], brightness: 75}   # fern
         feature: "Colour and dimming: all nine Hubspace strands set to fern."
@@ -730,14 +737,15 @@ modes:
         lights:
           effect: glow
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          steps_per_cycle: 24
+          softness: 0.12
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 120
-          floor: 5
+          floor: 0
           peak: 100
-          softness: 0.5
+          on_at: 50
           brightness: 75
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so the light opens out from the centre like a flower and closes again."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so light blooms from the centre out to the corners and closes again, like a flower opening and closing."
       strand:
         look: {kind: rgb, rgb: [247, 182, 200], brightness: 75}   # peony
         feature: "Colour and dimming: all nine Hubspace strands set to peony."
@@ -775,14 +783,15 @@ modes:
         lights:
           effect: ripple
           field: {kind: "linear", angle_deg: 140}
-          rings: 2.5
-          steps_per_cycle: 16
+          rings: 2.0
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 25
+          floor: 0
           peak: 100
+          on_at: 55
           brightness: 75
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so gusts of light roll diagonally across the canopy like a breeze through leaves."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so diagonal stripes of light roll across the canopy, dark between them, like wind through tall grass."
       strand:
         look: {kind: rgb, rgb: [169, 199, 160], brightness: 75}   # breeze sage
         feature: "Colour and dimming: all nine Hubspace strands set to breeze sage."
@@ -920,15 +929,16 @@ modes:
         lights:
           effect: ripple
           field: {kind: "linear", angle_deg: 90}
-          rings: 2.0
-          steps_per_cycle: 16
+          direction: "inward"
+          rings: 1.5
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 10
+          floor: 0
           peak: 100
-          direction: "inward"
+          on_at: 50
           brightness: 85
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so lines of light roll across the canopy like surf coming in to shore."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so bands of light roll across the canopy from one long side to the other, dark between them, like waves coming ashore."
       strand:
         look: {kind: rgb, rgb: [79, 159, 209], brightness: 85}   # ocean blue
         feature: "Colour and dimming: all nine Hubspace strands set to ocean blue."
@@ -966,14 +976,15 @@ modes:
         lights:
           effect: ripple
           field: {kind: "radial", centre_in: [75.0, 40.0], metric: "canopy"}
-          rings: 3.0
-          steps_per_cycle: 16
+          rings: 2.0
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 8
+          floor: 0
           peak: 100
+          on_at: 55
           brightness: 85
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so rings of light spread out across the canopy like ripples from a drop in a tide pool."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so rings of light spread out across the canopy, dark between them, like ripples from a drop in a tide pool."
       strand:
         look: {kind: rgb, rgb: [127, 214, 208], brightness: 85}   # pool aqua
         feature: "Colour and dimming: all nine Hubspace strands set to pool aqua."
@@ -1012,13 +1023,14 @@ modes:
           effect: ripple
           field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 90}
           rings: 1.0
-          steps_per_cycle: 16
+          steps_per_cycle: 8
           step_s: 1.5
           run_s: 120
-          floor: 6
+          floor: 0
           peak: 100
+          on_at: 70
           brightness: 85
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a beam of light turns around the centre like a lighthouse."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so one wide beam of light turns around the centre of the canopy like a lighthouse, the rest of the lights dark."
       strand:
         look: {kind: rgb, rgb: [46, 76, 122], brightness: 85}   # night sea
         feature: "Colour and dimming: all nine Hubspace strands set to night sea."
@@ -1163,14 +1175,15 @@ modes:
         lights:
           effect: glow
           field: {kind: "radial", centre_in: [0.0, 60.0], metric: "canopy", radius_in: 225}
-          steps_per_cycle: 24
+          softness: 0.12
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 120
-          floor: 4
+          floor: 0
           peak: 100
-          softness: 0.4
+          on_at: 50
           brightness: 95
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so the light spreads from one short side across the canopy like a sunrise, then draws back."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so light sweeps in from one short end across the whole canopy and back again, like the sun crossing the sky."
       strand:
         look: {kind: rgb, rgb: [255, 176, 138], brightness: 95}   # sunrise peach
         feature: "Colour and dimming: all nine Hubspace strands set to sunrise peach."
@@ -1208,14 +1221,15 @@ modes:
         lights:
           effect: breathe
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          steps_per_cycle: 16
+          lag: 1.0
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 30
+          floor: 0
           peak: 100
-          lag: 1.2
+          on_at: 55
           brightness: 95
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so waves of warmth swell out from the centre, each ring of lights brightening a moment after the one inside it."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so a ring of warm light rolls out from the centre to the corners, dark behind it, and another follows, like the glow of a setting sun."
       strand:
         look: {kind: rgb, rgb: [255, 164, 92], brightness: 95}   # amber glow
         feature: "Colour and dimming: all nine Hubspace strands set to amber glow."
@@ -1253,14 +1267,15 @@ modes:
         lights:
           effect: ripple
           field: {kind: "sweep", centre_in: [0.0, 60.0], start_deg: 270}
-          rings: 3.0
-          steps_per_cycle: 16
+          rings: 2.0
+          steps_per_cycle: 10
           step_s: 1.5
           run_s: 120
-          floor: 15
+          floor: 0
           peak: 100
+          on_at: 55
           brightness: 95
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so rays of light fan out from one short side and sweep across the canopy like a low sun."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so rays of light fan out from one short end and sweep across the canopy like a low sun, dark between them."
       strand:
         look: {kind: rgb, rgb: [255, 194, 77], brightness: 95}   # marigold
         feature: "Colour and dimming: all nine Hubspace strands set to marigold."
@@ -1401,14 +1416,15 @@ modes:
         lights:
           effect: glow
           field: {kind: "radial", centre_in: [112.5, 0.0], metric: "canopy"}
-          steps_per_cycle: 20
+          softness: 0.15
+          steps_per_cycle: 14
           step_s: 2.5
           run_s: 150
           floor: 0
           peak: 100
-          softness: 0.35
+          on_at: 45
           brightness: 28
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a soft moonglow rises from one long side across the canopy and settles back, the lights past it going dark."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so light spreads slowly from one long side across the canopy and draws back again, like the moon rising and setting."
       strand:
         look: {kind: rgb, rgb: [201, 214, 245], brightness: 28}   # moonrise blue
         feature: "Colour and dimming: all nine Hubspace strands set to moonrise blue."
@@ -1446,14 +1462,15 @@ modes:
         lights:
           effect: twinkle
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          steps_per_cycle: 16
+          seed: 7731
+          steps_per_cycle: 12
           step_s: 2.0
           run_s: 150
           floor: 0
           peak: 100
-          seed: 7731
+          on_at: 80
           brightness: 28
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, each on its own rhythm, so lights come and go across the canopy like stars."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so a few lights at a time blink on and off across the dark canopy, like stars coming out."
       strand:
         look: {kind: rgb, rgb: [207, 198, 240], brightness: 28}   # star lilac
         feature: "Colour and dimming: all nine Hubspace strands set to star lilac."
@@ -1491,14 +1508,15 @@ modes:
         lights:
           effect: breathe
           field: {kind: "radial", centre_in: [112.5, 60.0]}
-          steps_per_cycle: 16
+          lag: 1.0
+          steps_per_cycle: 14
           step_s: 3.0
           run_s: 150
-          floor: 15
+          floor: 0
           peak: 100
-          lag: 0.6
+          on_at: 40
           brightness: 28
-          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own and sent a new level every few seconds, so a slow breath rolls out from the centre, each light swelling and softening a moment after the one inside it."
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, on or off, and sent every few seconds, so a slow, wide ring of light rolls out from the centre and back, like the room breathing toward sleep."
       strand:
         look: {kind: rgb, rgb: [191, 179, 230], brightness: 28}   # lavender haze
         feature: "Colour and dimming: all nine Hubspace strands set to lavender haze."
