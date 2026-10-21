@@ -85,6 +85,8 @@ def effective_step_s(
     no ripple (`kiosk.ripple_stagger_s: 0`, the shipped value) the last term is min_step_s."""
     s = settings.motion.stepped
     planned = planned_writes_per_min(s)
+    if lights:  # D81: a per-light run paces by its own cap
+        planned = settings.motion.lights.account_writes_per_min * (1.0 - s.budget_reserve)
     span = _ripple_span_s(settings, rings)
     floor = settings.motion.lights.min_step_s if lights else s.min_step_s  # D80: per-light steps from 1 s
     step = max(float(design_step_s), n_modules * 60.0 / planned, span + floor)

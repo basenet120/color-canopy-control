@@ -121,6 +121,12 @@ class ProgramRunner:
             if self.lights
             else float(self.settings.min_step_s)
         )
+        # D81: a per-light run paces itself by, and holds steps under, its own account cap
+        self.cap = float(
+            engine.deps.settings.motion.lights.account_writes_per_min
+            if self.lights
+            else self.settings.account_writes_per_min
+        )
         # The rate test (D80, an operator's rehearsal ladder): each step's own length, the account cap not applied
         # (it is what the test measures; the per-device 1 s gap and the governor still hold). None = the even pace.
         self.schedule = list(schedule) if schedule else None
@@ -192,13 +198,13 @@ class ProgramRunner:
         rings = self.engine._rings(self.plan)  # the ripple a mood choice would land with (D64)
         span = (len(rings) - 1) * self.engine.deps.settings.kiosk.ripple_stagger_s if rings else 0.0
         # the ripple's span is 0 without a ripple, so the last term is also the min_step_s floor
-        planned = planned_writes_per_min(s)
+        planned = self.cap * (1.0 - s.budget_reserve)
         step = max(self.program.step_s, busiest * 60.0 / planned, span + self.min_step_s)
         step = math.ceil(step * 1000 - _EPS) / 1000  # whole milliseconds: 6.0, not 6.000000000001
         if step > s.max_step_s + _EPS:
             return step, (
                 f"stepping {busiest} modules on one account at {planned:g} writes a minute (the account's "
-                f"{s.account_writes_per_min:g} less a {s.budget_reserve:.0%} reserve for retries and re-sends) "
+                f"{self.cap:g} less a {s.budget_reserve:.0%} reserve for retries and re-sends) "
                 f"needs {step:g} s steps, longer than motion.stepped.max_step_s ({s.max_step_s:g} s)"
             )
         cooling = {a: until for a, until in self.engine.stepped_cooloff.items() if a in accounts}
@@ -336,7 +342,7 @@ class ProgramRunner:
                 mode=self.plan.mode_id,
                 step=n,
                 **over,
-                cap=self.settings.account_writes_per_min,
+                cap=self.cap,
             )
             self.engine._publish_soon()  # the panel draws the step last sent, frozen (to_state)
             if self.held_steps >= HELD_STEPS_END:  # the still look it ends on carries a guest level folded in
@@ -380,7 +386,7 @@ class ProgramRunner:
             target = engine.target_of(device_id)
             if target is not None:
                 per_account.setdefault(engine._account_of(target.address), []).append(target)
-        cap = self.settings.account_writes_per_min
+        cap = self.cap
         rooms = self._accounts()
         for account, targets in sorted(per_account.items()):
             executor, address = targets[0].executor, targets[0].address
