@@ -39,23 +39,24 @@ look nearly all on, and `/ops` (which draws 13 % as near black) disagrees with t
 - **Verified:** compiled on the box's registry: every light 0 or 100 on every step (#3 and #6 run 270 → 0 → 270);
   a frame-accurate preview sent to Alon; tests pinning the catalog size moved 36 → 42 (helper agent; reviewed);
   new tests for `on_at`. Not yet seen on the canopy.
-- **Known issue, pre-existing (not caused by Light Show):** two soak tests fail —
-  `test_engine_review2::test_f11_the_soak_runs_the_shows_wiring_and_a_motion_plan` and
-  `test_soak::test_short_soak_passes_and_writes_the_report` ("Stepped, SIMULATED: tier downgrades at 5% throttling";
-  test_soak also "All nine modules correct after a mode change"). Cause: a D80 per-light option picked as the mood
-  that cuts a run short drops stepped → module level ("a module stayed wrong for more than 10 s after re-asserts").
-  On the catalog *before* Light Show the f11 setup already fails on seeds 1, 2, 3, 4, 6 and 8 (passes 5, 7, 9–11):
-  the pinned seeds passed by luck, and six more moods changed the seeded picks. Not seen live (today's per-light
-  rehearsal stayed stepped all 144 steps). **Next:** find why a per-light run under 5 % throttling leaves a module
-  wrong > 10 s; don't re-seed the tests to hide it. CI on a Light Show PR will fail these two until then.
+- **Soak failures → two real per-light bugs, fixed on `claude/per-light-resend` (on #47; no PR yet):**
+  1. A per-light frame that came back MISMATCH was treated as slot drift (rewritten at most every 10 min), so while
+     that module's frame held it was never re-sent, stayed wrong > 10 s and the look downgraded to module level.
+     Now the streamed slot's frame is re-sendable (`engine.streamed_slot`, `reconciler._rows_differ`).
+  2. After a per-light run, its hold shows the last frame in the streamed slot (custom-3), also Golden Hour #1's
+     saved slot: the slot check "repaired" it with Golden Hour's pattern, the module went wrong and the look
+     downgraded. The slot check now skips a per-light look's own slot.
+  `test_engine_review2::test_f11…` passes again. **Still failing:** `test_soak::test_short_soak_passes…` on one row
+  only, "All nine modules correct after a mode change": p95 5.08 s against 5 s (10 changes; the slowest, a per-light
+  option, 5.8 s). A latency target missed narrowly, not a downgrade; target left as is, to look at.
 
 ## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
 From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
 from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
-`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet); the exact
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` (no PR yet); the exact
 commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
 merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
-(`uv run --with pytest-xdist pytest -q -n 8`): all pass except the two known soak tests (see the Light Show block); ruff clean.
+(`uv run --with pytest-xdist pytest -q -n 8`): all pass except one row of `test_soak` (see the Light Show block): 3657 passed, 1 failed in 3 min 52 s; ruff clean.
 Rollback: `git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)"` then `canopy-mac install`.
 
 ## PR `claude/panel-own-orientation` — the guest panel draws each kit as it hangs → `main` (Oct 21 afternoon)
