@@ -83,13 +83,15 @@ motion:
   # level) to each module a step at a time, one PUT per module per step, into `slot`. Sim always; live only with
   # live_enabled (or during an operator's rehearsal of that look) and, per module, Gate C + a proven map — else the
   # rung's module-level steps run. Alon flips it after the per-light bench rehearsal (stepped-rehearsal.md).
+  # Oct 21 (venue): on — guests' per-light options (#4–#6, Light Show) run per light on all nine kits (Alon).
   lights:
-    live_enabled: false
+    live_enabled: true
     min_step_s: 1.0              # ≤ 1 write a second per module (Afero's per-device guidance)
     slot: custom-3               # the slot each step's frame is written to and selected
-    # D81: per-light runs pace by this cap (less the stepped budget_reserve): 225 → 180 a minute → nine kits every 3 s,
-    # where the venue rate test confirmed 93 % of per-light frames (~20 % at 2 s). Module-level runs keep the stepped 90.
-    account_writes_per_min: 225
+    # D81: per-light runs pace by this cap (less the stepped budget_reserve). Oct 21 (Alon, after the 2 / 1.5 / 1 s
+    # rate test: 0 × 429 at 442 writes a minute; 2 s the best trade of speed and frames landing): 337.5 → 270 a minute
+    # → nine kits every 2 s (was 225 → 3 s). Module-level runs keep the stepped 90.
+    account_writes_per_min: 337.5
   # D75: the idle look's breath. null = off (the shipped value). Alon sets it, e.g. {breathe_run_s: 60, every_s: 300},
   # only after a 30-minute live soak: live_enabled on, then this on, watched on /ops (budget, readbacks), back to
   # null to revert (a breath on nine ≈ 72 writes/min while it runs).
