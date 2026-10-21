@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-21 (Charleston: nine kits online, rate test 0 × 429 at 540/min, cap → 1.5 s steps, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,24 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR `claude/nine-kit-pace` — nine kits online in Charleston, the rate test, 1.5 s steps (D81) → `main` (Oct 21)
+**True on hardware (venue, Oct 21, Alon):** the box is at the venue (192.168.50.215). The nine new kits are on VWBD's
+account (bench), named Module 1–9 in the Hubspace app, and registered to `canopy-r0c0 … r2c2` on /ops/accounts; all
+nine online and writing (HTTP 200). Registry overlay first: Modules 3–9 moved to the bench account, Modules 1–2
+emptied, Kingston back on `bench-kit`, String light 1 back on `shop-string-1` (a spare) with its Gate C flag and map
+(backup `overrides/history/registry-before-venue-*.yaml`; Conductor restarted, preflight ok).
+- **Nine-kit rate test, twice (Rainbow Row Sunset #2):** 0 × 429 / 0 × 403 up to 540 writes a minute. Run 1: 53 × 424,
+  44 of them Module 3; run 2: 2 × 424 (Module 3, at 1 s). Verified share 75 % at 4 s, ~50 % at 1.5–2 s, 0 at 1 s.
+- **The change:** `motion.stepped.account_writes_per_min: 450` (D81) — nine modules can step every 1.5 s. Per-light
+  looks run at their designed pace on nine kits; module-level looks keep 6–8 s. Tests that pinned the old 7.5 s
+  nine-module pace updated.
+- **Verified:** targeted pytest (test_stepped_rehearsal, test_soak, test_engine_program, test_ops_routes,
+  test_lab_stepped, test_d65_modes, test_d77_catalog, test_per_light, test_lab_static, test_lab_export,
+  test_kiosk_routes) pass; ruff clean; the full suite runs in CI.
+- **Next:** Gate C + two probes + Apply map on each of the nine kits (per-light is all-or-nothing per look), then the
+  per-light rehearsal and rate test; keep an eye on Module 3's Wi-Fi.
+- **Deploy:** after merge, the usual paste block (config only, no iPad reload).
 
 ## Oct 20 (shop) — String light 1 is ready for per-light; `9e31dbe` deployed
 **Deployed (Alon asked, 11:25): `9e31dbe`** (main after #44, D80) on the Mac show box — backup

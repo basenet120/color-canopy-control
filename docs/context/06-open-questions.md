@@ -91,7 +91,7 @@ Answers from real hardware name the kit, date, source and evidence type, kept se
     holds. The governor stops a run at ≥ 8 throttled attempts that are ≥ 25% of its attempts in 60 s and holds stepped
     looks on that account still for 5 min. **Live on since D79 (Oct 19):** Gate R passed on one kit (String light 1,
     10 min, 13 writes a minute, 0 throttled); the nine-kit Gate R (`04` gate 14) still runs at install, and only Alon
-    flips it. **Bench item 6 answered on String light 1:** a strand's colour change **fades** (observer: "a nice
+    flips it. **Rate answered (D81, Oct 21):** nine kits on one account took up to 540 writes a minute with no 429/403; the cap is 450 (nine modules every 1.5 s). **Bench item 6 answered on String light 1:** a strand's colour change **fades** (observer: "a nice
     fade"); not yet seen on the other kits. Each step's landing spread was p95 2.78 s in the simulator against 05's 2 s
     target: reported, not gating, until Alon signs off a per-step target.
 28. **Throttling: per account or per IP?** The canopy account and the bench account write from the show box's one

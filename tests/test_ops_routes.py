@@ -904,7 +904,7 @@ def test_the_stepped_card_shows_the_accounts_writes_a_minute_and_the_cap(app_cli
     assert gauge == {
         "running": True,
         "moving": True,
-        "cap": 90.0,
+        "cap": 450.0,  # D81
         "live_enabled": True,
         "cooloff": [],
         "governor_trips": 0,

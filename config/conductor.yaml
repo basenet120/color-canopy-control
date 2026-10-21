@@ -67,8 +67,11 @@ motion:
     live_enabled: true           # on since Gate R passed on one kit (String light 1, Oct 19); nine-kit Gate R at install
     min_step_s: 4.0              # never step faster than this
     max_step_s: 12.0             # a step the budget would stretch past this holds the still look instead
-    account_writes_per_min: 90   # the account's cap: writes of any kind in any 60 s (Gate R fails above it)
-    budget_reserve: 0.2          # steps are planned at the cap less this share (retries, re-sends): 9 modules → 7.5 s
+    # D81: two nine-kit rate tests at the venue (Oct 21) took up to 540 writes a minute on one account with no 429/403;
+    # 450 less the 20% reserve plans 360 a minute, so nine modules can step every 1.5 s (per-light looks; module-level
+    # designs keep their own 6–8 s steps). The Gate R report fails above it.
+    account_writes_per_min: 450  # the account's cap: writes of any kind in any 60 s
+    budget_reserve: 0.2          # steps are planned at the cap less this share (retries, re-sends): 9 modules → 1.5 s
     governor_window_s: 60        # the throttle governor counts a run's write attempts over this window, per account
     governor_min_throttled: 8    # ... and stops the run at ≥ this many 429/403 attempts
     governor_throttled_share: 0.25  # ... that are ≥ this share of the attempts
