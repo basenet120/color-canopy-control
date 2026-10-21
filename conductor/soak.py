@@ -116,6 +116,10 @@ from conductor.telemetry import Telemetry, percentile
 log = logging.getLogger(__name__)
 # D81: share of a soak's steps the next step may supersede before every module confirmed them (they still went out)
 STEPS_SUPERSEDED_MAX_SHARE = 0.05
+# Oct 21: a per-light run's own allowance. At its 2 s steps (Alon's choice after the venue rate test) a frame often
+# isn't shown on every module before the next one goes out — the next step carries it, and a frame that didn't land
+# is re-sent — so up to half of its steps may be superseded; module-level runs keep the 5 %.
+STEPS_SUPERSEDED_LIGHTS_MAX_SHARE = 0.5
 ROOT = Path(__file__).resolve().parent.parent
 REPORT_PATH = ROOT / "docs" / "reports" / "sim-acceptance.md"
 SOAK_SETTINGS = CONFIG_DIR / "sim" / "soak.yaml"
@@ -128,6 +132,12 @@ WATCH_LIMIT_S = 120.0  # a measurement gives up (and fails) after this long
 
 # The tiers the built-in compiler can compile ("stepped" isn't one: it has no program to step, BuiltinCompiler).
 _TIER_NAMES = {"canvas": Tier.T1, "slot": Tier.T2, "modules": Tier.T3, "strand": Tier.STRAND}
+
+
+def _lights_plan(plan: Any) -> bool:
+    """Is this a per-light (D80) plan?"""
+    program = getattr(plan, "program", None)
+    return bool(program is not None and getattr(program, "lights", False))
 
 
 # ---- the built-in compiler (used when conductor.looks isn't available) ------------------------------------------
@@ -1135,6 +1145,8 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         # executor gave up, or was still backing off), or the simulator silently dropped it (or its re-send). The next
         # step then carries the module, by design (reconciler._resend_before_step)
         "steps_superseded_faults": 0,
+        "steps_superseded_lights": 0,  # the same for a per-light run's steps (STEPS_SUPERSEDED_LIGHTS_MAX_SHARE)
+        "steps_landed_lights": 0,
         "step_writes_faulted": 0,  # (step, module) writes those faults hit: the bound on the above
         "steps_cut": 0,  # a newer mood replaced the look before the step landed (not a failure)
         "steps_failed": 0,  # never shown within WATCH_LIMIT_S
@@ -1237,6 +1249,8 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
             if len(group["landed"]) == len(group["rows"]):
                 times = list(group["landed"].values())
                 out["steps_landed"] += 1
+                if _lights_plan(group["plan"]):
+                    out["steps_landed_lights"] += 1
                 out["step_spreads"].append(max(times) - min(times))
                 out["step_landings"].append(max(times))
                 return
@@ -1340,6 +1354,8 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         # dropped): the faults' luck, which the next step carries; anything else is the runner sending too soon
         if group["not_landed"] <= group["faulted"]:
             out["steps_superseded_faults"] += 1
+        elif _lights_plan(group["plan"]):
+            out["steps_superseded_lights"] += 1
         else:
             out["steps_superseded"] += 1
     out["step_writes_faulted"] = sum(len(group["faulted"]) for group in groups.values())
@@ -1556,17 +1572,24 @@ def _stepped_rows(stepped: dict) -> list[dict]:
         {
             "name": f"{tag}: each step shown on all its modules, send → last module ({stepped['steps_landed']} "
             f"steps; {stepped['steps_superseded']} superseded, {faulted} carried by the next step after a pinned "
-            f"fault hit a module's write, {stepped['steps_failed']} failed, {stepped['steps_skipped']} skipped)",
+            f"fault hit a module's write, {stepped.get('steps_superseded_lights', 0)} per-light steps superseded, "
+            f"{stepped['steps_failed']} failed, {stepped['steps_skipped']} skipped)",
             "p50": percentile(landings, 50),
             "p95": percentile(landings, 95),
             "max": max(landings) if landings else None,
             "target": f"every step on all its modules before the next is sent ({_fmt(step_s)} s steps): 0 failed "
-            f"or skipped, at most {STEPS_SUPERSEDED_MAX_SHARE:.0%} superseded (D81: a per-light run's 3 s steps can "
-            "outpace a slow readback; the step still went out, and 93 % of frames were confirmed at 3 s on the "
-            "nine kits); a module whose step write a pinned fault hit (429 on every attempt, or a silent drop) is "
+            f"or skipped, at most {STEPS_SUPERSEDED_MAX_SHARE:.0%} of module-level steps superseded and "
+            f"{STEPS_SUPERSEDED_LIGHTS_MAX_SHARE:.0%} of per-light ones (Oct 21: a per-light run's 2 s steps outpace "
+            "a slow readback by design; the step still went out, the next step carries it and a frame that didn't "
+            "land is re-sent); a module whose step write a pinned fault hit (429 on every attempt, or a silent drop) is "
             "carried by the next step instead (by design), at most once per such write",
             "pass": bool(landings)
-            and stepped["steps_superseded"] <= STEPS_SUPERSEDED_MAX_SHARE * max(1, stepped["steps_landed"])
+            and stepped["steps_superseded"]
+            <= STEPS_SUPERSEDED_MAX_SHARE
+            * max(1, stepped["steps_landed"] - stepped.get("steps_landed_lights", 0))
+            and stepped.get("steps_superseded_lights", 0)
+            <= STEPS_SUPERSEDED_LIGHTS_MAX_SHARE
+            * max(1, stepped.get("steps_landed_lights", 0) + stepped.get("steps_superseded_lights", 0))
             and stepped["steps_failed"] == stepped["steps_skipped"] == 0
             and faulted <= stepped.get("step_writes_faulted", 0),
         },
