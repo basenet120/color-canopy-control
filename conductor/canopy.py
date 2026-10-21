@@ -3059,11 +3059,18 @@ class CanopyEngine:
             return
         self._early_counts[key] = self._early_counts.get(key, 0) + 1
         self.stats["early_reasserts"] += 1
-        targets = None if plan.motion else [self._by_address[address]]
+        device_id = self._by_address[address]
 
         def resend() -> None:
-            if self._plan is plan and self._outage is None:
-                self.send(targets, source="reconciler", label=f"re-assert: {plan.mode_id}")
+            if self._plan is not plan or self._outage is not None:
+                return
+            # the stale-readback hold and the re-send cap (D82, reconciler.py)
+            if self.reconciler.admit([device_id], motion=plan.motion):
+                self.send(
+                    None if plan.motion else [device_id],
+                    source="reconciler",
+                    label=f"re-assert: {plan.mode_id}",
+                )
 
         asyncio.get_running_loop().call_soon(resend)
 

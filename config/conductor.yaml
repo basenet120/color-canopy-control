@@ -21,6 +21,11 @@ reconciler:
   upgrade_after_clean_s: 300
   slot_rewrite_min_interval_s: 600
   outage_probe_interval_s: 10
+  # D82: Hubspace can accept writes for minutes while the readback stays put (Oct 21, after a rate test). A module
+  # whose readback hasn't moved through 4 accepted writes is "readback stale": re-sent once per interval, not at once,
+  # and it never downgrades the tier. All re-sends together stay under the cap (one third of the account's 90/min).
+  stale_resend_interval_s: 60
+  reassert_max_per_min: 30
 
 kiosk:
   # Guest pacing (D70): after an accepted guest input (a mood, brightness or on/off) the next one waits until the

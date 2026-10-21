@@ -249,3 +249,69 @@ def test_note_command_without_an_executor_and_snapshot_all():
     assert list(everything) == ["sim-b"] and everything["sim-b"]["meta"] == {"page": "module"}
     assert tracker.snapshot("sim-unknown")["status"] == "unknown"
     json.dumps(everything)
+
+
+def test_readback_stale_after_accepted_writes_leave_it_unmoved_and_ends_when_it_moves():
+    """D82 (Oct 21 live): Hubspace took write after write while the readback stayed put. Echo lag (≤ 3 stale
+    readbacks, D71) isn't stale; four accepted writes over ≥ 10 s are; the first readback that moves ends it."""
+    from conductor.state import STALE_AFTER_S, STALE_AFTER_WRITES
+
+    w = World()
+    rows = w.desire("sim-a", CALM)
+    old = full_state_vector(GOODNIGHT)
+
+    def accepted(readback_rows: list[StateRow]) -> None:
+        cmd = Command("sim-a", rows, Purpose.ENGINE, label="re-assert: calm")
+        w.tracker.note_submitted(cmd)
+        w.tracker.note_command(
+            CommandResult(
+                cmd,
+                CommandStatus.MISMATCH,
+                attempts=[WriteResult("sim-a", Outcome.OK, http_status=200)],
+                readback=w.read("sim-a", readback_rows),
+            )
+        )
+
+    async def main():
+        w.tracker.note_readback("sim-a", w.read("sim-a", old))
+        for _ in range(STALE_AFTER_WRITES - 1):
+            await asyncio.sleep(STALE_AFTER_S)
+            accepted(old)
+        lagging = w.tracker.readback_stale("sim-a")
+        accepted(old)
+        stale = w.tracker.readback_stale("sim-a")
+        snap = w.tracker.snapshot("sim-a")
+        # a readback in which a written row moved (not yet the look) ends it at once
+        w.tracker.note_readback(
+            "sim-a", w.read("sim-a", full_state_vector(Look(kind="white", cct=2700, brightness=30)))
+        )
+        moved = w.tracker.readback_stale("sim-a")
+        return lagging, stale, snap, moved
+
+    lagging, stale, snap, moved = run_virtual(main)
+    assert not lagging and stale and not moved
+    assert snap["readback_stale"] and snap["status"] == str(DeviceStatus.NEEDS_ATTENTION)
+    assert snap["reason"].startswith("Readback stale:")
+    alerts = [e for e in w.telemetry.recent(kind="alert") if e.get("readback_stale")]
+    assert len(alerts) == 1
+
+
+def test_a_changing_row_the_look_doesnt_write_cant_hide_a_stale_readback():
+    from conductor.state import STALE_AFTER_S, STALE_AFTER_WRITES
+
+    w = World()
+    rows = w.desire("sim-a", CALM)
+    old = full_state_vector(GOODNIGHT)
+
+    async def main():
+        for n in range(STALE_AFTER_WRITES + 1):
+            cmd = Command("sim-a", rows, Purpose.ENGINE)
+            w.tracker.note_submitted(cmd)
+            readback = w.read("sim-a", [*old, StateRow("wifi-rssi", None, -40 - n)])
+            w.tracker.note_command(
+                CommandResult(cmd, CommandStatus.MISMATCH, [WriteResult("sim-a", Outcome.OK, 200)], readback)
+            )
+            await asyncio.sleep(STALE_AFTER_S)
+        return w.tracker.readback_stale("sim-a")
+
+    assert run_virtual(main)

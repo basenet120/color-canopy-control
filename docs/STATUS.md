@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-21 afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,24 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## PR `claude/stale-readback` — stale readback, slow re-sends, a re-send cap (D82) → `main` (Oct 21)
+Live today (Charleston, nine kits, `9e31dbe`): after the 13:40 rate test six modules' Hubspace readback stayed frozen
+for ~9 min (`individual`, brightness 85) while every write got a 200 and Alon saw the lights change; /ops showed "N
+heads differ", the reconciler re-sent each every ~4 s (≈ the whole 90/min cap), three stepped looks ended on budget
+holds and the tier dropped to strand. It cleared by itself at 13:49:54 (all six in one second). Details: D82.
+- **Built:** `tracker.readback_stale` (4 accepted writes over ≥ 10 s with the written rows' readback unmoved);
+  `reconciler.admit` gates every re-send: a stale module at most once per `stale_resend_interval_s` (60), all re-sends
+  ≤ `reassert_max_per_min` (30) per 60 s; stale never downgrades the tier; /ops cell says "Readback stale".
+- **Verified (sim only):** new `tests/test_state.py` (stale after 4 writes, not after 3; a moving row ends it; an
+  unwritten changing row can't hide it) and `tests/test_reconciler.py` (frozen module: ≤ 10 writes in 180 s, was 40,
+  heals ≤ 70 s after; cap holds with nine frozen). Targeted suites pass (reconciler, state, echo lag, ops routes,
+  canopy engine, engine program/review2/ripple, guest budget/controls, stepped rehearsal, canopy view: 343). Full
+  suite left to CI.
+- **Needs hardware:** a rate test followed by a look change on the show box, watching /ops for "Readback stale" and
+  `stale_holds` instead of a re-send storm. Not deployed.
+- **Interacts with #46 (D81, cap 90 → 450):** independent, either order; the 30/min re-send cap is fixed, not a share
+  of the account cap.
 
 ## Oct 20 (shop) — String light 1 is ready for per-light; `9e31dbe` deployed
 **Deployed (Alon asked, 11:25): `9e31dbe`** (main after #44, D80) on the Mac show box — backup

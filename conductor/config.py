@@ -99,6 +99,10 @@ class ReconcilerSettings(_Strict):
     upgrade_after_clean_s: float = 300
     slot_rewrite_min_interval_s: float = 600
     outage_probe_interval_s: float = 10
+    # D82: a module whose readback is stale (state.py) is re-sent at most this often, not after every readback
+    stale_resend_interval_s: float = Field(60, ge=5)
+    # D82: re-sends (re-assert, true-up, early) across the canopy in any 60 s, so they never eat the steps' budget
+    reassert_max_per_min: int = Field(30, ge=9)
 
 
 class PreviewSettings(_Strict):

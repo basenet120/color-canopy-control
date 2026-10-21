@@ -13,11 +13,21 @@ Reported state comes only from REST readback — the executor's verification GET
 5. otherwise **UNKNOWN** — waiting for a readback (e.g. a command sent with `verify=False`).
 
 Never faked: without a readback that matches, nothing is READY.
+
+**Stale readback (D82).** On Oct 21, after a 5-minute rate test, Hubspace answered every write to six modules with a
+200 while their readback stayed exactly as it was for ~9 minutes (`color-mode` "individual", brightness 85) — through
+three different looks — then caught up on all six in the same second; the lights had shown each look. So per device
+we count the writes Hubspace accepted while the reported values of the rows we write did not move. At
+`STALE_AFTER_WRITES` such writes over at least `STALE_AFTER_S`, a readback that differs from desired is
+`readback_stale`: still NEEDS_ATTENTION (nothing is verified), but with a reason that says so, and the reconciler
+re-sends it slowly instead of at once (reconciler.py). Any change in those values ends it. D71's echo lag (the first
+one to three readbacks still showing the old look) stays below the threshold.
 """
 
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -39,6 +49,10 @@ SnapshotListener = Callable[[str, dict], None]
 AUTH_REASON = "The Hubspace sign-in has expired: re-sign-in required on /ops/accounts."
 OFFLINE_REASON = "Offline: Hubspace reports the device unavailable."
 _PROBLEM_STATUSES = (CommandStatus.FAILED, CommandStatus.DENIED, CommandStatus.MISMATCH)
+# Readback stale (D82): this many accepted writes, over at least this long, with the written rows' readback unmoved.
+# Above D71's echo lag (up to 3 stale readbacks over 5.7 s) and the three silent drops in a row that still heal in 10 s.
+STALE_AFTER_WRITES = 4
+STALE_AFTER_S = 10.0
 
 
 @dataclass
@@ -61,6 +75,11 @@ class _Device:
     outstanding: int = 0
     updated_at: float | None = None
     last_status: DeviceStatus = DeviceStatus.UNKNOWN
+    # D82: the written rows' reported values, when they were first read so, and writes accepted since
+    unmoved: str | None = None
+    unmoved_since: float | None = None
+    unmoved_writes: int = 0
+    stale_alerted: bool = False
 
 
 class DeviceStateTracker:
@@ -118,6 +137,10 @@ class DeviceStateTracker:
             dev.auth_problem = True
         elif Outcome.OK in outcomes:
             dev.auth_problem = False
+            if dev.unmoved is not None:
+                dev.unmoved_writes += (
+                    1  # accepted; its own readback (below) resets the count if anything moved
+                )
         if result.readback is not None:
             self._apply_readback(dev, result.readback)
         if result.status is not CommandStatus.SUPERSEDED or dev.last_command is None:
@@ -182,6 +205,11 @@ class DeviceStateTracker:
             return False
         return not self._mismatches(dev)
 
+    def readback_stale(self, address: str) -> bool:
+        """Does the readback differ from desired after `STALE_AFTER_WRITES` accepted writes left it unmoved (D82)?"""
+        dev = self._devices.get(address)
+        return dev is not None and self._stale(dev)
+
     def snapshot(self, address: str) -> dict:
         """JSON-safe record for /ops, the module page, the visualizer and WebSocket push."""
         dev = self._devices.get(address) or _Device(address)
@@ -196,6 +224,7 @@ class DeviceStateTracker:
             "desired": _rows_json(dev.desired),
             "reported": _rows_json(dev.reported),
             "mismatches": [m.to_json() for m in self._mismatches(dev)],
+            "readback_stale": self._stale(dev),
             "available": dev.available,
             "problems": list(dev.problems),
             "look": look,
@@ -240,8 +269,18 @@ class DeviceStateTracker:
         dev.reported_at = readback.fetched_at or self.clock.now()
         dev.readback_seq = next(self._seq)
         dev.available = readback.available
+        unmoved = _written_values(dev.desired, dev.reported)
+        if unmoved != dev.unmoved:
+            dev.unmoved, dev.unmoved_since, dev.unmoved_writes = unmoved, self.clock.monotonic(), 0
         if dev.desired is not None and not compare(dev.desired, dev.reported):
             dev.command_problem = None  # the device shows the look now, whatever the last command said
+
+    def _stale(self, dev: _Device) -> bool:
+        if dev.unmoved_writes < STALE_AFTER_WRITES or dev.unmoved_since is None:
+            return False
+        if self.clock.monotonic() - dev.unmoved_since < STALE_AFTER_S:
+            return False
+        return bool(self._mismatches(dev))
 
     @staticmethod
     def _mismatches(dev: _Device) -> list[Mismatch]:
@@ -269,6 +308,12 @@ class DeviceStateTracker:
             return DeviceStatus.NEEDS_ATTENTION, AUTH_REASON
         if dev.available is False:
             return DeviceStatus.NEEDS_ATTENTION, OFFLINE_REASON
+        if self._stale(dev):  # before the last command's MISMATCH: that is what a stale readback looks like
+            names = ", ".join(sorted({m.function_class for m in self._mismatches(dev)}))
+            return DeviceStatus.NEEDS_ATTENTION, (
+                f"Readback stale: Hubspace accepted the last {dev.unmoved_writes} writes but still reports the "
+                f"same {names}. The lights may already show the look; re-sending slowly until the readback moves."
+            )
         if dev.command_problem:
             return DeviceStatus.NEEDS_ATTENTION, dev.command_problem
         if dev.reported is None or dev.readback_seq < dev.desired_seq:
@@ -283,6 +328,12 @@ class DeviceStateTracker:
         status, reason = self._evaluate(dev)
         if status is DeviceStatus.NEEDS_ATTENTION and dev.last_status is not DeviceStatus.NEEDS_ATTENTION:
             self.telemetry.record("alert", device_id=dev.address, level="warn", message=reason)
+        stale = self._stale(dev)
+        if stale and not dev.stale_alerted:
+            self.telemetry.record(
+                "alert", device_id=dev.address, level="warn", message=reason, readback_stale=True
+            )
+        dev.stale_alerted = stale
         dev.last_status = status
         if not self._listeners:
             return
@@ -292,6 +343,19 @@ class DeviceStateTracker:
                 fn(dev.address, snap)
             except Exception:
                 log.exception("state listener failed")
+
+
+def _written_values(desired: list[StateRow] | None, reported: list[StateRow] | None) -> str | None:
+    """The reported values of the rows the look writes, canonical — what a write that landed would move (D82). Rows
+    the look doesn't write (a signal strength, a sensor) are left out so they can't hide a stale readback."""
+    if desired is None or reported is None:
+        return None
+    keys = {r.key for r in desired}
+    values = sorted(
+        ([r.function_class, r.function_instance or "", r.value] for r in reported if r.key in keys),
+        key=lambda v: (v[0], v[1]),
+    )
+    return json.dumps(values, sort_keys=True, default=str)
 
 
 def _rows_json(rows: list[StateRow] | None) -> list[dict] | None:
