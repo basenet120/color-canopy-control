@@ -354,11 +354,12 @@ def test_a_mismatch_on_a_pending_module_never_starts_a_reconciler_rewrite(no_thr
 def test_a_failed_module_is_left_to_the_reconciler_600_s_after_the_attempt(no_threads):
     """One module's slot write is refused (HTTP 400, every attempt): the others are repainted; its marks are
     cleared and `slot_written` stamped at the attempt, so the reconciler leaves it for 600 s, then rewrites it once;
-    the scene stays at module level until then, then T1."""
+    the scene stays at module level until then, then T1. Per-light off: Golden Hour's per-light picture (D80) is
+    written into custom-3, its own painted slot, which would overwrite the repaint this follows."""
     victim = "canopy-r1c1"
 
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.request_mode(GOLDEN, source="ops")
         await w.engine.wait_idle()
         driver = w.services.engine_driver

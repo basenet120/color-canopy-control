@@ -22,6 +22,7 @@ settle, and Golden Hour #2's stops follow decision D3 (warm white, honey, Home D
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import math
@@ -987,11 +988,16 @@ def test_the_painted_firsts_t2_slot_is_never_a_motion_burst(scene_id, header):
 
 
 # ---- the engine (the show's own wiring, the simulator's writes) ------------------------------------------------------
-async def _show_world(*, simulated: bool = True, live_enabled: bool = False):
+async def _show_world(*, simulated: bool = True, live_enabled: bool = False, per_light: bool = True):
     """The real engine with the show's wiring (the shipped modes, its tier rules) on the simulator's writes, its driver
-    named as the simulator or as live hardware. Writes are logged as (monotonic time, device id, rows)."""
+    named as the simulator or as live hardware. Writes are logged as (monotonic time, device id, rows).
+    `per_light=False`: compile without per-light motion (as on a show box without motion.lights.live_enabled), so a
+    stepped rung runs its module-level steps (D65/D75) although every look now carries a `lights` block (Oct 21)."""
     w = make_world(settings=settings_with(motion={"stepped": {"live_enabled": live_enabled}}))
     wiring = _show_wiring(w.registry, simulated=simulated, live_enabled=live_enabled)
+    if not per_light:
+        context = wiring.context
+        wiring.context = lambda *a, **kw: dataclasses.replace(context(*a, **kw), lights=False)
     wiring.services.settings = w.engine.deps.settings
     w.engine.deps.compile = wiring.compile
     w.engine.deps.ladder = wiring.ladder
@@ -1016,11 +1022,12 @@ def test_a_breath_sends_one_full_state_put_per_module_per_step_and_reads_back_re
     """A whole run in sim (Coastal Tides #1, a colour breath, and Calm #2, the first level-only one): every send is one
     full-state PUT holding the colour and the level together (07 §6), at most one per module in each step of the run
     (the step window it lands in: t0 + n × the runner's step) and at most one in the settle after it, never closer
-    than the 4 s write budget on one device; after the run every module reads back READY."""
+    than the 4 s write budget on one device; after the run every module reads back READY. Module-level steps: per-light off
+    (these looks' own per-light picture is still, test_per_light.py)."""
     tech = MODES.mode(scene_id).techniques.stepped
 
     async def main():
-        w = await _show_world()
+        w = await _show_world(per_light=False)
         since = w.clock.monotonic()
         await w.engine.request_mode(scene_id, source="kiosk")
         plan, runner = w.engine.current_plan(), w.engine.runner
@@ -1057,12 +1064,12 @@ def test_a_breath_sends_one_full_state_put_per_module_per_step_and_reads_back_re
 def test_a_guest_brightness_never_leaves_moving_copy_with_nothing_sent(scene_id):
     """D75 (decision B3, integration C7): a guest level during a level-only breath keeps the breath, swung around the
     guest's level (clamped to kiosk.guest_brightness_min), so the program sends go on with changing levels and the
-    moving copy stays true. Never moving copy for three steps with nothing sent."""
+    moving copy stays true. Never moving copy for three steps with nothing sent. Module-level steps: per-light off."""
     tech = MODES.mode(scene_id).techniques.stepped
     guest = 50
 
     async def main():
-        w = await _show_world()
+        w = await _show_world(per_light=False)
         await w.engine.request_mode(scene_id, source="kiosk")
         runner = w.engine.runner
         await w.run_for(2 * tech.step_s + 0.5)  # step 2 is out

@@ -9,6 +9,7 @@ simulator on the virtual clock, its own temporary data dir), with `build_live_lo
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import shutil
 import tempfile
 from pathlib import Path
@@ -116,10 +117,13 @@ async def show(
     settings=None,
     sim: SimSettings | None = None,
     config_dir: Path | None = None,
+    per_light: bool = True,
 ) -> Show:
     """The show on virtual time, its live looks built before ShowWiring (the lifespan's order). `live`: the show
     box's tier rules over the simulator's transport (no automatic commissioning, no bench flags). `sim`: the
-    simulator's settings (default: acceptance with no random throttling or silent drops)."""
+    simulator's settings (default: acceptance with no random throttling or silent drops). `per_light=False`: the
+    show compiles without per-light motion (as a show box without motion.lights.live_enabled), so a stepped rung runs
+    its module-level steps and no per-light frame goes to custom-3 (every look has a `lights` block since Oct 21)."""
     from conductor.alerts import AlertBoard
     from conductor.services import build_services
     from conductor.show import ShowWiring
@@ -144,6 +148,8 @@ async def show(
         prepare(services)
     L.build_live_looks(services)
     wiring = ShowWiring(services)
+    if not per_light:
+        module_level(wiring)
     services.extras["show"] = wiring
     engine = await wiring.start()
     lab = SVC.LabService(services)
@@ -152,6 +158,12 @@ async def show(
     if quiet:
         await w.run_for(QUIET_S)
     return w
+
+
+def module_level(wiring) -> None:
+    """Compile `wiring`'s looks without per-light motion (CompileContext.lights False), whatever the driver."""
+    context = wiring.context
+    wiring.context = lambda *a, **kw: dataclasses.replace(context(*a, **kw), lights=False)
 
 
 # ---- routes ---------------------------------------------------------------------------------------------------------

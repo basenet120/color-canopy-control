@@ -1126,6 +1126,8 @@ def light_level(lights: LightsMotion, t: float, p: float, twinkle: tuple[int, fl
     elif lights.effect == "breathe":
         d = t if out else 1.0 - t
         v = 0.5 + 0.5 * math.cos(2 * math.pi * (p - lights.lag * d))
+    elif lights.effect == "still":
+        v = 0.5 + 0.5 * math.cos(2 * math.pi * lights.rings * t) if lights.field is not None else 1.0
     else:
         assert twinkle is not None
         k, start = twinkle

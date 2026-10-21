@@ -603,14 +603,20 @@ def test_the_route_previews_a_stepped_edit(app_client):
     r = app_client.post("/api/lab/preview", json={"scene_id": scene_id, "draft": draft})
     assert r.status_code == 200, r.text[:300]
     body = r.json()
-    # a travel program is one cycle of steps_per_cycle steps; a breath's adds its largest lag (D75)
-    tech = LIVE.modes.mode(scene_id).techniques.stepped.model_copy(update={"steps_per_cycle": 8})
-    cycle = program_cycle(tech, module_lags(tech, list(D.GRID), CANOPY))
-    assert len(body["stepped"]["steps"]) == cycle == body["stepped"]["cycle"]
-    assert body["stepped"]["steps_per_cycle"] == 8 and body["stepped"]["direction"] == "reverse"
+    # every live look carries a per-light rung since Oct 21, and the Lab plays it as designed (D80): its own steps,
+    # timing and copy; the edit reaches the module-level rung, its direction and its regenerated moving copy
+    lights = LIVE.modes.mode(scene_id).techniques.stepped.lights
+    assert lights is not None and body["stepped"]["lights"] is True
+    assert len(body["stepped"]["steps"]) == lights.steps_per_cycle == body["stepped"]["cycle"]
+    assert (
+        body["stepped"]["steps_per_cycle"] == lights.steps_per_cycle
+        and body["stepped"]["direction"] == "reverse"
+    )
+    assert body["stepped"]["mode"] == f"lights-{lights.effect}"
+    assert body["stepped"]["moving_feature"] == lights.moving_feature
     assert body["stepped"]["live_sentence"] is None  # live_enabled as shipped (on since Gate R, Oct 19)
     assert body["copy"]["stepped"]["chosen"] == "generated"
-    assert body["stepped"]["moving_feature"] == body["copy"]["stepped"]["sentence"]
+    assert body["copy"]["stepped"]["why"] == "the stepped direction changed"
 
 
 # ---- copy -------------------------------------------------------------------------------------------------------------
@@ -953,8 +959,12 @@ def test_the_export_route_passes_the_conductors_settings(app_client, monkeypatch
     assert saved.status_code == 201, saved.text[:300]
     r = app_client.get(f"/api/lab/export?version={saved.json()['id']}&format=json")
     assert r.status_code == 200, r.text[:300]
-    assert seen["settings"] is app_client.app.state.services.settings
-    assert "step every 10 s" in " ".join(r.json()["stepped_changes"])
+    settings = app_client.app.state.services.settings
+    assert seen["settings"] is settings
+    # the nine-strand pace at the conductor's budget: a live look's run is its per-light rung's (D80, D81)
+    lights = LIVE.modes.mode(scene_id).techniques.stepped.lights
+    nine = ST.effective_step_s(lights.step_s, 9, settings, lights=True)
+    assert f"step every {nine:g} s" in " ".join(r.json()["stepped_changes"])
 
 
 def test_the_d65_section_says_where_the_live_gate_stands():
