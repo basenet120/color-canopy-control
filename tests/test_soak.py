@@ -584,13 +584,23 @@ def test_a_module_is_correct_when_it_shows_the_step_the_run_is_at():
 
 
 def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_path):
-    """The instruments can fail: with the lights taking 9–10 s to apply a write and 7.5 s steps (the account cap's
-    pace less its reserve), every step is superseded by the next before it shows, and the verdict says so."""
+    """The instruments can fail: with the lights taking 9–10 s to apply a write and 3 s steps (a per-light run's pace
+    on nine kits, the motion.lights cap less its reserve, D81), every step is superseded by the next before it shows,
+    and the verdict says so. A look that moves: a #1-#3 look's per-light picture is still (Oct 21), nothing to
+    supersede."""
     from conductor.clock import run_virtual
+    from conductor.config import load_settings
+    from conductor.design_lab.stepped import effective_step_s
     from conductor.sim.settings import SimSettings
 
+    mode_id = (
+        "coastal-tides-4"  # a ripple: every step a new frame (a glow's plateau repeats one, which lands)
+    )
+    lights = load_modes(CONFIG_DIR).mode(mode_id).techniques.stepped.lights
+    assert lights.effect == "ripple"
     stepped = {
         **soak.load_soak_stepped(),
+        "modes": [mode_id],
         "runs": 1,
         "interrupt_every": 0,
         "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 45},
@@ -603,7 +613,8 @@ def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_
     )
     cfg = soak.SoakConfig(seed=1, report_path=None, stepped=stepped, sim_settings=slow)
     out = run_virtual(lambda: soak._stepped_soak(cfg))
-    assert out["runs"] == 1 and set(out["step_s"]) == {7.5}
+    pace = effective_step_s(lights.step_s, 9, load_settings(), lights=True)
+    assert out["runs"] == 1 and set(out["step_s"]) == {pace} == {3.0}
     assert out["steps_superseded"] >= 4 and out["steps_landed"] <= 1  # only the last step (the hold) can land
     landing = soak._stepped_rows(out)[1]
     assert not landing["pass"] and f"{out['steps_superseded']} superseded" in landing["name"]
