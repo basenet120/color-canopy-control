@@ -26,6 +26,13 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Rate test paces, `claude/rate-test-rungs` → `main` (Oct 21 evening; no PR yet)
+The rate test (D80) takes its own paces and stage length: `rungs` (1–12 s each, so never more than one write a second
+per module) and `rung_s` (15–120 s) on `POST /api/canopy/stepped-rehearsal`; the confirm sentence names them.
+Alon's run: 2, 1.5, 1 s, 30 s each (4 s and 3 s known good). `~/fast.py` on the Mac starts it (asks first; Ctrl-C
+stops). Verified: a new test (custom rungs run and report each), rehearsal tests, full suite 3658 passed with only
+the known `test_soak` latency row failing.
+
 ## Light Show #1–#6 and `on_at`, `claude/light-show` → `main` (Oct 21 evening; no PR yet)
 **True on hardware (venue, Oct 21):** `orient.py levels 5` — red at level 0 is off (no white fallback), and levels 5,
 15, 40 and 100 all read about the same on the canopy (photo). So the 18 per-light options, whose floor is 8–15 %,
@@ -53,7 +60,7 @@ look nearly all on, and `/ops` (which draws 13 % as near black) disagrees with t
 ## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
 From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
 from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
-`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` (no PR yet); the exact
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` + `claude/rate-test-rungs` (no PRs yet); the exact
 commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
 merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
 (`uv run --with pytest-xdist pytest -q -n 8`): all pass except one row of `test_soak` (see the Light Show block): 3657 passed, 1 failed in 3 min 52 s; ruff clean.
