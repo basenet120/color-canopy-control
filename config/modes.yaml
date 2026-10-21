@@ -105,6 +105,18 @@ modes:
         run_s: 120
         brightness: 70
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the sea glass near the middle drifts and settles across the canopy and back."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 0}
+          rings: 6
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 45
+          brightness: 70
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so six rays of light fan out from the centre over soft ivory and sea glass, dark between them, like sun through a porch screen."
       strand:
         look: {kind: rgb, rgb: [247, 242, 231], brightness: 70}   # soft ivory
         feature: "Colour and dimming: all nine Hubspace strands set to soft ivory."
@@ -139,6 +151,18 @@ modes:
         run_s: 120
         brightness: 70
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the porch-light glow swells and softens across the canopy."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 35
+          brightness: 70
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rings of light follow the fins' rings, porch light at the centre through warm linen to haint blue at the rim, dark between them."
       strand:
         look: {kind: rgb, rgb: [191, 227, 223], brightness: 70}   # haint blue
         feature: "Colour and dimming: all nine Hubspace strands set to haint blue."
@@ -170,6 +194,18 @@ modes:
         run_s: 120
         brightness: 70
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the marsh colours move diagonally across the canopy along the fins: oyster shell, then spartina and mist blue."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          rings: 2.5
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 40
+          brightness: 70
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so circles of light ring the centre over oyster shell, spartina and mist blue, dark between them, like rings on still water."
       strand:
         look: {kind: rgb, rgb: [211, 226, 234], brightness: 70}   # mist blue
         feature: "Colour and dimming: all nine Hubspace strands set to mist blue."
@@ -344,6 +380,18 @@ modes:
         run_s: 90
         brightness: 85
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the facade colours move diagonally across the canopy along the fins: pastel coral, then blush pink and lilac."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "linear", angle_deg: 108}
+          rings: 5
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 45
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so stripes of light cross the canopy over pastel coral, blush pink and lilac, dark between them, like a row of painted shutters."
       strand:
         look: {kind: rgb, rgb: [255, 158, 150], brightness: 85}   # pastel coral
         feature: "Colour and dimming: all nine Hubspace strands set to pastel coral."
@@ -378,6 +426,15 @@ modes:
         run_s: 90
         brightness: 85
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the facade colours move diagonally across the canopy, house by house: facade pink, then butter yellow, mint, sky blue, lavender and apricot."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so every light is lit along a rainbow of facade pink, butter yellow, mint, sky blue, lavender and apricot, light by light across the canopy."
       strand:
         look: {kind: rgb, rgb: [246, 184, 200], brightness: 85}   # facade pink
         feature: "Colour and dimming: all nine Hubspace strands set to facade pink."
@@ -410,6 +467,18 @@ modes:
         run_s: 90
         brightness: 85
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the dusk colours move in toward the centre: dusk violet and rose, then coral and apricot glow."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 35
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rings of light follow the fins' rings, apricot at the centre through coral and rose to dusk violet at the rim, dark between them."
       strand:
         look: {kind: rgb, rgb: [255, 138, 122], brightness: 85}   # coral
         feature: "Colour and dimming: all nine Hubspace strands set to coral."
@@ -586,6 +655,18 @@ modes:
         run_s: 90
         brightness: 75
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the garden's colours move in toward one spot near the middle: sage green, then pale lime and ivory."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "sweep", centre_in: [112.5, 60.0], start_deg: 0}
+          rings: 6
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 40
+          brightness: 75
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so six petals of light open from the centre over sage green, pale lime and ivory, dark between them, like a flower seen from above."
       strand:
         look: {kind: rgb, rgb: [143, 191, 157], brightness: 75}   # sage green
         feature: "Colour and dimming: all nine Hubspace strands set to sage green."
@@ -618,6 +699,18 @@ modes:
         run_s: 90
         brightness: 75
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the blossom colours move from the centre out: magnolia cream, then blossom pink, leaf green and moss."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 35
+          brightness: 75
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rings of light follow the fins' rings, magnolia cream at the centre through blossom pink and leaf green to moss at the rim, dark between them."
       strand:
         look: {kind: rgb, rgb: [243, 198, 208], brightness: 75}   # blossom pink
         feature: "Colour and dimming: all nine Hubspace strands set to blossom pink."
@@ -655,6 +748,18 @@ modes:
         run_s: 120
         brightness: 75
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the strands glow and soften on their own, like string lights over supper."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "radial", centre_in: [112.5, 60.0]}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 45
+          brightness: 75
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so circles of light ring the centre over edison amber, lantern gold and fern green, dark between them, like string lights hung in rings."
       strand:
         look: {kind: rgb, rgb: [255, 225, 163], brightness: 75}   # lantern gold
         feature: "Colour and dimming: all nine Hubspace strands set to lantern gold."
@@ -828,6 +933,18 @@ modes:
         run_s: 105
         brightness: 85
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the deep ocean blue in the middle drifts and settles, out over the aqua and back, like a tide."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 35
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rings of light follow the fins' rings, ocean blue at the centre through aqua and seafoam to foam white at the rim, dark between them."
       strand:
         look: {kind: rgb, rgb: [121, 206, 212], brightness: 85}   # aqua
         feature: "Colour and dimming: all nine Hubspace strands set to aqua."
@@ -861,6 +978,18 @@ modes:
         run_s: 90
         brightness: 85
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the channel's colours move diagonally across the canopy like a tide running in: deep teal, then marsh green, tidewater blue and oyster white."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "linear", angle_deg: 50}
+          rings: 4
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 45
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so bands of light cross the canopy over deep teal, marsh green, tidewater blue and oyster white, dark between them, like tide lines on sand."
       strand:
         look: {kind: rgb, rgb: [143, 195, 230], brightness: 85}   # tidewater blue
         feature: "Colour and dimming: all nine Hubspace strands set to tidewater blue."
@@ -893,6 +1022,18 @@ modes:
         run_s: 120
         brightness: 85
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the lighthouse beam of lamp gold and beam white moves around one spot near the middle, over night sea and harbor blue."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "sweep", centre_in: [107.5, 55.0], start_deg: 0}
+          rings: 1
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 60
+          brightness: 85
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so one wide beam of light reaches out from near the centre over night sea, harbor blue, lamp gold and beam white, the rest of the canopy dark."
       strand:
         look: {kind: rgb, rgb: [91, 143, 203], brightness: 85}   # harbor blue
         feature: "Colour and dimming: all nine Hubspace strands set to harbor blue."
@@ -1074,6 +1215,18 @@ modes:
         run_s: 90
         brightness: 95
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the sunset's colours move out from one edge like rays from a low sun: gold and peach, then sunset pink, rose and lavender."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "sweep", centre_in: [0.0, 60.0], start_deg: 270}
+          rings: 5
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 45
+          brightness: 95
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rays of light fan out from one short end over soft gold, peach, sunset pink, rose and lavender, dark between them, like a low sun."
       strand:
         look: {kind: rgb, rgb: [255, 155, 196], brightness: 95}   # sunset pink
         feature: "Colour and dimming: all nine Hubspace strands set to sunset pink."
@@ -1106,6 +1259,18 @@ modes:
         run_s: 90
         brightness: 95
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the glow moves from the centre out: warm white, then honey, Home Depot orange and amber."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 35
+          brightness: 95
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rings of light follow the fins' rings, warm white at the centre through honey and orange to amber at the rim, dark between them."
       strand:
         look: {kind: rgb, rgb: [255, 210, 122], brightness: 95}   # honey
         feature: "Colour and dimming: all nine Hubspace strands set to honey."
@@ -1138,6 +1303,15 @@ modes:
         run_s: 90
         brightness: 95
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour every few seconds, so the low sun's colours move diagonally across the canopy along the fins: deep amber, then burnt orange, dusty rose and smoky violet."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          brightness: 95
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so every light is lit along deep amber, burnt orange, dusty rose and smoky violet, light by light across the canopy."
       strand:
         look: {kind: rgb, rgb: [232, 117, 58], brightness: 95}   # burnt orange
         feature: "Colour and dimming: all nine Hubspace strands set to burnt orange."
@@ -1310,6 +1484,18 @@ modes:
         run_s: 120
         brightness: 28
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the moonlit glow swells and softens, slow as a sleeping breath."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 3
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 35
+          brightness: 28
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so rings of light follow the fins' rings, moonlight blue at the centre through lavender to periwinkle at the rim, dark between them."
       strand:
         look: {kind: rgb, rgb: [139, 139, 209], brightness: 28}   # periwinkle
         feature: "Colour and dimming: all nine Hubspace strands set to periwinkle."
@@ -1346,6 +1532,15 @@ modes:
         run_s: 144
         brightness: 25
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent its next colour and a brighter or softer level every few seconds, so the strands glow and soften on their own, one or two at a time, the corner strands lighting up firefly, like fireflies over the marsh."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          brightness: 25
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so every light is lit along the fins' rings, night blue at the centre through deep moss to firefly at the rim, light by light."
       strand:
         look: {kind: rgb, rgb: [74, 93, 166], brightness: 25}   # night blue
         feature: "Colour and dimming: all nine Hubspace strands set to night blue."
@@ -1380,6 +1575,18 @@ modes:
         run_s: 150
         brightness: 26
         moving_feature: "Colour and dimming through the Hubspace cloud: each Hubspace strand set to a single colour and sent a brighter or softer level every few seconds, so the candle-amber heart swells and softens, with dusky mauve around it."
+        lights:   # Oct 21: a still per-light picture
+          effect: still
+          field: {kind: "fins"}
+          rings: 2
+          steps_per_cycle: 4
+          step_s: 2.0
+          run_s: 8
+          floor: 0
+          peak: 100
+          on_at: 50
+          brightness: 26
+          moving_feature: "Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so two rings of light follow the fins' rings, candle amber at the centre through dusky mauve to night blue, dark between them."
       strand:
         look: {kind: rgb, rgb: [255, 191, 115], brightness: 26}   # candle amber
         feature: "Colour and dimming: all nine Hubspace strands set to candle amber."

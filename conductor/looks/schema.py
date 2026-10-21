@@ -286,7 +286,7 @@ LIGHTS_FALSE_CLAIMS = re.compile(
     re.IGNORECASE,
 )
 LIGHTS_PHRASES = ("each light", "every light", "light by light")
-LightsEffect = Literal["ripple", "glow", "breathe", "twinkle"]
+LightsEffect = Literal["ripple", "glow", "breathe", "twinkle", "still"]
 
 
 class LightsMotion(_Strict):
@@ -299,7 +299,10 @@ class LightsMotion(_Strict):
     - `glow`: a front that grows from t = 0 out to the far edge and back, lights past it at `floor` (0 = off), its
       edge `softness` wide;
     - `breathe`: every light swells and softens, the far edge `lag` cycles behind the near one (a rolling breath);
-    - `twinkle`: each light on its own seeded rhythm (`seed`).
+    - `twinkle`: each light on its own seeded rhythm (`seed`);
+    - `still` (Oct 21): no motion — every step the same frame, so after the first nothing more is sent. The picture is
+      the canvas at each light, cut into `rings` bands of the field when `field` is given (rings, rays or stripes,
+      with `on_at` lit or dark), else every light at `peak`. Its copy says what the lights show, never a pace.
 
     A light's level runs `floor`…`peak` (its colorBrightness; 0 = off), the module's brightness row is `brightness`.
     `on_at` makes the lights on or off: a light whose level would reach it is sent at `peak`, any other at 0 (Oct 21,
@@ -352,6 +355,13 @@ class LightsMotion(_Strict):
             raise ValueError(
                 f"moving_feature must say the lights are set one by one ({' or '.join(map(repr, LIGHTS_PHRASES))})"
             )
+        if self.effect == "still":
+            if "through the hubspace cloud" not in copy:
+                raise ValueError("moving_feature must say it is sent 'through the Hubspace cloud'")
+            if STEPPED_PACE in copy or (m := MOTION_WORDS.search(self.moving_feature)):
+                said = STEPPED_PACE if STEPPED_PACE in copy else m.group(0)
+                raise ValueError(f"a still look's moving_feature says {said!r}: nothing moves or repeats")
+            return self
         if "through the hubspace cloud" not in copy or STEPPED_PACE not in copy:
             raise ValueError(
                 f"moving_feature must say it is sent 'through the Hubspace cloud' and {STEPPED_PACE!r}"
