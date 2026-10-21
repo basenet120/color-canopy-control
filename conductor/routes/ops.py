@@ -15,7 +15,7 @@ answers 503 with a plain sentence when the engine isn't running. Nothing here wr
                                      + `rehearsal` (the stepped rehearsal running now and the last one's verdict)
 - `GET  /api/canopy/stepped-rehearsal[?mode=&minutes=]`  the rehearsal's status, the looks it can run and, with a
                                      mode and minutes, the preview: the modules it writes to and the confirm sentence
-- `POST /api/canopy/stepped-rehearsal`  `{mode, minutes (1–10), confirm, ladder?}` start the stepped rehearsal (Gate R,
+- `POST /api/canopy/stepped-rehearsal`  `{mode, minutes (1–10), confirm, ladder?, rungs?, rung_s?}` start the stepped rehearsal (Gate R,
                                      or with `ladder` the rate test, D80: steps of 4, 3, 2, 1.5 then 1 s),
                                      conductor/rehearsal.py). Without `confirm` equal to the preview's sentence (it
                                      names every module and the minutes) it answers 409 `confirm_required` and sends
@@ -175,6 +175,9 @@ class RehearsalBody(_Body):
     minutes: int = Field(ge=1, le=REHEARSAL_MAX_MINUTES)
     confirm: str | None = Field(None, max_length=2000)
     ladder: bool = False  # D80: the rate test (steps of 4 → 1 s), its own minutes
+    # the rate test's own paces (each 1–12 s: a module never gets more than one write a second) and how long each runs
+    rungs: list[Annotated[float, Field(ge=1.0, le=12.0)]] | None = Field(None, min_length=1, max_length=6)
+    rung_s: float | None = Field(None, ge=15.0, le=120.0)
 
 
 class IpadSceneBody(_Body):
@@ -603,6 +606,18 @@ async def rehearsal_info(
     return JSONResponse(body, headers=NO_STORE)
 
 
+def _ladder_kw(body: RehearsalBody) -> dict[str, Any]:
+    """The rate test's arguments (only when asked for: a plain rehearsal passes none)."""
+    if not body.ladder:
+        return {}
+    kw: dict[str, Any] = {"ladder": True}
+    if body.rungs:
+        kw["rungs"] = tuple(body.rungs)
+    if body.rung_s is not None:
+        kw["rung_s"] = body.rung_s
+    return kw
+
+
 @router.post("/api/canopy/stepped-rehearsal")
 async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> JSONResponse:
     services = services_of(request)
@@ -610,9 +625,7 @@ async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> J
     _known_mode(services, body.mode)
     preview = await _engine_call(
         "prepare the stepped rehearsal",
-        lambda: engine.rehearsal_preview(
-            body.mode, body.minutes, **({"ladder": True} if body.ladder else {})
-        ),
+        lambda: engine.rehearsal_preview(body.mode, body.minutes, **_ladder_kw(body)),
     )
     if body.confirm != preview["confirm"]:
         # Nothing is sent until ops has confirmed this very sentence (the modules or minutes may have changed).
@@ -628,9 +641,7 @@ async def rehearsal_start(request: Request, body: RehearsalBody, _ops: Ops) -> J
         )
     result = await _engine_call(
         "start the stepped rehearsal",
-        lambda: engine.rehearse(
-            body.mode, body.minutes, source="ops", **({"ladder": True} if body.ladder else {})
-        ),
+        lambda: engine.rehearse(body.mode, body.minutes, source="ops", **_ladder_kw(body)),
     )
     _publish(services, "rehearsal", mode=body.mode, minutes=body.minutes)
     return JSONResponse(

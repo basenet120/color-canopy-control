@@ -137,19 +137,27 @@ def rate_minutes(rungs: tuple[float, ...] = RATE_RUNGS, rung_s: float = RATE_RUN
 
 
 def rate_confirm_sentence(
-    *, label: str, modules: list[str], accounts: list[str], simulated: bool, lights: bool
+    *,
+    label: str,
+    modules: list[str],
+    accounts: list[str],
+    simulated: bool,
+    lights: bool,
+    rungs: tuple[float, ...] = RATE_RUNGS,
+    rung_s: float = RATE_RUNG_S,
 ) -> str:
     """What ops confirms before the rate test (D80): the look, every module, the ladder and what stops it."""
     n = len(modules)
     where = f"account {accounts[0]}" if len(accounts) == 1 else f"accounts {_names(accounts)}"
     sim = " (simulator: no real lights)" if simulated else ""
-    rungs = ", ".join(f"{s:g}" for s in RATE_RUNGS)
+    steps = ", ".join(f"{s:g}" for s in rungs)
     kind = "a per-light frame (every light's colour and level)" if lights else "its next colour or level"
-    top = n * 60 / min(RATE_RUNGS)
+    top = n * 60 / min(rungs)
     return (
         f"Run the rate test with {label} on {_names(modules)} ({n} {'module' if n == 1 else 'modules'} on {where})"
-        f"{sim}? Each step sends every module {kind}; the steps come every {rungs} s, {RATE_RUNG_S:g} s each "
-        f"(about {rate_minutes()} minutes, up to {top:g} writes a minute at 1 s). Our 90-a-minute plan is not "
+        f"{sim}? Each step sends every module {kind}; the steps come every {steps} s, {rung_s:g} s each "
+        f"(about {rate_minutes(rungs, rung_s)} minutes, up to {top:g} writes a minute at {min(rungs):g} s). Our "
+        "90-a-minute plan is not "
         "applied (that is what it measures); each module still gets at most one write a second. It stops at the "
         "first 429 or 403, or if the throttle governor trips, then the still look holds. Guests can't change the "
         "canopy meanwhile."
@@ -177,10 +185,12 @@ class Rehearsal:
         source: str,
         report_dir: Path | None,
         ladder: tuple[float, ...] | None = None,
+        rung_s: float = RATE_RUNG_S,
     ) -> None:
         self.engine = engine
         self.ladder = tuple(ladder) if ladder else None  # D80: the rate test's rungs
-        self.schedule = rate_schedule(self.ladder) if self.ladder else None
+        self.rung_s = rung_s
+        self.schedule = rate_schedule(self.ladder, rung_s) if self.ladder else None
         self._rungs: list[dict] = [_new_rung(step) for step in self.ladder] if self.ladder else []
         self._stopping = False
         self.clock = engine.clock
@@ -334,7 +344,7 @@ class Rehearsal:
             return None
         elapsed, start = mono - self.runner.t0, 0.0
         for rung in self._rungs:
-            length = rung["step_s"] * max(1, int(RATE_RUNG_S / rung["step_s"] + 1e-6))
+            length = rung["step_s"] * max(1, int(self.rung_s / rung["step_s"] + 1e-6))
             if elapsed < start + length:
                 return rung if elapsed >= start - 1e-6 else None
             start += length

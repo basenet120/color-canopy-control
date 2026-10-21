@@ -106,6 +106,33 @@ def test_the_rate_test_steps_4_3_2_1_5_then_1_s_and_reports_each_rung():
     assert "max_writes_60s" not in {c["id"] for c in report["criteria"]}  # the rate test measures the account
 
 
+def test_a_rate_test_can_run_its_own_paces_each_for_its_own_time():
+    # Oct 21 (venue): 4 s and 3 s were known good, so only 2, 1.5 and 1 s, half a minute each
+    from tests.test_stepped_rehearsal import show
+
+    async def main():
+        w = await show()
+        preview = w.engine.rehearsal_preview(
+            "garden-gathering", 1, ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
+        )
+        result = await w.engine.rehearse(
+            "garden-gathering", 1, source="ops", ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
+        )
+        await w.run_for(90 + 30)
+        await w.ended()
+        report = w.report()
+        await w.close()
+        return preview, result, report
+
+    preview, result, report = run_virtual(main)
+    assert preview["ladder"] == [2.0, 1.5, 1.0] and preview["rung_s"] == 30.0
+    assert "every 2, 1.5, 1 s, 30 s each" in preview["confirm"]
+    assert result["ok"] and report["kind"] == "rate_test" and report["completed"]
+    assert [r["step_s"] for r in report["rungs"]] == [2.0, 1.5, 1.0]
+    assert all(r["attempts"] > 0 for r in report["rungs"])
+    assert rate_schedule((2.0, 1.5, 1.0), 30.0) == [2.0] * 15 + [1.5] * 20 + [1.0] * 30
+
+
 def test_per_light_runs_pace_by_their_own_cap_and_module_level_keeps_its_own():
     """D81: on nine kits a per-light run steps every 3 s (motion.lights cap 225 less the 20 % reserve), while a
     module-level run keeps the stepped cap's 7.5 s (its nine-kit Gate R pace, what the soak validates)."""
