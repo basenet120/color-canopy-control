@@ -267,3 +267,20 @@ def test_a_still_looks_copy_never_claims_a_pace_or_motion():
                 effect="still",
                 moving_feature=f"Colour and dimming through the Hubspace cloud: every light set on its own, {said}.",
             )
+
+
+def test_a_still_look_on_a_partial_canopy_claims_no_pace():
+    # a still per-light picture is sent once: on two kits its copy must not say "every few seconds"
+    driven = {d.id for d in REGISTRY if d.module in ("r0c0", "r0c1")}
+    addresses = {d.id: (f"sim-{d.id}" if d.id in driven else None) for d in REGISTRY}
+    ctx = CompileContext(
+        registry=REGISTRY,
+        capabilities={d.id: CAPS for d in REGISTRY},
+        modes=MODES,
+        lights=True,
+        addresses=addresses,
+    )
+    plan = compile_mode("lowcountry-calm", Tier.STEPPED, ctx)
+    assert plan.program is not None and plan.program.lights
+    copy = plan.program.moving_feature
+    assert "every few seconds" not in copy and "both Hubspace strands" in copy
