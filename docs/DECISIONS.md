@@ -1450,9 +1450,25 @@ writes) and chose both layers plus a bench test, built so it can go live easily:
   the bench rehearsal's and the rate test's to answer. At nine kits our own 90-a-minute plan stretches per-light steps
   to 7.5 s until the rate test justifies more.
 
+**D81 — Per-light looks step every 3 s on nine kits; module-level looks keep 7.5 s (Oct 21, Charleston; follows
+D65, D79, D80).** With the nine new kits registered on VWBD's account (bench), commissioned (Gate C + map on all nine)
+and online at the venue, Alon ran the rate test (D80) three times on all nine: twice with Rainbow Row Sunset #2
+(module level) and once with Coastal Tides #5 (per-light). All three: **0 × 429 and 0 × 403** at up to 540 writes a
+minute on one account. But Hubspace's ~1.5–2.6 s readback confirms only part of the steps when they come fast: module
+level ~75 % at 4 s and ~50 % at 1.5–2 s; per-light **97 % at 4 s, 93 % at 3 s**, 24 % at 2 s, 0 at 1 s. Module 3 (run
+1) and Module 9 (per-light, at 1.5 s) had a few HTTP 424s (device reachability). A first try (account cap 90 → 450,
+1.5 s) failed CI: in the soak (5 % simulated throttling, 1 % silent drops) unconfirmed steps piled up re-sends and a
+look was downgraded; any looser **stepped** cap degraded the module-level soak. So:
+- `motion.lights.account_writes_per_min: 225` — per-light runs pace by their own cap (less the 20 % reserve = 180 a
+  minute): nine kits every 3 s, one kit at its designed 1.5–3 s. The runner, the rehearsal report and the Lab use it.
+- `motion.stepped` unchanged (cap 90, 7.5 s on nine): the module-level looks keep their Gate R pace.
+- The soak counts a module as showing a per-light look when it shows any frame of the run (the look moves faster
+  than a slow module confirms), judges its write rows against the cap in force, and allows up to 5 % of steps
+  superseded before every module confirmed them (still 0 failed or skipped).
+
 
 **D82 — A readback that won't move is "stale": re-sent slowly, never a downgrade, and re-sends are capped (Oct 21;
-follows D71; D81 is PR #46).** Live, Oct 21 13:40:57, right after a 5-minute rate test (`coastal-tides-5`), six of the
+follows D71 and D81).** Live, Oct 21 13:40:57, right after a 5-minute rate test (`coastal-tides-5`), six of the
 nine modules (r0c0, r0c1, r0c2, r1c0, r2c0, r2c1) read back `color-mode` "individual", brightness 85 and the
 pre-test colour for ~9 minutes, through three different looks, while Hubspace answered every write with a 200. Alon
 saw the lights take each look. All six caught up in the same second (13:49:54) on an ordinary re-send; the 12:35
@@ -1475,4 +1491,5 @@ differ". Decision:
 - **/ops** shows "Readback stale" on the module's cell instead of "N heads differ".
 Simulator (a module whose writes are dropped for 180 s): 7 writes instead of 40, stale at 14 s, healed 12 s after the
 freeze ends. Not known: why Hubspace's readback freezes after sustained 1 write/s per module, or whether our re-sends
-prolonged it. Worth weighing before D81's 450/min cap: two of today's three rate tests left minutes of stale readback.
+prolonged it. Two of today's three rate tests left minutes of stale readback: worth weighing before per-light runs
+near D81's 225/min cap.

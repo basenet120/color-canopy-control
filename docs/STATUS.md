@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-21 afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-21 afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -41,8 +41,29 @@ holds and the tier dropped to strand. It cleared by itself at 13:49:54 (all six 
   suite left to CI.
 - **Needs hardware:** a rate test followed by a look change on the show box, watching /ops for "Readback stale" and
   `stale_holds` instead of a re-send storm. Not deployed.
-- **Interacts with #46 (D81, cap 90 → 450):** independent, either order; the 30/min re-send cap is fixed, not a share
-  of the account cap.
+- **With D81 (#46, merged):** merged with main after #46. The 30/min re-send cap is fixed, not a share of either
+  stepped cap (90 module-level, 225 per-light).
+
+## PR `claude/nine-kit-pace` — nine kits online and commissioned in Charleston; per-light every 3 s (D81) → `main` (Oct 21)
+**True on hardware (venue, Oct 21, Alon):** the box is at the venue (192.168.50.215). The nine new kits are on VWBD's
+account (bench), named Module 1–9 in the Hubspace app, registered to `canopy-r0c0 … r2c2` on /ops/accounts, and
+**all nine commissioned for per-light**: hue ramp into slot 1, Gate C (`t1_frames`) and a map (30 heads in a 60-entry
+frame, in order) each, from `~/commission-kit.sh` on the Mac (the bench CLI; it reads the ops password from the
+settings). Registry overlay first: Modules 3–9 moved to the bench account, Modules 1–2 emptied, Kingston back on
+`bench-kit`, String light 1 back on `shop-string-1` with its flag and map (backup in `overrides/history/`).
+- **Rate tests on nine kits:** module level twice (Rainbow Row Sunset #2), per-light once (Coastal Tides #5): 0 × 429 /
+  0 × 403 up to 540 writes a minute. Per-light frames confirmed: 97 % at 4 s, 93 % at 3 s, 24 % at 2 s.
+- **Orientation:** Alon saw Module 5 run the opposite way to 1–4 — the plan's middle column (2, 5, 8) hangs B
+  (rotated); whether Module 2 matched is still to check (`/ops/calibrate`).
+- **The change (D81):** `motion.lights.account_writes_per_min: 225` (per-light every 3 s on nine); module-level
+  unchanged (90 → 7.5 s); the soak recognizes a landed per-light look, judges by the cap in force, allows ≤ 5 %
+  superseded steps. A first version (450 for everything) failed CI and was replaced.
+- **Verified:** targeted pytest (test_engine_review2, test_soak, test_per_light, test_stepped_rehearsal,
+  test_engine_program, test_ops_routes, test_lab_stepped, test_d65_modes, test_d77_catalog, test_lab_static,
+  test_kiosk_routes) pass; ruff clean; the full suite runs in CI.
+- **Next:** the orientation check; then a per-light rehearsal at show pace and Alon's call on
+  `motion.lights.live_enabled`; Module 3 and 9's Wi-Fi (a few 424s at the fastest steps).
+- **Deploy:** after merge, the usual paste block (config + code, no iPad reload).
 
 ## Oct 20 (shop) — String light 1 is ready for per-light; `9e31dbe` deployed
 **Deployed (Alon asked, 11:25): `9e31dbe`** (main after #44, D80) on the Mac show box — backup

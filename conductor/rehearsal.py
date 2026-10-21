@@ -421,7 +421,11 @@ class Rehearsal:
     def build_report(self) -> dict:
         runner = self.runner
         share = (self.throttled_429 + self.forbidden_403) / self.attempts if self.attempts else 0.0
-        cap = self.engine.deps.settings.motion.stepped.account_writes_per_min
+        cap = (
+            runner.cap
+            if runner is not None
+            else self.engine.deps.settings.motion.stepped.account_writes_per_min
+        )
         most = self.max_writes()
         over = {a: n for a, n in most.items() if a in self.accounts and n > cap}
         criteria = [

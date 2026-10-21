@@ -299,6 +299,10 @@ class LightsMotionSettings(_Strict):
     live_enabled: bool = False
     min_step_s: float = Field(1.0, ge=1.0, le=12.0)
     slot: Literal["custom-1", "custom-2", "custom-3"] = "custom-3"
+    # D81: the account cap a per-light run paces itself by (less motion.stepped.budget_reserve) and holds steps back
+    # under; module-level runs keep motion.stepped.account_writes_per_min. The venue rate tests (Oct 21) took 540 a
+    # minute with no throttling and confirmed 93 % of per-light frames at 3 s steps on nine kits.
+    account_writes_per_min: float = Field(90.0, gt=0, le=600)
 
 
 class MotionSettings(_Strict):
