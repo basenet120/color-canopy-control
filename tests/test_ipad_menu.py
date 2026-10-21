@@ -988,9 +988,23 @@ def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_l
     body = _panel(app_client_show)
     by_id = {s["id"]: s for s in body["scenes"]}
     assert list(by_id) == REVIEW_IDS
-    assert all(by_id[o]["thumb"]["basis"] == "modules" for o in OPTION_IDS)
-    assert all(by_id[b]["thumb"]["basis"] == "modules" for b in MODULES_FIRST)
     current = K._current_plan(engine)
+
+    def lights(sid):
+        plan = K._likely_plan(engine, sid, current)
+        return plan is not None and plan.program is not None and plan.program.lights
+
+    # Oct 21: a per-light look (the simulator runs every lights rung per light) draws one of its own frames, its dark
+    # lights left out; the rest draw their nine module colours
+    for sid in [*OPTION_IDS, *MODULES_FIRST]:
+        want = "lights" if lights(sid) else "modules"
+        assert by_id[sid]["thumb"]["basis"] == want, (sid, by_id[sid]["thumb"]["basis"])
+    per_light = [sid for sid in OPTION_IDS if lights(sid)]
+    assert per_light, "no per-light option in the review catalog"
+    for sid in per_light:
+        modules = by_id[sid]["thumb"]["modules"]
+        heads = [c for m in modules for c in (m["colors"] or [])]
+        assert len(heads) == 270 and any(c is None for c in heads) and any(c for c in heads), sid
     for base in PAINTED:
         plan = K._likely_plan(engine, base, current)
         tier = str(plan.tier) if plan is not None else None

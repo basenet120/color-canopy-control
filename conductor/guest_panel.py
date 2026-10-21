@@ -303,7 +303,9 @@ def thumb_plans(engine: Any, modes: ModesFile | None, scene_ids: Iterable[str]) 
             out[sid] = ThumbPlan(None if str(mode.ladder[0]) == str(Tier.STRAND) else fallback, None)
             continue
         tier = str(plan.tier)
-        if tier in PER_LIGHT_TIERS:
+        if tier == str(Tier.STEPPED) and plan.program is not None and plan.program.lights:
+            out[sid] = ThumbPlan("lights", plan)  # Oct 21: a per-light look's own frame
+        elif tier in PER_LIGHT_TIERS:
             out[sid] = ThumbPlan("heads", plan)
         elif tier == str(Tier.STRAND):
             out[sid] = ThumbPlan("strand", plan)
@@ -699,7 +701,9 @@ class GuestPanel:
             self._thumbs = {}
             self._thumbs_for = stamp
         missing = {
-            sid: basis[sid] for sid in ids if basis[sid] != "strand" and (sid, basis[sid]) not in self._thumbs
+            sid: basis[sid]
+            for sid in ids
+            if basis[sid] not in ("strand", "lights") and (sid, basis[sid]) not in self._thumbs
         }
         if missing:
             got = ipad_menu.catalog_thumbs(
@@ -721,6 +725,8 @@ class GuestPanel:
                 if canopy is None:
                     canopy = self.engine_target._canopy_cfg()
                 thumb = ipad_menu.plan_thumb(sid, canopy, self.services.registry, plan)
+            elif basis[sid] == "lights" and plan is not None:
+                thumb = ipad_menu.lights_thumb(sid, plan)
             else:
                 thumb = self._thumbs[(sid, basis[sid])]
             out[sid] = ipad_menu.mask_thumb(thumb, driven or frozenset())
