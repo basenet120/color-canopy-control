@@ -699,8 +699,11 @@ class Reconciler:
         engine = self.engine
         self.stats["slot_checks"] += 1
         got_rows = {r.key: r.value for r in rows}
+        streamed = engine.streamed_slot(device_id)
         for slot, expected, tier, _mode in engine.slot_expectations(device_id):
             if (device_id, slot) in engine.repaint_pending:  # an operator repaint writes it (D68)
+                continue
+            if slot == streamed:  # a per-light look's frame is there now, not the saved pattern (Oct 21)
                 continue
             key = (device_id, slot)
             value = got_rows.get((R.FRAME_CLASS, slot))

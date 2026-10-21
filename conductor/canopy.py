@@ -689,10 +689,11 @@ class CanopyEngine:
         return self._runner is not None and self._runner.moving
 
     def streamed_slot(self, device_id: str) -> str | None:
-        """The slot a per-light run (D80) is writing this module's frames into, while one moves; else None. Its frame
-        is the look itself, not a saved pattern: a re-send fixes it."""
-        runner = self._runner
-        if runner is None or not runner.moving or not runner.program.lights:
+        """The slot a per-light look (D80) writes this module's frames into, while that look is the plan (its run or
+        the hold it ends on); else None. Its frame is the look itself, not a saved pattern: a re-send fixes it, and
+        the slot check leaves it alone (the saved pattern goes back in when a look selects that slot again)."""
+        plan = self._plan
+        if plan is None or plan.program is None or not plan.program.lights:
             return None
         return self._streamed.get(device_id)
 
