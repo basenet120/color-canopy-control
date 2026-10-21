@@ -362,7 +362,7 @@ class Reconciler:
             return False
         snap = engine.tracker.snapshot(target.address)
         reported = [StateRow.from_wire(r) for r in snap["reported"] or []]
-        return _rows_differ(engine.desired_rows(device_id), reported)
+        return _rows_differ(engine.desired_rows(device_id), reported, engine.streamed_slot(device_id))
 
     def _differs(self, device_id: str, target: Any) -> bool:
         engine = self.engine
@@ -370,7 +370,7 @@ class Reconciler:
         if engine.tracker.mismatched([address]):
             snap = engine.tracker.snapshot(address)
             reported = [StateRow.from_wire(r) for r in snap["reported"] or []]
-            return _rows_differ(engine.desired_rows(device_id), reported)
+            return _rows_differ(engine.desired_rows(device_id), reported, engine.streamed_slot(device_id))
         if engine.program_unsent(device_id):
             return True  # a stepped run ended (its still look desired) while nothing could be sent
         return engine.last_status.get(address) in (CommandStatus.FAILED, CommandStatus.MISMATCH)
@@ -794,6 +794,11 @@ class Reconciler:
         self.engine.telemetry.record("alert", level="warn", device_id=device_id, message=message)
 
 
-def _rows_differ(expected: list[StateRow], reported: list[StateRow]) -> bool:
-    """A re-send can fix any differing row except a slot object (that is drift, handled by the slot check)."""
-    return any(m.function_class != R.FRAME_CLASS for m in R.compare(expected, reported))
+def _rows_differ(expected: list[StateRow], reported: list[StateRow], streamed: str | None = None) -> bool:
+    """A re-send can fix any differing row except a slot object (that is drift, handled by the slot check) — but a
+    per-light run's frame (`streamed`, its slot) is the look itself: that one a re-send fixes too (Oct 21: left to the
+    10-minute slot rewrite, a frame that didn't land kept the module wrong past the window and downgraded the look)."""
+    return any(
+        m.function_class != R.FRAME_CLASS or (streamed is not None and m.function_instance == streamed)
+        for m in R.compare(expected, reported)
+    )

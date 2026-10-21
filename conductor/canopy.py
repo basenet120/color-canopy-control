@@ -688,6 +688,14 @@ class CanopyEngine:
         """Is a stepped look moving now (its run going, its writes not held, the canopy on)?"""
         return self._runner is not None and self._runner.moving
 
+    def streamed_slot(self, device_id: str) -> str | None:
+        """The slot a per-light run (D80) is writing this module's frames into, while one moves; else None. Its frame
+        is the look itself, not a saved pattern: a re-send fixes it."""
+        runner = self._runner
+        if runner is None or not runner.moving or not runner.program.lights:
+            return None
+        return self._streamed.get(device_id)
+
     def program_unsent(self, device_id: str) -> bool:
         """A stepped plan whose desired rows for this module weren't sent (its run ended while nothing could be)."""
         return self._runner is not None and self.desired_rows(device_id) != self.sent_rows.get(device_id)
