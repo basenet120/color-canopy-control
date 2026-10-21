@@ -9,6 +9,7 @@ own ShowWiring on the simulator on virtual time (tests/test_stepped_rehearsal.py
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import time
@@ -370,6 +371,13 @@ async def _show():
     shutil.copytree(CONFIG_DIR, config)
     for name in ("scenes.yaml", "modes.yaml", "recipes.yaml"):
         shutil.copy(BASELINE / name, config / name)
+    # the baseline predates the Light Show (git's idle_scene since Oct 21): no idle reset scene here
+    conductor_yaml = config / "conductor.yaml"
+    text, n = re.subn(
+        r"^(\s*)idle_scene: \S+", r"\1idle_scene: null", conductor_yaml.read_text(), flags=re.MULTILINE
+    )
+    assert n == 1
+    conductor_yaml.write_text(text)
     sim = SimSettings.from_acceptance().with_(throttle_429_rate=0.0, silent_drop_rate=0.0)
     services = build_services(
         {"CONDUCTOR_DATA_DIR": str(data / "data")}, clock=VirtualClock(), config_dir=config, sim_settings=sim

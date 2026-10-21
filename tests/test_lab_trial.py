@@ -181,7 +181,14 @@ def test_trial_max_s_is_validated_against_idle_return_s(tmp_path):
         settings_with(kiosk={"idle_return_s": 100}, lab={"trial_max_s": 150})
     with pytest.raises(ValidationError):
         settings_with(lab={"trial_max_s": 0})
-    text = (CONFIG_DIR / "conductor.yaml").read_text().replace("idle_return_s: 180", "idle_return_s: 120")
+    # the file's own trial_max_s (150) over an idle_return_s of 120, whatever git ships (86400 since Oct 21)
+    text, n = re.subn(
+        r"^(\s*)idle_return_s: \d+",
+        r"\1idle_return_s: 120",
+        (CONFIG_DIR / "conductor.yaml").read_text(),
+        flags=re.MULTILINE,
+    )
+    assert n == 1
     (tmp_path / "conductor.yaml").write_text(text)
     with pytest.raises(ConfigError, match="trial_max_s"):
         load_settings(tmp_path)
@@ -189,7 +196,7 @@ def test_trial_max_s_is_validated_against_idle_return_s(tmp_path):
 
 
 def test_the_bound_is_the_smaller_of_the_two():
-    assert trial_bound_s(load_settings(CONFIG_DIR)) == 150  # the shipped setting (≤ idle_return_s 180)
+    assert trial_bound_s(load_settings(CONFIG_DIR)) == 150  # the shipped setting (≤ idle_return_s 86400)
     assert trial_bound_s(settings_with()) == 180  # None = kiosk.idle_return_s
     assert trial_bound_s(settings_with(kiosk={"idle_return_s": 30})) == 30  # old tests' settings stay valid
     assert trial_bound_s(settings_with(lab={"trial_max_s": 45})) == 45
