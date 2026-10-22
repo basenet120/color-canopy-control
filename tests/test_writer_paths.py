@@ -177,6 +177,11 @@ async def _bench_runner_effect_probe(env: Env, address: str) -> str:
     return await _bench_runner_job(env, address, "effect_probe", {"duration_s": 2.0}, t1=True)
 
 
+async def _bench_runner_effect_sweep(env: Env, address: str) -> str:
+    params = {"first_code": 1, "last_code": 2, "hold_s": 2.0}
+    return await _bench_runner_job(env, address, "effect_sweep", params, t1=True)
+
+
 async def _module_page_paint(env: Env, address: str) -> str:
     """/ops/module: open the device (takes its lock) → paint three heads (a T1 frame write + select, one PUT)."""
     import json
@@ -521,6 +526,7 @@ WRITER_PATHS: dict[str, WriterPath] = {
     "bench runner (gate_c_safe, with restore)": _bench_runner_gate_c_safe,
     "bench runner (address_probe_safe, with restore)": _bench_runner_address_probe_safe,
     "bench runner (effect_probe, with restore)": _bench_runner_effect_probe,
+    "bench runner (effect_sweep, with restore)": _bench_runner_effect_sweep,
     "module page (paint)": _module_page_paint,
     "module page (lowcountry preview)": _module_page_lowcountry_preview,
     "canopy engine (mode change)": _canopy_mode_change,

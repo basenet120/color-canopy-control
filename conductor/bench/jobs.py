@@ -79,6 +79,7 @@ FLAG_QUESTIONS: dict[str, dict[str, str]] = {
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "gate_c_safe": {"brightness": (1, 100), "duration_s": (4.0, 120.0), "before_duration_s": (4.0, 60.0)},
     "effect_probe": {"code": (1, 255), "speed": (0, 100), "duration_s": (2.0, 20.0)},
+    "effect_sweep": {"first_code": (1, 255), "last_code": (1, 255), "speed": (0, 100), "hold_s": (2.0, 20.0)},
     "address_probe_safe": {
         "start": (0, 255),
         "count": (1, 256),
@@ -1008,16 +1009,9 @@ async def effect_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     before = contrast_look(caps)
     if before is None:
         return JobResult(Verdict.ERROR, "No whole-strand look is available for a clean slot reselect.")
-    test_entries = hue_ramp_entries(len(entries))
-    if pattern == "blocks":
-        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
-        test_entries = [
-            R.FrameEntry(*colors[(i // 10) % 3]) if i % 10 < 3 else R.FrameEntry(0, 0, 0, 0, 0, 0)
-            for i in range(len(entries))
-        ]
     static = R.frame_value(
         original,
-        test_entries,
+        _effect_test_entries(pattern, len(entries)),
         expected_length=len(entries),
         effects={"motionEffect": 0, "brightnessEffect": 0},
         cct_range=caps.cct_range,
@@ -1104,6 +1098,210 @@ async def effect_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         "This code is not automatically enabled or assigned a behavior name.",
         obs,
         ["What did the colors do during the timed test: travel, pulse, flash, or stay still?"],
+    )
+
+
+def _effect_test_entries(pattern: str, length: int) -> list[R.FrameEntry]:
+    """The static picture an effect test animates: a hue ramp, 3-head red/green/blue blocks with dark gaps, or a
+    band — Light Show #4's six colours on the first six entries, the rest dark (the rolling band, if a code
+    travels)."""
+    if pattern == "band":
+        palette = [(255, 23, 68), (255, 143, 0), (255, 224, 0), (0, 200, 83), (41, 98, 255), (170, 0, 255)]
+        return [
+            R.FrameEntry(*palette[i]) if i < len(palette) else R.FrameEntry(0, 0, 0, 0, 0, 0)
+            for i in range(length)
+        ]
+    if pattern == "blocks":
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+        return [
+            R.FrameEntry(*colors[(i // 10) % 3]) if i % 10 < 3 else R.FrameEntry(0, 0, 0, 0, 0, 0)
+            for i in range(length)
+        ]
+    return hue_ramp_entries(length)
+
+
+EFFECT_SWEEP_MAX_CODES = 32  # one run stays under ~15 min at the longest hold
+
+
+def _sweep_speeds(text: str) -> list[int] | None:
+    """`speeds` as a list of 0–100 values ("10, 40,100"), or None when it isn't one."""
+    try:
+        speeds = [int(part) for part in text.replace(" ", "").split(",") if part]
+    except ValueError:
+        return None
+    if not speeds or len(speeds) > EFFECT_SWEEP_MAX_CODES or not all(0 <= v <= 100 for v in speeds):
+        return None
+    return speeds
+
+
+async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
+    """Walk a range of unverified effect codes on one kit in one run, each held for a fixed time — or, with
+    `vary` "speed", hold `first_code` and walk the `speeds` list (how fast does the controller step at each?).
+
+    The packaged-animation question: does a code make the controller animate the slot on its own, with no further
+    writes? Each candidate is announced as a live step (with its send time) so the observer can match what they see,
+    or a video, to the code. The kit leaves the slot before each code by default, since some controllers may load
+    effect headers only on entering individual mode. Nothing is enabled or named; the original slot is restored.
+    """
+    if not ctx.t1_allowed:
+        return JobResult(Verdict.ERROR, "Physically confirm Gate C before testing custom effects.")
+    slot, field = str(params["slot"]), str(params["field"])
+    pattern = str(params.get("pattern", "rainbow"))
+    first, last, speed = int(params["first_code"]), int(params["last_code"]), int(params["speed"])
+    hold, reselect = float(params["hold_s"]), bool(params["reselect"])
+    vary = str(params.get("vary", "code"))
+    speeds = _sweep_speeds(str(params.get("speeds", ""))) if vary == "speed" else [speed]
+    if (
+        vary not in ("code", "speed")
+        or speeds is None
+        or pattern not in ("rainbow", "blocks", "band")
+        or field not in ("motionEffect", "brightnessEffect")
+        or not 1 <= first <= 255
+        or (vary == "code" and (not first <= last <= 255 or last - first + 1 > EFFECT_SWEEP_MAX_CODES))
+        or not 0 <= speed <= 100
+        or not math.isfinite(hold)
+        or not 2 <= hold <= 20
+    ):
+        return JobResult(
+            Verdict.ERROR,
+            f"Choose one effect field, codes 1–255 (first ≤ last, at most {EFFECT_SWEEP_MAX_CODES} codes), "
+            "speed 0–100 and a hold of 2–20 s; to vary the speed, list up to "
+            f"{EFFECT_SWEEP_MAX_CODES} speeds 0–100 (e.g. 10,40,70,100).",
+        )
+    pairs = [(first, v) for v in speeds] if vary == "speed" else [(c, speed) for c in range(first, last + 1)]
+    info = await ctx.profile()
+    caps = _caps(info)
+    _check_slot(caps, slot)
+    rr = await _read_ok(ctx, "before the effect sweep")
+    original, entries = _slot_entries(rr, slot)
+    if len(entries) != caps.framebuffer_length or len(set(caps.framebuffer_lengths.values())) > 1:
+        return JobResult(Verdict.ERROR, "Slot lengths disagree; no effect sweep was sent.")
+    before = contrast_look(caps)
+    if before is None:
+        return JobResult(Verdict.ERROR, "No whole-strand look is available for a clean slot reselect.")
+    static = R.frame_value(
+        original,
+        _effect_test_entries(pattern, len(entries)),
+        expected_length=len(entries),
+        effects={"motionEffect": 0, "brightnessEffect": 0},
+        cct_range=caps.cct_range,
+    )
+    speed_field = "motionSpeed" if field == "motionEffect" else "brightnessSpeed"
+
+    def candidate(code: int, speed: int) -> dict[str, Any]:
+        return R.frame_value(
+            static,
+            R.frame_entries(static),
+            expected_length=len(entries),
+            effects={field: code, speed_field: speed},
+            cct_range=caps.cct_range,
+        )
+
+    def slot_rows(value):
+        return [R.slot_write(slot, value), *R.slot_select(slot), R.power(True), R.brightness(30)]
+
+    leave_rows = _only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range))
+    if not {r.key for r in slot_rows(candidate(*pairs[0]))}.issubset(_declared(info)):
+        return JobResult(Verdict.ERROR, "The device does not declare all required effect controls.")
+    ctx.artifacts["effect_sweep_before"] = {"slot": slot, "value": copy.deepcopy(original)}
+    spacing = max(LOOK_SPACING_S, ctx.budget_s)
+    codes: list[dict[str, Any]] = []
+    obs: dict[str, Any] = {
+        "slot": slot,
+        "field": field,
+        "first_code": first,
+        "last_code": last,
+        "speed": speed,
+        "vary": vary,
+        "speeds": speeds,
+        "hold_s": hold,
+        "reselect": reselect,
+        "length": len(entries),
+        "pattern": pattern,
+        "original_hash": R.slot_hash(original),
+        "automatically_enabled": False,
+        "codes": codes,
+    }
+    result = left = None
+    try:
+        res = await ctx.write(leave_rows, label="effect_sweep: before look")
+        result = _write_problem(res, "The before look")
+        if result is None:
+            await ctx.sleep(spacing)
+            res = await ctx.write(slot_rows(static), label=f"effect_sweep: static {pattern}")
+            result = _write_problem(res, "The static pattern")
+            ctx.step(
+                f"Static {pattern} (no effect) for {hold:g} s: the baseline every code is compared with."
+            )
+            await ctx.sleep(hold)
+        for n, (code, speed) in enumerate(pairs, 1):
+            if result is not None:
+                break
+            if reselect:
+                res = await ctx.write(leave_rows, label=f"effect_sweep: leave slot before {field} {code}")
+                left = _write_problem(res, "Leaving the slot")
+                # Hubspace's readback often lags a look (seen: brightness, Oct 22): note it and keep sweeping;
+                # only a leave that wasn't accepted at all stops the run.
+                if left is not None and res.status is not CommandStatus.MISMATCH:
+                    result = left
+                    break
+                await ctx.sleep(spacing)
+            value = candidate(code, speed)
+            sent_at = ctx.now()
+            res = await ctx.write(slot_rows(value), label=f"effect_sweep: {field} {code} speed {speed}")
+            codes.append(
+                {
+                    "code": code,
+                    "speed": speed,
+                    "leave_problem": left.summary if reselect and left is not None else None,
+                    "sent_at": sent_at,
+                    "write": write_facts(res),
+                    "reported_effects": (
+                        R.slot_effects(res.readback.get(R.FRAME_CLASS, slot)) if res.readback else None
+                    ),
+                }
+            )
+            # A cloud mismatch can still physically animate: note it and keep sweeping.
+            if problem := _write_problem(res, f"{field} {code}"):
+                codes[-1]["problem"] = problem.summary
+            ctx.step(
+                f"Now showing {field} {code} at speed {speed} ({n} of {len(pairs)}) for {hold:g} s. "
+                + ("How fast is it stepping?" if vary == "speed" else "What is it doing?"),
+                code=code,
+                speed=speed,
+                sent_at=sent_at,
+            )
+            await ctx.sleep(hold)
+    finally:
+        restore_rows = [R.slot_write(slot, copy.deepcopy(original)), *R.slot_select(slot), R.power(True)]
+        if caps.brightness_range:
+            level = rr.get("brightness")
+            if isinstance(level, int) and 1 <= level <= 100:
+                restore_rows.append(R.brightness(level))
+        restored = await ctx.write(restore_rows, label="effect_sweep: restore original slot and header")
+        obs["restore"] = write_facts(restored)
+    if problem := _write_problem(restored, "Restoring the original pattern"):
+        problem.observations.update(obs)
+        return problem
+    if result is not None:
+        result.observations.update(obs)
+        result.ask_human = ["What changed during the codes that did run, if anything?"]
+        return result
+    swept = (
+        f"{field} {first} at speeds {', '.join(map(str, speeds))}"
+        if vary == "speed"
+        else f"{field} {first}–{last} at speed {speed}"
+    )
+    return JobResult(
+        Verdict.NEEDS_EYES,
+        f"Swept {swept}, {hold:g} s each; original slot restored. No code is enabled or named by this run.",
+        obs,
+        [
+            (
+                "Which codes animated on their own (travel, pulse, twinkle, flash), and which stayed still? "
+                "Was any motion smooth enough for the show?"
+            )
+        ],
     )
 
 
@@ -1839,6 +2037,31 @@ JOBS: dict[str, Job] = {
                 },
             ),
             effect_probe,
+        ),
+        Job(
+            JobSpec(
+                "effect_sweep",
+                "Custom effect sweep — packaged animations",
+                "Walks a range of unverified effect codes on a rainbow or color blocks at 30%, each held for a few "
+                "seconds with no further writes, then restores the original slot.",
+                writes=True,
+                look_for="Watch the static baseline, then each code as the live steps announce it. Note which codes "
+                "move on their own and how smoothly; film it if you can (each step carries its send time). "
+                'Vary "speed" holds first_code and walks the speeds list: count steps per second at each.',
+                params={
+                    "slot": "custom-3",
+                    "field": "motionEffect",
+                    "first_code": 1,
+                    "last_code": 12,
+                    "speed": 50,
+                    "hold_s": 8.0,
+                    "pattern": "rainbow",
+                    "reselect": True,
+                    "vary": "code",
+                    "speeds": "10,25,40,55,70,85,100",
+                },
+            ),
+            effect_sweep,
         ),
         Job(
             JobSpec(
