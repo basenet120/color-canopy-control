@@ -4,8 +4,9 @@ it shows right now (PR #19 follow-up 2, server half; the kiosk draws it, `web/ki
 Pure: no network, no engine calls, nothing written. Two parts, both served with GET /api/kiosk/panel:
 
 - **Geometry** (`canopy_geometry`): the canopy in inches, every head of every module from `geometry.build_layout`,
-  per module sorted top to bottom then left to right — the module's *lattice order*. It never depends on how a strand
-  is wired, so the picture is the ceiling, not the cable. `view` is how the iPad turns that picture to match what a
+  per module sorted top to bottom then left to right — the module's *lattice order*. Each panel is drawn the way it
+  hangs: a registered module's own orientation (its calibration, the module page's), else the canopy scheme's
+  (`hung`). It never depends on how a strand is wired, so the picture is the ceiling, not the cable. `view` is how the iPad turns that picture to match what a
   guest at the stand sees overhead (`kiosk.preview` in config/conductor.yaml, set at install). With the canopy's fin
   map (D74, config/fins.json through canopy.yaml → canopy → fins) it also lists the 650 fins (centre, plan axis,
   drop) and the outline the canopy plus its 6 in apron makes; never the file's free-text fields. Without one the
@@ -77,6 +78,7 @@ OFF, DARK, UNKNOWN, LIT, CHANGING = "off", "dark", "unknown", "lit", "changing"
 GRID = [
     f"r{r}c{c}" for r in range(3) for c in range(3)
 ]  # the order of a stepped run's frames (sequence.GRID)
+HUNG = "as-hung"  # the orientation grid `hung` adds: the panels as they actually hang
 # (module, why) already logged: a flat fallback is logged once, not on every request
 _warned: set[tuple[str, str]] = set()
 
@@ -99,7 +101,7 @@ def _point(x: float, y: float) -> tuple[int, int]:
     return round(2 * x), round(2 * y)
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=32)
 def _modules(cfg_key: str) -> tuple[tuple[str, int, int, tuple[tuple[float, float], ...]], ...]:
     """(pos, row, col, heads in lattice order) per module, row-major."""
     heads = build_layout(json.loads(cfg_key))
@@ -111,6 +113,24 @@ def _modules(cfg_key: str) -> tuple[tuple[str, int, int, tuple[tuple[float, floa
         for pos, (row, col, points) in out.items()
     ]
     return tuple(sorted(modules, key=lambda m: (m[1], m[2])))
+
+
+def _orient(cfg: Mapping[str, Any], own: Mapping[str, str]) -> Mapping[str, Any]:
+    """`cfg` with the orientation of each position in `own` ("r0c0" → "A" or "B") replacing the scheme's."""
+    grid = cfg["orientations"][cfg["orientation_scheme"]]
+    rows = [[own.get(f"r{r}c{c}") or o for c, o in enumerate(row)] for r, row in enumerate(grid)]
+    if rows == [list(row) for row in grid]:
+        return cfg
+    return {**cfg, "orientations": {**cfg["orientations"], HUNG: rows}, "orientation_scheme": HUNG}
+
+
+def hung(cfg: Mapping[str, Any], registry: Any) -> Mapping[str, Any]:
+    """The canopy as its panels actually hang: each registered module's own orientation (its calibration, which
+    `placement_for` places its lights by), else the scheme's. Oct 21: the venue kits hang B-A-B where the scheme
+    says A-B-A, and a panel drawn the other way round has a different lattice (7 heads on top, not 8), so its lights
+    couldn't be drawn where they are."""
+    modules = registry.canopy_modules() if hasattr(registry, "canopy_modules") else (registry or [])
+    return _orient(cfg, {str(e.module): e.orientation for e in modules if e.module and e.orientation})
 
 
 def _fins_part(cfg: Mapping[str, Any]) -> dict:
@@ -127,11 +147,14 @@ def _fins_part(cfg: Mapping[str, Any]) -> dict:
     }
 
 
-def canopy_geometry(cfg: Mapping[str, Any], view: Any = None) -> dict:
+def canopy_geometry(cfg: Mapping[str, Any], view: Any = None, registry: Any = None) -> dict:
     """`{width_in, height_in, module_w_in, module_h_in, view: {mirror_x, rotate_deg, dim_floor}, modules: [{pos, row,
     col, heads: [[x, y] × 30]} × 9], apron_in, outline: {x: [lo, hi], y: [lo, hi]}, fin_width_in, fins: [{x, y,
     angle_deg, drop_in}] (650; [] without a fin map)}`, heads in canopy inches in lattice order. `view` is
-    `kiosk.preview` (a `PreviewSettings`; None = the defaults: unmirrored, unrotated, floor 0.35)."""
+    `kiosk.preview` (a `PreviewSettings`; None = the defaults: unmirrored, unrotated, floor 0.35). With `registry`
+    each panel is drawn as it hangs (`hung`); without one, as the canopy scheme says."""
+    if registry is not None:
+        cfg = hung(cfg, registry)
     modules = _modules(_key(cfg))
     return {
         "width_in": cfg["width_in"],
@@ -183,13 +206,19 @@ def _slots(cfg_key: str, entry_key: str) -> tuple[tuple[int, ...] | None, str | 
 
 def lattice_slots(cfg: Mapping[str, Any], entry: Any) -> list[int] | None:
     """Wire index → lattice slot for a placed registry entry (its own orientation and calibration, as the compiler
-    places it), or None when that isn't a one-to-one map onto the position's lattice (the module is then shown as one
-    flat mean colour; the reason is logged once)."""
-    slots, why = _slots(_key(cfg), _entry_key(entry))
+    places it) on its position's lattice as that panel hangs (`hung`), or None when that isn't a one-to-one map (the
+    module is then shown as one flat mean colour; the reason is logged once)."""
+    slots, why = _slots(_key(_own(cfg, entry)), _entry_key(entry))
     if slots is None:
         _warn(str(getattr(entry, "id", "?")), str(why))
         return None
     return list(slots)
+
+
+def _own(cfg: Mapping[str, Any], entry: Any) -> Mapping[str, Any]:
+    """`cfg` with `entry`'s position oriented the way that panel hangs."""
+    orientation = getattr(entry, "orientation", None)
+    return _orient(cfg, {str(entry.module): orientation}) if orientation else cfg
 
 
 def _warn(module: str, why: str) -> None:
@@ -210,7 +239,7 @@ def _mean(colors: Sequence[Mapping[str, Any]]) -> dict:
 def module_colours(cfg: Mapping[str, Any], entry: Any, colors: Sequence[Mapping[str, Any]]) -> list[str]:
     """The module's full-strength head colours as "#RRGGBB" in lattice order (one flat mean on every head when its
     wiring doesn't map one to one, or the plan has a different number of heads than the lattice)."""
-    lattice = _lattice(cfg, str(entry.module)) or ()
+    lattice = _lattice(_own(cfg, entry), str(entry.module)) or ()
     slots = lattice_slots(cfg, entry)
     if slots is not None and len(colors) != len(slots):
         _warn(str(entry.id), f"the plan has {len(colors)} head colours for {len(slots)} lattice heads")

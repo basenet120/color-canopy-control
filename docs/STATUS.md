@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-21 afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -26,6 +26,40 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
+From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
+from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation`; the exact
+commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
+merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
+(`uv run --with pytest-xdist pytest -q -n 8`): 3546 passed, 6 skipped in 3 min 32 s; ruff check + format clean.
+Rollback: `git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)"` then `canopy-mac install`.
+
+## PR `claude/panel-own-orientation` — the guest panel draws each kit as it hangs → `main` (Oct 21 afternoon)
+**True on hardware (venue, Oct 21, Alon watching):** the kits hang far row 1-2-3, middle 4-5-6, near 7-8-9 (plan seen
+from below, Module 1 top-left), so the registry overlay was transposed: Module N's tag → `canopy-r{row}c{col}` with
+flags and maps moving with the devices (backups in `overrides/history/`). Calibration set per kit from a wiring test
+(light 1 white, 2–8 red, 30 blue), all `serpentine_rows`, no flip, no hand wire order:
+M1, M2, M3 B bottom-left · M4 A bottom-right · M5 A bottom-left · M6 A top-left · M7 B top-right · M8, M9 B
+bottom-right. **The columns hang B-A-B where canopy.yaml's scheme p14 says A-B-A.** Checked with two concentric red
+rings drawn from the calibrated map: continuous across every seam (Alon's photo).
+- **Every look on that calibration (offline, on the box's registry):** all 18 per-light and 18 module-level looks
+  compile; each frame, undone through the kit's map and placed by the module page's map, puts every light where the
+  design does; 0 problems. The compiler and the module page place lights by the same code (`panel_order`, B = 180°).
+- **The bug this PR fixes:** the guest panel (and the per-light `heads` it draws) took each position's lattice from
+  the scheme, so a kit hung the other way round couldn't map onto it and every venue kit fell back to one flat mean
+  colour on the iPad (the per-light previews would have been flat). `canopy_view.hung` now orients each position by
+  its registered kit (the scheme when unset); `canopy_geometry(..., registry=)` and `lattice_slots` use it. The Design
+  Lab's own drawing (no registry) is unchanged. No change to what is sent to the canopy.
+- **Verified:** targeted pytest (test_canopy_view, test_guest_panel, test_per_light, test_kiosk_routes, test_kiosk_node,
+  test_ipad_menu) 181 pass; ruff clean; on the box's registry all nine kits map one to one; sim Lab (:8200) with the
+  venue calibration as its overlay: the panel draws 7/8/7 heads on top (B-A-B) and Rainbow Row Sunset #4 per light on
+  all nine panels, no "flat colour" warning. Full suite in CI.
+- **Tools on the Mac (not in git):** `python3 ~/orient.py health [minutes] [watch]` — per kit, from the box's own
+  telemetry: writes confirmed, late readback, failed, 424s, readback timeouts (read-only). Oct 21: Module 8's
+  "hiccups" are late cloud readbacks (D82 / PR #47), at the same rate as Modules 1, 2, 4, 7; Module 3 had 46 × 424
+  today (Wi-Fi).
+- **Deploy:** after merge, the usual paste block; reload the iPad page once.
 ## PR `claude/stale-readback` — stale readback, slow re-sends, a re-send cap (D82) → `main` (Oct 21)
 Live today (Charleston, nine kits, `9e31dbe`): after the 13:40 rate test six modules' Hubspace readback stayed frozen
 for ~9 min (`individual`, brightness 85) while every write got a 200 and Alon saw the lights change; /ops showed "N
