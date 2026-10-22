@@ -40,9 +40,14 @@ APPROVED = [
     "golden-hour",
     "goodnight-glow",
 ]
+# Oct 21: the seventh scene, after the six approved ones, with its own five per-light options (#2-#6)
+LIGHT_SHOW = "light-show"
+BASES = [*APPROVED, LIGHT_SHOW]
 OPTIONS = (2, 3, 4, 5, 6)  # D77's #2/#3 and D80's per-light #4–#6 (git's own catalog)
-REVIEW_IDS = [x for s in APPROVED for x in (s, *(f"{s}-{n}" for n in OPTIONS))]
-OPTION_IDS = [x for x in REVIEW_IDS if x not in APPROVED]
+REVIEW_IDS = [x for s in BASES for x in (s, *(f"{s}-{n}" for n in OPTIONS))]
+OPTION_IDS = [x for x in REVIEW_IDS if x not in BASES]
+# hide these and the six approved #1s are left: every option, and the Light Show scene with its options
+BEYOND_SIX = [x for x in REVIEW_IDS if x not in APPROVED]
 PER_LIGHT_RUNGS = ("canvas", "slot")
 
 

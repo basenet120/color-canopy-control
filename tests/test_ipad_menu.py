@@ -60,7 +60,16 @@ from conductor.looks.live import git_trio, install_looks
 from conductor.routes import kiosk as K
 from conductor.routes.design import mode_design
 from conductor.scenes import load_scenes
-from tests.review_fixture import APPROVED, OPTION_IDS, REVIEW_IDS, install_review, review_scenes, review_trio
+from tests.review_fixture import (
+    APPROVED,
+    BASES,
+    BEYOND_SIX,
+    OPTION_IDS,
+    REVIEW_IDS,
+    install_review,
+    review_scenes,
+    review_trio,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 CALM = "lowcountry-calm"
@@ -369,9 +378,13 @@ def test_a_visible_option_of_a_hidden_base_keeps_its_group():
 
 def test_six_visible_is_the_grid_seven_is_the_review_menu():
     catalog = review_scenes(load_scenes())
-    six = IM.menu(catalog, _kiosk(hidden_scenes=list(OPTION_IDS)))
-    assert len(six.visible.scenes) == 6 and six.review is False
-    seven = IM.menu(catalog, _kiosk(hidden_scenes=[x for x in OPTION_IDS if x != "golden-hour-2"]))
+    # every option and the Light Show scene hidden: the six approved #1s
+    six = IM.menu(catalog, _kiosk(hidden_scenes=list(BEYOND_SIX)))
+    assert [s.id for s in six.visible.scenes] == APPROVED and six.review is False
+    seven = IM.menu(catalog, _kiosk(hidden_scenes=[x for x in BEYOND_SIX if x != "golden-hour-2"]))
+    assert len(seven.visible.scenes) == 7 and seven.review is True
+    # the Light Show #1 as the seventh card is the review menu too
+    seven = IM.menu(catalog, _kiosk(hidden_scenes=list(OPTION_IDS)))
     assert len(seven.visible.scenes) == 7 and seven.review is True
 
 
@@ -473,7 +486,7 @@ def test_two_switches_keep_catalog_order(tmp_path):
 
 def test_the_switch_says_when_the_menu_changes_shape_and_when_the_scene_is_showing(tmp_path):
     services = _services(tmp_path)
-    install_review(services, hide=[x for x in OPTION_IDS if x != "golden-hour-2"])  # 7 visible
+    install_review(services, hide=[x for x in BEYOND_SIX if x != "golden-hour-2"])  # 7 visible
     hid = IM.set_on_ipad(services, "golden-hour-2", False)
     assert hid.message.endswith(" The iPad is back to its 3 × 2 grid.")
     shown = IM.set_on_ipad(services, "golden-hour-2", True)
@@ -1042,8 +1055,8 @@ def test_the_panel_lists_eighteen_options_with_their_group_and_design(app_client
     scenes = body["scenes"]
     assert [s["id"] for s in scenes] == REVIEW_IDS
     for s in scenes:
-        base = s["id"] if s["id"] in APPROVED else s["id"].rsplit("-", 1)[0]
-        assert s["group"] == base and s["option_of"] == (None if s["id"] in APPROVED else base)
+        base = s["id"] if s["id"] in BASES else s["id"].rsplit("-", 1)[0]
+        assert s["group"] == base and s["option_of"] == (None if s["id"] in BASES else base)
         thumb = s["thumb"]
         assert thumb["basis"] == "modules" and HEX12.match(
             thumb["sig"]
@@ -1210,15 +1223,14 @@ def test_six_or_fewer_visible_compute_and_send_no_thumbnail(app_client, monkeypa
         return real(*a, **kw)
 
     monkeypatch.setattr(GP, "thumb_plans", counted_basis)
-    _svc(app_client).settings.kiosk.hidden_scenes = list(
-        OPTION_IDS
-    )  # D77's 12 options off the iPad, in place
-    for _ in range(3):  # the git config with every option hidden: the six #1s
+    # every option and the Light Show scene off the iPad, in place
+    _svc(app_client).settings.kiosk.hidden_scenes = list(BEYOND_SIX)
+    for _ in range(3):  # the git config with every option and the Light Show hidden: the six #1s
         body = _panel(app_client)
         assert len(body["scenes"]) == 6 and all(s["thumb"] is None for s in body["scenes"])
         assert all(s["group"] == s["id"] and s["option_of"] is None for s in body["scenes"])
-    install_review(_svc(app_client), hide=OPTION_IDS)
-    for _ in range(3):  # the review fixture with every option hidden: six again
+    install_review(_svc(app_client), hide=BEYOND_SIX)
+    for _ in range(3):  # the review fixture with every option and the Light Show hidden: six again
         body = _panel(app_client)
         assert [s["id"] for s in body["scenes"]] == APPROVED and all(
             s["thumb"] is None for s in body["scenes"]

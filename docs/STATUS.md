@@ -26,13 +26,36 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Light Show #1–#6 and `on_at`, `claude/light-show` → `main` (Oct 21 evening; no PR yet)
+**True on hardware (venue, Oct 21):** `orient.py levels 5` — red at level 0 is off (no white fallback), and levels 5,
+15, 40 and 100 all read about the same on the canopy (photo). So the 18 per-light options, whose floor is 8–15 %,
+look nearly all on, and `/ops` (which draws 13 % as near black) disagrees with the canopy.
+- **The change:** `LightsMotion.on_at` (needs floor 0): a light whose level would reach it is sent at `peak`, any
+  other at 0. A seventh scene, **Light Show**, with six per-light looks, every light fully on or off: #1 big drop
+  (radial rings), #2 lighthouse (sweep beam), #3 sunrise wipe (glow, end to end), #4 stadium wave (rolling breath,
+  rainbow, colours travel), #5 fireflies (twinkle), #6 heartbeat (radial glow). Brightness 90; module-level breath
+  fallback as the other options. On the iPad they are a seventh scene (hide them from `/ops` "Show on the iPad" if
+  they're for rehearsals only). The 18 D80 options are unchanged (Alon to decide whether they get floor 0 / `on_at`).
+- **Verified:** compiled on the box's registry: every light 0 or 100 on every step (#3 and #6 run 270 → 0 → 270);
+  a frame-accurate preview sent to Alon; tests pinning the catalog size moved 36 → 42 (helper agent; reviewed);
+  new tests for `on_at`. Not yet seen on the canopy.
+- **Known issue, pre-existing (not caused by Light Show):** two soak tests fail —
+  `test_engine_review2::test_f11_the_soak_runs_the_shows_wiring_and_a_motion_plan` and
+  `test_soak::test_short_soak_passes_and_writes_the_report` ("Stepped, SIMULATED: tier downgrades at 5% throttling";
+  test_soak also "All nine modules correct after a mode change"). Cause: a D80 per-light option picked as the mood
+  that cuts a run short drops stepped → module level ("a module stayed wrong for more than 10 s after re-asserts").
+  On the catalog *before* Light Show the f11 setup already fails on seeds 1, 2, 3, 4, 6 and 8 (passes 5, 7, 9–11):
+  the pinned seeds passed by luck, and six more moods changed the seeded picks. Not seen live (today's per-light
+  rehearsal stayed stepped all 144 steps). **Next:** find why a per-light run under 5 % throttling leaves a module
+  wrong > 10 s; don't re-seed the tests to hide it. CI on a Light Show PR will fail these two until then.
+
 ## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
 From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
 from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
-`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet); the exact
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet); the exact
 commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
 merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
-(`uv run --with pytest-xdist pytest -q -n 8`): 3546 passed, 6 skipped in 3 min 32 s; ruff check + format clean.
+(`uv run --with pytest-xdist pytest -q -n 8`): all pass except the two known soak tests (see the Light Show block); ruff clean.
 Rollback: `git -C ~/canopy-show checkout --detach "$(cat ~/canopy-prev-sha.txt)"` then `canopy-mac install`.
 
 ## PR `claude/panel-own-orientation` — the guest panel draws each kit as it hangs → `main` (Oct 21 afternoon)

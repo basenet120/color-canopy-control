@@ -1130,7 +1130,10 @@ def light_level(lights: LightsMotion, t: float, p: float, twinkle: tuple[int, fl
         assert twinkle is not None
         k, start = twinkle
         v = 0.5 + 0.5 * math.cos(2 * math.pi * (k * p + start))
-    return _half_up(lights.floor + (lights.peak - lights.floor) * v**LIGHTS_GAMMA)
+    level = _half_up(lights.floor + (lights.peak - lights.floor) * v**LIGHTS_GAMMA)
+    if lights.on_at is not None:
+        return lights.peak if level >= lights.on_at else 0
+    return level
 
 
 def _encode_head(entry: R.FrameEntry) -> str:

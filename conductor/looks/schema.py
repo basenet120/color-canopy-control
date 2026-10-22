@@ -302,6 +302,9 @@ class LightsMotion(_Strict):
     - `twinkle`: each light on its own seeded rhythm (`seed`).
 
     A light's level runs `floor`…`peak` (its colorBrightness; 0 = off), the module's brightness row is `brightness`.
+    `on_at` makes the lights on or off: a light whose level would reach it is sent at `peak`, any other at 0 (Oct 21,
+    venue: level 5 looks about as bright as 100 on the canopy, so in-between levels all read as on; `floor` must
+    then be 0).
     It runs only where every driven module can take per-light frames (sim; live: `motion.lights`, Gate C and a map),
     else the rung's module-level steps run. `moving_feature` is shown while it runs."""
 
@@ -318,6 +321,7 @@ class LightsMotion(_Strict):
     softness: float = Field(0.25, ge=0.02, le=1.0)
     lag: float = Field(0.5, ge=0.0, le=2.0)
     colour_travel: float = Field(0.0, ge=-2.0, le=2.0)
+    on_at: int | None = Field(None, ge=1, le=100)
     seed: int | None = Field(None, ge=0, le=2_147_483_647)
     moving_feature: str = Field(min_length=10)
 
@@ -328,6 +332,11 @@ class LightsMotion(_Strict):
         if self.floor >= self.peak:
             raise ValueError(
                 f"floor ({self.floor}) must be below peak ({self.peak}), or no light would change"
+            )
+        if self.on_at is not None and (self.floor != 0 or self.on_at > self.peak):
+            raise ValueError(
+                f"on_at ({self.on_at}) sends each light at peak or off: it needs floor 0 (not {self.floor}) and must "
+                f"be at most peak ({self.peak})"
             )
         if (self.effect == "twinkle") != (self.seed is not None):
             raise ValueError(

@@ -835,3 +835,131 @@ colors:
     rgb_only: {r: 255, g: 200, b: 140, colorBrightness: 100}
     blend: {r: 0, g: 0, b: 0, colorBrightness: 0, cct: 2700, whiteBrightness: 100}
     strand: {cct: 2700}
+
+  # Light Show (Oct 21): bold, saturated colours for the on-or-off per-light looks
+  electric-cyan:
+    label: Electric cyan
+    hex: "#00E5FF"
+    rgb_only: {r: 0, g: 229, b: 255, colorBrightness: 100}
+    blend: {r: 0, g: 229, b: 255, colorBrightness: 100}
+    strand: {rgb: [0, 229, 255]}
+  cobalt:
+    label: Cobalt
+    hex: "#2050FF"
+    rgb_only: {r: 32, g: 80, b: 255, colorBrightness: 100}
+    blend: {r: 32, g: 80, b: 255, colorBrightness: 100}
+    strand: {rgb: [32, 80, 255]}
+  ultraviolet:
+    label: Ultraviolet
+    hex: "#8A2BFF"
+    rgb_only: {r: 138, g: 43, b: 255, colorBrightness: 100}
+    blend: {r: 138, g: 43, b: 255, colorBrightness: 100}
+    strand: {rgb: [138, 43, 255]}
+  beacon-amber:
+    label: Beacon amber
+    hex: "#FFB000"
+    rgb_only: {r: 255, g: 176, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 176, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 176, 0]}
+  flame-orange:
+    label: Flame orange
+    hex: "#FF5A00"
+    rgb_only: {r: 255, g: 90, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 90, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 90, 0]}
+  signal-red:
+    label: Signal red
+    hex: "#E00020"
+    rgb_only: {r: 224, g: 0, b: 32, colorBrightness: 100}
+    blend: {r: 224, g: 0, b: 32, colorBrightness: 100}
+    strand: {rgb: [224, 0, 32]}
+  hot-pink:
+    label: Hot pink
+    hex: "#FF2D95"
+    rgb_only: {r: 255, g: 45, b: 149, colorBrightness: 100}
+    blend: {r: 255, g: 45, b: 149, colorBrightness: 100}
+    strand: {rgb: [255, 45, 149]}
+  bright-coral:
+    label: Bright coral
+    hex: "#FF6A3D"
+    rgb_only: {r: 255, g: 106, b: 61, colorBrightness: 100}
+    blend: {r: 255, g: 106, b: 61, colorBrightness: 100}
+    strand: {rgb: [255, 106, 61]}
+  sunbeam:
+    label: Sunbeam
+    hex: "#FFD000"
+    rgb_only: {r: 255, g: 208, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 208, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 208, 0]}
+  ruby:
+    label: Ruby
+    hex: "#FF1744"
+    rgb_only: {r: 255, g: 23, b: 68, colorBrightness: 100}
+    blend: {r: 255, g: 23, b: 68, colorBrightness: 100}
+    strand: {rgb: [255, 23, 68]}
+  tangerine:
+    label: Tangerine
+    hex: "#FF8F00"
+    rgb_only: {r: 255, g: 143, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 143, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 143, 0]}
+  lemon:
+    label: Lemon
+    hex: "#FFE000"
+    rgb_only: {r: 255, g: 224, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 224, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 224, 0]}
+  emerald:
+    label: Emerald
+    hex: "#00C853"
+    rgb_only: {r: 0, g: 200, b: 83, colorBrightness: 100}
+    blend: {r: 0, g: 200, b: 83, colorBrightness: 100}
+    strand: {rgb: [0, 200, 83]}
+  sapphire:
+    label: Sapphire
+    hex: "#2962FF"
+    rgb_only: {r: 41, g: 98, b: 255, colorBrightness: 100}
+    blend: {r: 41, g: 98, b: 255, colorBrightness: 100}
+    strand: {rgb: [41, 98, 255]}
+  violet:
+    label: Violet
+    hex: "#AA00FF"
+    rgb_only: {r: 170, g: 0, b: 255, colorBrightness: 100}
+    blend: {r: 170, g: 0, b: 255, colorBrightness: 100}
+    strand: {rgb: [170, 0, 255]}
+  spark-lime:
+    label: Spark lime
+    hex: "#A6FF00"
+    rgb_only: {r: 166, g: 255, b: 0, colorBrightness: 100}
+    blend: {r: 166, g: 255, b: 0, colorBrightness: 100}
+    strand: {rgb: [166, 255, 0]}
+  firefly-gold:
+    label: Firefly gold
+    hex: "#FFD400"
+    rgb_only: {r: 255, g: 212, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 212, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 212, 0]}
+  ember-amber:
+    label: Ember amber
+    hex: "#FF9500"
+    rgb_only: {r: 255, g: 149, b: 0, colorBrightness: 100}
+    blend: {r: 255, g: 149, b: 0, colorBrightness: 100}
+    strand: {rgb: [255, 149, 0]}
+  hot-magenta:
+    label: Hot magenta
+    hex: "#FF1493"
+    rgb_only: {r: 255, g: 20, b: 147, colorBrightness: 100}
+    blend: {r: 255, g: 20, b: 147, colorBrightness: 100}
+    strand: {rgb: [255, 20, 147]}
+  orchid:
+    label: Orchid
+    hex: "#E000E0"
+    rgb_only: {r: 224, g: 0, b: 224, colorBrightness: 100}
+    blend: {r: 224, g: 0, b: 224, colorBrightness: 100}
+    strand: {rgb: [224, 0, 224]}
+  royal-purple:
+    label: Royal purple
+    hex: "#7A00FF"
+    rgb_only: {r: 122, g: 0, b: 255, colorBrightness: 100}
+    blend: {r: 122, g: 0, b: 255, colorBrightness: 100}
+    strand: {rgb: [122, 0, 255]}
