@@ -187,6 +187,7 @@ from conductor.locks import DeviceLockManager
 from conductor.reconciler import Reconciler
 from conductor.rehearsal import (
     MAX_MINUTES,
+    RATE_RUNG_S,
     RATE_RUNGS,
     REHEARSAL_DIR,
     Rehearsal,
@@ -1468,12 +1469,22 @@ class CanopyEngine:
                 "kiosk out by itself while it runs."
             )
 
-    def rehearsal_preview(self, mode_id: str, minutes: int, *, ladder: bool = False) -> dict:
+    def rehearsal_preview(
+        self,
+        mode_id: str,
+        minutes: int,
+        *,
+        ladder: bool = False,
+        rungs: tuple[float, ...] | None = None,
+        rung_s: float | None = None,
+    ) -> dict:
         """What a rehearsal of `mode_id` for `minutes` would do, and the sentence ops confirms before it starts (it
         names every module written to). RehearsalRefused (a plain sentence) when it can't run now. `ladder`: the rate
-        test (D80): its own steps (`RATE_RUNGS`), its minutes are the ladder's."""
+        test (D80): its own steps (`RATE_RUNGS`, or `rungs` each `rung_s` long), its minutes are the ladder's."""
+        steps = tuple(rungs) if rungs else RATE_RUNGS
+        length = rung_s if rung_s is not None else RATE_RUNG_S
         if ladder:
-            minutes = rate_minutes()
+            minutes = rate_minutes(steps, length)
         self._rehearsal_checks(mode_id, minutes)
         plan = self._rehearsal_plan(mode_id)
         modules, accounts = {}, set()
@@ -1508,6 +1519,8 @@ class CanopyEngine:
                 accounts=accounts_sorted,
                 simulated=simulated,
                 lights=lights,
+                rungs=steps,
+                rung_s=length,
             )
         else:
             confirm = confirm_sentence(
@@ -1523,7 +1536,8 @@ class CanopyEngine:
             "mode": mode_id,
             "label": plan.label,
             "minutes": minutes,
-            "ladder": list(RATE_RUNGS) if ladder else None,
+            "ladder": list(steps) if ladder else None,
+            "rung_s": length if ladder else None,
             "lights": lights,
             "modules": list(modules.values()),
             "module_ids": list(modules),
@@ -1532,11 +1546,20 @@ class CanopyEngine:
             "confirm": confirm,
         }
 
-    async def rehearse(self, mode_id: str, minutes: int, *, source: str, ladder: bool = False) -> dict:
+    async def rehearse(
+        self,
+        mode_id: str,
+        minutes: int,
+        *,
+        source: str,
+        ladder: bool = False,
+        rungs: tuple[float, ...] | None = None,
+        rung_s: float | None = None,
+    ) -> dict:
         """Start the stepped rehearsal: one stepped run of `mode_id` lasting `minutes`, then the still look. Only an
         operator starts it (the ops route, behind `rehearsal_preview`'s confirm sentence). Returns
         {ok, message, rehearsal}; RehearsalRefused (a plain sentence) when it can't start."""
-        preview = self.rehearsal_preview(mode_id, minutes, ladder=ladder)
+        preview = self.rehearsal_preview(mode_id, minutes, ladder=ladder, rungs=rungs, rung_s=rung_s)
         minutes = preview["minutes"]
         # Before the rehearsal is set: with a try-on still set, compile_best would skip STEPPED for its scene (D66).
         cleared = self._clear_trial("a stepped rehearsal started")
@@ -1549,7 +1572,8 @@ class CanopyEngine:
             accounts=preview["accounts"],
             source=source,
             report_dir=self.deps.rehearsal_dir,
-            ladder=RATE_RUNGS if ladder else None,
+            ladder=tuple(preview["ladder"]) if ladder else None,
+            rung_s=preview["rung_s"] or RATE_RUNG_S,
         )
         # A hysteresis floor indexes the mode's own ladder; the rehearsal's has the stepped rung in front of it.
         rehearsal.saved_floor = self.floors.pop(mode_id, None)
