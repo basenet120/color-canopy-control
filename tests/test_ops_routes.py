@@ -260,7 +260,9 @@ def test_heads_flag_a_module_whose_readback_differs(app_client):
     module = next(m for m in body["modules"] if m["id"] == "r1c1")
     assert module["counts"]["mismatch"] == 30 and module["status"] == "needs_attention"
     head = next(h for h in body["heads"] if h["module"] == "r1c1")
-    assert head["match"] is False and head["reported"]["b"] > 200 and head["desired"]["b"] < 200
+    assert (
+        head["match"] is False and head["reported"]["r"] < 50 and head["desired"]["r"] > 150
+    )  # blue vs ivory
     assert body["counts"]["mismatch"] == 30 and body["counts"]["match"] == 240
 
 

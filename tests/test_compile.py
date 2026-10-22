@@ -240,7 +240,7 @@ def test_t2_refuses_until_the_hand_painted_slot_is_recorded():
     plan = compile_mode("garden-gathering", Tier.T2, _ctx(**_painted()))
     target = plan.modules["canopy-r0c0"]
     assert target.slot == "custom-2" and target.slot_hash == "b2" * 8 and target.slot_value is None
-    assert R.slot_select("custom-2")[0] in target.rows and R.brightness(75) in target.rows
+    assert R.slot_select("custom-2")[0] in target.rows and R.brightness(100) in target.rows
     # the registry's own recorded hashes are used when the context doesn't pass any
     entries = [
         m.model_copy(update={"slot_hashes": {"custom-2": "d4" * 8}, "slot_origin": {"custom-2": "app"}})
@@ -255,7 +255,7 @@ def test_t2_preview_shows_the_readback_only_when_it_matches_the_recorded_hash():
     real = R.slot_hash(readback["custom-2"])
     recorded = {m.id: {"custom-2": real} for m in MODULES}
     plan = compile_mode("garden-gathering", Tier.T2, _ctx(**_painted(recorded)))
-    assert plan.modules["canopy-r0c0"].preview[0] == {"r": 0, "g": 191, "b": 0}  # green profile slot × 75 %
+    assert plan.modules["canopy-r0c0"].preview[0] == {"r": 0, "g": 255, "b": 0}  # green profile slot × 100 %
     # a stale readback isn't shown as if it were the painted look: the preview falls back to the canvas design
     stale = compile_mode("garden-gathering", Tier.T2, _ctx(**_painted()))
     design = compile_mode("garden-gathering", Tier.T1, _ctx())

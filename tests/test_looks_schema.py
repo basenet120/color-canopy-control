@@ -603,7 +603,7 @@ def test_a_stepped_rung_needs_a_later_modules_rung_with_the_same_design():
         d["modes"]["coastal-tides"]["techniques"]["stepped"]["canvas"]["field"]["invert"] = True
 
     assert "stepped → canvas must be the modules sample's canvas" in _bad(other_canvas)
-    assert "brightness (50) must be the modules sample's (85)" in _bad(_stepped(brightness=50))
+    assert "brightness (50) must be the modules sample's (100)" in _bad(_stepped(brightness=50))
 
     def mean(d):
         _stepped()(d)
@@ -826,12 +826,8 @@ def test_breathe_parameters_have_their_bounds(over, field, message):
         ({**SHIMMER, "seed": None}, "mode: shimmer needs a seed"),
         ({**SHIMMER, "lag_steps": 0}, "mode: shimmer needs lag_steps of at least 1"),
         (
-            {**BREATHE, "brightness": 95, "brightness_swing": 8},
-            "brightness 95 ± brightness_swing 8 would run 87–103, outside 1–100",
-        ),
-        (
             {**BREATHE, "brightness": 5, "brightness_swing": 5},
-            "brightness 5 ± brightness_swing 5 would run 0–10, outside 1–100",
+            "brightness 5 − brightness_swing 5 would dip to 0, below 1",
         ),
     ],
 )
@@ -850,9 +846,9 @@ def test_a_breathe_and_a_shimmer_rung_load_with_their_parameters():
     )
     shimmer = _stepped_ok(_stepped(**SHIMMER))
     assert (shimmer.mode, shimmer.lag_steps, shimmer.seed) == ("shimmer", 2, 7)
-    # the swing may reach the ends of 1–100 exactly
+    # at the top a breath dips (compile.breath_level), so any swing that stays at or above 1 loads
     assert (
-        _stepped_ok(_stepped(**{**BREATHE, "brightness": 85, "brightness_swing": 15})).brightness_swing == 15
+        _stepped_ok(_stepped(**{**BREATHE, "brightness": 100, "brightness_swing": 15})).brightness_swing == 15
     )
 
 

@@ -415,16 +415,16 @@ def test_no_ripple_is_drawn_while_off_or_resting(kw):
 def test_the_plan_keeps_preview_at_the_look_and_colors_at_full_strength():
     plan = compile_mode("coastal-tides", Tier.T3, CTX)
     target = plan.modules["canopy-r0c0"]
-    # approved: (111, 181, 213) at full strength, (94, 154, 181) at the look's 85 % (the pinned fixture's colour,
-    # Design Lab PLAN §3.7; the 85 % as a strand shows it, render.head_colors)
+    # approved: the pinned fixture's colour at full strength (Design Lab PLAN §3.7); the preview is it at the look's
+    # brightness as a strand shows it (render.head_colors) — the same since every look is at 100 % (Oct 22)
     pins = json.loads((Path(__file__).parent / "fixtures_scene_frames.json").read_text())["_pins"]
     r, g, b = pins["coastal-tides"]["t3"]["r0c0"]
     assert target.colors == [{"r": r, "g": g, "b": b}] * 30
     level = pins["coastal-tides"]["brightness"]
     shown = [R.power(True), R.color_mode("color"), R.color_rgb(r, g, b), R.brightness(level)]
-    assert target.preview == render.head_colors(shown, 1) * 30 != target.colors  # for /ops and the visualizer
+    assert target.preview == render.head_colors(shown, 1) * 30 == target.colors  # for /ops and the visualizer
     t1 = compile_mode("golden-hour", Tier.T1, CTX).modules["canopy-r0c0"]
-    assert len(t1.colors) == len(t1.preview) == 30 and t1.colors != t1.preview
+    assert len(t1.colors) == len(t1.preview) == 30
 
 
 # ---- kiosk.preview -------------------------------------------------------------------------------------------------
