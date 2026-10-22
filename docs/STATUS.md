@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-22 morning (`claude/effect-sweep`: the bench's effect sweep for on-device animation, deployed `408f11a`; see its block). Before that 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,27 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## Packaged animations: the effect sweep, `claude/effect-sweep` → `main` (Oct 22 morning; no PR yet; deployed)
+Alon: is there a format that sends animations faster than a frame per step? Streaming is bounded by the cloud
+(≤ 1 write/s per device; frames confirmed 29 % at 2 s, 0 % at 1 s), so a denser encoding won't help; the only real
+speed-up is the controller animating on its own. Each slot's `color-sequence-v2` header carries `motionEffect`,
+`motionSpeed`, `brightnessEffect`, `brightnessSpeed`, `brightnessDepth`; only `motionEffect` 1 was ever seen moving
+(Oct 2). Other options looked at and set aside: firmware presets (moving, but not our colours — already T3), attr 300
+programs (whole-strand, named built-ins only), the raw Afero `attribute_write` (no rate gain, unverified), the rules
+engine (unverified), Conclave writes / BLE (not possible).
+- **New bench job `effect_sweep`:** a static frame, then codes `first_code`–`last_code` (≤ 32) of one field, each held
+  `hold_s` (2–20 s) with no writes, announced as a live step with its send time; leaves the slot before each code
+  (`reselect`, default on); a cloud mismatch is noted and the sweep goes on; the original slot is restored in a
+  `finally`. Nothing is enabled or named. `effect_probe` now shares its test picture.
+- **Verified:** `tests/test_effect_sweep.py` (7), the job list and writer-path registry; a 3-code run on the simulator
+  bench page (:8200). Full suite locally: 3675 passed, 1 failed (`test_soak` short soak — a stepped-scenario count
+  under a loaded Mac; it fails on its base too, on a different row; the soak runs no bench jobs).
+- **Deployed** Oct 22 09:53 at Alon's paste: the box runs `408f11a` (`claude/effect-sweep` = `e586a1a` + this),
+  rc 0, preflight ok, accounts reconnected. The same commit also sits on `local/deploy-47-48` as `a03c9ae`, after
+  another session's idle-reset commits `1d6cfb9`, `df64868` (not deployed).
+- **Needs hardware:** run the sweep on one visible module (`motionEffect` 1–12, speed 50, 8 s; then
+  `brightnessEffect`), filmed. If a code animates cleanly: start all nine on it together and watch the drift.
 
 ## PR stack to merge — in this order, merge commits, each base `main` (pushed Oct 21 night)
 Each branch contains every PR before it (it is a point on `local/deploy-47-48`, what the show box runs), so after
