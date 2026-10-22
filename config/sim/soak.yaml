@@ -26,28 +26,36 @@ ripple:
   ring_spread_p95_s: 2.0
   settle_extra_s: 5.0
 
-# The stepped scenario (D65, D75, D77), also soak-only and SIMULATED: a separate, shorter run of the show's own wiring
-# that runs the stepped rungs of `modes` (motion.stepped.live_enabled stays false, so live hardware doesn't). Since D77
-# every scene has its own rung (config/modes.yaml), which stays where the show has it: a guest's (kiosk) choice runs it
-# first and then settles onto its best still tier (D75; a painted scene's commissioned canvas). The candidates cover
-# every kind of motion: travel (Golden Hour and Garden Gathering, which then settle onto their canvas), a colour breath
-# (Coastal Tides and Lowcountry Calm), a shimmer (Garden Gathering #3) and a level-only breath (The Goodnight
-# Glow). A mode without a rung of its own (none since D77) would get a SIMULATED one just before `modules`, in the
-# soak's config copy only, from its own module-level design, with the `technique` fields below and copy that says what
-# changes. Golden Hour comes first, so a short run settles it onto its canvas; the idle mode is never the last choice
-# (interrupts fire at runs 4, 8 and 12). `runs` kiosk choices `hold_s` (+ up to 2 s, seeded) after the last run ends,
-# cycling the modes; every `interrupt_every`-th run is cut short by another mood chosen mid-run (never the idle look),
-# which starts its own run (every mood steps since D77). Then no input until the idle return. Targets (proposed, not in
-# the pinned acceptance.yaml until Alon signs them off): each step on all its modules before the next, one PUT per
-# changed module per step, <= motion.stepped's account_writes_per_min writes in any 60 s on the account, no governor
-# trip and no downgrade at 5% throttling, the still look after each run (counted by the tier it settled on), the idle
-# return idle_return_s to idle_return_s + `idle_return_slack_s` after the last choice, installing the idle look still
-# (no runner: motion.idle is off). Each step's landing spread (p95 <= `step_spread_p95_s`) is reported, not gating.
+# The stepped scenario (D65, D75, D77; per light since Oct 21), also soak-only and SIMULATED: a separate, shorter run
+# of the show's own wiring. In the simulator every look runs its per-light rung (`techniques.stepped.lights`): the
+# #1-#3 looks are still pictures (one frame, sent again whole one step later, then held), the #4-#6 and Light Show
+# looks move and LOOP in whole laps until the next choice, nine kits every 2 s (motion.lights' cap less the reserve).
+# `modes` covers every kind: still pictures (Golden Hour #1, which then settles onto its commissioned canvas, and
+# Coastal Tides #1, a fins-ring picture that holds its own frame) and moving looks (a ripple, a twinkle, a glow and a
+# breathe). `runs` kiosk choices cycle them. A moving run is watched for one whole lap plus `watch_extra_steps` steps
+# (past its loop seam: it must still be running) and then the next guest choice replaces it; a still run must end on
+# its own within its run (+ `still_end_slack_s`) and its frame hold on all nine until the next choice, `hold_s` (+ up
+# to 2 s, seeded) later. Every `interrupt_every`-th run, when it moves, is cut short by another mood chosen mid-run
+# (never the idle look or the idle scene). The moving looks sit at the interrupted places (runs 4, 8, 12).
+# Then no input: the scenario's config copy sets kiosk.idle_reset_s to `idle_reset_s` and kiosk.idle_return_s to
+# `idle_return_s` (the show's are an hour and a day), and the canopy must go to kiosk.idle_scene (Light Show #2)
+# `idle_reset_s` (+ `idle_slack_s`) after the last choice and run and loop there, then to kiosk.idle_mode
+# `idle_return_s` (+ slack) after that, still (no runner: motion.idle is off). `idle_reset_s: null` skips the idle
+# checks. A candidate without a rung of its own (none since D77) would get a SIMULATED module-level rung just before
+# `modules` from `technique`. Targets (proposed, not in the pinned acceptance.yaml until Alon signs them off): each
+# step on all its modules (per-light allowance), one PUT per changed module per step, <= the cap in force in any
+# 60 s on the account, no governor trip and no downgrade at 5% throttling, steps neither failed nor skipped, the
+# still pictures end and hold, the moving looks loop, the idle reset and the idle hold. Each step's landing spread
+# (p95 <= `step_spread_p95_s`) is reported, not gating.
 stepped:
-  modes: [golden-hour, coastal-tides, lowcountry-calm, garden-gathering, garden-gathering-3, goodnight-glow]
+  modes: [golden-hour, coastal-tides-4, coastal-tides, garden-gathering-4, light-show-3, golden-hour-5]
   technique: {direction: forward, steps_per_cycle: 6, step_s: 6, run_s: 90}
   runs: 12
   hold_s: 20
+  watch_extra_steps: 3
   interrupt_every: 4
+  still_end_slack_s: 2
   step_spread_p95_s: 2.0
-  idle_return_slack_s: 10
+  idle_reset_s: 240
+  idle_return_s: 600
+  idle_slack_s: 10

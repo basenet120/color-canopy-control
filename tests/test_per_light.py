@@ -305,3 +305,25 @@ def test_a_still_picture_is_sent_again_whole_one_step_after_it_lands():
 
     lights, before, once, after = run_virtual(main)
     assert lights and before == 0 and once == 1 and after == 1
+
+
+def test_after_an_hour_untouched_the_idle_scene_runs_and_loops():
+    # Oct 21 (Alon): a pick holds an hour untouched, then Light Show #2 — moving, not its still module-level look
+    from tests.test_stepped_rehearsal import show
+
+    async def main():
+        w = await show()
+        kiosk = w.engine.deps.settings.kiosk
+        kiosk.idle_reset_s, kiosk.idle_return_s = 60.0, 600.0  # the hour and the day, shortened
+        await w.engine.request_mode("coastal-tides-4", source="kiosk")
+        await w.run_for(70)
+        plan, runner = w.engine.current_plan(), w.engine.runner
+        first = (plan.mode_id, str(plan.tier), runner is not None and runner.running and runner.loop)
+        await w.run_for(runner.run_len_s * 1.3)
+        later = (w.engine.current_plan().mode_id, w.engine.runner is runner and runner.running)
+        await w.close()
+        return first, later
+
+    first, later = run_virtual(main)
+    assert first == ("light-show-2", "stepped", True)
+    assert later == ("light-show-2", True)  # past its run's end, still stepping
