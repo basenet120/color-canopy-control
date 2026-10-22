@@ -952,7 +952,14 @@ class CanopyEngine:
         if step is not None:  # a stepped look's step: its breath keeps its swing around a guest's level (D75)
             return self._guest_rows(list(step), mt, swing=runner.swing(device_id))
         rows = list(mt.rows)
-        if mt.slot_value is not None and mt.slot and self._streamed.get(device_id) == mt.slot:
+        if (
+            mt.slot_value is not None
+            and mt.slot
+            and self._streamed.get(device_id) == mt.slot
+            and not any(
+                r.key == (R.FRAME_CLASS, mt.slot) for r in rows
+            )  # a per-light hold carries it already
+        ):
             # D80: a per-light run overwrote this canvas's slot, so selecting it would show the run's frame: the
             # canvas goes back into its slot in the same PUT (frame + select + mode + power, 04)
             rows.append(R.slot_write(mt.slot, mt.slot_value))

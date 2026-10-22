@@ -380,7 +380,11 @@ class ProgramRunner:
             else:
                 self._send_folded()  # a guest's level folded into this step still goes out now (B-R3-1)
             return
-        if self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})"):
+        # Oct 21 (venue): a still per-light picture (a painting, a #1–#3 look) is sent again whole one step after it
+        # was first sent — Hubspace often held a new frame for a panel already showing one until the next write
+        # reached it, so a painting stuck until another command pushed it through
+        force = n == 1 and self.lights and not self._moves()
+        if self._send(f"step {n} ({n % self.cycle + 1} of {self.cycle})", force=force):
             self.held_steps = 0
         # A step with nothing to write (its rows are what the canopy shows: in a breath, the step after a held one
         # that comes back to the same level) neither holds nor resets the count. Otherwise a breath whose every
@@ -433,10 +437,10 @@ class ProgramRunner:
                 }
         return None
 
-    def _send(self, what: str) -> list[str]:
+    def _send(self, what: str, *, force: bool = False) -> list[str]:
         engine = self.engine
         engine._early_counts.clear()  # this step's silent drops get their early re-sends too
-        wanted = self._wanted()
+        wanted = list(self.plan.modules) if force else self._wanted()
         self.deferred.clear()
         sent = engine.send(wanted, source="program", label=f"{what}: {self.plan.mode_id}") if wanted else []
         if sent:

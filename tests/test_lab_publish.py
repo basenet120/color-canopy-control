@@ -437,7 +437,9 @@ def test_show_after_publishing_is_one_burst_of_that_scene(no_threads):
     first, status, body, writes, mode = run_virtual(main)
     assert first["show_offer"] == TIDES and first["cost"].startswith("sends 9 writes now")
     assert status == 200 and mode == TIDES
-    assert len(look_writes(writes)) == 9 and body["report"]["sent"] == 9
+    # nine now; Coastal Tides #1 is a still per-light picture, sent again whole one step later (Oct 21: Hubspace held
+    # a new frame on a panel already showing one until the next write reached it)
+    assert len(look_writes(writes)) == 18 and body["report"]["sent"] == 9
 
 
 # ---- the T1 hold (sim: every module recorded) ------------------------------------------------------------------------
