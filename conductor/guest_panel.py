@@ -466,13 +466,32 @@ class EngineTarget:
             raise GuestRefused(503, K.RESTING, why=current.message or "the canopy is resting")
         return engine, current
 
+    async def paint(self, painting: Any) -> None:
+        """Show the guest's painting (the Paint tab, Oct 21) as the look `PAINT_ID`: the same refusals as a scene.
+        A refused painting leaves the one before it in force (a later re-pick of a painting showing never shows a
+        painting that was turned away)."""
+        from conductor.looks.paint import PAINT_ID
+        from conductor.show import PAINTING_KEY
+
+        extras = self.services.extras
+        before = extras.get(PAINTING_KEY)
+        extras[PAINTING_KEY] = painting
+        try:
+            await self._choose(PAINT_ID)
+        except BaseException:
+            extras[PAINTING_KEY] = before
+            raise
+
     async def scene(self, scene: Scene) -> None:
+        await self._choose(scene.id)
+
+    async def _choose(self, mode_id: str) -> None:
         engine, current = self._ready_engine()
         wait = K._remaining(current.cooldown_until, self.services.clock.now())
         if wait > 0:
             raise GuestRefused(*K.cooldown_refusal(wait), why="inside the engine's cooldown")
         try:
-            new = await engine.request_mode(scene.id, source="kiosk")
+            new = await engine.request_mode(mode_id, source="kiosk")
         except ModeRefused as exc:
             status, message, extra = K.refusal_for(exc)
             if status == 404:  # the engine doesn't know this scene (yet): a calm 409
@@ -481,7 +500,7 @@ class EngineTarget:
         except (PlanError, LookupError) as exc:
             raise GuestRefused(409, SCENE_UNAVAILABLE, why=f"engine: {exc}") from None
         except Exception:
-            log.exception("The canopy engine failed a guest panel request for %s.", scene.id)
+            log.exception("The canopy engine failed a guest panel request for %s.", mode_id)
             raise GuestRefused(503, K.RESTING, why="the engine raised") from None
         if isinstance(new, CanopyState) and new.refused:
             status, message, extra = K.refusal_for_state(engine, new, self.services.clock.now())

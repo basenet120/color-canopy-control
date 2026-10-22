@@ -621,3 +621,50 @@ def test_a_scene_tapped_during_the_stepped_rehearsal_says_the_canopy_is_being_te
         assert 0 < r.json()["retry_after_s"] <= 60
     finally:
         assert c.post(f"{route}/stop", json={}).status_code == 200
+
+
+# ---- the Paint tab (Oct 21) -----------------------------------------------------------------------------------------
+def _painting(canopy: dict, colour_at) -> dict:
+    return {
+        "kind": "lights",
+        "modules": [
+            {"pos": m["pos"], "colors": [colour_at(m["pos"], k) for k in range(len(m["heads"]))]}
+            for m in canopy["modules"]
+        ],
+    }
+
+
+def test_a_painting_goes_to_the_canopy_light_by_light_and_shows_on_now_showing(app_client_show):
+    from conductor.looks.paint import PAINT_ID
+
+    c = app_client_show
+    engine = showing(c)
+    canopy = _panel(c)["canopy"]
+    body = _painting(canopy, lambda pos, k: "#FF0000" if pos == "r1c1" and k % 2 == 0 else None)
+    r = c.post("/api/kiosk/paint", json=body)
+    assert r.status_code == 200, r.text
+    plan = engine.current_plan()
+    assert plan.mode_id == PAINT_ID and plan.label == "Your painting" and plan.program.lights
+    lit = {m["pos"]: m for m in _lit_settled(c)["state"]["lit"]["modules"]}
+    centre = lit["r1c1"]["colors"]
+    assert centre[0::2] == ["#FF0000"] * 15  # every painted light red, as painted
+    assert all(m["color"] in (None, "#000000") or m["colors"] for p, m in lit.items() if p != "r1c1")
+    # a malformed painting is refused calmly and changes nothing
+    bad = {"kind": "lights", "modules": [{"pos": "r1c1", "colors": ["#FF0000"]}]}
+    r = c.post("/api/kiosk/paint", json=bad)
+    assert r.status_code == 422 and "reload" in r.json()["detail"]
+    nothing = _painting(canopy, lambda pos, k: None)
+    assert c.post("/api/kiosk/paint", json=nothing).status_code == 422
+    assert engine.current_plan() is plan or engine.current_plan().mode_id == PAINT_ID
+
+
+def test_one_colour_and_panel_by_panel_paintings_are_the_same_request(app_client_show):
+    c = app_client_show
+    engine = showing(c)
+    canopy = _panel(c)["canopy"]
+    whole = _painting(canopy, lambda pos, k: "#00FF00") | {"kind": "whole"}
+    assert c.post("/api/kiosk/paint", json=whole).status_code == 200
+    _lit_settled(c)
+    lit = {m["pos"]: m for m in _panel(c)["state"]["lit"]["modules"]}
+    assert all(m["color"] == "#00FF00" for m in lit.values()), lit
+    assert engine.current_plan().program.lights
