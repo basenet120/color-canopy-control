@@ -664,20 +664,46 @@ class Reconciler:
 
     async def _idle_reset(self, now: float, *, recovering: bool = False) -> None:
         """No guest input for `kiosk.idle_reset_s` while a guest setting is in force: clear the guest's
-        brightness/power (and show `idle_scene`). Nothing else — a mood chosen since (by ops or anyone) already
-        cleared them, so it is never undone. `recovering`: called just before an outage ends, so the change goes
-        out with the recovery burst instead of a second burst right after it."""
+        brightness/power (and show `idle_scene`). With `idle_scene` set, also when no setting is in force: nothing
+        chosen by anyone for `idle_reset_s` (Oct 21, Alon: a pick holds an hour untouched, then Light Show #2 — before,
+        a plain pick never reached it, since choosing a mood clears the guest settings). Never during a stepped
+        rehearsal. `recovering`: called just before an outage ends, so the change goes out with the recovery burst
+        instead of a second burst right after it."""
         engine = self.engine
         kiosk = engine.deps.settings.kiosk
         if engine.paused or engine.commissioning or engine.stopped:
             return
         if engine.outage is not None and not recovering:
             return
-        if not engine.guest_overrides_active or now - engine.last_guest_input_mono < kiosk.idle_reset_s:
-            return
-        engine.last_guest_input_mono = now  # one attempt per idle period, even if it's refused
         scene = kiosk.idle_scene
         plan = engine.current_plan()
+        if not engine.guest_overrides_active:
+            quiet = now - max(engine.last_guest_input_mono, engine.last_change_mono)
+            # a look someone other than a guest chose since the last guest input (ops) stays: never undone — the
+            # start-up look and the idle hold's own mood excepted; and when the idle hold comes first it owns the
+            # canopy, so the two never take turns
+            staff_chose = engine.last_change_mono > engine.last_guest_input_mono and (
+                plan is None or plan.mode_id != kiosk.idle_mode
+            )
+            if (
+                scene is None
+                or (plan is not None and plan.mode_id == scene)
+                or getattr(engine, "rehearsal_mode", None) is not None
+                or kiosk.idle_reset_s >= kiosk.idle_return_s
+                or staff_chose
+                or quiet < kiosk.idle_reset_s
+            ):
+                return
+            engine.last_guest_input_mono = now  # one attempt per idle period, even if it's refused
+            state = await engine.request_mode(scene, source="idle")
+            if state.refused:
+                engine.telemetry.record(
+                    "alert", level="warn", message=f"Idle reset to {scene} refused: {state.message}"
+                )
+            return
+        if now - engine.last_guest_input_mono < kiosk.idle_reset_s:
+            return
+        engine.last_guest_input_mono = now  # one attempt per idle period, even if it's refused
         if scene is not None and (plan is None or plan.mode_id != scene):  # choosing a mood clears them too
             state = await engine.request_mode(scene, source="idle")
             if not state.refused:
