@@ -354,6 +354,30 @@ def test_idle_reset_can_return_to_the_idle_scene_and_waits_while_paused():
     assert shown is not None
 
 
+def test_a_plain_pick_left_untouched_goes_to_the_idle_scene_after_idle_reset_s():
+    # Oct 21 (Alon): a pick holds an hour untouched, then Light Show #2 — a plain pick clears the guest settings, so
+    # the reset used to wait for a dimming or an off that never came, and the pick stayed up for a day
+    async def main():
+        w = make_world(
+            settings=settings_with(
+                kiosk={"idle_return_s": 100_000, "idle_reset_s": 20, "idle_scene": "lowcountry-calm"}
+            )
+        )
+        await w.engine.start(apply_initial=False)
+        await settled_on(w, "holiday", source="kiosk")
+        await w.run_for(10)
+        held = w.engine.state().mode
+        await w.run_for(15)  # 25 s untouched
+        after = w.engine.state().mode
+        await w.run_for(60)  # already on the idle scene: nothing more
+        stays = w.engine.state().mode
+        await w.close()
+        return held, after, stays
+
+    held, after, stays = run_virtual(main)
+    assert held == "holiday" and after == "lowcountry-calm" and stays == "lowcountry-calm"
+
+
 def test_guest_input_restarts_the_idle_hold_and_the_idle_hold_clears_the_guest_settings():
     async def main():
         w = make_world(settings=settings_with(kiosk={"idle_return_s": 30, "idle_reset_s": 100_000}))
