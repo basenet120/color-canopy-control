@@ -930,7 +930,11 @@ def test_f10_calm_never_claims_2700_k_when_the_device_floor_is_higher():
 def test_f11_the_soak_runs_the_shows_wiring_and_a_motion_plan(tmp_path):
     from conductor import soak
 
-    cfg = soak.SoakConfig(hours=1 / 3, changes=8, seed=5, report_path=tmp_path / "r.md")
+    # Oct 22: an hour and 30 changes, so the latency row's p95 is a p95. Over 20 minutes and 8 changes (6–8 timed) it
+    # was the slowest change, and one change caught by the pinned 429s or a silent drop on one of nine modules (5–7 s)
+    # failed it for about one seed in four — any config edit moves the seeded path. Measured at 1 h / 30 changes over
+    # seeds 0–11: p95 3.2–4.6 s (per-light and module-level changes alike; docs/STATUS.md)
+    cfg = soak.SoakConfig(hours=1, changes=30, seed=5, report_path=tmp_path / "r.md")
     results, verdicts, meta = soak.run_soak(cfg)
     # rows the soak reports without gating on (the ripple's and stepped looks' spread, D64/D65) never fail it
     failed = [v["name"] for v in verdicts if not v["pass"] and v.get("gating", True)]

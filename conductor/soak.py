@@ -35,32 +35,40 @@ redefine and the show runs one burst until then), the time until the last ring i
 it first (D75), so the ripple's config copy strips every stepped rung (`_strip_stepped`): each mood lands as its still
 look, ring by ring, the way live hardware shows it until Gate R and `motion.stepped.live_enabled`.
 
-**The stepped scenario (D65, D75, D77).** Since D77 every scene has a stepped rung in `config/modes.yaml` (the
-simulator steps them; `motion.stepped.live_enabled` stays false, so live hardware doesn't). Since D75 a guest's
-(kiosk) choice runs a mode's rung first and then settles onto its best still tier (a painted scene's commissioned
-canvas), so the main run steps whichever mood a guest chooses. A third, separate run (`stepped:` in
-`config/sim/soak.yaml`, same pinned conditions) runs six candidates that cover every kind of motion (travel, a colour
-breath, a shimmer, a level-only breath): a mode's own rung stays where modes.yaml puts it (design, cadence and copy as
-the show has them), and a mode without one (none since D77) would get a SIMULATED rung just before `modules`, made
-from its module-level design (so the still look it holds is that rung), with the scenario's `technique` and any
-per-mode `simulated:` overrides, and copy that says what changes. It makes seeded kiosk runs of them, some cut short
-by another mood chosen mid-run (never the idle look, so the idle return stays measurable), which starts its own run
-since every mood steps (D77), then leaves the canopy alone until the idle return. Each run's end is counted by the
-tier it settled on (`settled`; a settle goes out with the source `settle`, so it is never grouped with a run's steps),
-and the idle return must install the idle look still: no run, and no runner at all (motion.idle is off).
-Correctness is program-aware (`_wanted`): while a run shows a step, a module is right when its lights show that
-step. Measured per step from the lights (every program command, grouped by step):
-each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's) and
-send → last module; steps superseded (a module sent the next step before it showed this one — counted apart when a
-pinned fault hit that module's step write, 429 on every attempt or a silent drop, which the next step carries by
-design), failed, skipped by a late schedule or cut by a newer mood; the program commands per module per step (exactly one, and none missing for a
-module whose rows changed); the most program PUTs on one account in any 60 s and the most writes of any kind there
-(both ≤ `account_writes_per_min`: the runner paces its steps at the cap less `budget_reserve`, the room retries,
-re-sends and a mood chosen mid-run need, and holds back a step that would leave less than a guest's burst of that
-room, D75); governor trips and
-tier downgrades at 5% throttling (0); the still look after each run; and the idle return after the last choice
-(`idle_return_s` to `idle_return_s` + slack — a run never moves the idle clock). Its targets are proposals in
-soak.yaml: `config/sim/acceptance.yaml` is pinned and gains them only with Alon's sign-off.
+**The stepped scenario (D65, D75, D77; per light since Oct 21).** Every look has a stepped rung in
+`config/modes.yaml` and in the simulator every look runs its per-light rung (`techniques.stepped.lights`, D80): the
+#1–#3 looks are still pictures (one frame, sent again whole one step later — the venue's stuck-painting fix — then held,
+or settled onto the mode's canvas or slot, D75), and the #4–#6 and Light Show looks move and LOOP in whole laps until
+the next choice (`ProgramRunner.loop`), nine kits every 2 s (motion.lights' cap less the reserve). So the main run
+already runs whichever look a guest chooses. A third, separate run (`stepped:` in `config/sim/soak.yaml`, same pinned
+conditions) cycles candidates covering every kind — still pictures (Golden Hour #1, which settles onto its canvas, and
+Coastal Tides #1, a fins-ring picture) and moving looks (a ripple, a twinkle, a glow, a breathe) — as seeded kiosk
+choices. A mode without a rung of its own (none since D77) would get a SIMULATED module-level one just before
+`modules`, made from its module-level design, with the scenario's `technique` and any per-mode `simulated:`
+overrides, and copy that says what changes. A moving run never ends on its own, so it is watched for one whole lap
+plus `watch_extra_steps` steps — past its loop seam, where it must still be running in its next lap — and then the
+next guest choice replaces it; every `interrupt_every`-th run, when it moves, is cut short mid-run by another mood
+(never the idle look or the idle scene). A still run must end on its own within its run (+ `still_end_slack_s`), its
+still look show on all nine, and still show when the next choice comes `hold_s` later. A refused choice (the guest
+pacing's back-off while Hubspace throttles, D72) is tried again after the panel's countdown, as a guest would.
+**The idle checks:** the show waits an hour (`kiosk.idle_reset_s`) and a day (`idle_return_s`), so the scenario's
+config copy sets them to `idle_reset_s` / `idle_return_s` (minutes; the reset shorter than any watch is long, so it
+never fires mid-scenario). After the last choice the canopy must go to `kiosk.idle_scene` (Light Show #2) that long
+after it (+ `idle_slack_s`), running its rung and looping (Oct 22: a plain pick untouched goes there too, and the
+idle scene moves), and `idle_return_s` after that to `kiosk.idle_mode`, installed still (no run and no runner:
+motion.idle is off). Correctness is program-aware (`_wanted`; a per-light run's module is right showing any frame of
+its run, D81). Measured per step from the lights (every program command, grouped by step and, for a looping run, by
+lap): each step's landing spread (first to last of its modules showing it — reported, not gating, like the ripple's)
+and send → last module; steps superseded (a module sent the next step before it showed this one: at most
+`STEPS_SUPERSEDED_LIGHTS_MAX_SHARE` of a per-light run's steps, `STEPS_SUPERSEDED_MAX_SHARE` of a module-level run's;
+counted apart when a pinned fault hit that module's step write, 429 on every attempt or a silent drop, which the next
+step carries by design), failed, skipped by a late schedule or cut by a newer mood; the program commands per module
+per step (exactly one, and none missing for a module whose rows changed); the most program PUTs on one account in
+any 60 s and the most writes of any kind there (both ≤ the cap in force: motion.lights' for a per-light run, the
+runner paces its steps at the cap less `budget_reserve` and holds back a step that would leave less than a guest's
+burst, D75/D81); governor trips and tier downgrades at 5% throttling (0); the still pictures' end and hold; the
+moving looks' loop; the idle reset and the idle hold. Its targets are proposals in soak.yaml:
+`config/sim/acceptance.yaml` is pinned and gains them only with Alon's sign-off.
 
 Writes `docs/reports/sim-acceptance.md` and exits non-zero when any target fails.
 
@@ -370,12 +378,22 @@ def _soak_config_dir(
     """A copy of config/ with the soak-only SIMULATED motion code applied (modes.yaml + conductor.yaml), with
     `ripple_stagger_s` as kiosk.ripple_stagger_s when given (the ripple scenario, every stepped rung stripped:
     `_strip_stepped`), and with `stepped` modes given a stepped rung (the stepped scenario, `_apply_stepped`: their own
-    in place, else a SIMULATED one just before `modules`)."""
+    in place, else a SIMULATED one just before `modules`) and its idle checks' kiosk.idle_reset_s / idle_return_s."""
     root = Path(tempfile.mkdtemp(prefix="canopy-soak-config-"))
     config = root / "config"
     shutil.copytree(CONFIG_DIR, config)
     if stepped:
         _apply_stepped(config, stepped)
+        if stepped.get("idle_reset_s"):
+            # the idle checks: an idle reset and an idle hold within minutes, not the show's hour and day
+            settings_path = config / "conductor.yaml"
+            settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+            kiosk = settings.setdefault("kiosk", {})
+            kiosk["idle_reset_s"] = float(stepped["idle_reset_s"])
+            kiosk["idle_return_s"] = float(stepped["idle_return_s"])
+            settings_path.write_text(
+                yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8"
+            )
     if ripple_stagger_s is not None:
         _strip_stepped(config)
         settings_path = config / "conductor.yaml"
@@ -429,16 +447,16 @@ def load_soak_ripple(path: Path = SOAK_SETTINGS) -> dict:
 
 
 STEPPED_DEFAULTS = {
-    # every kind of motion, each on its own rung (D77): travel (Golden Hour, Garden Gathering), a colour breath (Coastal
-    # Tides, Lowcountry Calm), a shimmer (Garden Gathering #3), a level-only breath (The Goodnight Glow). Golden Hour
-    # first, so the short soak's first run settles onto its canvas (D75); the idle look never last
+    # every kind of per-light look (Oct 21): still pictures (Golden Hour #1, which settles onto its canvas, and Coastal
+    # Tides #1, a fins-ring picture holding its own frame) and moving looks that loop (a ripple, a twinkle, a glow, a
+    # breathe), the moving ones where the interrupts fall (runs 4, 8, 12); never the idle look or the idle scene
     "modes": [
         "golden-hour",
+        "coastal-tides-4",
         "coastal-tides",
-        "lowcountry-calm",
-        "garden-gathering",
-        "garden-gathering-3",
-        "goodnight-glow",
+        "garden-gathering-4",
+        "light-show-3",
+        "golden-hour-5",
     ],
     # a SIMULATED rung's cadence, for a candidate without a rung of its own (none since D77)
     "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0},
@@ -447,9 +465,15 @@ STEPPED_DEFAULTS = {
     "simulated": {},
     "runs": 12,
     "hold_s": 20.0,
+    "watch_extra_steps": 3,  # a moving run is watched one whole lap plus this many steps, then replaced
     "interrupt_every": 4,
+    "still_end_slack_s": 2.0,  # a still picture's run ends within its run plus this
     "step_spread_p95_s": 2.0,
-    "idle_return_slack_s": 10.0,
+    # the scenario's kiosk.idle_reset_s / idle_return_s (its config copy only; the show's are 3600 / 86400). None: no
+    # idle checks
+    "idle_reset_s": 240.0,
+    "idle_return_s": 600.0,
+    "idle_slack_s": 10.0,
 }
 
 
@@ -749,6 +773,9 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
 
     async def watch_change(plan: ModePlan, source: str, started: float, fault: str | None) -> None:
         while clock.monotonic() - started < WATCH_LIMIT_S:
+            # a fault window that opens before the change settles makes it a faulted change too (the schedule keeps
+            # changes clear of the windows and the minutes after them, not of the moments just before one)
+            fault = fault or in_fault(clock.monotonic())
             if engine.current_plan() is not plan:
                 results["abandoned"] += 1  # superseded before it settled (button mash)
                 return
@@ -757,13 +784,24 @@ async def _soak(cfg: SoakConfig, compiler: Any) -> dict:
                     {
                         "source": source,
                         "mode": plan.mode_id,
+                        "tier": str(plan.tier),
+                        "lights": _lights_plan(plan),
                         "seconds": clock.monotonic() - started,
                         "fault": fault,
                     }
                 )
                 return
             await clock.sleep(POLL_S)
-        results["changes"].append({"source": source, "mode": plan.mode_id, "seconds": None, "fault": fault})
+        results["changes"].append(
+            {
+                "source": source,
+                "mode": plan.mode_id,
+                "tier": str(plan.tier),
+                "lights": _lights_plan(plan),
+                "seconds": None,
+                "fault": fault,
+            }
+        )
 
     def on_event(event: dict) -> None:
         if event.get("kind") != "mode":
@@ -1090,10 +1128,11 @@ async def _ripple_soak(cfg: SoakConfig) -> dict:
 
 
 async def _stepped_soak(cfg: SoakConfig) -> dict:
-    """The stepped scenario (D65, D75): the show's own wiring with a stepped rung on every one of `stepped["modes"]`
-    (their own where the show has it, or a SIMULATED one just before `modules`), kiosk runs of them under the pinned
-    conditions, each step measured from the lights and each run's end by the tier it settled on (see the module
-    docstring)."""
+    """The stepped scenario (D65, D75, D77; per light since Oct 21): the show's own wiring with a stepped rung on every
+    one of `stepped["modes"]` (their own where the show has it, or a SIMULATED one just before `modules`), kiosk runs
+    of them under the pinned conditions — a moving run watched past its loop seam and then replaced, a still picture
+    run to its end and its hold checked — each step measured from the lights, then the idle reset and the idle hold
+    (see the module docstring)."""
     st = cfg.stepped
     world = await _build_show(cfg, stepped=st)
     engine, clock, sim = world.engine, world.clock, world.sim
@@ -1101,11 +1140,13 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         await clock.sleep(1.0)
     settings = engine.deps.settings
     stepped_settings = settings.motion.stepped
+    kiosk = settings.kiosk
     by_address = {a: d for d, a in world.addresses.items()}
     rng = random.Random(f"{cfg.seed}:stepped")
     stepped_modes = list(st["modes"])
-    # the moods a guest cuts a run short with: every other one but the idle look (each runs its own rung since D77)
-    others = [m for m in world.wiring.mode_ids() if m not in stepped_modes and m != settings.kiosk.idle_mode]
+    idle_looks = {kiosk.idle_mode, kiosk.idle_scene} - {None}
+    # the moods a guest cuts a run short with: every other one but the idle look and the idle scene
+    others = [m for m in world.wiring.mode_ids() if m not in stepped_modes and m not in idle_looks]
     from conductor.looks import load_modes
 
     show_modes = load_modes(CONFIG_DIR)  # the show's own modes.yaml: which candidates bring their own rung
@@ -1118,6 +1159,8 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
                     k: getattr(world.wiring.modes_file.mode(m).techniques.stepped, k)
                     for k in ("steps_per_cycle", "step_s", "run_s", "mode", "brightness_swing", "lag_steps")
                 },
+                # the per-light rung the simulator runs (Oct 21): its effect and cadence
+                "lights": _lights_words(world.wiring.modes_file.mode(m).techniques.stepped.lights),
             }
             for m in stepped_modes
         },
@@ -1130,13 +1173,18 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         if world.services is not None
         else stepped_settings.account_writes_per_min,
         "requests": 0,
-        "refused": 0,
+        "refused": 0,  # choices still refused after the guest tried again (`choose`)
+        "retried": 0,  # a refused choice tried again after the panel's countdown
         "runs": 0,  # accepted choices that started a run
-        "not_stepping": 0,  # accepted choices that installed a stepped look that held still, or another tier
+        "not_stepping": 0,  # accepted choices that installed a look that never ran (another tier, or a cool-off)
         "tiers": {},
-        "ended": {},  # why each run stopped: "the run is over", "replaced" (cut short by a newer mood), …
-        "interrupted": 0,
+        "kinds": {},  # per run: "moving" (it loops, Oct 21) or "still" (a #1-#3 picture)
+        "ended": {},  # why each run stopped: "the run is over" (a still picture), "replaced" (the next choice), …
+        "interrupted": 0,  # moving runs cut short by another mood chosen mid-run
+        "watched": 0,  # moving runs watched for a whole lap plus watch_extra_steps (not interrupted)
+        "looped": 0,  # ... still running at the end of it, in a later lap (the runner moved its t0 on)
         "step_s": [],  # the runner's step per run
+        "laps_s": [],  # per moving run: the length of one lap (its whole loop, from t0 to the seam)
         "step_spreads": [],  # per landed step: first to last of its modules showing it (s)
         "step_landings": [],  # per landed step: its send → the last of its modules showing it (s)
         "steps_landed": 0,
@@ -1153,13 +1201,19 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
         "steps_skipped": 0,  # steps the runner's schedule skipped (it came due late)
         "puts_per_module_step": [],  # per (step, module sent): the program commands that step sent it
         "missing": 0,  # modules whose rows changed from the step before but weren't sent
-        "holds": [],  # per finished run: the still look sent → every module showing it (s)
+        "still_ends": [],  # per still run: its end after the choice, less its run (s; ≤ still_end_slack_s)
+        "still_unended": 0,  # still runs that never ended on their own
+        "holds": [],  # per still run that ended: its still look (hold or settle) sent → every module showing it (s)
         "holds_unsettled": 0,
-        "settled": {},  # D75: per finished run, the tier its look settled on (a canvas or slot, else its own hold)
+        "holds_lost": 0,  # a still look shown on all nine that no longer was when the next choice came
+        "settled": {},  # D75: per still run, the tier its look settled on (a canvas or slot, else its own hold)
         "max_account_writes_60s": 0,  # every write the simulator received on one account, any 60 s
-        "max_account_program_puts_60s": 0,  # the stepped program's commands on one account, by send time, any 60 s
-        "idle_return": None,  # {after_s, mode, settled_s, ran}
-        "idle_return_s": settings.kiosk.idle_return_s,
+        "max_account_program_puts_60s": 0,  # the program's commands on one account, by send time, any 60 s
+        "idle_reset": None,  # {after_s, mode, tier, ran, looped, settled_s}
+        "idle_return": None,  # {after_s (after the idle reset), mode, tier, settled_s, ran, runner}
+        "idle_reset_s": kiosk.idle_reset_s,
+        "idle_return_s": kiosk.idle_return_s,
+        "idle_scene": kiosk.idle_scene,
     }
     # every write the simulator receives, per account: the sliding 60 s maximum
     writes: dict[str, list[float]] = {}
@@ -1171,24 +1225,37 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
 
     sim.write = counted_write  # type: ignore[method-assign]
     program_puts: dict[str, list[float]] = {}  # account → when each program command was sent
-    # every program command, grouped by step: (runner, label) → the step's record
-    groups: dict[tuple[int, str], dict] = {}
+    # every program command, grouped by step: (runner, its lap's t0, label) → the step's record. A looping run reuses
+    # its step labels every lap, so the lap is part of the key
+    groups: dict[tuple[int, float, str], dict] = {}
     latest: dict[str, dict] = {}  # device id → the group that last sent it a program command
     # id(program command) → (the command, its group, device id)
     submitted: dict[int, tuple[Any, dict, str]] = {}
     superseded: list[dict] = []  # the groups a later step overtook, classified once every result is in
     watchers: set[asyncio.Task] = set()
 
+    seen: list[Any] = []  # every runner a program command came from, newest last
+
+    def runner_of(label: str) -> Any:
+        """The runner that sent a program command labelled `label` ("step 3 (4 of 12): <mode>"). A step's burst is
+        submitted a moment after the runner sends it, so a mood chosen in that moment is already the engine's runner:
+        the label's mode says which run it was."""
+        current = engine.runner
+        if current is not None and (not seen or seen[-1] is not current):
+            seen.append(current)
+        mode_id = label.rsplit(": ", 1)[-1]
+        return next((r for r in reversed(seen) if r.plan.mode_id == mode_id), current)
+
     def on_submit(cmd: Any) -> None:
         if cmd.source != "program":
             return
-        runner, device_id = engine.runner, by_address.get(cmd.device_id, cmd.device_id)
-        key = (id(runner), cmd.label)
+        runner, device_id = runner_of(cmd.label), by_address.get(cmd.device_id, cmd.device_id)
+        key = (id(runner), getattr(runner, "t0", 0.0), cmd.label)
         group = groups.get(key)
         if group is None:
             group = groups[key] = {
                 "t": clock.monotonic(),
-                "plan": engine.current_plan(),
+                "plan": runner.plan if runner is not None else engine.current_plan(),
                 "runner": runner,
                 "label": cmd.label,
                 "rows": {},
@@ -1266,88 +1333,135 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
                 return
             await clock.sleep(POLL_S)
 
+    async def settled_s(plan: ModePlan) -> float | None:
+        """From now until every module shows `plan` (None: not within WATCH_LIMIT_S, or another look came)."""
+        since = clock.monotonic()
+        while clock.monotonic() - since < WATCH_LIMIT_S and engine.current_plan() is plan:
+            if _all_correct(world, plan):
+                return clock.monotonic() - since
+            await clock.sleep(POLL_S)
+        return None
+
+    async def choose(mode_id: str) -> Any:
+        """A guest's choice. Refused (the guest pacing's back-off while Hubspace throttles, D72), the guest tries
+        again when the panel says to, a few times."""
+        state = await engine.request_mode(mode_id, source="kiosk")
+        for _ in range(5):
+            if not state.refused or state.retry_after_s is None:
+                break
+            out["retried"] += 1
+            await clock.sleep(state.retry_after_s)
+            state = await engine.request_mode(mode_id, source="kiosk")
+        return state
+
     tier_downs = len([t for t in engine.stats["tier_changes"] if t["direction"] == "down"])
     trips = engine.stats.get("governor_trips", 0)
+    runners: list[Any] = []  # every run the scenario's choices started (their end is counted last)
+    every = int(st.get("interrupt_every") or 0)
+    extra = int(st.get("watch_extra_steps") or 0)
+    held: ModePlan | None = (
+        None  # a still look shown on all nine, to look at again when the next choice comes
+    )
+    watched_before = False  # the last run was a watched moving run: the next choice replaces it at once
     last_choice = clock.monotonic()
     for i in range(int(st["runs"])):
-        await clock.sleep(float(st["hold_s"]) + rng.uniform(0.0, 2.0))
+        if not watched_before:
+            await clock.sleep(float(st["hold_s"]) + rng.uniform(0.0, 2.0))
+        watched_before = False
+        if held is not None:
+            if engine.current_plan() is not held or not _all_correct(world, held):
+                out["holds_lost"] += 1
+            held = None
         mode_id = stepped_modes[i % len(stepped_modes)]
         out["requests"] += 1
-        state = await engine.request_mode(mode_id, source="kiosk")
+        state = await choose(mode_id)
         if state.refused:
             out["refused"] += 1
             continue
-        last_choice = clock.monotonic()
+        chosen = last_choice = clock.monotonic()
         out["tiers"][str(state.tier)] = out["tiers"].get(str(state.tier), 0) + 1
         runner = engine.runner
         if runner is None or not runner.running:
             out["not_stepping"] += 1
             continue
         out["runs"] += 1
+        runners.append(runner)
         out["step_s"].append(runner.step_s)
         plan = engine.current_plan()
-        run_s = runner.count * runner.step_s
-        every = int(st.get("interrupt_every") or 0)
-        interrupting = None
-        if every and (i + 1) % every == 0:
-            mood = _interrupting_mood(rng, others, stepped_modes, mode_id, settings.kiosk.idle_mode)
-            if mood is not None:
-                # a guest chooses another mood mid-run: the run stops there, its steps not yet landed are cut
-                await clock.sleep(
-                    rng.uniform(2 * runner.step_s, max(2 * runner.step_s, run_s - 2 * runner.step_s))
+        kind = "moving" if runner.loop else "still"
+        out["kinds"][kind] = out["kinds"].get(kind, 0) + 1
+        if runner.loop:
+            # Oct 21: a moving per-light look loops until the next choice. Watch it past its loop seam (one whole lap
+            # plus a few steps), then the next guest choice replaces it; or a guest cuts it short with another mood
+            first_t0, lap, step = runner.t0, runner.run_len_s, runner.step_s
+            out["laps_s"].append(lap)
+            watch = lap + extra * step
+            mood = None
+            if every and (i + 1) % every == 0:
+                mood = _interrupting_mood(
+                    rng, others, stepped_modes, mode_id, kiosk.idle_mode, kiosk.idle_scene
                 )
-                state = await engine.request_mode(mood, source="kiosk")
+            if mood is not None:
+                await clock.sleep(rng.uniform(2 * step, max(2 * step, watch - 2 * step)))
+                state = await choose(mood)
                 if not state.refused:
                     out["interrupted"] += 1
                     last_choice = clock.monotonic()
-                    interrupting = engine.runner
-        while runner.running and clock.monotonic() - last_choice < run_s + WATCH_LIMIT_S:
+                continue  # the next guest comes hold_s later, whatever the mood chosen does
+            out["watched"] += 1
+            await clock.sleep(max(0.0, chosen + watch - clock.monotonic()))
+            if runner.running and runner.t0 > first_t0 + 1e-6:
+                out["looped"] += 1
+            watched_before = True
+            continue
+        # a still picture: its run ends on its own (one frame, sent again whole one step later), then its still look
+        # holds: the mode's canvas or slot where it settles there (D75), else the frame itself
+        limit = runner.run_len_s + WATCH_LIMIT_S
+        while runner.running and clock.monotonic() - chosen < limit:
             await clock.sleep(POLL_S)
-        out["ended"][runner.ended or "?"] = out["ended"].get(runner.ended or "?", 0) + 1
-        out["steps_skipped"] += runner.skipped
-        # D75/D77: every scene steps, so the mood that cut the run short runs too; the next guest comes `hold_s`
-        # after that run ends, as after any other (two choices around a full-pace run would crowd one 60 s window)
-        while (
-            interrupting is not None
-            and interrupting.running
-            and clock.monotonic() - last_choice < interrupting.count * interrupting.step_s + WATCH_LIMIT_S
-        ):
-            await clock.sleep(POLL_S)
+        if runner.running:
+            out["still_unended"] += 1
+            continue
+        out["still_ends"].append(clock.monotonic() - chosen - runner.run_len_s)
         current = engine.current_plan()
-        # D75: the run's end settles onto the mode's canvas or slot (a new plan of the same mode), else holds its own
-        if current is not None and current.mode_id == plan.mode_id and not runner.running:
-            ended = clock.monotonic()  # the still look was sent when the run ended
-            while clock.monotonic() - ended < WATCH_LIMIT_S and not _all_correct(world, current):
-                await clock.sleep(POLL_S)
-            if _all_correct(world, current):
-                out["holds"].append(clock.monotonic() - ended)
-                tier = str(current.tier)
-                out["settled"][tier] = out["settled"].get(tier, 0) + 1
-            else:
-                out["holds_unsettled"] += 1
-    # no input after the last choice: the idle hold returns to the idle mode, the runs never moving its clock
-    idle_mode = settings.kiosk.idle_mode
-    deadline = last_choice + settings.kiosk.idle_return_s + 2 * float(st["idle_return_slack_s"])
-    while clock.monotonic() < deadline:
-        plan = engine.current_plan()
-        if plan is not None and plan.mode_id == idle_mode:
-            back = clock.monotonic()
-            while clock.monotonic() - back < WATCH_LIMIT_S and not _all_correct(world, plan):
-                await clock.sleep(POLL_S)
-            out["idle_return"] = {
-                "after_s": back - last_choice,
-                "mode": idle_mode,
-                "tier": str(plan.tier),
-                "settled_s": clock.monotonic() - back if _all_correct(world, plan) else None,
-                # D75: an idle return shows the idle look still (motion.idle is off), even with a rung of its own
-                # (D77: Lowcountry Calm breathes when a guest chooses it): no run, and no runner at all
-                "ran": engine.runner is not None and engine.runner.running,
-                "runner": engine.runner is not None,
-            }
-            break
-        await clock.sleep(POLL_S)
+        seconds = (
+            await settled_s(current) if current is not None and current.mode_id == plan.mode_id else None
+        )
+        if seconds is None:
+            out["holds_unsettled"] += 1
+            continue
+        out["holds"].append(seconds)
+        tier = str(current.tier)
+        out["settled"][tier] = out["settled"].get(tier, 0) + 1
+        held = current
+    if held is not None:
+        await clock.sleep(float(st["hold_s"]))
+        if engine.current_plan() is not held or not _all_correct(world, held):
+            out["holds_lost"] += 1
+    if st.get("idle_reset_s") and kiosk.idle_scene:
+        # no input after the last choice: the idle reset shows the idle scene (Oct 22: a plain pick too) and runs its
+        # rung, looping; then the idle hold returns to the idle mode, still (motion.idle is off)
+        slack = float(st["idle_slack_s"])
+        out["idle_reset"] = await _idle_arrival(
+            world, kiosk.idle_scene, last_choice, kiosk.idle_reset_s + 2 * slack
+        )
+        reset = out["idle_reset"]
+        if reset is not None:
+            back = last_choice + reset["after_s"]
+            scene = engine.runner
+            if scene is not None and scene.running and scene.loop:
+                first_t0 = scene.t0
+                await clock.sleep(max(0.0, back + scene.run_len_s + extra * scene.step_s - clock.monotonic()))
+                reset["looped"] = scene.running and scene.t0 > first_t0 + 1e-6
+                runners.append(scene)
+            out["idle_return"] = await _idle_arrival(
+                world, kiosk.idle_mode, back, kiosk.idle_return_s + 2 * slack
+            )
+    out["ended"] = dict(Counter(r.ended or "still running" for r in runners))
     for task in list(watchers):
         await task
+    for task in list(watchers):  # steps a run still looping sent meanwhile: after the scenario, not measured
+        task.cancel()
     await asyncio.sleep(0)  # a command a newer one overtook resolves SUPERSEDED in its own worker's turn
     for group in superseded:
         # every module that missed this step had its write hit by a pinned fault (refused on each attempt, or silently
@@ -1358,6 +1472,7 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
             out["steps_superseded_lights"] += 1
         else:
             out["steps_superseded"] += 1
+    out["steps_skipped"] = sum(r.skipped for r in runners)
     out["step_writes_faulted"] = sum(len(group["faulted"]) for group in groups.values())
     out["max_account_writes_60s"] = max((_most_in_60s(times) for times in writes.values()), default=0)
     out["max_account_program_puts_60s"] = max((_most_in_60s(t) for t in program_puts.values()), default=0)
@@ -1374,14 +1489,47 @@ async def _stepped_soak(cfg: SoakConfig) -> dict:
     return out
 
 
+async def _idle_arrival(world: _World, mode_id: str, since: float, within: float) -> dict | None:
+    """Wait (up to `within` s after `since`) for `mode_id` to be the look, then until every module shows it: when it
+    came (after `since`), at which tier, whether a run started (and a runner at all), and how long it took to show."""
+    engine, clock = world.engine, world.clock
+    while clock.monotonic() < since + within:
+        plan = engine.current_plan()
+        if plan is not None and plan.mode_id == mode_id:
+            back = clock.monotonic()
+            runner = engine.runner
+            ran = runner is not None and runner.running
+            while clock.monotonic() - back < WATCH_LIMIT_S and not _all_correct(world, plan):
+                await clock.sleep(POLL_S)
+            return {
+                "after_s": back - since,
+                "mode": mode_id,
+                "tier": str(plan.tier),
+                "settled_s": clock.monotonic() - back if _all_correct(world, plan) else None,
+                "ran": ran,
+                "runner": runner is not None,
+                "looped": False,
+            }
+        await clock.sleep(POLL_S)
+    return None
+
+
 def _interrupting_mood(
-    rng: random.Random, others: list[str], stepped_modes: list[str], mode_id: str, idle_mode: str
+    rng: random.Random,
+    others: list[str],
+    stepped_modes: list[str],
+    mode_id: str,
+    idle_mode: str,
+    idle_scene: str | None = None,
 ) -> str | None:
-    """The mood a guest cuts a run short with: one of `others` (the moods outside the scenario, never the idle look),
-    else another of the scenario's modes — never the running one and never the idle look, so the idle return after the
-    last choice stays measurable. Every mood steps since D77, so the one chosen starts its own run. None when there is
-    none."""
-    pool = others or [m for m in stepped_modes if m not in (mode_id, idle_mode)]
+    """The mood a guest cuts a run short with: one of `others` (the moods outside the scenario, never the idle look
+    or the idle scene), else another of the scenario's modes — never the running one, the idle look or the idle scene,
+    so the idle reset and the idle hold after the last choice stay measurable. Every mood steps since D77, so the one
+    chosen starts its own run. None when there is none."""
+    idle = {idle_mode, idle_scene}
+    pool = [m for m in others if m not in idle] or [
+        m for m in stepped_modes if m != mode_id and m not in idle
+    ]
     return rng.choice(pool) if pool else None
 
 
@@ -1400,8 +1548,8 @@ def _missing_steps(groups: dict) -> int:
     """Modules whose rows changed from one step to the next of the same run but that the later step didn't send."""
     missing = 0
     by_runner: dict[int, list[dict]] = {}
-    for (runner_id, _label), group in groups.items():
-        by_runner.setdefault(runner_id, []).append(group)
+    for key, group in groups.items():  # (runner, [its lap's t0,] label)
+        by_runner.setdefault(key[0], []).append(group)
     for runs in by_runner.values():
         runs.sort(key=lambda g: g["t"])
         for before, after in itertools.pairwise(runs):
@@ -1449,9 +1597,13 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
         return percentile(values, 50), percentile(values, 95), (max(values) if values else None)
 
     p50, p95, mx = stats(times)
+    # Oct 22: per-light changes (every guest look in the simulator) are not slower than module-level ones (see
+    # docs/STATUS.md): the tail is the pinned 429s and silent drops on one of nine modules. One target for both
+    lights = [c["seconds"] for c in clean if c.get("lights") and c["seconds"] is not None]
     rows.append(
         {
-            "name": f"All nine modules correct after a mode change ({len(times)} changes)",
+            "name": f"All nine modules correct after a mode change ({len(times)} changes: {len(lights)} "
+            f"per-light, p95 {_fmt(percentile(lights, 95))} s)",
             "p50": p50,
             "p95": p95,
             "max": mx,
@@ -1539,10 +1691,11 @@ def evaluate(results: dict, targets: dict) -> list[dict]:
 
 
 def _stepped_rows(stepped: dict) -> list[dict]:
-    """The stepped scenario's verdict rows (D65). Each step's landing spread is reported, not gating (05's
-    spread target, which D65 asks Alon to sign off per step); the rest gate: every step lands before the next one
-    (none superseded, none failed), exactly one PUT per changed module per step, the account inside the cap, no
-    governor trip and no downgrade at 5% throttling, every run's still look shown, the idle return on time."""
+    """The stepped scenario's verdict rows (D65; per light since Oct 21). Each step's landing spread is reported, not
+    gating (05's spread target, which D65 asks Alon to sign off per step); the rest gate: every step lands (with the
+    per-light allowance; none failed or skipped), exactly one PUT per changed module per step, the account inside the
+    cap in force, no governor trip and no downgrade at 5% throttling, every still picture ends on its own and holds,
+    every watched moving look loops, the idle reset to the idle scene (running, looping) and the idle hold."""
     s = stepped["settings"]
     spread_target = float(s["step_spread_p95_s"])
     spreads, landings, puts = (
@@ -1550,12 +1703,16 @@ def _stepped_rows(stepped: dict) -> list[dict]:
         stepped["step_landings"],
         stepped["puts_per_module_step"],
     )
-    holds = stepped["holds"]
+    holds, ends = stepped["holds"], stepped["still_ends"]
     step_s = min(stepped["step_s"]) if stepped["step_s"] else None
     cap = stepped["cap"]
-    idle = stepped.get("idle_return") or {}
-    idle_limit = float(s["idle_return_slack_s"])
     faulted = stepped.get("steps_superseded_faults", 0)
+    slack = float(s["idle_slack_s"])
+    end_slack = float(s["still_end_slack_s"])
+    reset = stepped.get("idle_reset") or {}
+    idle = stepped.get("idle_return") or {}
+    reset_s, return_s = float(stepped["idle_reset_s"]), float(stepped["idle_return_s"])
+    scene = stepped.get("idle_scene") or "the idle scene"
     tag = "Stepped, SIMULATED"
     runs = f"{stepped['runs']} runs of {', '.join(stepped['modes'])}"
     return [
@@ -1600,16 +1757,17 @@ def _stepped_rows(stepped: dict) -> list[dict]:
             "pass": bool(puts) and set(puts) == {1} and stepped["missing"] == 0,
         },
         {
-            "name": f"{tag}: most stepped program PUTs on one account in any 60 s (by send time)",
+            "name": f"{tag}: most program PUTs on one account in any 60 s (by send time)",
             "max": stepped["max_account_program_puts_60s"],
-            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min; the runner plans below it)",
+            "target": f"≤ {cap:g} (the cap in force: motion.lights.account_writes_per_min for a per-light run, "
+            "motion.stepped's for a module-level one; the runner plans below it)",
             "pass": stepped["max_account_program_puts_60s"] <= cap,
         },
         {
             "name": f"{tag}: most writes of any kind on one account in any 60 s (steps, 429 retries, re-sends, "
             "mood changes)",
             "max": stepped["max_account_writes_60s"],
-            "target": f"≤ {cap:g} (motion.stepped.account_writes_per_min: the steps are paced at the cap less "
+            "target": f"≤ {cap:g} (the cap in force: the steps are paced at the cap less "
             "motion.stepped.budget_reserve, the room retries, re-sends and a mood chosen mid-run need, and a step "
             "waits rather than leave less than a guest's burst of it)",
             "pass": stepped["max_account_writes_60s"] <= cap,
@@ -1627,22 +1785,44 @@ def _stepped_rows(stepped: dict) -> list[dict]:
             "pass": stepped["downgrades"] == 0,
         },
         {
-            "name": f"{tag}: the still look shown after each run ({len(holds)} runs ran to the end)",
+            "name": f"{tag}: each still picture's run ends on its own and its look holds on all nine "
+            f"({len(holds)} of {stepped.get('kinds', {}).get('still', 0)} still runs; time to show it)",
             "p50": percentile(holds, 50),
             "p95": percentile(holds, 95),
             "max": max(holds) if holds else None,
-            "target": "every one settles",
-            "pass": bool(holds) and stepped["holds_unsettled"] == 0,
+            "target": f"every one ends within its run + {end_slack:g} s, shows its still look (its canvas or slot, "
+            "else its frame) on all nine and still shows it when the next choice comes",
+            "pass": bool(holds)
+            and stepped["still_unended"] == stepped["holds_unsettled"] == stepped["holds_lost"] == 0
+            and all(e <= end_slack + 1e-6 for e in ends),
         },
         {
-            "name": f"{tag}: idle return after the last choice",
+            "name": f"{tag}: each moving look loops until the next choice ({stepped['looped']} of "
+            f"{stepped['watched']} watched a lap + {s['watch_extra_steps']} steps; {stepped['interrupted']} cut "
+            "short mid-run)",
+            "max": stepped["watched"] - stepped["looped"],
+            "target": "every watched run still running past its loop seam, in its next lap (Oct 21)",
+            "pass": stepped["watched"] > 0 and stepped["looped"] == stepped["watched"],
+        },
+        {
+            "name": f"{tag}: idle reset to {scene} after the last choice (kiosk.idle_reset_s {reset_s:g} s here)",
+            "max": reset.get("after_s"),
+            "target": f"{scene} {reset_s:g}–{reset_s + slack:g} s after it, running its rung and looping, shown "
+            "on all nine",
+            "pass": bool(reset)
+            and reset_s - 1e-6 <= reset["after_s"] <= reset_s + slack
+            and reset.get("ran") is True
+            and reset.get("looped") is True
+            and reset.get("settled_s") is not None,
+        },
+        {
+            "name": f"{tag}: idle hold after the idle reset (kiosk.idle_return_s {return_s:g} s here)",
             "max": idle.get("after_s"),
-            "target": f"{idle.get('mode') or 'the idle mode'} {stepped['idle_return_s']:g}–"
-            f"{stepped['idle_return_s'] + idle_limit:g} s after it (idle_return_s + {idle_limit:g}), installed still "
-            "(no run and no runner: motion.idle is off, D75, though the idle look has its own rung, D77), then "
-            "settles",
+            "target": f"{idle.get('mode') or 'the idle mode'} {return_s:g}–{return_s + slack:g} s after the reset, "
+            "installed still (no run and no runner: motion.idle is off, D75, though the idle look has its own rung, "
+            "D77), then shown on all nine",
             "pass": bool(idle)
-            and stepped["idle_return_s"] - 1e-6 <= idle["after_s"] <= stepped["idle_return_s"] + idle_limit
+            and return_s - 1e-6 <= idle["after_s"] <= return_s + slack
             and idle["settled_s"] is not None
             and not idle.get("ran")
             and not idle.get("runner"),
@@ -1836,9 +2016,31 @@ def _ripple_line(ripple: dict) -> str:
     )
 
 
+def _lights_words(lights: Any) -> dict | None:
+    """A per-light rung's effect and cadence, for the report (None: the rung has no `lights` block)."""
+    if lights is None:
+        return None
+    return {
+        "effect": str(lights.effect),
+        "steps_per_cycle": lights.steps_per_cycle,
+        "step_s": lights.step_s,
+        "run_s": lights.run_s,
+    }
+
+
 def _technique_words(mode_id: str, t: dict) -> str:
-    """One candidate's rung as the report says it: travel by its cycle (D65's text), a breath by its kind, swing and
-    lag (D75)."""
+    """One candidate's rung as the report says it: a per-light rung (Oct 21) by its effect (a still picture, or a
+    moving one by its cycle and lap), else travel by its cycle (D65's text), a breath by its kind, swing and lag
+    (D75)."""
+    lights = t.get("lights")
+    if lights:
+        whose = "its own" if t.get("own", True) else "a SIMULATED"
+        if lights["effect"] == "still":
+            return f"{mode_id}: {whose} per-light still picture, {lights['run_s']:g} s run"
+        return (
+            f"{mode_id}: {whose} per-light {lights['effect']}, {lights['steps_per_cycle']} steps a cycle, "
+            f"{lights['step_s']:g} s steps designed, looping (laps of about {lights['run_s']:g} s)"
+        )
     timing = f"{t['step_s']:g} s steps designed, {t['run_s']:g} s runs"
     kind = t.get("mode", "travel")
     if kind == "travel":
@@ -1851,30 +2053,52 @@ def _technique_words(mode_id: str, t: dict) -> str:
 
 def _stepped_line(stepped: dict) -> str:
     tiers = ", ".join(f"{k} {n}" for k, n in sorted(stepped["tiers"].items())) or "none"
+    kinds = ", ".join(f"{n} {k}" for k, n in sorted((stepped.get("kinds") or {}).items())) or "none"
     ended = "; ".join(f"{why} {n}" for why, n in sorted(stepped["ended"].items())) or "none"
     settled = ", ".join(f"{k} {n}" for k, n in sorted((stepped.get("settled") or {}).items())) or "none"
     steps = sorted(set(stepped["step_s"]))
+    laps = sorted(set(stepped.get("laps_s") or []))
     used = "; ".join(_technique_words(m, t) for m, t in stepped["techniques"].items())
+    reset = stepped.get("idle_reset") or {}
     idle = stepped.get("idle_return") or {}
-    at = f" at {idle['tier']}" if idle.get("tier") else ""
-    ran = " (it started a run)" if idle.get("ran") else (" (with a runner)" if idle.get("runner") else "")
+    scene = stepped.get("idle_scene") or "the idle scene"
+    if reset:
+        how = (
+            "running its rung and looping" if reset.get("ran") and reset.get("looped") else "without looping"
+        )
+        went = f"went to {scene} {reset['after_s']:.1f} s after the last choice ({how})"
+    else:
+        went = f"never went to {scene}"
+    if idle:
+        held = f"then to {idle['mode']} {idle['after_s']:.1f} s later, still at {idle['tier']}"
+        held += (
+            " (it started a run)" if idle.get("ran") else (" (with a runner)" if idle.get("runner") else "")
+        )
+    else:
+        held = "and the idle hold never came"
     return (
-        f"- Stepped scenario (D65, D75, D77, SIMULATED): a separate run of the show's own wiring with a stepped rung "
-        f"on {', '.join(stepped['modes'])} in the soak's config copy, a mode's own where config/modes.yaml puts it "
-        f"and a SIMULATED one just before `modules` otherwise ({used}; `motion.stepped.live_enabled` stays false, "
-        f"so live hardware never steps), under the same pinned conditions. {stepped['requests']} kiosk choices, "
-        f"{stepped['refused']} refused; by tier: {tiers}; {stepped['runs']} runs at "
-        f"{', '.join(f'{x:g}' for x in steps) or '—'} s a step ({stepped['not_stepping']} held still instead), "
-        f"{stepped['interrupted']} cut short by another mood chosen mid-run (which starts its own run, D77; never "
-        f"the idle look); how runs ended: {ended}; the look each finished run settled on, by tier: {settled}; the "
-        f"idle return showed the idle look still{at}{ran}. Steps: {stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "
-        f"{stepped['steps_superseded']} superseded, {stepped.get('steps_superseded_faults', 0)} carried by the "
+        f"- Stepped scenario (D65, D75, D77, per light since Oct 21, SIMULATED): a separate run of the show's own "
+        f"wiring with a stepped rung on {', '.join(stepped['modes'])} in the soak's config copy, a mode's own where "
+        f"config/modes.yaml puts it and a SIMULATED one just before `modules` otherwise ({used}), under the same "
+        f"pinned conditions; in the simulator every look runs its per-light rung. {stepped['requests']} kiosk "
+        f"choices, {stepped['refused']} refused ({stepped.get('retried', 0)} tried again after the panel's countdown); by tier: {tiers}; {stepped['runs']} runs ({kinds}) at "
+        f"{', '.join(f'{x:g}' for x in steps) or '—'} s a step ({stepped['not_stepping']} never ran). The still "
+        f"pictures end on their own and hold (the look each settled on, by tier: {settled}); the moving looks loop "
+        f"in laps of {', '.join(f'{x:g}' for x in laps) or '—'} s: {stepped['looped']} of {stepped['watched']} "
+        f"watched a lap and {stepped['settings']['watch_extra_steps']} steps were still running in a later lap, "
+        f"then the next choice replaced them; {stepped['interrupted']} cut short by another mood chosen mid-run "
+        f"(never the idle look or the idle scene); how runs ended: {ended}. Untouched after the last choice (the "
+        f"scenario's kiosk.idle_reset_s {stepped['idle_reset_s']:g} s and idle_return_s "
+        f"{stepped['idle_return_s']:g} s; the show's are an hour and a day), the canopy {went}, {held}. "
+        f"Steps: {stepped['steps_landed']} landed, {stepped['steps_cut']} cut by a newer mood, "
+        f"{stepped['steps_superseded']} superseded, {stepped.get('steps_superseded_lights', 0)} per-light steps "
+        f"superseded, {stepped.get('steps_superseded_faults', 0)} carried by the "
         f"next step after a pinned fault hit a module's write (429 on every attempt, or a silent drop; of "
         f"{stepped.get('step_writes_faulted', 0)} step writes hit that way), {stepped['steps_failed']} failed, "
-        f"{stepped['steps_skipped']} skipped; {stepped['missing']} changed modules a step didn't send. The 60 s account maximum counts every "
-        f"write the simulator received on that account (steps, re-sends, retries) against the "
-        f"{stepped['cap']:g}/min cap. Targets live in `config/sim/soak.yaml` until Alon signs them off "
-        "(`config/sim/acceptance.yaml` is pinned)."
+        f"{stepped['steps_skipped']} skipped; {stepped['missing']} changed modules a step didn't send. The 60 s "
+        "account maximum counts every write the simulator received on that account (steps, re-sends, retries) "
+        f"against the {stepped['cap']:g}/min cap in force. Targets live in `config/sim/soak.yaml` until Alon signs "
+        "them off (`config/sim/acceptance.yaml` is pinned)."
     )
 
 
