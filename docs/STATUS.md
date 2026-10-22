@@ -26,6 +26,18 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Per-light for guests, every 2 s, `claude/per-light-2s` → `main` (Oct 21 evening; no PR yet)
+**Alon, after the 2 / 1.5 / 1 s rate test on Light Show #4** (0 × 429 / 0 × 403, 442 writes a minute at most;
+frames confirmed 29 % at 2 s, 13 % at 1.5 s, 0 % at 1 s — every write accepted, the next replacing it before its
+readback): 2 s is the best trade of speed and frames landing. Faster than 1 s is refused (≤ 1 write a second per
+module, 07).
+- `motion.lights.live_enabled: true` — guests' per-light options (#4–#6, Light Show) run per light on the canopy.
+- `motion.lights.account_writes_per_min: 337.5` (270 a minute after the 20 % reserve) → nine kits every 2 s (was 225
+  → 3 s). Panels whose frame doesn't change get no write (they were never re-sent); the pace still assumes all nine.
+- Soak: a per-light run's own superseded allowance (`STEPS_SUPERSEDED_LIGHTS_MAX_SHARE` 0.5; module level keeps
+  5 %); `test_soak`'s pace and cap pins allow the per-light cap in force. With the per-light fixes, both soak tests
+  pass again.
+
 ## Rate test paces, `claude/rate-test-rungs` → `main` (Oct 21 evening; no PR yet)
 The rate test (D80) takes its own paces and stage length: `rungs` (1–12 s each, so never more than one write a second
 per module) and `rung_s` (15–120 s) on `POST /api/canopy/stepped-rehearsal`; the confirm sentence names them.
@@ -60,7 +72,7 @@ look nearly all on, and `/ops` (which draws 13 % as near black) disagrees with t
 ## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
 From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
 from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
-`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` + `claude/rate-test-rungs` (no PRs yet); the exact
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` + `claude/rate-test-rungs` + `claude/per-light-2s` (no PRs yet); the exact
 commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
 merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
 (`uv run --with pytest-xdist pytest -q -n 8`): all pass except one row of `test_soak` (see the Light Show block): 3657 passed, 1 failed in 3 min 52 s; ruff clean.

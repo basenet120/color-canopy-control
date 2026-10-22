@@ -134,13 +134,13 @@ def test_a_rate_test_can_run_its_own_paces_each_for_its_own_time():
 
 
 def test_per_light_runs_pace_by_their_own_cap_and_module_level_keeps_its_own():
-    """D81: on nine kits a per-light run steps every 3 s (motion.lights cap 225 less the 20 % reserve), while a
+    """D81: on nine kits a per-light run steps every 2 s (motion.lights cap 337.5 less the 20 % reserve, Oct 21), while a
     module-level run keeps the stepped cap's 7.5 s (its nine-kit Gate R pace, what the soak validates)."""
     from conductor.config import load_settings
     from conductor.design_lab.stepped import effective_step_s
 
     settings = load_settings()
-    assert effective_step_s(1.5, 9, settings, lights=True) == 3.0
+    assert effective_step_s(1.5, 9, settings, lights=True) == 2.0
     assert effective_step_s(6.0, 9, settings) == 7.5
     assert effective_step_s(1.5, 1, settings, lights=True) == 1.5  # one kit: its designed pace
 

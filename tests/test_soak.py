@@ -57,10 +57,18 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
         set(st["puts_per_module_step"]) == {1} and st["missing"] == 0
     )  # one PUT per changed module per step
     assert st["governor_trips"] == 0 and st["downgrades"] == 0  # at the pinned 5% throttling
-    assert st["max_account_program_puts_60s"] <= 72 + 9  # the runner's pace, and part of a ninth step's burst
+    # the runner's pace (module level 72 a minute; a per-light run its own cap less the reserve, D81: 270 since Oct 21),
+    # and part of a ninth step's burst
+    from conductor.config import load_settings
+
+    motion = load_settings().motion
+    pace = max(72, motion.lights.account_writes_per_min * (1 - motion.stepped.budget_reserve))
+    assert st["max_account_program_puts_60s"] <= pace + 9
     assert (
-        st["max_account_program_puts_60s"] <= st["max_account_writes_60s"] <= 90
-    )  # retries, re-sends: the cap
+        st["max_account_program_puts_60s"]
+        <= st["max_account_writes_60s"]
+        <= max(90, motion.lights.account_writes_per_min)
+    )  # retries, re-sends: the cap in force (a per-light run's own, D81)
     assert len(st["holds"]) == 3 and st["holds_unsettled"] == 0
     # Golden Hour's run settles onto its commissioned canvas; Coastal Tides and the idle look hold their own rung's
     assert st["settled"] == {"canvas": 1, "stepped": 2}
