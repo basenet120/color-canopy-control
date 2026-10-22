@@ -1194,7 +1194,7 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         "automatically_enabled": False,
         "codes": codes,
     }
-    result = None
+    result = left = None
     try:
         res = await ctx.write(leave_rows, label="effect_sweep: before look")
         result = _write_problem(res, "The before look")
@@ -1211,7 +1211,11 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
                 break
             if reselect:
                 res = await ctx.write(leave_rows, label=f"effect_sweep: leave slot before {field} {code}")
-                if result := _write_problem(res, "Leaving the slot"):
+                left = _write_problem(res, "Leaving the slot")
+                # Hubspace's readback often lags a look (seen: brightness, Oct 22): note it and keep sweeping;
+                # only a leave that wasn't accepted at all stops the run.
+                if left is not None and res.status is not CommandStatus.MISMATCH:
+                    result = left
                     break
                 await ctx.sleep(spacing)
             value = candidate(code)
@@ -1220,6 +1224,7 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             codes.append(
                 {
                     "code": code,
+                    "leave_problem": left.summary if reselect and left is not None else None,
                     "sent_at": sent_at,
                     "write": write_facts(res),
                     "reported_effects": (

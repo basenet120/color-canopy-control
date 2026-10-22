@@ -87,6 +87,25 @@ class EffectSweepTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("problem", codes[1])
         self.assertEqual(frame_of(ctx.writes[-1]), ctx.header)
 
+    async def test_a_leave_whose_readback_lags_is_noted_and_the_sweep_continues(self):
+        ctx = Context()
+        write = ctx.write
+
+        async def lagging(rows, **kwargs):
+            result = await write(rows, **kwargs)
+            if len(ctx.writes) == 3:  # the leave before the first code (seen live: brightness lagged)
+                result.status = CommandStatus.MISMATCH
+            return result
+
+        ctx.write = lagging
+        result = await effect_sweep(ctx, params(first_code=1, last_code=2))
+        self.assertEqual(result.verdict, Verdict.NEEDS_EYES)
+        codes = result.observations["codes"]
+        self.assertEqual([c["code"] for c in codes], [1, 2])
+        self.assertIsNotNone(codes[0]["leave_problem"])
+        self.assertIsNone(codes[1]["leave_problem"])
+        self.assertEqual(frame_of(ctx.writes[-1]), ctx.header)
+
     async def test_a_failed_leave_stops_the_sweep_and_still_restores(self):
         ctx = Context()
         write = ctx.write
