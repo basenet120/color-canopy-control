@@ -507,6 +507,7 @@ def test_every_job_is_listed_with_a_spec():
         "hue_ramp",
         "address_probe_safe",
         "effect_probe",
+        "effect_sweep",
         "latency_trials",
         "whole_strand",
         "stale_clock_put",
