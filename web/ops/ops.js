@@ -331,7 +331,9 @@ function drawGrid() {
           { class: "cell-foot" },
           unregistered
             ? "No device registered"
-            : m.lock_owner ? `Held: ${m.lock_owner}` : mism ? `${mism} heads differ` : statusWord(status),
+            : m.lock_owner ? `Held: ${m.lock_owner}`
+            : m.readback_stale ? "Readback stale" // D82: Hubspace took the writes; its readback hasn't moved
+            : mism ? `${mism} heads differ` : statusWord(status),
         ),
       );
     }),

@@ -536,3 +536,69 @@ def test_a_stepped_module_that_differs_waits_for_the_next_step_unless_its_write_
     # failed, but the step 1.5 s away carries it (and still the one that differs)
     assert deferred_sent == [] and deferred == {"canopy-r1c1", "canopy-r2c2"}
     assert len(b_writes) == 1  # one write, with the step
+
+
+def freeze_readback(w, addresses: set[str], seconds: float) -> None:
+    """Oct 21 live (D82): Hubspace answers 200 to every write to `addresses` for `seconds` while their readback
+    doesn't move. From the Conductor's side that is a run of silent drops."""
+    original = w.sim.cloud.accept_wire
+    until = w.clock.monotonic() + seconds
+
+    def accept(body, *, silent_drop=False):
+        if body.get("metadeviceId") in addresses and w.clock.monotonic() < until:
+            silent_drop = True
+        return original(body, silent_drop=silent_drop)
+
+    w.sim.cloud.accept_wire = accept
+
+
+def test_a_stale_readback_is_resent_slowly_and_heals_when_it_moves():
+    async def main():
+        w = make_world(settings=QUIET)
+        await w.engine.start(apply_initial=False)
+        await w.engine.request_mode("lowcountry-calm", source="ops")
+        await w.until(w.all_correct, timeout=10)
+        await w.engine.wait_idle()
+        before = writes_per_device(w)
+        freeze_readback(w, {"sim-canopy-r2c1"}, 180)
+        await w.engine.request_mode("holiday", source="ops")
+        await w.run_for(60)
+        stale = w.engine.tracker.readback_stale("sim-canopy-r2c1")
+        reason = w.engine.tracker.snapshot("sim-canopy-r2c1")["reason"]
+        await w.run_for(120)
+        frozen = writes_per_device(w)
+        healed = await w.until(w.all_correct, timeout=120)
+        await w.close()
+        return before, frozen, stale, reason, healed, w.engine.reconciler.stats
+
+    before, frozen, stale, reason, healed, stats = run_virtual(main)
+    assert stale and reason.startswith("Readback stale:")
+    # 180 s frozen: the change, its early re-sends and re-asserts until it reads stale (≈ 4 writes), then about one a
+    # minute — not one every few seconds (≈ 50 on Oct 21's code)
+    assert frozen["sim-canopy-r2c1"] - before["sim-canopy-r2c1"] <= 10
+    assert stats["stale_holds"] >= 1
+    # once the readback moves (the freeze ends) the next slow re-send lands: within one interval and a true-up
+    assert healed is not None and healed <= 60 + 10
+
+
+def test_reconciler_resends_across_the_canopy_stay_under_the_cap():
+    settings = settings_with(kiosk={"idle_return_s": 100_000}, reconciler={"reassert_max_per_min": 12})
+
+    async def main():
+        w = make_world(settings=settings)
+        await w.engine.start(apply_initial=False)
+        sends: list[float] = []
+        w.executor.add_submit_listener(
+            lambda c: sends.append(w.clock.monotonic()) if c.label.startswith("re-assert") else None
+        )
+        freeze_readback(w, {f"sim-{m}" for m in MODULES}, 120)
+        await w.engine.request_mode("holiday", source="ops")
+        await w.run_for(120)
+        healed = await w.until(w.all_correct, timeout=120)
+        await w.close()
+        return sends, healed, w.engine.reconciler.stats
+
+    sends, healed, stats = run_virtual(main)
+    assert sends and stats["cap_holds"] >= 1
+    assert max(sum(1 for t in sends if s <= t < s + 60) for s in sends) <= 12
+    assert healed is not None

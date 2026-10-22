@@ -57,6 +57,13 @@ One loop on the injected Clock (a tick every `TICK_S`), owned by the CanopyEngin
   it does nothing, so it never undoes a later mood choice and never alternates with the idle hold. The idle hold goes
   first in a tick; a reset that fell due during an outage goes out with the recovery burst. One attempt per idle
   period.
+- **Stale readback and the re-send cap (D82).** Every re-send — the re-assert, a true-up read's re-send and the
+  engine's early re-assert — goes through `admit`. A module whose readback is stale (`tracker.readback_stale`: Hubspace
+  accepted several writes and the readback didn't move, state.py) is re-sent at most once per
+  `stale_resend_interval_s`, and it never counts toward a tier downgrade (no tier fixes the cloud's readback). All
+  re-sends together stay under `reassert_max_per_min` in any 60 s (a motion burst counts nine, all or none), so a
+  stuck readback can't take the account's whole write budget from a stepped look. What's held is re-checked when it
+  may go; the rolling reads keep reading it, and the first readback that moves ends it.
 - **Slots.** During a true-up each module's slot objects are hashed (canonical projection of the readback, 07 §6)
   and compared with the recorded hash; the effect fields that make a pattern animate (motionEffect, brightnessEffect
   — outside the hash) are compared with those recorded, separately. A drifted T1 slot (commissioned, origin "api") is
@@ -97,6 +104,7 @@ READ_RETRY_S = 1.0  # a failed rolling true-up read is tried again this soon, on
 SLOT_CHECK_INTERVAL_S = 60.0
 # A stepped look's module that differs waits for the next step unless its write failed and that step is further off.
 STEP_DEFER_S = 2.0
+RESEND_WINDOW_S = 60.0  # `reassert_max_per_min` counts the re-sends in this window
 
 
 class Reconciler:
@@ -123,6 +131,8 @@ class Reconciler:
         self._reads: set[asyncio.Task] = set()
         # device id → (when its slots were last checked, {slot: readback value} then)
         self._slots_seen: dict[str, tuple[float, dict]] = {}
+        self._resends: deque[float] = deque()  # one entry per module re-sent, for `reassert_max_per_min`
+        self._last_resend: dict[str, float] = {}  # device id → its last re-send (a stale module waits on it)
         self.stats: dict[str, int] = {
             "reasserts": 0,
             "true_ups": 0,
@@ -132,6 +142,8 @@ class Reconciler:
             "slot_rewrites": 0,
             "drift": 0,
             "slot_checks": 0,  # modules whose slot patterns were compared with their records
+            "stale_holds": 0,  # re-sends held because the module's readback is stale (D82)
+            "cap_holds": 0,  # re-sends held by `reassert_max_per_min` (D82)
         }
 
     @property
@@ -283,14 +295,58 @@ class Reconciler:
                 needs.append(device_id)
         if not needs:
             return []
-        if plan.motion:
-            if busy:  # all or none, as ONE burst: wait until nothing is in flight
-                self.schedule_reassert(1.0)
-                return []
-            needs = [device_id for device_id, _ in active]
+        if plan.motion and busy:  # all or none, as ONE burst: wait until nothing is in flight
+            self.schedule_reassert(1.0)
+            return []
+        needs = self.admit(needs, motion=plan.motion)
+        if not needs:
+            return []
         sent = engine.send(needs, source=source, label=f"re-assert: {plan.mode_id}")
         self.stats["reasserts"] += len(sent)
         return sent
+
+    def admit(self, device_ids: list[str], *, motion: bool) -> list[str]:
+        """The re-sends that may go now (see Stale readback above). Motion: every active module, or none. Whatever is
+        held is looked at again (a re-assert) once it may go."""
+        s = self.settings
+        engine = self.engine
+        now = self.clock.monotonic()
+        while self._resends and now - self._resends[0] >= RESEND_WINDOW_S:
+            self._resends.popleft()
+        ready: list[str] = []
+        wait: float | None = None
+        for device_id in device_ids:
+            target = engine.target_of(device_id)
+            last = self._last_resend.get(device_id)
+            if (
+                target is not None
+                and last is not None
+                and now - last < s.stale_resend_interval_s
+                and engine.tracker.readback_stale(target.address)
+            ):
+                self.stats["stale_holds"] += 1
+                due = last + s.stale_resend_interval_s - now
+                wait = due if wait is None else min(wait, due)
+                continue
+            ready.append(device_id)
+        if motion and ready:
+            ready = [device_id for device_id, _ in engine.active_modules()]
+        room = s.reassert_max_per_min - len(self._resends)
+        if len(ready) > room:
+            self.stats["cap_holds"] += 1
+            # room frees as the oldest re-sends leave the window
+            freed = (
+                self._resends[min(len(self._resends) - 1, len(ready) - room - 1)] if self._resends else now
+            )
+            due = max(0.5, freed + RESEND_WINDOW_S - now)
+            wait = due if wait is None else min(wait, due)
+            ready = [] if motion else ready[: max(0, room)]
+        if wait is not None:
+            self.schedule_reassert(wait)
+        for device_id in ready:
+            self._resends.append(now)
+            self._last_resend[device_id] = now
+        return ready
 
     def _resend_before_step(self, address: str, runner: Any) -> bool:
         """A stepped look's module that differs: re-send it now only when its write failed outright and the next step
@@ -392,10 +448,13 @@ class Reconciler:
                 if engine.last_status.get(target.address) in (CommandStatus.FAILED, CommandStatus.MISMATCH):
                     engine.last_status.pop(target.address, None)
                 return
-            self.stats["drift_resends"] += 1
             if plan.motion:
+                self.stats["drift_resends"] += 1
                 self.schedule_reassert(0.0)  # all nine as one burst, from the loop
                 return
+            if not self.admit([device_id], motion=False):
+                return
+            self.stats["drift_resends"] += 1
             sent = engine.send([device_id], source="reconciler", label=f"re-assert (true-up): {plan.mode_id}")
             self.stats["reasserts"] += len(sent)
         finally:
@@ -496,7 +555,9 @@ class Reconciler:
                 self._attention_since.pop(address, None)
             elif status is DeviceStatus.NEEDS_ATTENTION:
                 self._attention_since.setdefault(address, now)
-                if address not in self._wrong_since and self._tier_relevant(address):
+                if engine.tracker.readback_stale(address):
+                    self._wrong_since.pop(address, None)  # no tier fixes the cloud's readback (D82)
+                elif address not in self._wrong_since and self._tier_relevant(address):
                     self._wrong_since[address] = now
                     self._clean_since = now
 

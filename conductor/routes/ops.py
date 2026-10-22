@@ -771,6 +771,7 @@ def canopy_heads(services: Any) -> dict:
             desired: list[dict | None] = [None] * len(positions)
             reported: list[dict | None] = [None] * len(positions)
             desired_source, reported_at, lock_owner, simulated = None, None, None, None
+            readback_stale = False
         else:
             cal = calibration_for(cfg, entry)
             mmap = module_map(cfg, cal)
@@ -805,6 +806,9 @@ def canopy_heads(services: Any) -> dict:
             }
             lock_owner = _lock_owner(services, entry, address)
             simulated = bool(services.engine_driver.simulated)
+            readback_stale = bool(
+                (snap or {}).get("readback_stale")
+            )  # D82: its "differ" counts may be the cloud's
         m_counts = {"match": 0, "mismatch": 0, "unknown": 0}
         for i, (x, y) in enumerate(positions):
             d, r = desired[i], reported[i]
@@ -840,6 +844,7 @@ def canopy_heads(services: Any) -> dict:
                 "lock_owner": lock_owner,
                 "desired_source": desired_source,
                 "reported_at": reported_at,
+                "readback_stale": readback_stale,
                 "heads": len(positions),
                 "counts": m_counts,
                 "simulated": simulated,

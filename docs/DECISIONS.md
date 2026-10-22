@@ -1465,3 +1465,31 @@ look was downgraded; any looser **stepped** cap degraded the module-level soak. 
 - The soak counts a module as showing a per-light look when it shows any frame of the run (the look moves faster
   than a slow module confirms), judges its write rows against the cap in force, and allows up to 5 % of steps
   superseded before every module confirmed them (still 0 failed or skipped).
+
+
+**D82 — A readback that won't move is "stale": re-sent slowly, never a downgrade, and re-sends are capped (Oct 21;
+follows D71 and D81).** Live, Oct 21 13:40:57, right after a 5-minute rate test (`coastal-tides-5`), six of the
+nine modules (r0c0, r0c1, r0c2, r1c0, r2c0, r2c1) read back `color-mode` "individual", brightness 85 and the
+pre-test colour for ~9 minutes, through three different looks, while Hubspace answered every write with a 200. Alon
+saw the lights take each look. All six caught up in the same second (13:49:54) on an ordinary re-send; the 12:35
+rate test left the same freeze for up to 4 minutes. Meanwhile the reconciler re-sent each of them every ~4 s (≈ 95
+writes a minute, the whole 90/min account cap), so `goodnight-glow-4`, `golden-hour` and `lowcountry-calm` each ended
+on "the account's write budget held back 2 steps in a row", the tier dropped to strand, and /ops showed "N heads
+differ". Decision:
+- **Stale readback** (`state.py`): per module, the writes Hubspace accepted while the reported values *of the rows
+  the look writes* didn't move (rows the look doesn't write, like a signal strength, are ignored). At
+  `STALE_AFTER_WRITES` (4) such writes over ≥ `STALE_AFTER_S` (10 s), a readback that differs is `readback_stale`:
+  still NEEDS_ATTENTION (nothing is verified; the copy never claims it), with its own reason and one alert. Above D71's
+  echo lag and the three silent drops that must still heal in 10 s. The first readback in which a written row moves
+  ends it.
+- **Re-sent slowly** (`reconciler.admit`): a stale module is re-sent at most once per
+  `reconciler.stale_resend_interval_s` (60 s); the rolling reads keep reading it every 5 s, so recovery is seen at
+  once. It never counts toward the 10 s tier downgrade (no tier fixes the cloud's readback).
+- **Capped**: every re-send (re-assert, true-up re-send, the engine's early re-assert) goes through `admit`, and all
+  of them together stay under `reconciler.reassert_max_per_min` (30, a third of the 90/min cap) in any 60 s; a motion
+  burst counts nine, all or none. A change itself (a mode, a step, a recovery burst, a lock release) is never capped.
+- **/ops** shows "Readback stale" on the module's cell instead of "N heads differ".
+Simulator (a module whose writes are dropped for 180 s): 7 writes instead of 40, stale at 14 s, healed 12 s after the
+freeze ends. Not known: why Hubspace's readback freezes after sustained 1 write/s per module, or whether our re-sends
+prolonged it. Two of today's three rate tests left minutes of stale readback: worth weighing before per-light runs
+near D81's 225/min cap.
