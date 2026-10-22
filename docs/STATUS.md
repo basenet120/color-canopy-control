@@ -26,6 +26,24 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## PR stack to merge — in this order, merge commits, each base `main` (pushed Oct 21 night)
+Each branch contains every PR before it (it is a point on `local/deploy-47-48`, what the show box runs), so after
+each merge the next PR's diff is only its own change and it merges without conflicts:
+1. #47 `claude/stale-readback` — stale readback, slow re-sends, re-send cap (D82)
+2. #48 `claude/panel-own-orientation` — the guest panel draws each kit as it hangs (+ the local-workflow note)
+3. #49 `claude/ops-heads-step` — /ops heads compare a stepped run with the step sent
+4. #50 `claude/light-show` — Light Show #1–#6, `on_at` (CI: two soak tests fail here; fixed by #51)
+5. #51 `claude/per-light-resend` — re-send a per-light frame that didn't land; slot check skips the streamed slot
+6. #52 `claude/rate-test-rungs` — the rate test's own paces
+7. #53 `claude/per-light-2s` — per-light for guests, every 2 s on nine
+8. #54 `claude/visible-per-light` — the 18 per-light options on or off
+9. #55 `claude/every-look-per-light` — still #1–#3 pictures, looping motion, per-light iPad cards
+10. #56 `claude/idle-light-show` — an hour untouched, then Light Show #2
+11. #57 `claude/kiosk-paint` — the iPad Paint tab
+12. #58 `claude/still-resend` — still pictures go out twice; a hold carries its frame once (+ this note)
+Known CI red until redesigned: `test_short_soak` (its stepped scenario assumes module-level runs; every look is
+per-light in sim now), and at some points `test_f11` (a 5 s latency row, flaky). Everything else green locally.
+
 ## Paint sends stuck, `claude/still-resend` (Oct 21 night; no PR yet)
 Alon: paintings sometimes stuck, then several went through when another command was sent. Telemetry: 35 of 108
 "mode: paint" writes ended MISMATCH — every one on a panel already showing a per-light picture (Hubspace accepted the
