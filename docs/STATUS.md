@@ -26,6 +26,21 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Paint: a guest paints the canopy, `claude/kiosk-paint` → `main` (Oct 21 night; no PR yet)
+The iPad panel has two tabs at the top of the sheet: **Scenes** (unchanged) and **Paint**. Paint is a large mockup of
+the 270 lights (canopy-preview `layout()`, the kiosk's own view transform, no fins so every light is a big dot), 13
+presets (warm white `#FFE4BC` among them), Off (eraser) and a custom colour picker, and three ways to paint: Whole
+canopy (tap or "Fill"), Panels (tap a panel; outlines dashed) and Draw (Pointer Events, every pointer tracked, each
+move painted as a segment so fast strokes leave no gap; Small/Medium/Large brush). Clear, then **Send to the canopy**
+posts `POST /api/kiosk/paint` (server in `d6a2e58`) with kind = the mode; Send looks disabled and explains itself when
+the painting is all off, in a cooldown (with a countdown chip) or paused. Refusals show the server's `detail` (429 with
+its countdown; a 422's calm detail too). The painting starts from `state.lit` and survives tab switches; the attract
+screen sends the next guest back to Scenes. Now Showing names "Your painting" while it is the last thing this iPad sent
+(`state.scene` is null for it). Pure math in `web/kiosk/paint-model.mjs`, tested by `tests/paint-model.test.mjs` (run by
+`tests/test_kiosk_node.py`); modules now `?v=paint-1`. **Verified:** node tests (67 pass), `test_kiosk_node`,
+`test_kiosk_routes`, `test_guest_panel`, `test_panel_latency` (82 pass), ruff. **Not verified:** the look and the layout
+at 1180×820, 1366×1024 and portrait (Alon checks in the sim), touch on the iPad's WebKit, the colour picker on iOS.
+
 ## Idle: an hour, then Light Show #2, `claude/idle-light-show` → `main` (Oct 21 night; no PR yet)
 Alon: a guest's pick should hold an hour untouched, then Light Show #2. `kiosk.idle_reset_s: 3600` with
 `kiosk.idle_scene: light-show-2` (the reset clears guest brightness/off and returns to that mood);

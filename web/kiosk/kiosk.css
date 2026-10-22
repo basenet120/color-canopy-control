@@ -225,13 +225,13 @@ body[data-view="loading"] .app { visibility: hidden; }
   background: var(--sheet);
   border-radius: var(--r-sheet) var(--r-sheet) 0 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) calc(var(--bar-h) + env(safe-area-inset-bottom, 0px));
+  grid-template-rows: auto minmax(0, 1fr) calc(var(--bar-h) + env(safe-area-inset-bottom, 0px));
   min-height: 0;
   overflow: hidden;
 }
 .grabber {
   position: absolute;
-  top: 8px;
+  top: 6px;
   left: 50%;
   width: 40px;
   height: 5px;
@@ -239,11 +239,51 @@ body[data-view="loading"] .app { visibility: hidden; }
   border-radius: 3px;
   background: var(--grabber);
 }
+/* the tab switch (Scenes | Paint): a segmented control at the top of the sheet, under the grabber */
+.tabs {
+  grid-row: 1;
+  justify-self: center;
+  width: min(440px, calc(100% - 2 * var(--side)));
+  height: 52px;
+  margin-top: 16px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--chip-grey);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  outline: none;
+  transition: background-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out, transform 120ms var(--ease-move);
+}
+.tab[aria-selected="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 2px 6px rgba(0, 0, 0, .08); }
+.tab.is-pressed { transform: scale(.97); }
+.tab:focus-visible { box-shadow: 0 0 0 3px var(--brand); }
+.tab-icon { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tab[aria-selected="true"] .tab-icon { stroke: var(--brand-text); }
+.app[data-tab="paint"] .sheet-body { display: none; }
+
 .sheet-body {
+  grid-row: 2;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--right-col);
   column-gap: var(--col-gap);
-  padding: 28px var(--pad-r) 24px var(--pad-l);
+  padding: 8px var(--pad-r) 24px var(--pad-l);
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -479,8 +519,9 @@ body[data-view="loading"] .app { visibility: hidden; }
   .now { flex: 1 1 auto; display: flex; flex-direction: column; }
   .now-body { flex: 1; display: flex; flex-direction: column; }
   .now .snake, .now .canopy-preview { margin: auto 0; padding-top: 18px; }
-  /* a quarter-turned view (kiosk.preview.rotate_deg) is tall: it letterboxes into the card instead of growing it */
-  .now .canopy-preview { max-height: 210px; }
+  /* a quarter-turned view (kiosk.preview.rotate_deg) is tall: it letterboxes into the card instead of growing it.
+     It takes the card's spare height (the tab switch above the sheet costs some), shrinking rather than overflowing */
+  .now .canopy-preview { flex: 1 1 0; min-height: 96px; height: auto; max-height: 210px; }
 }
 .bright-row { display: flex; align-items: center; }
 .bright-label { margin-left: 12px; font-size: 20px; line-height: 26px; font-weight: 500; }
@@ -541,6 +582,7 @@ body[data-view="loading"] .app { visibility: hidden; }
 
 /* ---- bottom bar ---------------------------------------------------------------------------------------------- */
 .bar {
+  grid-row: 3;
   display: flex;
   align-items: center;
   gap: 24px;
@@ -716,6 +758,264 @@ body[data-lost="true"] .power { opacity: .45; }
   pointer-events: none;
 }
 
+/* ---- the Paint tab (Oct 21) ----------------------------------------------------------------------------------
+   The guest's painting on a large mockup of the canopy (canopy-preview.mjs layout(), the view a guest at the stand
+   sees), a palette, three ways to paint and Send. The mockup is the guest's own drawing, never a claim about the
+   ceiling; the footer's feature line stays the server's sentence. Landscape: mockup left, tools in the right
+   column. Portrait: mockup on top, tools under it in two columns. Nothing scrolls; the mockup letterboxes. */
+.paint-body {
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--right-col);
+  grid-template-rows: minmax(0, 1fr);
+  column-gap: var(--col-gap);
+  padding: 8px var(--pad-r) 24px var(--pad-l);
+  min-height: 0;
+  overflow: hidden;
+}
+.paint-canvas {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 20px 24px 18px;
+}
+.paint-canvas .sec-head { margin-bottom: 12px; min-height: 36px; }
+.paint-hint {
+  font-size: 16px;
+  line-height: 20px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.paint-stage {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 160px;
+  border-radius: 12px;
+  background: var(--sheet);
+  touch-action: none; /* a drag paints, never scrolls or zooms */
+  cursor: crosshair;
+  overflow: hidden;
+}
+.paint-svg { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); display: block; }
+.paint-svg .paint-frame { fill: none; stroke: transparent; stroke-width: 1.2; transition: stroke 160ms ease-out; }
+.paint-svg .paint-panel { fill: transparent; stroke: var(--hairline); stroke-width: .6; transition: fill 240ms ease-out, stroke 160ms ease-out; }
+.paint-svg .paint-dot { stroke: rgba(0, 0, 0, .16); stroke-width: .45; transition: fill 120ms ease-out; }
+.paint-svg .paint-dot.is-off { stroke: rgba(0, 0, 0, .08); }
+.paint-svg .paint-cursor { fill: rgba(255, 255, 255, .18); stroke: rgba(0, 0, 0, .45); stroke-width: .6; stroke-dasharray: 2 1.5; }
+.paint-stage[data-mode="modules"] .paint-panel { stroke: var(--ring-selected); stroke-width: .8; stroke-dasharray: 3 2; }
+.paint-stage[data-mode="whole"] .paint-frame { stroke: var(--ring-selected); stroke-dasharray: 3 2; }
+.paint-svg .paint-panel.is-hit { fill: rgba(250, 70, 22, .10); transition-duration: 0ms; }
+.paint-svg .paint-frame.is-hit { stroke: var(--brand); transition-duration: 0ms; }
+.paint-help { margin-top: 10px; }
+
+.paint-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "modes" "palette" "slot" "actions";
+  align-content: start;
+  row-gap: 18px;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto; /* a fallback only: every size the kiosk ships at fits without it */
+  overscroll-behavior: contain;
+  padding: 2px 2px 6px;
+  margin: -2px;
+}
+#paint-modes { grid-area: modes; }
+.paint-tools .paint-group:not(.paint-slot) { grid-area: palette; }
+.paint-slot { grid-area: slot; }
+.paint-actions { grid-area: actions; }
+
+.paint-label {
+  margin: 0 0 10px;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--brand-text);
+}
+
+/* a segmented control (the paint modes, the brush sizes): the tab switch's look at card scale */
+.seg-ctl {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 4px;
+  height: 56px;
+  padding: 4px;
+  border-radius: 16px;
+  background: var(--chip-grey);
+}
+.seg-ctl button {
+  min-width: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 16px;
+  font-weight: 600;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+  outline: none;
+  text-align: center;
+  line-height: 18px; /* a long label ("Whole canopy" in a narrow column) wraps to two lines inside the segment */
+  transition: background-color 160ms ease-out, color 160ms ease-out, transform 120ms var(--ease-move);
+}
+.seg-ctl button[aria-checked="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 2px 6px rgba(0, 0, 0, .08); }
+.seg-ctl button.is-pressed { transform: scale(.96); }
+.seg-ctl button:focus-visible { box-shadow: 0 0 0 3px var(--brand); }
+.seg-small { height: 52px; }
+.brush-dot { flex: none; border-radius: 50%; background: currentColor; }
+
+/* the palette: bold presets, Off (the eraser) and a custom colour; the chosen one ringed and checked */
+.palette {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px 12px;
+  padding: 6px; /* room for the chosen swatch's ring (outline 3px, offset 3px) */
+  margin: -6px;
+}
+.swatch-btn {
+  position: relative;
+  justify-self: center;
+  width: 100%;
+  max-width: 56px;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
+  outline: 3px solid transparent;
+  outline-offset: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 120ms var(--ease-move), outline-color 120ms ease-out;
+}
+.swatch-btn.is-pressed { transform: scale(.92); }
+.swatch-btn[aria-checked="true"] { outline-color: var(--ring-selected); }
+.swatch-btn:focus-visible { outline-color: var(--brand); }
+.swatch-btn .swatch-check { width: 46%; height: 46%; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; display: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35)); }
+.swatch-btn.is-light .swatch-check { stroke: #222; filter: none; }
+.swatch-btn[aria-checked="true"] .swatch-check { display: block; }
+.swatch-off { background: #fff; }
+.swatch-off::after { /* the "none" slash */
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: calc(50% - 1.5px);
+  height: 3px;
+  border-radius: 2px;
+  background: var(--brand);
+  transform: rotate(-45deg);
+}
+.swatch-off[aria-checked="true"]::after { display: none; }
+.swatch-off .swatch-check { stroke: #222; filter: none; }
+.swatch-custom { background: conic-gradient(#FF1E1E, #FFE500, #00C853, #00D4FF, #2962FF, #E400D0, #FF1E1E); }
+.swatch-custom .swatch-core {
+  position: absolute;
+  inset: 22%;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff;
+  pointer-events: none;
+}
+.swatch-custom .swatch-check { position: relative; width: 34%; height: 34%; }
+.swatch-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.paint-slot { min-height: 82px; display: flex; flex-direction: column; justify-content: flex-start; }
+.paint-slot > * { display: none; }
+.paint-body[data-mode="lights"] .paint-brush,
+.paint-body[data-mode="whole"] .btn-fill,
+.paint-body[data-mode="modules"] .paint-slot-help { display: block; }
+.paint-body[data-mode="whole"] .btn-fill { display: flex; }
+.paint-slot-help { margin-top: 4px; font-size: 16px; line-height: 22px; }
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 60px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+  transition: transform 120ms var(--ease-move), background-color 120ms ease-out, opacity 160ms ease-out;
+}
+.btn.is-pressed { transform: scale(.97); }
+.btn[aria-disabled="true"] { opacity: .45; }
+.btn[aria-disabled="true"].is-pressed { transform: none; }
+.btn:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.btn-primary { background: var(--brand); color: #fff; }
+.btn-primary.is-pressed { background: var(--brand-press); }
+.btn-primary .spinner { color: #fff; width: 20px; height: 20px; }
+.btn-secondary, .btn-fill { background: var(--card); color: var(--text); box-shadow: inset 0 0 0 1.5px var(--hairline), var(--sh-card-press); }
+.btn-fill { width: 100%; height: 56px; }
+.btn-fill .fill-dot { width: 24px; height: 24px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
+.paint-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
+.paint-actions .btn-secondary { min-width: 108px; }
+.paint-body[data-sending="true"] .btn-primary { opacity: .75; }
+
+@media (orientation: landscape) and (max-width: 1100px) {
+  .paint-canvas { padding: 16px 20px 14px; }
+  .paint-tools { row-gap: 14px; }
+  .seg-ctl { height: 52px; }
+  .seg-ctl button { font-size: 15px; }
+  .palette { gap: 8px 10px; }
+  .swatch-btn { max-width: 48px; }
+  .btn { height: 56px; font-size: 17px; }
+  .paint-help { display: none; }
+}
+@media (orientation: portrait) {
+  .paint-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    row-gap: 20px;
+  }
+  .paint-tools {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "modes palette" "slot palette" "actions palette";
+    column-gap: 28px;
+    row-gap: 16px;
+    overflow: visible;
+  }
+}
+@media (orientation: portrait) and (max-width: 700px) {
+  .paint-tools { grid-template-columns: minmax(0, 1fr); grid-template-areas: "modes" "palette" "slot" "actions"; }
+  .paint-body { overflow-y: auto; grid-template-rows: minmax(280px, 1fr) auto; }
+  .tab { font-size: 16px; }
+}
+
 /* ---- §4.2 landscape 1024 ------------------------------------------------------------------------------------- */
 @media (orientation: landscape) and (max-width: 1100px) {
   :root {
@@ -750,8 +1050,8 @@ body[data-lost="true"] .power { opacity: .45; }
     row-gap: 24px;
     align-content: start;
   }
-  .grid { grid-auto-rows: 220px; flex: none; }
-  .scene { min-height: 220px; }
+  .grid { grid-auto-rows: 212px; flex: none; }
+  .scene { min-height: 212px; }
   .side { display: flex; flex-direction: column-reverse; gap: 24px; }
   .now-body { display: flex; align-items: center; gap: 24px; }
   .now-copy { flex: 1; min-width: 0; }
@@ -782,6 +1082,8 @@ body[data-lost="true"] .power { opacity: .45; }
   .mark .spinner { color: #fff; font-size: 10px; line-height: 1; }
   .glow { transform: none; }
   .attract-strips span { transition: opacity 300ms ease-out; }
+  .tab, .seg-ctl button, .swatch-btn, .btn { transition: opacity 120ms ease-out !important; transform: none !important; }
+  .paint-svg .paint-dot, .paint-svg .paint-panel { transition: none !important; }
 }
 
 /* ---- ops debug (?debug=1; never in the guest DOM) ------------------------------------------------------------ */

@@ -2,9 +2,10 @@
 
 CI runs only pytest (.github/workflows/ci.yml), so these node test files ran nowhere but a developer's machine until
 now: tests/canopy-preview.test.mjs (web/kiosk/canopy-preview.mjs: the canopy, its apron and fins, finNeighbours and
-finPaint, and the static checks on kiosk.js and kiosk.css), tests/guest-panel.test.mjs (web/kiosk/panel-model.mjs) and
+finPaint, and the static checks on kiosk.js and kiosk.css), tests/guest-panel.test.mjs (web/kiosk/panel-model.mjs), tests/paint-model.test.mjs (web/kiosk/paint-model.mjs, the Paint
+tab's brush, panel hit-tests and request body) and
 tests/ops-ipad.test.mjs (web/ops/ipad-model.mjs, the /ops "On the iPad" card's words, D76). The one wrapper for the
-three (integration C24: PR C's own ops-ipad wrapper folded in here, so no node file runs twice in CI). The same runner
+four (integration C24: PR C's own ops-ipad wrapper folded in here, so no node file runs twice in CI). The same runner
 and summary rule as tests/test_lab_static.py's lab-model wrapper.
 """
 
@@ -18,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = ("canopy-preview.test.mjs", "guest-panel.test.mjs", "ops-ipad.test.mjs")
+FILES = ("canopy-preview.test.mjs", "guest-panel.test.mjs", "paint-model.test.mjs", "ops-ipad.test.mjs")
 
 
 @pytest.mark.skipif(

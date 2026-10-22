@@ -15,12 +15,13 @@
   <link rel="apple-touch-icon" href="/kiosk/brand/apple-touch-icon.png">
   <!--
     The guest panel on the iPad stand (docs/design/guest-panel.md): a Hubspace-style device sheet driven by
-    /api/kiosk/panel and POST /api/kiosk/scene|brightness|power. A single page that never navigates away and never
+    /api/kiosk/panel and POST /api/kiosk/scene|paint|brightness|power. Two tabs: Scenes (the scene cards) and Paint (the
+    guest paints the canopy and sends it). A single page that never navigates away and never
     shows a raw error. The Hubspace feature sentence is always the server's (state.feature), never ours.
   -->
   <link rel="preload" href="/static/fonts/canopy-rounded/CanopyRounded-VF.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/kiosk/kiosk.css">
-  <script type="module" src="/kiosk/kiosk.js?v=lights-1"></script>
+  <script type="module" src="/kiosk/kiosk.js?v=paint-1"></script>
 </head>
 <body class="kiosk no-anim" data-view="loading">
   <div class="app" id="app" data-phase="ready">
@@ -41,7 +42,17 @@
 
     <main class="sheet" id="sheet">
       <div class="grabber" aria-hidden="true"></div>
-      <div class="sheet-body" id="sheet-body">
+      <div class="tabs" id="tabs" role="tablist" aria-label="Light the canopy">
+        <button class="tab" id="tab-scenes" type="button" role="tab" aria-selected="true" aria-controls="sheet-body" data-tab="scenes">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+          <span>Scenes</span>
+        </button>
+        <button class="tab" id="tab-paint" type="button" role="tab" aria-selected="false" aria-controls="paint-body" data-tab="paint" tabindex="-1">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.4 3.6a2 2 0 0 1 2.8 2.8l-8.6 8.6-3.6.8.8-3.6z"/><path d="M8.2 15.6c-2.2 0-3.6 1.4-3.6 3.2 0 .9-.6 1.6-1.6 1.9 1 .6 2.3.9 3.5.9 2.6 0 4.3-1.6 4.3-3.6"/></svg>
+          <span>Paint</span>
+        </button>
+      </div>
+      <div class="sheet-body" id="sheet-body" role="tabpanel" aria-labelledby="tab-scenes">
         <section class="scenes" aria-labelledby="scenes-title">
           <div class="sec-head">
             <h2 class="sec-title" id="scenes-title">Choose a Scene</h2>
@@ -80,6 +91,47 @@
               <div class="slider-knob" id="slider-knob"></div>
             </div>
           </section>
+        </div>
+      </div>
+
+      <div class="paint-body" id="paint-body" role="tabpanel" aria-labelledby="tab-paint" hidden>
+        <section class="card paint-canvas" aria-labelledby="paint-title">
+          <div class="sec-head">
+            <h2 class="sec-title" id="paint-title">Your Painting</h2>
+            <span class="sec-rule" aria-hidden="true"></span>
+            <span class="paint-hint" id="paint-hint">&nbsp;</span>
+            <span class="chip" id="paint-chip" hidden></span>
+          </div>
+          <div class="paint-stage" id="paint-stage" data-mode="lights">
+            <svg class="paint-svg" id="paint-svg" role="img" aria-label="Your painting"></svg>
+          </div>
+          <p class="help paint-help">Nothing on the canopy changes until you send your painting.</p>
+        </section>
+
+        <div class="paint-tools">
+          <div class="seg-ctl" id="paint-modes" role="radiogroup" aria-label="How to paint"></div>
+
+          <section class="paint-group" aria-labelledby="palette-title">
+            <h3 class="paint-label" id="palette-title">Colour</h3>
+            <div class="palette" id="palette" role="radiogroup" aria-labelledby="palette-title"></div>
+          </section>
+
+          <section class="paint-group paint-slot" id="paint-slot" aria-label="Brush">
+            <div class="paint-brush" id="paint-brush">
+              <h3 class="paint-label" id="brush-title">Brush</h3>
+              <div class="seg-ctl seg-small" id="brushes" role="radiogroup" aria-labelledby="brush-title"></div>
+            </div>
+            <button class="btn btn-fill" id="paint-fill" type="button">Fill the whole canopy</button>
+            <p class="help paint-slot-help" id="paint-panels-help">Tap a panel on the canopy to fill all its lights with your colour.</p>
+          </section>
+
+          <div class="paint-actions">
+            <button class="btn btn-secondary" id="paint-clear" type="button" aria-label="Clear: turn every light off in your painting">Clear</button>
+            <button class="btn btn-primary" id="paint-send" type="button" aria-disabled="true">
+              <span class="spinner" id="paint-send-spinner" aria-hidden="true" hidden></span>
+              <span id="paint-send-text">Send to the canopy</span>
+            </button>
+          </div>
         </div>
       </div>
 
