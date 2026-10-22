@@ -19,10 +19,13 @@
 // with palette strips, as before.
 // Ops: `?debug=1` (only when the server says the viewer is ops) adds a debug drawer; `?debug=1&frame=1` is the iPad
 // frame preview. A kiosk-role device gets the plain panel whatever the URL says.
-// Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump all four together, so a
+// Paint (Oct 21): a second tab where the guest paints the canopy (the whole canopy one colour, panel by panel, or light
+// by light with a brush) on a large mockup drawn by canopy-preview.mjs layout(), then sends it (POST /api/kiosk/paint).
+// The painting is the guest's own drawing, never a claim about the ceiling; paint-model.mjs holds its pure math.
+// Versions: index.html loads kiosk.js?v=… and kiosk.js its modules with the same tag; bump them all together, so a
 // browser that cached an older copy never runs a new kiosk.js over an older module (or the reverse).
 
-import { api, connectLive, setSimBadge } from "/static/app.js?v=lights-1";
+import { api, connectLive, setSimBadge } from "/static/app.js?v=paint-1";
 import {
   BRIGHTNESS_HOLD_MS,
   COPY,
@@ -65,7 +68,7 @@ import {
   switchView,
   thumbDots,
   waitToastOver,
-} from "/kiosk/panel-model.mjs?v=lights-1";
+} from "/kiosk/panel-model.mjs?v=paint-1";
 import {
   DOT_R_IN,
   ariaSummary,
@@ -77,7 +80,31 @@ import {
   motionActive,
   motionColors,
   paintFor,
-} from "/kiosk/canopy-preview.mjs?v=lights-1";
+  UNLIT,
+} from "/kiosk/canopy-preview.mjs?v=paint-1";
+import {
+  BRUSHES,
+  MODES,
+  PAINT_BLANK,
+  PAINT_SENT,
+  PAINT_SHOWING,
+  PALETTE,
+  dotsInStroke,
+  emptyPainting,
+  fillAll,
+  fillPanel,
+  isBlank,
+  lightSpacing,
+  needsDarkInk,
+  normalizeHex,
+  paintBody,
+  paintDots,
+  paintPalette,
+  paintRefusal,
+  paintSummary,
+  paintingFromLit,
+  panelAt,
+} from "/kiosk/paint-model.mjs?v=paint-1";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -107,6 +134,8 @@ const ui = {
   writeSeq: 0, // bumped when a write is sent and when its answer lands: a poll that spans either is stale
   serverClock: null, // {serverNow, at}: the server's wall clock (s) as last read, and the local ms it was read at
   waitToast: null, // {at}: the toast up is a "wait for staff" refusal (a try-on, the rehearsal) that landed at `at`
+  tab: "scenes", // "scenes" | "paint": in memory only
+  paintSent: null, // {palette}: this iPad's painting was accepted and no catalog scene has replaced it since
 };
 
 /** The server's wall clock now, estimated: server_now + the local time since it was read (motion is phase-synced). */
@@ -595,7 +624,7 @@ function render() {
   $("power-label").textContent = sw.label;
   const controlsOff = phase === "paused" || ui.lost || !panel.capabilities?.power;
   powerBtn.setAttribute("aria-disabled", String(controlsOff));
-  const showing = nowShowing(scenes, { ...state, power }, panel.showing);
+  const showing = shownNow(scenes, { ...state, power }, panel.showing);
   setTint(HEADER_LAYERS, headerTint(showing.scene, power));
 
   // cards
@@ -623,7 +652,7 @@ function render() {
   if (drawCanopy) paintCanopy(panel.canopy, showing.lit);
   else {
     stopCanopy();
-    paintSnake(showing.frame || nowShowing(scenes, { ...state, power, lit: null }, panel.showing).frame);
+    paintSnake(showing.frame || shownNow(scenes, { ...state, power, lit: null }, panel.showing).frame);
   }
 
   // brightness
@@ -648,7 +677,20 @@ function render() {
   $("paused").hidden = phase !== "paused";
   if (phase === "paused") $("paused-body").textContent = state.message || COPY.paused;
 
+  if (ui.tab === "paint") openPaint(); // lays the mockup out again only when the geometry changed
+  else renderPaint();
   if (ui.debug) renderDebug();
+}
+
+/**
+ * Now showing: nowShowing(), except that this iPad's own painting is named while it is what the guest last sent and
+ * no catalog scene has replaced it (the painting is not a catalog scene, so `state.scene` is null while it shows).
+ */
+function shownNow(scenes, state, showing) {
+  if (state.scene) ui.paintSent = null; // a scene (a guest's, ops' or the idle reset) has replaced the painting
+  if (!ui.paintSent || showing) return nowShowing(scenes, state, showing);
+  const painting = { ...PAINT_SHOWING, palette: ui.paintSent.palette };
+  return nowShowing(scenes, { ...state, scene: PAINT_SHOWING.id }, painting);
 }
 
 function paintSlider(level, range) {
@@ -804,6 +846,7 @@ async function chooseScene(id) {
   if (!decision.send) return;
   ui.pendingId = id;
   ui.pendingPosted = 0;
+  ui.paintSent = null;
   render();
   try {
     const sentAt = Date.now();
@@ -916,6 +959,396 @@ function wireSlider() {
   });
 }
 
+// ---- tabs ---------------------------------------------------------------------------------------------------------
+/** Show the Scenes or the Paint tab (remembered in memory only). */
+function selectTab(tab) {
+  ui.tab = tab === "paint" ? "paint" : "scenes";
+  $("app").dataset.tab = ui.tab;
+  for (const b of document.querySelectorAll("#tabs .tab")) {
+    const on = b.dataset.tab === ui.tab;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  $("sheet-body").hidden = ui.tab !== "scenes";
+  $("paint-body").hidden = ui.tab !== "paint";
+  if (ui.tab === "paint") openPaint();
+}
+
+function wireTabs() {
+  const tabs = [...document.querySelectorAll("#tabs .tab")];
+  for (const b of tabs) pressable(b, () => selectTab(b.dataset.tab));
+  $("tabs").addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = tabs.findIndex((b) => b.dataset.tab === ui.tab);
+    const next = tabs[(i + step + tabs.length) % tabs.length];
+    selectTab(next.dataset.tab);
+    next.focus();
+  });
+}
+
+// ---- paint --------------------------------------------------------------------------------------------------------
+/**
+ * The Paint tab: `paint.painting` is the guest's drawing ({pos: [hex | null]}, paint-model.mjs), kept across tab
+ * switches. The mockup is laid out by canopy-preview.mjs layout() in canopy inches (the kiosk's view: mirror and
+ * rotation), without the fins so every light is a big, tappable dot; the SVG letterboxes into the stage, and a pointer
+ * maps into its units through the SVG's own screen matrix. Each pointer (multi-touch) paints from its last point to
+ * its new one, so a fast stroke leaves no gap.
+ */
+const paint = {
+  key: "", // the geometry the mockup was laid out for
+  canopy: null,
+  dots: [], // layout() dots
+  nodes: [], // their circles
+  panels: [], // layout() panels
+  panelNodes: new Map(), // pos → rect
+  frame: null,
+  spacing: 10,
+  painting: null,
+  mode: "lights",
+  color: PALETTE[0].hex, // "#RRGGBB", or null for the eraser (Off)
+  choice: PALETTE[0].hex, // the swatch chosen: a preset hex, "off" or "custom"
+  custom: "#FF8800",
+  brush: "medium",
+  pointers: new Map(), // pointerId → {x, y, cursor}
+  sending: false,
+};
+
+/** The painting's geometry: the canopy as the kiosk draws it, minus the fins (big dots to paint). */
+const paintGeometry = (canopy) => ({ ...canopy, fins: undefined, fin_width_in: undefined });
+
+/** Lay out the mockup when the geometry changes; start the painting from what the canopy shows (or all off). */
+function openPaint() {
+  const panel = ui.panel;
+  if (!panel || !panel.canopy) return;
+  const canopy = paintGeometry(panel.canopy);
+  const key = geometryKey(canopy);
+  if (key !== paint.key) {
+    paint.key = key;
+    paint.canopy = canopy;
+    buildPaint(canopy);
+    const lit = panel.state && panel.state.lit;
+    paint.painting = lit ? paintingFromLit(canopy, lit) : emptyPainting(canopy);
+    paintAllDots();
+  }
+  renderPaint();
+}
+
+function buildPaint(canopy) {
+  const drawing = layout(canopy);
+  const root = $("paint-svg");
+  root.setAttribute("viewBox", `0 0 ${drawing.width} ${drawing.height}`);
+  root.replaceChildren();
+  const xs = drawing.panels.flatMap((p) => [p.x, p.x + p.w]);
+  const ys = drawing.panels.flatMap((p) => [p.y, p.y + p.h]);
+  const pad = 1.5;
+  paint.frame = svg("rect", {
+    class: "paint-frame",
+    x: Math.min(...xs) - pad,
+    y: Math.min(...ys) - pad,
+    width: Math.max(...xs) - Math.min(...xs) + 2 * pad,
+    height: Math.max(...ys) - Math.min(...ys) + 2 * pad,
+    rx: 2,
+  });
+  root.append(paint.frame);
+  paint.panels = drawing.panels;
+  paint.panelNodes = new Map();
+  for (const p of drawing.panels) {
+    const rect = svg("rect", { class: "paint-panel", x: p.x, y: p.y, width: p.w, height: p.h, rx: 1.5 });
+    paint.panelNodes.set(p.pos, rect);
+    root.append(rect);
+  }
+  paint.dots = drawing.dots;
+  paint.nodes = drawing.dots.map((d) => {
+    const node = svg("circle", { class: "paint-dot", cx: d.cx, cy: d.cy, r: d.r });
+    root.append(node);
+    return node;
+  });
+  paint.spacing = lightSpacing(drawing.dots);
+  for (const p of paint.pointers.values()) p.cursor = null;
+}
+
+function paintDot(i) {
+  const d = paint.dots[i];
+  const c = paint.painting[d.pos] ? paint.painting[d.pos][d.k] : null;
+  const node = paint.nodes[i];
+  node.setAttribute("fill", c || UNLIT);
+  node.setAttribute("class", c ? "paint-dot" : "paint-dot is-off");
+}
+
+function paintAllDots() {
+  paint.dots.forEach((_, i) => paintDot(i));
+}
+
+/** After the painting changed: repaint those dots and the controls that depend on it. */
+function painted(changed) {
+  if (!changed.length) return;
+  for (const i of changed) paintDot(i);
+  renderPaint();
+}
+
+function flash(node) {
+  if (!node) return;
+  node.classList.add("is-hit");
+  clearTimeout(node.hitTimer);
+  node.hitTimer = setTimeout(() => node.classList.remove("is-hit"), 260);
+}
+
+/** A client point → the mockup's own units (the SVG letterboxes, so its screen matrix does the work). */
+function toPaintUnits(clientX, clientY) {
+  const root = $("paint-svg");
+  const m = root.getScreenCTM();
+  if (!m) return null;
+  const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
+  return { x: p.x, y: p.y };
+}
+
+function brushRadius() {
+  const b = BRUSHES.find((x) => x.id === paint.brush) || BRUSHES[1];
+  return b.radius * paint.spacing;
+}
+
+/** Paint what a pointer moving from `a` to `b` touches, in the current mode. `first`: the pointer just went down. */
+function paintStroke(a, b, first) {
+  if (!paint.painting) return;
+  if (paint.mode === "whole") {
+    if (!first) return;
+    flash(paint.frame);
+    painted(fillAll(paint.painting, paint.dots, paint.color));
+    return;
+  }
+  if (paint.mode === "modules") {
+    const pos = panelAt(paint.panels, b.x, b.y, paint.spacing * 0.5);
+    if (!pos) return;
+    if (first || pos !== panelAt(paint.panels, a.x, a.y, paint.spacing * 0.5)) flash(paint.panelNodes.get(pos));
+    painted(fillPanel(paint.painting, paint.dots, pos, paint.color));
+    return;
+  }
+  painted(paintDots(paint.painting, paint.dots, dotsInStroke(paint.dots, a, b, brushRadius()), paint.color));
+}
+
+function moveCursor(p) {
+  if (paint.mode !== "lights") return;
+  if (!p.cursor) {
+    p.cursor = svg("circle", { class: "paint-cursor" });
+    $("paint-svg").append(p.cursor);
+  }
+  p.cursor.setAttribute("cx", p.x);
+  p.cursor.setAttribute("cy", p.y);
+  p.cursor.setAttribute("r", brushRadius());
+}
+
+function wireStage() {
+  const stage = $("paint-stage");
+  stage.addEventListener("pointerdown", (e) => {
+    if (!paint.painting || ui.attract) return;
+    e.preventDefault();
+    try {
+      stage.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic pointer can't be captured */
+    }
+    const at = toPaintUnits(e.clientX, e.clientY);
+    if (!at) return;
+    const p = { ...at, cursor: null };
+    paint.pointers.set(e.pointerId, p);
+    paintStroke(at, at, true);
+    moveCursor(p);
+  });
+  stage.addEventListener("pointermove", (e) => {
+    const p = paint.pointers.get(e.pointerId);
+    if (!p) return;
+    e.preventDefault();
+    // every sample since the last frame (iPad touch reports at 120 Hz), each as a segment from the one before
+    const samples = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
+    for (const s of samples.length ? samples : [e]) {
+      const at = toPaintUnits(s.clientX, s.clientY);
+      if (!at) continue;
+      paintStroke(p, at, false);
+      p.x = at.x;
+      p.y = at.y;
+    }
+    moveCursor(p);
+  });
+  const end = (e) => {
+    const p = paint.pointers.get(e.pointerId);
+    if (!p) return;
+    paint.pointers.delete(e.pointerId);
+    if (p.cursor) p.cursor.remove();
+  };
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) stage.addEventListener(type, end);
+}
+
+function radioButton(attrs, label, onChoose, ...kids) {
+  const b = el("button", { type: "button", role: "radio", "aria-checked": "false", ...attrs }, ...kids);
+  if (label) b.append(document.createTextNode(label));
+  pressable(b, onChoose);
+  return b;
+}
+
+function checkMark() {
+  const check = svg("svg", { class: "swatch-check", viewBox: "0 0 24 24", "aria-hidden": "true" });
+  check.append(svg("path", { d: "M5 12.5l4.5 4.5L19 7.5" }));
+  return check;
+}
+
+function chooseColor(choice) {
+  paint.choice = choice;
+  paint.color = choice === "off" ? null : choice === "custom" ? paint.custom : choice;
+  renderPaint();
+}
+
+function buildPaintTools() {
+  $("paint-modes").replaceChildren(
+    ...MODES.map((m) =>
+      radioButton({ "data-mode": m.id }, m.label, () => {
+        paint.mode = m.id;
+        renderPaint();
+      }),
+    ),
+  );
+  const swatches = PALETTE.map((p) => {
+    const b = radioButton({ class: "swatch-btn", "data-choice": p.hex, "aria-label": p.name }, "", () => chooseColor(p.hex), checkMark());
+    b.style.background = p.hex;
+    if (needsDarkInk(p.hex)) b.classList.add("is-light");
+    return b;
+  });
+  const off = radioButton(
+    { class: "swatch-btn swatch-off", "data-choice": "off", "aria-label": "Off: the eraser, turns lights off" },
+    "",
+    () => chooseColor("off"),
+    checkMark(),
+  );
+  // the custom colour: the system colour picker in a rainbow ring; picking a colour chooses it
+  const input = el("input", { type: "color", value: paint.custom.toLowerCase(), "aria-label": "Pick your own colour", tabindex: "-1" });
+  const core = el("span", { class: "swatch-core", "aria-hidden": "true" });
+  const custom = radioButton(
+    { class: "swatch-btn swatch-custom", "data-choice": "custom", "aria-label": "Your own colour" },
+    "",
+    () => chooseColor("custom"),
+    core,
+    checkMark(),
+    input,
+  );
+  const pick = () => {
+    const hex = normalizeHex(input.value);
+    if (!hex) return;
+    paint.custom = hex;
+    chooseColor("custom");
+  };
+  input.addEventListener("input", pick);
+  input.addEventListener("change", pick);
+  input.addEventListener("click", () => chooseColor("custom"));
+  $("palette").replaceChildren(...swatches, off, custom);
+  $("brushes").replaceChildren(
+    ...BRUSHES.map((b, i) => {
+      const dot = el("span", { class: "brush-dot", "aria-hidden": "true" });
+      dot.style.width = dot.style.height = `${8 + i * 6}px`;
+      return radioButton({ "data-brush": b.id, "aria-label": `${b.label} brush` }, b.label, () => {
+        paint.brush = b.id;
+        renderPaint();
+      }, dot);
+    }),
+  );
+}
+
+/** Why Send can't go now ({text, retryAfterS}), or null. A blocked Send looks disabled and explains itself. */
+function paintBlocked() {
+  const panel = ui.panel;
+  if (!panel || ui.lost || !panel.capabilities?.scene) return { text: COPY.reconnecting, retryAfterS: 0 };
+  const state = panel.state || {};
+  const phase = phaseOf(state);
+  if (phase === "paused" || phase === "resting") return { text: state.message || COPY.paused, retryAfterS: 0 };
+  if (!paint.painting || isBlank(paint.painting)) return { text: PAINT_BLANK, retryAfterS: 0 };
+  const left = cooldownLeft(state.cooldown_remaining_s, ui.readAt, Date.now());
+  if (phase === "cooldown" && left > 0) return { text: `You can send your painting in ${left} s.`, retryAfterS: left };
+  return null;
+}
+
+function renderPaint() {
+  const body = $("paint-body");
+  if (!body || !paint.painting) return;
+  body.dataset.mode = paint.mode;
+  body.dataset.sending = String(paint.sending);
+  $("paint-stage").dataset.mode = paint.mode;
+  const mode = MODES.find((m) => m.id === paint.mode) || MODES[2];
+  $("paint-hint").textContent = mode.hint;
+  for (const b of $("paint-modes").children) b.setAttribute("aria-checked", String(b.dataset.mode === paint.mode));
+  for (const b of $("palette").children) b.setAttribute("aria-checked", String(b.dataset.choice === paint.choice));
+  for (const b of $("brushes").children) b.setAttribute("aria-checked", String(b.dataset.brush === paint.brush));
+  const custom = $("palette").querySelector(".swatch-custom");
+  if (custom) {
+    custom.querySelector(".swatch-core").style.background = paint.custom;
+    custom.classList.toggle("is-light", needsDarkInk(paint.custom));
+  }
+  const fill = $("paint-fill");
+  const fillLabel = paint.color ? "Fill the whole canopy" : "Turn every light off";
+  if (fill.dataset.label !== `${fillLabel}|${paint.color}`) {
+    fill.dataset.label = `${fillLabel}|${paint.color}`;
+    const dot = el("span", { class: "fill-dot", "aria-hidden": "true" });
+    dot.style.background = paint.color || "#fff";
+    fill.replaceChildren(dot, document.createTextNode(fillLabel));
+  }
+  $("paint-svg").setAttribute("aria-label", paintSummary(paint.painting));
+  // Send: disabled while sending, and looks disabled (explaining itself on a tap) when it can't go
+  const blocked = paintBlocked();
+  const send = $("paint-send");
+  send.setAttribute("aria-disabled", String(paint.sending || Boolean(blocked)));
+  send.setAttribute("aria-busy", String(paint.sending));
+  $("paint-send-spinner").hidden = !paint.sending;
+  $("paint-send-text").textContent = paint.sending ? "Sending…" : "Send to the canopy";
+  $("paint-clear").setAttribute("aria-disabled", String(isBlank(paint.painting)));
+  const chip = $("paint-chip");
+  const cooling = blocked && blocked.retryAfterS > 0;
+  chip.hidden = !cooling;
+  $("paint-hint").hidden = Boolean(cooling);
+  if (cooling) chip.textContent = `Send again in ${blocked.retryAfterS} s`;
+}
+
+async function sendPainting() {
+  if (paint.sending || !paint.painting) return;
+  const blocked = paintBlocked();
+  if (blocked) return toast(blocked.text, { retryAfterS: blocked.retryAfterS });
+  const body = paintBody(paint.painting, paint.canopy, paint.mode);
+  const palette = paintPalette(paint.painting);
+  paint.sending = true;
+  renderPaint();
+  try {
+    const sentAt = Date.now();
+    const res = await post("/api/kiosk/paint", body);
+    ui.pendingId = null;
+    ui.powerHold = null; // a painting turns the lights on; follow the server
+    ui.paintSent = { palette };
+    paint.sending = false;
+    applyState(res.state, res.server_now, sentAt);
+    toast(PAINT_SENT);
+  } catch (err) {
+    paint.sending = false;
+    const own = paintRefusal(err);
+    if (own) toast(own.text);
+    else refused(err);
+  } finally {
+    paint.sending = false;
+    renderPaint();
+  }
+}
+
+function wirePaint() {
+  buildPaintTools();
+  wireStage();
+  pressable($("paint-fill"), () => {
+    if (!paint.painting) return;
+    flash(paint.frame);
+    painted(fillAll(paint.painting, paint.dots, paint.color));
+  });
+  pressable($("paint-clear"), () => {
+    if (!paint.painting) return;
+    painted(fillAll(paint.painting, paint.dots, null));
+  });
+  pressable($("paint-send"), sendPainting);
+}
+
 // ---- idle attract --------------------------------------------------------------------------------------------------
 let attractTimer = null;
 let attractIndex = 0;
@@ -948,6 +1381,7 @@ function showAttract() {
   box.hidden = false;
   hideToast();
   $("grid").scrollTop = 0; // the next guest starts at the top of the scene list
+  selectTab("scenes"); // ... on the Scenes tab (the painting is kept)
   attractIndex = -1;
   attractStep();
   attractTimer = setInterval(attractStep, reducedMotion() ? 8000 : 6000);
@@ -1233,6 +1667,8 @@ function start() {
   wireSlider();
   wireIdle();
   wireResize();
+  wireTabs();
+  wirePaint();
   pressable($("power"), togglePower);
   poll().catch(() => {}); // the first good read opens the live socket (wireLive)
 }

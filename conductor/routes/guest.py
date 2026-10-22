@@ -58,6 +58,8 @@ or one whose power-off hasn't read back yet, is `unknown` even while the guest h
 for a flagged note on a confirmed look (D78) reads as its readback (`lit` or `off`). Neither part carries
 a device id, label, reason or the vendor's name.
 - `POST /api/kiosk/scene`       `{"scene": "<scene id>"}` → `{ok, state, server_now}`
+- `POST /api/kiosk/paint`       `{"kind": "whole"|"modules"|"lights", "modules": [{pos, colors: [hex|null] × the
+                                panel's lights in lattice order]}}` → `{ok, state, server_now}` (the Paint tab, Oct 21)
 - `POST /api/kiosk/brightness`  `{"level": 1–100}` (raised to the guest floor, 10; coalesced — the last level wins)
                                 → `{ok, level, state, server_now}`
 - `POST /api/kiosk/power`       `{"on": true|false}` → `{ok, state, server_now}`
@@ -76,7 +78,7 @@ or someone is using the module page · 503 resting · 415/422/403 a malformed or
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -113,6 +115,16 @@ class BrightnessBody(_Body):
 
 class PowerBody(_Body):
     on: bool = Field(strict=True)
+
+
+class PaintModule(_Body):
+    pos: str = Field(min_length=1, max_length=8)
+    colors: list[str | None] = Field(max_length=64)
+
+
+class PaintBody(_Body):
+    kind: Literal["whole", "modules", "lights"]
+    modules: list[PaintModule] = Field(min_length=1, max_length=9)
 
 
 async def _parse(request: Request, model: type[_Body], hint: str) -> Any:
@@ -206,6 +218,30 @@ async def choose_scene(request: Request) -> JSONResponse:
     except GuestRefused as e:
         return _refused(panel, target, "scene", params, e)
     panel.log.record("scene", params, "accepted", target=target.kind)
+    return _ok(panel, target)
+
+
+@router.post("/api/kiosk/paint")
+async def paint(request: Request) -> JSONResponse:
+    """The Paint tab (Oct 21): show the guest's painting — one colour, one per panel, or light by light."""
+    from conductor.looks.paint import PaintError, parse_painting
+
+    body = await _parse(
+        request, PaintBody, 'Send {"kind": "whole|modules|lights", "modules": [{pos, colors}]}.'
+    )
+    panel = GuestPanel.of(services_of(request))
+    target = await panel.target()
+    params = {"kind": body.kind}
+    try:
+        painting = parse_painting(body.model_dump(), target.canopy())
+    except PaintError as e:
+        return _refused(panel, target, "paint", params, GuestRefused(422, str(e), why="a malformed painting"))
+    params["lit"] = painting.lit
+    try:
+        await target.paint(painting)
+    except GuestRefused as e:
+        return _refused(panel, target, "paint", params, e)
+    panel.log.record("paint", params, "accepted", target=target.kind)
     return _ok(panel, target)
 
 

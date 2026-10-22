@@ -1164,6 +1164,7 @@ def _lattice_heads(canopy: Mapping[str, Any], entry: DeviceEntry, entries: Seque
     return "".join(out)
 
 
+_FLAT_FIELD = F.LinearField(kind="linear")  # a painting's envelope: a still look ignores it
 _LIGHTS_CACHE: dict[tuple, tuple[Any, ModePlan]] = {}
 _LIGHTS_CACHE_MAX = 64
 
@@ -1216,16 +1217,29 @@ def _lights_stepped(
 
 
 def _lights_plan(
-    mode_id: str, mode: Mode, ctx: CompileContext, devices: list[DeviceEntry], lights: LightsMotion
+    mode_id: str,
+    mode: Mode | None,
+    ctx: CompileContext,
+    devices: list[DeviceEntry],
+    lights: LightsMotion,
+    *,
+    paint: Mapping[str, Sequence[R.FrameEntry]] | None = None,
+    label: str | None = None,
 ) -> ModePlan:
     """The rung as per-light frames (D80): step n sends each module ONE PUT — every light's colour (the canvas at the
     light, moved `colour_travel` repeats a cycle) at its own level (`light_level` over the envelope field), the slot
-    select, the mode and the power — into `ctx.lights_slot`. Step 0 is the hold (the plan's `modules`)."""
-    tech = mode.techniques.stepped
-    assert tech is not None and ctx.canopy is not None and ctx.recipes is not None
+    select, the mode and the power — into `ctx.lights_slot`. Step 0 is the hold (the plan's `modules`).
+
+    `paint` (the iPad's Paint tab, conductor/looks/paint.py): each module's light colours in wire order in place of
+    a canvas (`mode` None, `label` the plan's name)."""
+    tech = mode.techniques.stepped if mode is not None else None
+    assert ctx.canopy is not None
+    assert paint is not None or (tech is not None and ctx.recipes is not None)
     canopy, slot = ctx.canopy, ctx.lights_slot
-    env = lights.field if lights.field is not None else tech.canvas.field
-    colour = _Evaluator(tech.canvas, canopy, ctx.recipes)
+    env = (
+        lights.field if lights.field is not None else (tech.canvas.field if tech is not None else _FLAT_FIELD)
+    )
+    colour = _Evaluator(tech.canvas, canopy, ctx.recipes) if paint is None and tech is not None else None
     caps = {d.id: ctx.caps(d.id) for d in devices}
     indices = {d.id: ctx.frame_indices(d, caps[d.id]) for d in devices}
     placements = {
@@ -1235,7 +1249,8 @@ def _lights_plan(
     points = {d.id: head_positions(canopy, placements[d.id]) for d in devices}
     ts = {d.id: [F.value(env, x, y, canopy) for x, y in points[d.id]] for d in devices}
     still = {
-        d.id: [colour(x, y) for x, y in points[d.id]] for d in devices
+        d.id: list(paint[d.id]) if paint is not None else [colour(x, y) for x, y in points[d.id]]  # type: ignore[misc]
+        for d in devices
     }  # the colours when they don't travel
     spc = lights.steps_per_cycle
     notes = _Notes()
@@ -1252,7 +1267,7 @@ def _lights_plan(
             phase = lights.colour_travel * p
             entries = []
             for i, ((x, y), t) in enumerate(zip(points[d.id], ts[d.id], strict=True)):
-                base = colour(x, y, phase) if phase else still[d.id][i]
+                base = colour(x, y, phase) if phase and colour is not None else still[d.id][i]
                 tw = _twinkle(lights.seed or 0, pos, i) if lights.effect == "twinkle" else None
                 level = light_level(lights, t, p, tw)
                 entries.append(
@@ -1308,7 +1323,8 @@ def _lights_plan(
         "Colour and dimming: each light on each Hubspace strand set individually, saved as a Hubspace custom "
         "pattern and selected through the Hubspace cloud."
     )
-    plan = ModePlan(mode_id, mode.label, Tier.STEPPED, feature, False, holds, notes.lines(len(devices)))
+    name = label if label is not None else (mode.label if mode is not None else mode_id)
+    plan = ModePlan(mode_id, name, Tier.STEPPED, feature, False, holds, notes.lines(len(devices)))
     plan.program = Program(
         kind="stepped",
         field=env.model_dump(mode="json"),

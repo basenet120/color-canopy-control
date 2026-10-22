@@ -63,12 +63,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from conductor.capabilities import Capabilities, detect
-from conductor.engine_api import Tier
+from conductor.engine_api import PlanError, Tier
 from conductor.framemap import head_check, module_heads
 from conductor.gate import Purpose
 
 log = logging.getLogger(__name__)
 CAPS_KEY = "capabilities"
+PAINTING_KEY = "painting"  # services.extras: the iPad Paint tab's latest painting (looks/paint.py)
 ENGINE_KEY = "canopy"
 CAPS_RETRY_S = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0)  # backoff while a module has no capabilities
 CAPS_FETCH_TIMEOUT_S = 15.0
@@ -493,6 +494,13 @@ class ShowWiring:
 
     def compile(self, mode_id: str, tier: Tier) -> Any:
         from conductor.looks import compile_mode
+        from conductor.looks.paint import PAINT_ID, compile_paint
+
+        if mode_id == PAINT_ID:  # the iPad's Paint tab (Oct 21): the guest's painting, not a catalog mode
+            painting = self.services.extras.get(PAINTING_KEY)
+            if painting is None:
+                raise PlanError("nothing has been painted yet")
+            return compile_paint(painting, tier, self.context())
 
         # A module without capabilities is left out of the plan (the safe look assumes conservative ones); only
         # when no module has been read does compile_mode refuse (PlanError).
@@ -513,6 +521,10 @@ class ShowWiring:
 
     def ladder(self, mode_id: str) -> list[Tier]:
         from conductor.looks import ladder
+        from conductor.looks.paint import LADDER, PAINT_ID
+
+        if mode_id == PAINT_ID:
+            return list(LADDER)
 
         if self._rehearsing(mode_id):
             return ladder(mode_id, self.rehearsal_modes(mode_id))
