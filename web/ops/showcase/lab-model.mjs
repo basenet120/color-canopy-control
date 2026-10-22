@@ -1264,12 +1264,12 @@ export function steppedLimits(limits) {
   };
 }
 
-/** The largest breath swing a brightness takes (D75, SteppedTechnique: brightness ± swing stays within 1–100):
- * min(20, 100 − b, b − 1), never below 0. */
+/** The largest breath swing a brightness takes (D75, SteppedTechnique: brightness − swing stays at or above 1; near
+ * the top a breath dips instead of passing 100, Oct 22): min(20, b − 1), never below 0. */
 export function maxSwing(b, top = STEPPED_DEFAULT_LIMITS.brightness_swing[1]) {
   const n = Number(b);
   if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(top, 100 - n, n - 1));
+  return Math.max(0, Math.min(top, n - 1));
 }
 
 /** The Motion section's controls for a scene (a CatalogJSON scene) and its working draft: {editable, reason} plus, when

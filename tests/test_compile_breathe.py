@@ -351,3 +351,16 @@ def test_travel_steps_are_exactly_the_phase_samplers(mode_id):
             want = _sampled_rgb(sample, m, ctx, phase=sign * n / tech.steps_per_cycle)
             assert step.colours[m.module] == _hex(want)
         assert set(step.levels.values()) == {tech.brightness}
+
+
+def test_a_breath_at_the_top_dips_rests_at_its_brightness_and_never_repeats_a_step():
+    from conductor.looks.compile import breath_level, breath_wave
+
+    assert (
+        breath_level(80, 10, 1.0) == 90 and breath_level(80, 10, -1.0) == 70
+    )  # room above: ± swing as before
+    for n in (3, 4, 6):  # the breaths in config/modes.yaml (scene rules catch a repeated step in any other)
+        for swing in (4, 5, 6, 10):
+            levels = [breath_level(100, swing, breath_wave(k, n)) for k in range(n)]
+            assert levels[0] == 100 and max(levels) == 100 and min(levels) == 100 - swing, (n, swing, levels)
+            assert all(a != b for a, b in zip(levels, levels[1:] + levels[:1])), (n, swing, levels)
