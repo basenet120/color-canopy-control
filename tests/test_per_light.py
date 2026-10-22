@@ -284,3 +284,24 @@ def test_a_still_look_on_a_partial_canopy_claims_no_pace():
     assert plan.program is not None and plan.program.lights
     copy = plan.program.moving_feature
     assert "every few seconds" not in copy and "both Hubspace strands" in copy
+
+
+def test_a_still_picture_is_sent_again_whole_one_step_after_it_lands():
+    # Oct 21 (venue): Hubspace held a new frame for a panel already showing one until the next write reached it, so
+    # a still per-light picture (a painting, a #1-#3 look) goes out again one step later; nothing more after that
+    from tests.test_stepped_rehearsal import show
+
+    async def main():
+        w = await show()
+        await w.engine.request_mode("lowcountry-calm", source="kiosk")
+        await w.run_for(0.5)
+        runner = w.engine.runner
+        before = runner.steps_sent
+        await w.run_for(runner.step_s * 1.5)
+        once = runner.steps_sent
+        await w.run_for(runner.step_s * 3)
+        await w.close()
+        return runner.lights, before, once, runner.steps_sent
+
+    lights, before, once, after = run_virtual(main)
+    assert lights and before == 0 and once == 1 and after == 1
