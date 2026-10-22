@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-22 (#59 `claude/soak-per-light`: the soak for per-light looks, two idle fixes; see its block). Before that 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -41,8 +41,44 @@ each merge the next PR's diff is only its own change and it merges without confl
 10. #56 `claude/idle-light-show` — an hour untouched, then Light Show #2
 11. #57 `claude/kiosk-paint` — the iPad Paint tab
 12. #58 `claude/still-resend` — still pictures go out twice; a hold carries its frame once (+ this note)
-Known CI red until redesigned: `test_short_soak` (its stepped scenario assumes module-level runs; every look is
-per-light in sim now), and at some points `test_f11` (a 5 s latency row, flaky). Everything else green locally.
+13. #59 `claude/soak-per-light` — the soak for per-light looks (main ends green); also the two idle fixes
+    (`1d6cfb9`, `df64868`)
+Until #59: CI red on `test_short_soak` (its stepped scenario assumed module-level runs) and at some points `test_f11`
+(a 5 s latency row over too few changes). With #59 the full suite is green (see its block).
+
+## The soak for per-light looks + two idle fixes, `claude/soak-per-light` → `main` (Oct 22; #59)
+**Idle fixes (found while redesigning the soak; deployed nowhere yet):** Oct 21's "an hour untouched, then Light
+Show #2" never happened after a plain pick: the idle reset only ran while a guest dimming/off was in force, and
+choosing a mood clears those, so a pick stayed up for a day (`1d6cfb9`: with `kiosk.idle_scene` set the reset also
+fires once nothing has been chosen for `idle_reset_s`; a look ops chose since is never undone; it never alternates
+with the idle hold). And the idle reset showed Light Show #2 as a still module-level picture, not its looping
+per-light run (source "idle" skipped the stepped rung) (`df64868`: the idle scene runs its rung and loops; the idle
+hold to `idle_mode` stays still). Both with tests (`test_guest_controls`, `test_per_light`).
+**The stepped scenario** (`conductor/soak.py` `_stepped_soak`, `config/sim/soak.yaml` `stepped:`) now fits what the
+show does (every look per light in sim, moving looks loop, still #1–#3 pictures): candidates Golden Hour #1 (still,
+settles onto its canvas), Coastal Tides #4 (ripple), Coastal Tides #1 (fins-ring still), Garden Gathering #4
+(twinkle), Light Show #3 (glow), Golden Hour #5 (breathe). A moving run is watched one whole lap + 3 steps (it must
+still be running in its next lap), then the next choice replaces it; every 4th run (the moving ones) is cut short
+mid-run by another mood; a still run must end on its own within its run + 2 s and its look hold on all nine until
+the next choice. A refused choice (D72's back-off) is tried again after the countdown. The idle checks run in the
+scenario's config copy with `idle_reset_s` 240 / `idle_return_s` 600 (the show's: 3600 / 86400): Light Show #2
+240–250 s after the last choice, running and looping; then Lowcountry Calm 600–610 s later, still, no runner. Kept
+gates: each step on all its modules (per-light allowance 50 %), one PUT per changed module per step (now counted
+per lap — a looping run reuses its step labels — and attributed by the label's mode, since a step's burst is
+submitted a moment after the runner sends it), the cap in force in any 60 s, no governor trip, no downgrade at 5 %
+throttling, none failed/skipped. Seeds 0–5 × 12 runs pass every row.
+**The 5 s latency row (`test_f11`'s flake):** per-light changes are **not** slower. Measured over 2 simulated hours
+/ 40 changes, seeds 0–7: per-light p50 2.1–2.6 s, p95 3.6–4.3 s; the same runs with every rung stripped
+(module-level) p50 1.9–2.3 s, p95 3.2–5.4 s. The slow ones (5–7 s) are a change where one of nine modules caught the
+pinned 429s (executor back-off) or a silent drop; the still pictures' second send at 2 s already acts as a fast
+re-send. Nothing in the show to cut. The tests measured "p95" over 6–8 changes, i.e. the slowest one, so roughly
+one seed (or config edit) in four failed: `test_f11` and `test_short_soak` now run 1 h / 30 changes (p95 over 31–34
+changes; seeds 0–11: 3.2–4.6 s, all pass). Target unchanged (p95 ≤ 5 s, one for both kinds); the row now also
+shows the per-light count and p95. Also: a change made just before a fault window opened was counted clean and
+could never settle within the window (seed 1); a window opening before a change settles now marks it faulted.
+**Verified:** full suite (`uv run --with pytest-xdist pytest -q -n 8`), ruff check + format; `test_soak` (16),
+`test_f11`; seed sweeps by script. **Not verified:** anything on the canopy (sim only); the idle fixes need a deploy
+and an hour's wait at the venue.
 
 ## Paint sends stuck, `claude/still-resend` (Oct 21 night; no PR yet)
 Alon: paintings sometimes stuck, then several went through when another command was sent. Telemetry: 35 of 108
@@ -68,6 +104,8 @@ screen sends the next guest back to Scenes. Now Showing names "Your painting" wh
 at 1180×820, 1366×1024 and portrait (Alon checks in the sim), touch on the iPad's WebKit, the colour picker on iOS.
 
 ## Idle: an hour, then Light Show #2, `claude/idle-light-show` → `main` (Oct 21 night; no PR yet)
+**Correction (Oct 22):** as built here this only worked after a guest dimmed or switched off — a plain pick stayed up
+for a day — and Light Show #2 came as a still picture, not looping. Fixed in #59 (`1d6cfb9`, `df64868`; see its block).
 Alon: a guest's pick should hold an hour untouched, then Light Show #2. `kiosk.idle_reset_s: 3600` with
 `kiosk.idle_scene: light-show-2` (the reset clears guest brightness/off and returns to that mood);
 `kiosk.idle_return_s: 86400`, so the idle hold to `idle_mode` (Lowcountry Calm, still the start and safe look) waits
@@ -88,7 +126,7 @@ match the fin pattern"; moving looks loop forever; the iPad cards show a still p
   per-light look draws one of its own frames (basis `lights`, dark lights left out; a moving look's frame with about
   half its lights on).
 - **`claude/still-partial-copy`:** a still picture's partial-canopy copy claims no pace.
-- **Known, open (soak):** `test_engine_review2::test_f11…` fails "All nine modules correct after a mode change"
+- **Known, open (soak) — resolved in #59 (see its block):** `test_engine_review2::test_f11…` fails "All nine modules correct after a mode change"
   (p95 5.21 s vs 5 s: per-light mode changes land a little slower), and `test_soak::test_short_soak…`'s stepped
   assertions assume module-level runs (7.5 s, a canvas settle) — the scenario needs redesigning now that every look
   is per-light in sim. The Lab can't edit a `lights` block, so Lab stepped/brightness edits no longer change what a

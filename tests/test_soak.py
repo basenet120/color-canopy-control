@@ -1,4 +1,4 @@
-"""`python -m conductor.soak` in miniature: the same schedule shape over 20 simulated minutes, and the verdicts."""
+"""`python -m conductor.soak` in miniature: the same schedule shape over a simulated hour, and the verdicts."""
 
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ from conductor.sim.settings import SimSettings
 
 def test_short_soak_passes_and_writes_the_report(tmp_path):
     report = tmp_path / "sim-acceptance.md"
-    # Golden Hour, Coastal Tides, Lowcountry Calm, then Garden Gathering cut short by another mood (interrupt_every 4),
-    # which runs its own rung too (every mood steps since D77)
+    # Golden Hour #1 (a still picture, settling onto its canvas), Coastal Tides #4 (a ripple, watched past its loop
+    # seam), Coastal Tides #1 (a fins-ring picture) and Garden Gathering #4 (a twinkle) cut short by another mood
+    # (interrupt_every 4); then untouched: the idle reset to Light Show #2 and the idle hold
     stepped = {**soak.load_soak_stepped(), "runs": 4}
-    cfg = soak.SoakConfig(hours=1 / 3, changes=6, seed=3, report_path=report, stepped=stepped)
+    # an hour and 30 changes, so the latency row's p95 is a p95, not the slowest of six changes (see test_f11)
+    cfg = soak.SoakConfig(hours=1, changes=30, seed=3, report_path=report, stepped=stepped)
     results, verdicts, meta = soak.run_soak(cfg)
     failed = [v["name"] for v in verdicts if not v["pass"] and v.get("gating", True)]
     assert not failed, failed
@@ -35,60 +37,72 @@ def test_short_soak_passes_and_writes_the_report(tmp_path):
     assert "Ripple, SIMULATED 1.2 s stagger: each ring's landing spread" in text
     assert "`kiosk.ripple_stagger_s` 1.2 (the show's setting stays 0" in text
     assert "and every stepped rung stripped from its config copy (each mood lands still" in text
-    # the stepped scenario (D65, D75, D77): every candidate steps on its own rung, in place; each step measured from the
-    # lights, each run's end by the tier it settled on
+    # the stepped scenario (D65, D75, D77; per light since Oct 21): every candidate runs its own per-light rung, in
+    # place; each step measured from the lights, the still pictures' ends and holds, the moving looks' loops
     st = results["stepped"]
     # every rung exactly as config/modes.yaml has it (no approved value pinned here: make lab-roundtrip)
     keys = ("steps_per_cycle", "step_s", "run_s", "mode", "brightness_swing", "lag_steps")
     own = {m: load_modes(CONFIG_DIR).mode(m).techniques.stepped for m in st["modes"]}
-    assert st["techniques"] == {m: {"own": True, **{k: getattr(t, k) for k in keys}} for m, t in own.items()}
-    assert st["tiers"] == {"stepped": 4} and st["runs"] == 4 and st["interrupted"] == 1
-    # each design's step, stretched to 7.5 s where shorter: 9 modules at 72 a minute (the cap of 90 less the 20 %
-    # reserve)
-    assert st["ended"] == {"the run is over": 3, "replaced": 1}
-    assert set(st["step_s"]) == {max(own[m].step_s, 9 * 60 / 72) for m in st["modes"][:4]}
-    assert st["steps_landed"] >= 3 * 11 and st["step_spreads"] and st["step_landings"]  # the metrics exist
-    # B-R1-2: none superseded by the runner's own pacing. One a module missed because a pinned fault hit its write
-    # (429 on every attempt, or a silent drop; the next step carries it) is the faults' luck, whose random path moves
-    # with any config change (a Lab export): bounded by those faulted writes, not pinned at 0
+    assert st["techniques"] == {
+        m: {"own": True, **{k: getattr(t, k) for k in keys}, "lights": soak._lights_words(t.lights)}
+        for m, t in own.items()
+    }
+    assert st["tiers"] == {"stepped": 4} and st["runs"] == 4 and st["refused"] == 0
+    assert st["kinds"] == {"still": 2, "moving": 2}
+    # per light, nine kits every 2 s (motion.lights' 337.5 a minute less the 20 % reserve = 270)
+    assert set(st["step_s"]) == {2.0}
+    # the ripple loops: watched one whole lap (120 s: its 120 s run in whole 10-step cycles at 2 s) and 3 steps, still
+    # running in its next lap, then replaced by the next choice; the twinkle is cut short by another mood mid-run
+    assert st["watched"] == 1 and st["looped"] == 1 and st["interrupted"] == 1
+    assert st["laps_s"] == [120.0, 120.0]
+    # the two still pictures end on their own (in their 8 s run); the ripple, the twinkle and the idle scene's loop
+    # are replaced (by the next choice, the interrupting mood and the idle hold)
+    assert st["ended"] == {"the run is over": 2, "replaced": 3}
+    assert len(st["still_ends"]) == 2 and all(0 <= e <= 2.0 for e in st["still_ends"])
+    # Golden Hour #1 settles onto its commissioned canvas; Coastal Tides #1 holds its own per-light frame; both still
+    # show on all nine when the next choice comes
+    assert st["settled"] == {"canvas": 1, "stepped": 1}
+    assert len(st["holds"]) == 2 and st["holds_unsettled"] == st["holds_lost"] == st["still_unended"] == 0
+    assert st["steps_landed"] >= 100 and st["step_spreads"] and st["step_landings"]  # the metrics exist
+    # none failed or skipped; none superseded by a module-level run's pacing (there is none here); a per-light run's
+    # steps within their allowance; one a pinned fault hit is the faults' luck, bounded by those faulted writes
     assert st["steps_superseded"] == st["steps_failed"] == st["steps_skipped"] == 0
+    assert st["steps_superseded_lights"] <= soak.STEPS_SUPERSEDED_LIGHTS_MAX_SHARE * (
+        st["steps_landed_lights"] + st["steps_superseded_lights"]
+    )
     assert st["steps_superseded_faults"] <= st["step_writes_faulted"]
     assert (
         set(st["puts_per_module_step"]) == {1} and st["missing"] == 0
-    )  # one PUT per changed module per step
+    )  # one PUT per changed module per step, every lap counted apart
     assert st["governor_trips"] == 0 and st["downgrades"] == 0  # at the pinned 5% throttling
-    # the runner's pace (module level 72 a minute; a per-light run its own cap less the reserve, D81: 270 since Oct 21),
-    # and part of a ninth step's burst
+    # the runner's pace (a per-light run its own cap less the reserve, D81: 270 a minute since Oct 21), and every write
+    # of any kind within the cap in force
     from conductor.config import load_settings
 
     motion = load_settings().motion
-    pace = max(72, motion.lights.account_writes_per_min * (1 - motion.stepped.budget_reserve))
+    pace = motion.lights.account_writes_per_min * (1 - motion.stepped.budget_reserve)
+    assert st["cap"] == motion.lights.account_writes_per_min
     assert st["max_account_program_puts_60s"] <= pace + 9
-    assert (
-        st["max_account_program_puts_60s"]
-        <= st["max_account_writes_60s"]
-        <= max(90, motion.lights.account_writes_per_min)
-    )  # retries, re-sends: the cap in force (a per-light run's own, D81)
-    assert len(st["holds"]) == 3 and st["holds_unsettled"] == 0
-    # Golden Hour's run settles onto its commissioned canvas; Coastal Tides and the idle look hold their own rung's
-    assert st["settled"] == {"canvas": 1, "stepped": 2}
-    idle = st["idle_return"]
-    assert idle["mode"] == "lowcountry-calm" and 180 <= idle["after_s"] <= 190
-    # the idle return installs the idle look still (motion.idle off), though it has a rung of its own (D77): no run,
-    # no runner, its module-level design
+    assert st["max_account_program_puts_60s"] <= st["max_account_writes_60s"] <= st["cap"]
+    # untouched after the last choice (the scenario's idle_reset_s 240 s and idle_return_s 600 s; the show's are an
+    # hour and a day): Light Show #2 comes on time and runs its rung, looping (Oct 22); then the idle hold brings
+    # Lowcountry Calm back still (motion.idle off), though it has a rung of its own (D77): no run, no runner
+    assert (st["idle_reset_s"], st["idle_return_s"], st["idle_scene"]) == (240.0, 600.0, "light-show-2")
+    reset, idle = st["idle_reset"], st["idle_return"]
+    assert reset["mode"] == "light-show-2" and 240 <= reset["after_s"] <= 250 and reset["tier"] == "stepped"
+    assert reset["ran"] is True and reset["looped"] is True and reset["settled_s"] is not None
+    assert idle["mode"] == "lowcountry-calm" and 600 <= idle["after_s"] <= 610
     assert idle["ran"] is False and idle["runner"] is False and idle["tier"] == "modules"
     assert (
         "Stepped, SIMULATED: each step's landing spread" in text
-        and "Stepped scenario (D65, D75, D77, SIMULATED)" in text
+        and "Stepped scenario (D65, D75, D77, per light since Oct 21, SIMULATED)" in text
     )
-    assert (
-        "cut short by another mood chosen mid-run (which starts its own run, D77; never the idle look)"
-        in text
-    )
-    assert "the idle return showed the idle look still at modules." in text
+    assert "cut short by another mood chosen mid-run (never the idle look or the idle scene)" in text
+    assert "the canopy went to light-show-2 240" in text and "then to lowcountry-calm 600" in text
+    assert "Stepped, SIMULATED: each moving look loops until the next choice (1 of 1 watched" in text
     for mode_id, technique in st["techniques"].items():
         assert soak._technique_words(mode_id, technique) in text
-    # the main run steps Coastal Tides (its stepped rung is first, D65) and every pinned row above still holds
+    # the main run steps whichever look a guest chooses (per light in the simulator) and every pinned row above holds
     assert results["wiring"]["tiers"].get("stepped", 0) > 0
 
 
@@ -220,42 +234,79 @@ def test_builtin_compiler_samples_each_design_like_the_looks_compiler(tmp_path):
         edited.compile("lowcountry-calm", Tier.T3)
 
 
-# ---- the stepped scenario (D65) -------------------------------------------------------------------------------------
+# ---- the stepped scenario (D65; per light since Oct 21) --------------------------------------------------------------
 def _stepped(**kw) -> dict:
+    still = {"effect": "still", "steps_per_cycle": 4, "step_s": 2.0, "run_s": 8.0}
+    ripple = {"effect": "ripple", "steps_per_cycle": 10, "step_s": 1.5, "run_s": 120.0}
     base = {
-        "modes": ["golden-hour", "coastal-tides"],
+        "modes": ["golden-hour", "coastal-tides-4"],
         "techniques": {
-            "golden-hour": {"own": True, "steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0},
-            "coastal-tides": {"own": False, "steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0},
+            "golden-hour": {"own": True, "steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0, "lights": still},
+            "coastal-tides-4": {
+                "own": True,
+                "steps_per_cycle": 6,
+                "step_s": 6.0,
+                "run_s": 90.0,
+                "lights": ripple,
+            },
         },
         "settings": soak.load_soak_stepped(),
-        "cap": 90.0,
+        "cap": 337.5,
         "requests": 3,
         "refused": 0,
+        "retried": 0,
         "runs": 3,
         "not_stepping": 0,
         "tiers": {"stepped": 3},
-        "ended": {"the run is over": 3},
-        "interrupted": 0,
-        "step_s": [6.0, 6.0, 6.0],
+        "kinds": {"still": 1, "moving": 2},
+        "ended": {"the run is over": 1, "replaced": 3},
+        "interrupted": 1,
+        "watched": 1,
+        "looped": 1,
+        "step_s": [2.0, 2.0, 2.0],
+        "laps_s": [120.0, 120.0],
         "step_spreads": [0.5, 1.0, 1.5, 1.9],
         "step_landings": [1.5, 2.0, 3.0, 4.0],
         "steps_landed": 4,
         "steps_superseded": 0,
         "steps_superseded_faults": 0,
+        "steps_superseded_lights": 0,
+        "steps_landed_lights": 4,
         "step_writes_faulted": 0,
         "steps_cut": 0,
         "steps_failed": 0,
         "steps_skipped": 0,
         "puts_per_module_step": [1] * 36,
         "missing": 0,
-        "holds": [2.0, 2.5, 3.0],
+        "still_ends": [0.0],
+        "still_unended": 0,
+        "holds": [2.0],
         "holds_unsettled": 0,
-        "settled": {"canvas": 1, "stepped": 2},
-        "max_account_writes_60s": 88,
-        "max_account_program_puts_60s": 81,
-        "idle_return": {"after_s": 180.3, "mode": "lowcountry-calm", "settled_s": 2.0, "ran": False},
-        "idle_return_s": 180.0,
+        "holds_lost": 0,
+        "settled": {"canvas": 1},
+        "max_account_writes_60s": 290,
+        "max_account_program_puts_60s": 270,
+        "idle_reset": {
+            "after_s": 240.3,
+            "mode": "light-show-2",
+            "tier": "stepped",
+            "settled_s": 2.0,
+            "ran": True,
+            "runner": True,
+            "looped": True,
+        },
+        "idle_return": {
+            "after_s": 600.4,
+            "mode": "lowcountry-calm",
+            "tier": "modules",
+            "settled_s": 2.0,
+            "ran": False,
+            "runner": False,
+            "looped": False,
+        },
+        "idle_reset_s": 240.0,
+        "idle_return_s": 600.0,
+        "idle_scene": "light-show-2",
         "governor_trips": 0,
         "downgrades": 0,
     }
@@ -265,35 +316,56 @@ def _stepped(**kw) -> dict:
 def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
     settings = soak.load_soak_stepped()
     assert soak.SoakConfig().stepped == settings
-    # every kind of motion on its own rung (D77): travel, a colour breath, a shimmer (Garden Gathering #3, in Rainbow
-    # Row Sunset's place) and a level-only breath; Golden Hour first, the idle look never last
+    # every kind of per-light look (Oct 21): two still pictures (Golden Hour #1, which settles onto its canvas; Coastal
+    # Tides #1, a fins-ring picture) and four moving looks that loop (a ripple, a twinkle, a glow, a breathe), the
+    # moving ones where the interrupts fall (runs 4, 8, 12); never the idle look or the idle scene
     assert settings["modes"] == [
         "golden-hour",
+        "coastal-tides-4",
         "coastal-tides",
-        "lowcountry-calm",
-        "garden-gathering",
-        "garden-gathering-3",
-        "goodnight-glow",
+        "garden-gathering-4",
+        "light-show-3",
+        "golden-hour-5",
     ]
+    show = load_modes(CONFIG_DIR)
+    effects = [show.mode(m).techniques.stepped.lights.effect for m in settings["modes"]]
+    assert effects == ["still", "ripple", "still", "twinkle", "glow", "breathe"]
+    assert show.mode("coastal-tides").techniques.stepped.lights.rings  # the fins-ring picture
+    every = settings["interrupt_every"]
+    interrupted = [settings["modes"][(i - 1) % len(settings["modes"])] for i in range(every, 13, every)]
+    assert all(show.mode(m).techniques.stepped.lights.effect != "still" for m in interrupted)
+    from conductor.config import ConductorSettings
+
+    kiosk = ConductorSettings().kiosk
+    assert kiosk.idle_mode not in settings["modes"] and "light-show-2" not in settings["modes"]
+    # the idle checks run in minutes, the reset before the hold, and no watch (a lap and a few 2 s steps; the longest
+    # lap is Light Show #3's 180 s) or still hold reaches the reset mid-scenario
+    assert settings["idle_slack_s"] > 0 and settings["idle_reset_s"] < settings["idle_return_s"]
+    longest = max(show.mode(m).techniques.stepped.lights.run_s for m in settings["modes"])
+    assert longest + settings["watch_extra_steps"] * 2.0 < settings["idle_reset_s"]
+    assert settings["hold_s"] + 2 + 8 + soak.WATCH_LIMIT_S < settings["idle_reset_s"]
     # a SIMULATED rung's cadence, for a candidate without one of its own; no overrides (every scene has a rung, D77)
     assert settings["technique"] == {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 90}
     assert settings["simulated"] == {}
-    show = load_modes(CONFIG_DIR)
     assert all(show.mode(m).techniques.stepped is not None for m in settings["modes"])
     # the module's defaults mirror config/sim/soak.yaml
     assert {k: settings[k] for k in soak.STEPPED_DEFAULTS} == soak.STEPPED_DEFAULTS
     rows = soak._stepped_rows(_stepped())
-    assert [r["pass"] for r in rows] == [True] * 9
+    assert [r["pass"] for r in rows] == [True] * 11
     # B-R1-2: a step a module missed because a pinned fault hit its write (429 on every attempt, or a silent drop) is
     # the faults' luck (the next step carries that module, by design): counted apart, at most once per such write
     lucky = soak._stepped_rows(_stepped(steps_superseded_faults=2, step_writes_faulted=3))
-    assert [r["pass"] for r in lucky] == [True] * 9
+    assert [r["pass"] for r in lucky] == [True] * 11
     assert (
         "0 superseded, 2 carried by the next step after a pinned fault hit a module's write"
         in lucky[1]["name"]
     )
+    # Oct 21: up to half of a per-light run's steps may be superseded by the next (2 s steps outpace a slow readback)
+    assert soak._stepped_rows(_stepped(steps_superseded_lights=4))[1]["pass"]
+    assert not soak._stepped_rows(_stepped(steps_superseded_lights=5))[1]["pass"]
     # the spread (05's target, per step) is reported, not gating; the account's writes of every kind gate (the cap)
-    assert [r.get("gating", True) for r in rows] == [False, True, True, True, True, True, True, True, True]
+    assert [r.get("gating", True) for r in rows] == [False] + [True] * 10
+    reset, back = _stepped()["idle_reset"], _stepped()["idle_return"]
     failing = [
         _stepped(step_spreads=[2.5] * 4),
         _stepped(steps_superseded=1),
@@ -303,69 +375,98 @@ def test_the_stepped_scenario_is_configured_and_its_verdicts_hold_the_targets():
         _stepped(step_landings=[]),
         _stepped(puts_per_module_step=[1] * 35 + [2]),  # a module sent twice for one step
         _stepped(missing=1),  # a module whose colour changed but wasn't sent
-        _stepped(max_account_program_puts_60s=91),
-        _stepped(max_account_writes_60s=95),
+        _stepped(max_account_program_puts_60s=338),
+        _stepped(max_account_writes_60s=340),
         _stepped(governor_trips=1),
         _stepped(downgrades=1),
         _stepped(holds_unsettled=1),
         _stepped(holds=[]),
+        _stepped(still_unended=1),  # a still picture that never ended on its own
+        _stepped(still_ends=[2.5]),  # ... or ended late
+        _stepped(holds_lost=1),  # ... or stopped showing before the next choice
+        _stepped(looped=0),  # a moving look that ended on its own instead of looping
+        _stepped(watched=0, looped=0),  # no moving look watched at all
+        _stepped(idle_reset=None),
+        _stepped(idle_reset={**reset, "after_s": 251.0}),  # late
+        _stepped(idle_reset={**reset, "after_s": 120.0}),  # early: something moved the idle clock
+        _stepped(idle_reset={**reset, "ran": False}),  # the idle scene shown still, not running
+        _stepped(idle_reset={**reset, "looped": False}),  # ... or not looping
+        _stepped(idle_reset={**reset, "settled_s": None}),
         _stepped(idle_return=None),
-        _stepped(idle_return={"after_s": 191.0, "mode": "lowcountry-calm", "settled_s": 2.0}),  # late
-        _stepped(
-            idle_return={"after_s": 120.0, "mode": "lowcountry-calm", "settled_s": 2.0}
-        ),  # a run moved it
-        _stepped(idle_return={"after_s": 180.3, "mode": "lowcountry-calm", "settled_s": None}),
-        # D75: the idle return started a run (motion.idle is off: it shows the idle look still)
-        _stepped(idle_return={"after_s": 180.3, "mode": "lowcountry-calm", "settled_s": 2.0, "ran": True}),
+        _stepped(idle_return={**back, "after_s": 611.0}),  # late
+        _stepped(idle_return={**back, "settled_s": None}),
+        # D75: the idle hold started a run (motion.idle is off: it shows the idle look still)
+        _stepped(idle_return={**back, "ran": True, "runner": True}),
         # D77: or installed its stepped rung at all (a runner, even one that never moved)
-        _stepped(
-            idle_return={
-                "after_s": 180.3,
-                "mode": "lowcountry-calm",
-                "settled_s": 2.0,
-                "ran": False,
-                "runner": True,
-            }
-        ),
+        _stepped(idle_return={**back, "runner": True}),
     ]
-    rows_failing = (0, 1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 7, 8, 8, 8, 8, 8, 8)
+    rows_failing = (
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        7,
+        7,
+        7,
+        7,
+        8,
+        8,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        10,
+        10,
+        10,
+        10,
+        10,
+    )
     for index, stepped in zip(rows_failing, failing, strict=True):
         rows = soak._stepped_rows(stepped)
         assert [i for i, r in enumerate(rows) if not r["pass"]] == [index], stepped
         assert soak.passed(rows) is (index == 0), stepped  # only the reported spread never fails it
     line = soak._stepped_line(
-        _stepped(steps_cut=2, interrupted=1, steps_superseded_faults=1, step_writes_faulted=2)
+        _stepped(steps_cut=2, interrupted=1, steps_superseded_faults=1, step_writes_faulted=2, retried=1)
     )
     assert "2 cut by a newer mood" in line and "`config/sim/acceptance.yaml` is pinned" in line
+    assert "1 cut short by another mood chosen mid-run (never the idle look or the idle scene)" in line
+    assert "0 refused (1 tried again after the panel's countdown)" in line
+    assert "1 of 1 watched a lap and 3 steps were still running in a later lap" in line
     assert (
-        "1 cut short by another mood chosen mid-run (which starts its own run, D77; never the idle look)"
-        in line
+        "the canopy went to light-show-2 240.3 s after the last choice (running its rung and looping)" in line
     )
+    assert "then to lowcountry-calm 600.4 s later, still at modules." in line
     assert (
         "1 carried by the next step after a pinned fault hit a module's write (429 on every attempt, or a "
         "silent drop; of 2 step writes hit that way)" in line
     )
-    # D65's travel wording in full, from the fixture's techniques (not config: make lab-roundtrip moves config)
-    assert "golden-hour: its own (config/modes.yaml), 6 steps a cycle, 6 s steps designed, 90 s runs" in line
-    assert "coastal-tides: a SIMULATED one, 6 steps a cycle, 6 s steps designed, 90 s runs" in line
-    # D75's breath wording in full: its kind, swing, lag and timing
-    timing = {"steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0}
-    breaths = {
-        "garden-gathering": {
-            "own": False,
-            **timing,
-            "mode": "breathe",
-            "brightness_swing": 6,
-            "lag_steps": 2,
-        },
-        "golden-hour": {"own": True, **timing, "mode": "shimmer", "brightness_swing": 4, "lag_steps": 3},
-    }
-    breaths["golden-hour"].update(steps_per_cycle=4, step_s=8.0, run_s=60.0)
-    line = soak._stepped_line(_stepped(techniques=breaths))
+    # the per-light rungs in words, from the fixture's techniques (not config: make lab-roundtrip moves config)
+    assert "golden-hour: its own per-light still picture, 8 s run" in line
     assert (
-        "garden-gathering: a SIMULATED breathe (swing 6, lag 2), 6 steps a breath, 6 s steps designed, 90 s runs; "
-        "golden-hour: its own shimmer (config/modes.yaml) (swing 4, lag 3), 4 steps a breath, 8 s steps designed, "
-        "60 s runs; `motion.stepped.live_enabled` stays false" in line
+        "coastal-tides-4: its own per-light ripple, 10 steps a cycle, 1.5 s steps designed, looping (laps of about "
+        "120 s)" in line
+    )
+    # a module-level rung's words (D65's travel, D75's breath) where a candidate has no per-light block
+    timing = {"steps_per_cycle": 6, "step_s": 6.0, "run_s": 90.0}
+    assert (
+        soak._technique_words("coastal-tides", {"own": False, **timing})
+        == "coastal-tides: a SIMULATED one, 6 steps a cycle, 6 s steps designed, 90 s runs"
+    )
+    breath = {"own": False, **timing, "mode": "breathe", "brightness_swing": 6, "lag_steps": 2}
+    assert (
+        soak._technique_words("garden-gathering", breath)
+        == "garden-gathering: a SIMULATED breathe (swing 6, lag 2), 6 steps a breath, 6 s steps designed, 90 s runs"
     )
 
 
@@ -524,9 +625,9 @@ def test_a_simulated_rung_takes_its_kind_of_motion_from_the_overrides(tmp_path):
 
 
 def test_the_interrupting_mood_is_never_the_idle_mode():
-    """A run is cut short by a mood outside the scenario, else another of its modes: never the running one and never
-    the idle look (an interrupt with the idle look would hide the idle return the scenario measures). Every mood steps
-    since D77, so the one chosen starts its own run."""
+    """A run is cut short by a mood outside the scenario, else another of its modes: never the running one, the idle
+    look or the idle scene (an interrupt with either would hide the idle reset and idle hold the scenario measures).
+    Every mood steps since D77, so the one chosen starts its own run."""
     import random
 
     from conductor.config import ConductorSettings
@@ -539,6 +640,12 @@ def test_the_interrupting_mood_is_never_the_idle_mode():
             mood = soak._interrupting_mood(rng, [], settings["modes"], mode_id, idle)
             assert mood is not None and mood not in (idle, mode_id)
             assert mood in settings["modes"]
+    # nor the idle scene (Oct 21: Light Show #2, where the idle reset goes), even when it is in a pool
+    scene = "light-show-2"
+    for seed in range(50):
+        pool = [scene, "golden-hour-4"]
+        assert soak._interrupting_mood(random.Random(seed), pool, [], "x", idle, scene) == "golden-hour-4"
+        assert soak._interrupting_mood(random.Random(seed), [], [scene, idle, "x"], "x", idle, scene) is None
     # a mood outside the scenario, when there is one, is the one chosen (the soak's pool: every other mood of the
     # catalog but the idle look)
     others = [m for m in load_modes(CONFIG_DIR).modes if m not in settings["modes"] and m != idle]
@@ -611,6 +718,7 @@ def test_the_stepped_scenario_catches_steps_that_never_land_before_the_next(tmp_
         "modes": [mode_id],
         "runs": 1,
         "interrupt_every": 0,
+        "idle_reset_s": None,  # no idle checks: only the run's steps
         "technique": {"direction": "forward", "steps_per_cycle": 6, "step_s": 6, "run_s": 45},
     }
     slow = SimSettings.from_acceptance().with_(

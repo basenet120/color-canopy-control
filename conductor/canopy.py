@@ -792,6 +792,11 @@ class CanopyEngine:
             return self._repick_best(mode_id)
         if self._idle_return_breathes(mode_id, source):
             return self.compile_best(mode_id, prefer=Tier.STEPPED)
+        kiosk = self.deps.settings.kiosk
+        if source == "idle" and mode_id == kiosk.idle_scene and mode_id != kiosk.idle_mode:
+            # the idle reset's scene (Oct 21: an hour untouched, then Light Show #2) runs its rung, as a guest's
+            # choice does, and a moving per-light look loops until the next choice; the idle hold stays still (D75)
+            return self.compile_best(mode_id, prefer=Tier.STEPPED)
         if source == "ops":  # ladder order (D65): Golden Hour's canvas first, Coastal Tides' rung first
             return self.compile_best(mode_id)
         # start-up and the idle return (motion.idle off), the try-on, the checklist's change back, anything new
