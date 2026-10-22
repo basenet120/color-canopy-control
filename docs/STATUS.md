@@ -26,6 +26,14 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Paint sends stuck, `claude/still-resend` (Oct 21 night; no PR yet)
+Alon: paintings sometimes stuck, then several went through when another command was sent. Telemetry: 35 of 108
+"mode: paint" writes ended MISMATCH — every one on a panel already showing a per-light picture (Hubspace accepted the
+write but kept reporting the old frame through verification), against 1–2 % for other per-light looks; the engine's
+deferred re-send went out only ~6 s later and a quicker new painting superseded it. Now a still per-light picture
+(a painting, a #1–#3 look) is sent again whole one step (2 s) after it lands; a per-light hold no longer appends its
+frame a second time (9.5 kB PUTs). Not yet confirmed on the canopy: watch whether paintings land at once.
+
 ## Paint: a guest paints the canopy, `claude/kiosk-paint` → `main` (Oct 21 night; no PR yet)
 The iPad panel has two tabs at the top of the sheet: **Scenes** (unchanged) and **Paint**. Paint is a large mockup of
 the 270 lights (canopy-preview `layout()`, the kiosk's own view transform, no fins so every light is a big dot), 13
