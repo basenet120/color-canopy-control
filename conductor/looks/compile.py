@@ -1126,6 +1126,8 @@ def light_level(lights: LightsMotion, t: float, p: float, twinkle: tuple[int, fl
     elif lights.effect == "breathe":
         d = t if out else 1.0 - t
         v = 0.5 + 0.5 * math.cos(2 * math.pi * (p - lights.lag * d))
+    elif lights.effect == "still":
+        v = 0.5 + 0.5 * math.cos(2 * math.pi * lights.rings * t) if lights.field is not None else 1.0
     else:
         assert twinkle is not None
         k, start = twinkle
@@ -1409,6 +1411,8 @@ def _moving_feature(mode: Mode, plan: ModePlan, *, partial: bool) -> str:
         strands = (
             "one Hubspace strand" if n == 1 else f"{'both' if n == 2 else _count_words(n)} Hubspace strands"
         )
+        if all(s.rows == steps[0].rows for s in steps[1:]):  # a still picture (Oct 21): sent once, no pace
+            return f"Colour and dimming through the Hubspace cloud: each light on {strands} set individually."
         return (
             f"Colour and dimming through the Hubspace cloud: each light on {strands} set individually, its colour "
             "and level sent every few seconds."

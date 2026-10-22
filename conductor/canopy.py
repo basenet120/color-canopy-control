@@ -2806,7 +2806,11 @@ class CanopyEngine:
                 runner = ProgramRunner(self, plan, t0=self._chosen_mono, schedule=rehearsal.schedule)
             else:
                 runner = ProgramRunner(
-                    self, plan, t0=self._chosen_mono, over=self._ran_for == self._chosen_mono
+                    self,
+                    plan,
+                    t0=self._chosen_mono,
+                    over=self._ran_for == self._chosen_mono,
+                    loop=self._breath_run_s is None,  # a moving per-light look loops (not the idle breath)
                 )
                 if not runner.running:
                     # it can't run now (its choice already ran, a cool-off, a step too long, its run over): that

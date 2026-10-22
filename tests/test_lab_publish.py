@@ -49,6 +49,11 @@ from conductor.looks import compile_mode
 from conductor.looks import live as L
 
 SLOT = "custom-3"
+# a per-light run's hold (conductor/looks/compile.py, D80): the copy while its frame is held
+PER_LIGHT_HOLD = (
+    "Colour and dimming: each light on each Hubspace strand set individually, saved as a Hubspace custom pattern and "
+    "selected through the Hubspace cloud."
+)
 GOODNIGHT = "goodnight-glow"
 # git's names (D77: "Golden Hour #1"; PR E renames in one place)
 NAME = {s.id: s.name for s in GIT.scenes.scenes}
@@ -72,12 +77,18 @@ def spy_writes(w) -> list[tuple[float, str, list]]:
     return writes
 
 
+def _slot_write(rows) -> bool:
+    """A slot (re)write is the saved pattern alone (`_slot_command`: one frame row). A per-light look's step (D80;
+    every look carries one since Oct 21) sends its frame inside the whole look's PUT, so it is a look write."""
+    return bool(rows) and all(r.function_class == R.FRAME_CLASS for r in rows)
+
+
 def slot_writes(writes) -> list:
-    return [x for x in writes if any(r.function_class == R.FRAME_CLASS for r in x[2])]
+    return [x for x in writes if _slot_write(x[2])]
 
 
 def look_writes(writes) -> list:
-    return [x for x in writes if not any(r.function_class == R.FRAME_CLASS for r in x[2])]
+    return [x for x in writes if not _slot_write(x[2])]
 
 
 def rows_of(plan) -> dict:
@@ -523,18 +534,20 @@ def test_after_a_restart_the_show_compiles_the_published_trio_with_no_slot_write
         data = w.data
         w.owned = False
         await w.close()
-        w2 = await show(data=data)
+        # per-light off: a per-light run's frame in custom-3 (Golden Hour's slot) would be put back by the slot check
+        w2 = await show(data=data, per_light=False)
         writes = spy_writes(w2)
         await w2.engine.request_mode(TIDES, source="ops")
         await w2.engine.wait_idle()
-        compiled = rows_of(w2.engine.current_plan())
+        compiled, tier = rows_of(w2.engine.current_plan()), w2.engine.current_plan().tier
         expected_ctx = w2.wiring.context()
         await w2.run_for(20 * 60)
         stale = [w2.engine.stale_slot(DEV, s, None) for s in ("custom-1", "custom-2", "custom-3")]
         alerts = [a.message for a in w2.alerts() if "pattern in custom-" in a.message]
         out = (
             w2.looks.source,
-            compiled == rows_of(compile_mode(TIDES, w2.engine.current_plan().tier, expected_ctx)),
+            compiled
+            == rows_of(compile_mode(TIDES, tier, expected_ctx)),  # the tier it was compiled at (its run ends)
             slot_writes(writes),
             alerts,
             w2.looks.trio.modes.modes[TIDES].label,
@@ -1032,15 +1045,19 @@ def test_the_copy_follows_the_tier_in_use_after_a_publish(no_threads):
             "modules": mode.techniques.modules,
             "strand": mode.techniques.strand,
         }
-        out = r.status_code, plan.tier, plan.feature, rung
+        out = r.status_code, plan.tier, plan.feature, rung, bool(plan.program and plan.program.lights)
         await w.close()
         return out
 
-    status, tier, feature, rung = run_virtual(main)
+    status, tier, feature, rung, per_light = run_virtual(main)
     assert status == 200
     technique = rung[str(tier)]
     allowed = {getattr(technique, "feature", None), getattr(technique, "moving_feature", None)}
     if (
+        per_light
+    ):  # D80 (every look since Oct 21, always in sim): its per-light picture, held as a custom pattern
+        allowed = {technique.lights.moving_feature, PER_LIGHT_HOLD}
+    elif (
         tier is Tier.STEPPED
     ):  # a stepped look holds its still design (the modules rung's sentence) after its run
         allowed.add(rung["modules"].feature)
@@ -1180,14 +1197,15 @@ def off_the_fins() -> str:
 def test_a_fins_design_publishes_to_the_simulated_show(no_threads):
     """The Lab's Fins layout on a scene that isn't on the fins (off_the_fins), published with Show: the installed
     trio's design moves onto the fins' rings (D68 validate → install → compile), the copy is regenerated from the
-    centre out, and the show sends one burst of it, nine look writes."""
+    centre out, and the show sends one burst of it, nine look writes. Per-light off: the module-level travel the Lab's layout
+    moves (its per-light picture, D80, has its own field and copy)."""
     from conductor.looks import field as F
 
     scene_id = off_the_fins()
     approved = GIT.modes.mode(scene_id).techniques
 
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         before = w.looks.trio.modes.mode(scene_id).techniques.modules.sample.canvas.field
         writes = spy_writes(w)
         async with client_of(w) as c:

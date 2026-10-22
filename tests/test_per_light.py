@@ -25,13 +25,27 @@ def _ctx(**kw) -> CompileContext:
     return CompileContext(registry=REGISTRY, capabilities={d.id: CAPS for d in REGISTRY}, modes=MODES, **kw)
 
 
+def _number(mode_id: str) -> int:
+    tail = mode_id.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 1
+
+
 def test_eighteen_options_carry_a_per_light_rung():
-    # D80: the six scenes' #4-#6; then the Light Show scene (Oct 21), every one of its six looks per-light
+    # D80: the six scenes' #4-#6; then the Light Show scene (Oct 21), every one of its six looks per-light; then
+    # (Oct 21) every scene's #1-#3 a still per-light picture: all 42 looks carry a lights block
     light_show = [m for m in PER_LIGHT if m.rsplit("-", 1)[0] == "light-show" or m == "light-show"]
-    d80 = [m for m in PER_LIGHT if m not in light_show]
-    assert len(d80) == 18 and len(PER_LIGHT) == 24
+    scenes = [m for m in PER_LIGHT if m not in light_show]
+    d80 = [m for m in scenes if _number(m) >= 4]
+    still = [m for m in scenes if _number(m) <= 3]
+    assert len(PER_LIGHT) == 42 and len(d80) == 18 and len(still) == 18
     assert {m.rsplit("-", 1)[1] for m in d80} == {"4", "5", "6"}
+    assert all(MODES.mode(m).techniques.stepped.lights.effect != "still" for m in d80)  # D80's options move
+    assert all(MODES.mode(m).techniques.stepped.lights.effect == "still" for m in still)
+    assert (
+        len({m.rsplit("-", 1)[0] if _number(m) > 1 else m for m in still}) == 6
+    )  # #1-#3 of each of six scenes
     assert light_show == ["light-show", *(f"light-show-{n}" for n in range(2, 7))]
+    assert all(MODES.mode(m).techniques.stepped.lights.effect != "still" for m in light_show)
 
 
 def test_per_light_is_opt_in_and_falls_back_to_the_module_level_steps():
@@ -91,7 +105,9 @@ def test_the_rate_test_steps_4_3_2_1_5_then_1_s_and_reports_each_rung():
 
     async def main():
         w = await show()
-        result = await w.engine.rehearse("garden-gathering", 1, source="ops", ladder=True)
+        result = await w.engine.rehearse(
+            "garden-gathering-4", 1, source="ops", ladder=True
+        )  # a look that moves
         await w.run_for(RATE_RUNG_S * len(RATE_RUNGS) + 30)
         await w.ended()
         report = w.report()
@@ -113,10 +129,10 @@ def test_a_rate_test_can_run_its_own_paces_each_for_its_own_time():
     async def main():
         w = await show()
         preview = w.engine.rehearsal_preview(
-            "garden-gathering", 1, ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
+            "garden-gathering-4", 1, ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
         )
         result = await w.engine.rehearse(
-            "garden-gathering", 1, source="ops", ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
+            "garden-gathering-4", 1, source="ops", ladder=True, rungs=(2.0, 1.5, 1.0), rung_s=30.0
         )
         await w.run_for(90 + 30)
         await w.ended()
@@ -131,6 +147,32 @@ def test_a_rate_test_can_run_its_own_paces_each_for_its_own_time():
     assert [r["step_s"] for r in report["rungs"]] == [2.0, 1.5, 1.0]
     assert all(r["attempts"] > 0 for r in report["rungs"])
     assert rate_schedule((2.0, 1.5, 1.0), 30.0) == [2.0] * 15 + [1.5] * 20 + [1.0] * 30
+
+
+def test_a_moving_per_light_look_loops_until_the_next_choice():
+    # Oct 21 (Alon): a guest's per-light choice keeps moving (whole cycles), not 2 minutes then a frozen frame
+    from tests.test_stepped_rehearsal import show
+
+    async def main():
+        w = await show()
+        await w.engine.request_mode("coastal-tides-5", source="kiosk")
+        await w.run_for(1)
+        runner = w.engine.runner
+        first = (runner.loop, runner.count, runner.cycle, runner.program.run_s, runner.t0)
+        await w.run_for(
+            runner.run_len_s * 1.4
+        )  # past the run's end, before the idle return (kiosk.idle_return_s)
+        later = (w.engine.runner is runner, runner.running, runner.steps_sent, runner.t0)
+        await w.engine.request_mode("golden-hour-5", source="kiosk")
+        await w.run_for(1)
+        after = (runner.running, w.engine.runner.plan.mode_id)
+        await w.close()
+        return first, later, after
+
+    (loop, count, cycle, run_s, t0), (same, running, sent, t0_later), (old_running, mode) = run_virtual(main)
+    assert loop and count % cycle == 0 and count * 2.0 >= run_s
+    assert same and running and sent > count and t0_later > t0  # into its second lap, still stepping
+    assert not old_running and mode == "golden-hour-5"
 
 
 def test_per_light_runs_pace_by_their_own_cap_and_module_level_keeps_its_own():
@@ -181,3 +223,64 @@ def test_on_at_needs_floor_zero():
             moving_feature="Colour and dimming through the Hubspace cloud: every light set on its own, sent every "
             "few seconds.",
         )
+
+
+def _still(**kw) -> LightsMotion:
+    kw = {"steps_per_cycle": 4, "floor": 0, "peak": 100, **kw}
+    return LightsMotion(
+        effect="still",
+        moving_feature="Colour and dimming through the Hubspace cloud: every light on the canopy set on its own, so "
+        "rings of light sit over the gradient, dark between them.",
+        **kw,
+    )
+
+
+def test_a_still_field_is_lit_or_dark_and_never_depends_on_the_phase():
+    lights = _still(field={"kind": "radial", "centre_in": [112.5, 60.0]}, rings=3, on_at=45)
+    levels = {p: [light_level(lights, i / 40, p) for i in range(41)] for p in (0.0, 0.125, 0.25, 0.5, 0.75)}
+    assert set(levels[0.0]) == {0, 100}  # rings: lit at peak or dark
+    assert all(row == levels[0.0] for row in levels.values())  # no p dependence
+
+
+def test_a_still_look_without_a_field_lights_every_light_at_peak():
+    lights = _still(peak=80)
+    assert {light_level(lights, i / 20, p) for i in range(21) for p in (0.0, 0.3, 0.7)} == {80}
+
+
+def test_a_still_look_compiles_to_steps_that_are_all_the_same_frame():
+    still = [m for m in PER_LIGHT if MODES.mode(m).techniques.stepped.lights.effect == "still"]
+    assert still
+    for mode_id in still:
+        plan = compile_mode(mode_id, Tier.STEPPED, _ctx(lights=True))
+        steps = plan.program.steps
+        assert plan.program.lights and len(steps) >= 2
+        assert all(s.rows == steps[0].rows and s.heads == steps[0].heads for s in steps), mode_id
+
+
+def test_a_still_looks_copy_never_claims_a_pace_or_motion():
+    import pytest
+    from pydantic import ValidationError
+
+    for said in ("sent every few seconds", "so the rings move outward"):
+        with pytest.raises(ValidationError, match="nothing moves or repeats"):
+            LightsMotion(
+                effect="still",
+                moving_feature=f"Colour and dimming through the Hubspace cloud: every light set on its own, {said}.",
+            )
+
+
+def test_a_still_look_on_a_partial_canopy_claims_no_pace():
+    # a still per-light picture is sent once: on two kits its copy must not say "every few seconds"
+    driven = {d.id for d in REGISTRY if d.module in ("r0c0", "r0c1")}
+    addresses = {d.id: (f"sim-{d.id}" if d.id in driven else None) for d in REGISTRY}
+    ctx = CompileContext(
+        registry=REGISTRY,
+        capabilities={d.id: CAPS for d in REGISTRY},
+        modes=MODES,
+        lights=True,
+        addresses=addresses,
+    )
+    plan = compile_mode("lowcountry-calm", Tier.STEPPED, ctx)
+    assert plan.program is not None and plan.program.lights
+    copy = plan.program.moving_feature
+    assert "every few seconds" not in copy and "both Hubspace strands" in copy

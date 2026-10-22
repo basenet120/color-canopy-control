@@ -108,6 +108,7 @@ class ProgramRunner:
         t0: float,
         over: bool = False,
         schedule: list[float] | None = None,
+        loop: bool = False,
     ) -> None:
         assert plan.program is not None
         self.engine = engine
@@ -163,13 +164,22 @@ class ProgramRunner:
             self.count = len(self.schedule)
         else:
             self.count = self.count_for(self.step_s)  # the step number the hold goes out at
-        if over:  # this choice already ran (D75): a re-pick only holds, whatever its run_s; no alert
+        # Oct 21 (Alon): a moving per-light look loops until the next choice — whole cycles, so the seam is a step
+        self.loop = bool(loop and self.schedule is None and self.lights and self._moves())
+        if self.loop:
+            self.count = max(self.cycle, math.ceil(self.count / self.cycle) * self.cycle)
+        if (
+            over and not self.loop
+        ):  # this choice already ran (D75): a re-pick only holds, whatever its run_s; no alert
             self.state, self.shown, self.ended = DONE, None, "this choice already ran (a re-pick only holds)"
             return
         if why is not None:
             self._never(why)
             return
         self.index = self._schedule_index()
+        if self.loop and self.index >= self.count:  # a re-pick later on: the same phase in a later lap
+            self._rebase(self.index // self.count)
+            self.index = self._schedule_index()
         if self.index >= self.count:
             self.state, self.shown, self.ended = DONE, None, "the run was over before this look was installed"
             return
@@ -221,6 +231,17 @@ class ProgramRunner:
 
     def count_for(self, step: float) -> int:
         return int(self.program.run_s / step + _EPS)
+
+    def _moves(self) -> bool:
+        """Do the program's steps differ (a still per-light picture's steps are all the same frame)?"""
+        first = self.program.steps[0].rows
+        return any(step.rows != first for step in self.program.steps[1:])
+
+    def _rebase(self, laps: int = 1) -> None:
+        """Move t0 on by `laps` whole runs: a looping run starts its next lap (the panel gets the new t0)."""
+        length = self._at(self.count) * laps
+        self.t0 += length
+        self.t0_wall += length
 
     def _at(self, n: int) -> float:
         """Seconds after t0 that step n is due (n = count: the hold at the end)."""
@@ -295,7 +316,16 @@ class ProgramRunner:
             while True:
                 n += 1
                 if n >= self.count:
-                    break
+                    if not self.loop:
+                        break
+                    await self._sleep_until(self.t0 + self._at(self.count))
+                    self._rebase()
+                    n = self.index = 0
+                    self.engine._publish_soon()  # the panel draws the next lap from its new t0
+                    self._step(0)
+                    if self.state is not RUNNING:
+                        return
+                    continue
                 await self._sleep_until(self.t0 + self._at(n))
                 due = self._schedule_index()
                 if due > n:  # late: the steps that fell due meanwhile are skipped, never queued

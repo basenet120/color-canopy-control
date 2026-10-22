@@ -63,7 +63,7 @@ GRID_MAX = (
 IDLE_ALWAYS = "{name} is the idle scene ({key}), so the iPad always offers it."
 CONDUCTOR_YAML = "config/conductor.yaml"
 HIDDEN_LINE = re.compile(r"^(?P<i>[ ]+)hidden_scenes:[ ]*\[[^\]]*\][ ]*$")
-Basis = Literal["heads", "modules", "strand"]
+Basis = Literal["heads", "modules", "strand", "lights"]
 _THUMB_LOGGED: set[tuple[str, str]] = set()
 _THUMB_LOGGED_MAX = 256
 
@@ -343,6 +343,37 @@ def plan_thumb(scene_id: str, canopy: Mapping[str, Any], registry: Any, plan: An
         _log_thumb_failure(scene_id, exc)
         return None
     return _signed("strand", picture) if picture is not None else None
+
+
+def lights_thumb(scene_id: str, plan: Any) -> dict | None:
+    """A per-light card's picture (basis "lights", Oct 21): one real frame of the look — each light's colour, a
+    light that's off left out (the card shows dark there). A still picture's only frame; a moving look's frame with
+    about half its lights on (its pattern clearest), a still card for a moving look. None when the plan has no
+    per-light steps. Never raises."""
+    try:
+        steps = list(plan.program.steps) if plan.program is not None and plan.program.lights else []
+        if not steps:
+            return None
+
+        def lit_share(step: Any) -> float:
+            heads = "".join(h for h in step.heads.values() if h)
+            n = len(heads) // 4
+            return sum(1 for k in range(n) if heads[4 * k + 3] != "0") / n if n else 0.0
+
+        step = min(steps, key=lambda s: (abs(lit_share(s) - 0.5), s.index))
+        items = []
+        for pos, coded in sorted(step.heads.items()):
+            colors = [
+                None
+                if coded[k + 3] == "0"
+                else "#" + "".join(f"{int(c, 16) * 17:02X}" for c in coded[k : k + 3])
+                for k in range(0, len(coded), 4)
+            ]
+            items.append({"pos": pos, "color": None, "colors": colors})
+        return _signed("lights", items)
+    except Exception as exc:  # noqa: BLE001 - a card without a picture, never a failed panel
+        _log_thumb_failure(scene_id, exc)
+        return None
 
 
 def _log_thumb_failure(scene_id: str, exc: BaseException) -> None:

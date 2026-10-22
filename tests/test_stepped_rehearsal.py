@@ -5,6 +5,7 @@ the writer-path allowlist: tests/test_writer_paths.py."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import tempfile
@@ -103,10 +104,17 @@ class Show:
 
 
 async def show(
-    *, live: bool = False, sim: SimSettings | None = None, monkeypatch=None, stepped_live: bool | None = None
+    *,
+    live: bool = False,
+    sim: SimSettings | None = None,
+    monkeypatch=None,
+    stepped_live: bool | None = None,
+    per_light: bool = True,
 ) -> Show:
     """`stepped_live`: motion.stepped.live_enabled for this show (None = as shipped, on since D79); False = before
-    Gate R, where the live gate refuses the stepped rung outside a rehearsal."""
+    Gate R, where the live gate refuses the stepped rung outside a rehearsal. `per_light=False`: compile without
+    per-light motion (as a live kit without Gate C), so a rehearsal steps the rung's module-level design (D65) although
+    every look carries a `lights` block since Oct 21 (a #1-#3 look's is a still picture)."""
     from conductor.services import build_services
 
     data = Path(tempfile.mkdtemp(prefix="canopy-rehearsal-"))
@@ -121,6 +129,9 @@ async def show(
         services.settings.motion.stepped.live_enabled = stepped_live
     await services.start()
     wiring = ShowWiring(services)
+    if not per_light:
+        context = wiring.context
+        wiring.context = lambda *a, **kw: dataclasses.replace(context(*a, **kw), lights=False)
     services.extras["show"] = wiring
     engine = await wiring.start()
     w = Show(services, wiring, engine, data)
@@ -155,7 +166,7 @@ SCENE_NAME = {s.id: s.name for s in load_scenes(CONFIG_DIR).scenes}  # D77: "Low
 # ---- the acceptance: a 2-minute rehearsal in sim -------------------------------------------------------------------
 def test_a_two_minute_rehearsal_writes_a_complete_report_and_returns_to_the_still_look():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         before = w.engine.state()
         preview = w.engine.rehearsal_preview("golden-hour", 2)
         result = await w.engine.rehearse("golden-hour", 2, source="ops")
@@ -286,7 +297,7 @@ def test_the_rehearsal_design_is_the_modes_module_level_design_stepped_and_modes
 # ---- it stops ------------------------------------------------------------------------------------------------------
 def test_it_stops_at_the_first_403_and_fails():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.rehearse("golden-hour", 5, source="ops")
         await w.run_for(40)
         # a 403 from Hubspace (the simulator doesn't make them): the attempt the executor would record
@@ -379,7 +390,7 @@ def test_after_a_403_nothing_more_is_sent_and_ops_cant_rehearse_again_until_the_
 def test_a_governor_trip_ends_it_and_the_report_says_so():
     async def main():
         storm = SimSettings.from_acceptance().with_(throttle_429_rate=0.35, silent_drop_rate=0.0)
-        w = await show(sim=storm)
+        w = await show(sim=storm, per_light=False)
         await w.engine.rehearse("golden-hour", 5, source="ops")
         await w.run_for(120)
         await w.ended()
@@ -396,7 +407,7 @@ def test_a_governor_trip_ends_it_and_the_report_says_so():
 
 def test_ops_choosing_another_look_ends_it_with_what_it_measured():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.rehearse("golden-hour", 3, source="ops")
         await w.run_for(16)  # the hold and steps 1 and 2 (7.5 s apart)
         await w.engine.request_mode("goodnight-glow", source="ops")  # another mood
@@ -415,7 +426,7 @@ def test_ops_choosing_another_look_ends_it_with_what_it_measured():
 
 def test_ops_can_stop_it_and_a_pause_stops_it():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.rehearse("golden-hour", 3, source="ops")
         await w.run_for(16)  # steps 1 and 2 (7.5 s apart) are out
         w.engine.floors["golden-hour"] = 1  # set during it (its ladder's index): it doesn't outlive it
@@ -452,7 +463,7 @@ def test_ops_can_stop_it_and_a_pause_stops_it():
 # ---- while it runs ---------------------------------------------------------------------------------------------------
 def test_guests_wait_the_idle_hold_waits_and_the_run_lasts_its_minutes():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.set_guest_brightness(40, source="ops")
         await w.engine.rehearse("golden-hour", 4, source="ops")
         cleared = w.engine.state().guest_brightness
@@ -614,7 +625,7 @@ def test_a_floor_set_before_the_rehearsal_is_back_afterwards():
 
 def test_the_safe_look_ends_it_and_a_look_that_cant_step_never_starts_one():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.rehearse("golden-hour", 2, source="ops")
         await w.run_for(10)
         await w.engine.safe_look(source="ops")
@@ -733,7 +744,7 @@ def test_a_command_that_failed_throttled_after_retries_fails_it_and_an_outage_do
 
 def test_throttled_attempts_at_5_percent_fail_it_and_writes_count_by_send_time():
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.rehearse("golden-hour", 2, source="ops")
         await w.run_for(5)
         t = w.services.telemetry

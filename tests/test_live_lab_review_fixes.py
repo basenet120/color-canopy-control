@@ -247,10 +247,11 @@ def test_the_lab_publishes_over_the_git_the_show_loaded_and_refuses_during_a_dep
 # ---- LL-PUB-3 / B1-6: the rollback's re-pick and the T1 hold ----------------------------------------------------------
 def test_a_failure_after_the_repick_is_rolled_back_to_the_restored_trios_plan(no_threads, monkeypatch):
     """The real reload_looks runs (the new trio's plan is installed and sent), then something raises: the rollback
-    re-picks under the restored trio, so the lights never keep the failed publish's plan."""
+    re-picks under the restored trio, so the lights never keep the failed publish's plan. Per-light off: a brightness
+    edit changes Calm's module-level rows, not its per-light picture (its `lights` block has its own level)."""
 
     async def main():
-        w = await show()
+        w = await show(per_light=False)
         await w.engine.request_mode(CALM, source="ops")
         await w.engine.wait_idle()
         real = w.engine.reload_looks

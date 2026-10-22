@@ -988,9 +988,27 @@ def test_on_the_sim_engine_painted_scenes_draw_per_light_and_options_at_module_l
     body = _panel(app_client_show)
     by_id = {s["id"]: s for s in body["scenes"]}
     assert list(by_id) == REVIEW_IDS
-    assert all(by_id[o]["thumb"]["basis"] == "modules" for o in OPTION_IDS)
-    assert all(by_id[b]["thumb"]["basis"] == "modules" for b in MODULES_FIRST)
     current = K._current_plan(engine)
+
+    def lights(sid):
+        plan = K._likely_plan(engine, sid, current)
+        return plan is not None and plan.program is not None and plan.program.lights
+
+    # Oct 21: a per-light look (the simulator runs every lights rung per light) draws one of its own frames, its dark
+    # lights left out; the rest draw their nine module colours
+    for sid in [*OPTION_IDS, *MODULES_FIRST]:
+        want = "lights" if lights(sid) else "modules"
+        assert by_id[sid]["thumb"]["basis"] == want, (sid, by_id[sid]["thumb"]["basis"])
+    per_light = [sid for sid in OPTION_IDS if lights(sid)]
+    assert per_light, "no per-light option in the review catalog"
+    for sid in per_light:
+        modules = by_id[sid]["thumb"]["modules"]
+        heads = [c for m in modules for c in (m["colors"] or [])]
+        assert len(heads) == 270 and any(c for c in heads), sid
+    # a look cut into rings, rays or stripes leaves its dark lights out of the card
+    assert any(
+        any(c is None for m in by_id[sid]["thumb"]["modules"] for c in m["colors"] or []) for sid in per_light
+    )
     for base in PAINTED:
         plan = K._likely_plan(engine, base, current)
         tier = str(plan.tier) if plan is not None else None
@@ -1045,7 +1063,8 @@ def test_on_the_sim_engine_a_hysteresis_floor_at_the_strand_rung_draws_the_whole
         for sid in eased:
             engine.floors.pop(sid, None)
     by_id = {s["id"]: s for s in _panel(app_client_show)["scenes"]}
-    assert all(by_id[sid]["thumb"]["basis"] == "modules" for sid in eased)
+    # the floor lifted: each card is back to the picture it had (a per-light look's own frame since Oct 21)
+    assert all(by_id[sid]["thumb"]["basis"] == before[sid]["thumb"]["basis"] for sid in eased)
 
 
 # ---- the guest panel ------------------------------------------------------------------------------------------------------
