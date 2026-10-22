@@ -566,7 +566,12 @@ def test_guest_settings_config_defaults_and_validation():
     kiosk = KioskSettings()
     assert (kiosk.guest_brightness_min, kiosk.idle_reset_s, kiosk.idle_scene) == (10, 300, None)
     shipped = load_settings().kiosk
-    assert (shipped.guest_brightness_min, shipped.idle_reset_s, shipped.idle_scene) == (10, 300, None)
+    # Oct 21 (Alon): a guest's pick holds an hour untouched, then the idle reset returns to Light Show #2
+    assert (shipped.guest_brightness_min, shipped.idle_reset_s, shipped.idle_scene) == (
+        10,
+        3600,
+        "light-show-2",
+    )
     for bad in ({"guest_brightness_min": 0}, {"guest_brightness_min": 101}, {"idle_reset_s": 0}):
         with pytest.raises(ValidationError):
             ConductorSettings.model_validate({"kiosk": bad})

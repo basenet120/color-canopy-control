@@ -1152,6 +1152,14 @@ def test_the_review_menu_sees_the_real_catalog(app_client):
         assert s["thumb"] is not None  # the review menu: every card carries its picture
     # the iPad polls this every 2 s: PR A's fin geometry and PR C's 18 thumbnails together, pinned
     assert len(r.content) < PANEL_MAX_BYTES, len(r.content)
+    # Oct 21 (Alon): the shipped idle reset returns to Light Show #2, so the iPad always offers it
+    reset = app_client.post("/api/ops/ipad-scenes", json={"scene": "light-show-2", "show": False})
+    assert reset.status_code == 409
+    assert reset.json()["detail"] == IM.IDLE_ALWAYS.format(
+        name=SCENES.get("light-show-2").name, key="kiosk.idle_scene"
+    )
+    # the 3 × 2 grid below is without an idle reset scene, so every option and the Light Show can go
+    app_client.app.state.services.settings.kiosk.idle_scene = None
     for option in [
         x for x in FULL if x not in BASE_NAMES
     ]:  # every option and the Light Show scene off the iPad: the six D77 #1s, in order

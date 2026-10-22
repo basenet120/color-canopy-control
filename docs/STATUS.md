@@ -26,6 +26,13 @@ adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple ar
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
 
+## Idle: an hour, then Light Show #2, `claude/idle-light-show` → `main` (Oct 21 night; no PR yet)
+Alon: a guest's pick should hold an hour untouched, then Light Show #2. `kiosk.idle_reset_s: 3600` with
+`kiosk.idle_scene: light-show-2` (the reset clears guest brightness/off and returns to that mood);
+`kiosk.idle_return_s: 86400`, so the idle hold to `idle_mode` (Lowcountry Calm, still the start and safe look) waits
+a day. Light Show #2 loops every 2 s until a guest picks (~270 writes a minute overnight). As the idle scene it can't
+be hidden from the iPad, so the six-card 3×2 grid can't come back while it is. Tests updated (helper agent).
+
 ## Every look per light: #1–#3 still pictures, moving looks loop, per-light cards (Oct 21 night; no PRs yet)
 Alon: "1–3 should be per light, but static … at least one of each option should have concentric ring gradients to
 match the fin pattern"; moving looks loop forever; the iPad cards show a still picture of each look.
@@ -101,7 +108,7 @@ look nearly all on, and `/ops` (which draws 13 % as near black) disagrees with t
 ## Show box deploy — local branch `local/deploy-47-48` (Oct 21 afternoon; local workflow)
 From Oct 21 Alon iterates locally: the box deploys from the dev checkout on the same Mac (`~/canopy-show` fetches
 from `~/color-canopy-control`), not from GitHub, and CI is a backstop. **The box runs `local/deploy-47-48`** =
-`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` + `claude/rate-test-rungs` + `claude/per-light-2s` + `claude/visible-per-light` + `claude/static-per-light` + `claude/loop-per-light` + `claude/still-partial-copy` + `claude/merge-test-fixes` (no PRs yet); the exact
+`main` (`e6ef743`, #46) + PR #47 `claude/stale-readback` (D82) + PR #48 `claude/panel-own-orientation` + `claude/ops-heads-step` (no PR yet) + `claude/light-show` (no PR yet) + `claude/per-light-resend` + `claude/rate-test-rungs` + `claude/per-light-2s` + `claude/visible-per-light` + `claude/static-per-light` + `claude/loop-per-light` + `claude/still-partial-copy` + `claude/merge-test-fixes` + `claude/idle-light-show` (no PRs yet); the exact
 commit is the one `canopy-mac status` / `state/installed_sha` shows after the paste. Not on `main` until #47 and #48
 merge; then redeploy `main` to get back in line. Verified before the deploy: full suite locally, 8-way
 (`uv run --with pytest-xdist pytest -q -n 8`): all pass except one row of `test_soak` (see the Light Show block): 3657 passed, 1 failed in 3 min 52 s; ruff clean.

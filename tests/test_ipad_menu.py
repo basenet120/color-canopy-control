@@ -74,6 +74,7 @@ from tests.review_fixture import (
 ROOT = Path(__file__).resolve().parent.parent
 CALM = "lowcountry-calm"
 GOLDEN = "golden-hour"
+LIGHT_SHOW_2 = "light-show-2"  # Oct 21 (Alon): the shipped kiosk.idle_scene, the idle reset's look
 # D77: "Golden Hour #1"; PR E renames in one place
 NAMES = {s.id: s.name for s in load_scenes(CONFIG_DIR).scenes}
 
@@ -378,18 +379,23 @@ def test_a_visible_option_of_a_hidden_base_keeps_its_group():
 
 def test_six_visible_is_the_grid_seven_is_the_review_menu():
     catalog = review_scenes(load_scenes())
-    # every option and the Light Show scene hidden: the six approved #1s
-    six = IM.menu(catalog, _kiosk(hidden_scenes=list(BEYOND_SIX)))
+    # no idle reset scene (the shipped Light Show #2 can't be hidden): every option and the Light Show scene hidden
+    # leaves the six approved #1s
+    six = IM.menu(catalog, _kiosk(idle_scene=None, hidden_scenes=list(BEYOND_SIX)))
     assert [s.id for s in six.visible.scenes] == APPROVED and six.review is False
-    seven = IM.menu(catalog, _kiosk(hidden_scenes=[x for x in BEYOND_SIX if x != "golden-hour-2"]))
+    seven = IM.menu(
+        catalog, _kiosk(idle_scene=None, hidden_scenes=[x for x in BEYOND_SIX if x != "golden-hour-2"])
+    )
     assert len(seven.visible.scenes) == 7 and seven.review is True
     # the Light Show #1 as the seventh card is the review menu too
-    seven = IM.menu(catalog, _kiosk(hidden_scenes=list(OPTION_IDS)))
+    seven = IM.menu(catalog, _kiosk(idle_scene=None, hidden_scenes=list(OPTION_IDS)))
     assert len(seven.visible.scenes) == 7 and seven.review is True
 
 
 def test_the_idle_scene_settings_name_themselves():
-    assert IM.idle_ids(_kiosk()) == {CALM: "kiosk.idle_mode"}
+    # Oct 21 (Alon): the shipped idle reset returns to Light Show #2, so the iPad always offers it too
+    assert IM.idle_ids(_kiosk()) == {CALM: "kiosk.idle_mode", LIGHT_SHOW_2: "kiosk.idle_scene"}
+    assert IM.idle_ids(_kiosk(idle_scene=None)) == {CALM: "kiosk.idle_mode"}
     assert IM.idle_ids(_kiosk(idle_scene="goodnight-glow")) == {
         CALM: "kiosk.idle_mode",
         "goodnight-glow": "kiosk.idle_scene",
@@ -415,7 +421,8 @@ def test_the_ops_body_lists_every_scene_with_its_switch(tmp_path):
     body = IM.menu_json(services)
     assert [s["id"] for s in body["scenes"]] == REVIEW_IDS
     assert all(s["on_ipad"] is True for s in body["scenes"])
-    assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM]
+    # Oct 21 (Alon): the shipped idle reset's Light Show #2 is an idle scene too
+    assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM, LIGHT_SHOW_2]
     gh2 = next(s for s in body["scenes"] if s["id"] == "golden-hour-2")
     assert gh2 == {
         "id": "golden-hour-2",
@@ -486,6 +493,9 @@ def test_two_switches_keep_catalog_order(tmp_path):
 
 def test_the_switch_says_when_the_menu_changes_shape_and_when_the_scene_is_showing(tmp_path):
     services = _services(tmp_path)
+    services.settings.kiosk.idle_scene = (
+        None  # no idle reset scene: Light Show #2 can be hidden for the 3 × 2 grid
+    )
     install_review(services, hide=[x for x in BEYOND_SIX if x != "golden-hour-2"])  # 7 visible
     hid = IM.set_on_ipad(services, "golden-hour-2", False)
     assert hid.message.endswith(" The iPad is back to its 3 × 2 grid.")
@@ -1242,7 +1252,9 @@ def test_six_or_fewer_visible_compute_and_send_no_thumbnail(app_client, monkeypa
         return real(*a, **kw)
 
     monkeypatch.setattr(GP, "thumb_plans", counted_basis)
-    # every option and the Light Show scene off the iPad, in place
+    # no idle reset scene (the shipped Light Show #2 can't be hidden), then every option and the Light Show scene
+    # off the iPad, in place
+    _svc(app_client).settings.kiosk.idle_scene = None
     _svc(app_client).settings.kiosk.hidden_scenes = list(BEYOND_SIX)
     for _ in range(3):  # the git config with every option and the Light Show hidden: the six #1s
         body = _panel(app_client)
@@ -1393,7 +1405,8 @@ def test_the_ipad_switch_hides_and_shows_a_scene_without_an_engine(app_client):
     published = _published(services)
     body = app_client.get("/api/ops/ipad-scenes").json()
     assert [s["id"] for s in body["scenes"]] == REVIEW_IDS and all(s["on_ipad"] for s in body["scenes"])
-    assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM]
+    # Oct 21 (Alon): the shipped idle reset's Light Show #2 is an idle scene too
+    assert [s["id"] for s in body["scenes"] if s["idle"]] == [CALM, LIGHT_SHOW_2]
     assert (
         body["review"] is True and body["notes"] == [] and body["visible"] == body["total"] == len(REVIEW_IDS)
     )
