@@ -6401,7 +6401,7 @@
 "layout_words": "from one spot",
 "sample_at": "centre",
 "solid": "Soft ivory",
-"brightness": 70,
+"brightness": 100,
 "t3": {
 "r0c0": [
 245,
@@ -6472,7 +6472,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Haint blue",
-"brightness": 70,
+"brightness": 100,
 "t3": {
 "r0c0": [
 225,
@@ -6544,7 +6544,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Mist blue",
-"brightness": 70,
+"brightness": 100,
 "t3": {
 "r0c0": [
 217,
@@ -6616,7 +6616,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Sea foam",
-"brightness": 70,
+"brightness": 100,
 "t3": {
 "r0c0": [
 232,
@@ -6688,7 +6688,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Lantern glow",
-"brightness": 70,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -6760,7 +6760,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Oak linen",
-"brightness": 70,
+"brightness": 100,
 "t3": {
 "r0c0": [
 210,
@@ -6832,7 +6832,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Pastel coral",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -6904,7 +6904,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Facade pink",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 248,
@@ -6975,7 +6975,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Coral",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 231,
@@ -7047,7 +7047,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Facade rose",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -7125,7 +7125,7 @@
 "layout_words": "from one edge",
 "sample_at": "centre",
 "solid": "Apricot",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 249,
@@ -7197,7 +7197,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Pinwheel blush",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 221,
@@ -7275,7 +7275,7 @@
 "layout_words": "from one spot",
 "sample_at": "centre",
 "solid": "Sage green",
-"brightness": 75,
+"brightness": 100,
 "t3": {
 "r0c0": [
 195,
@@ -7346,7 +7346,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Blossom pink",
-"brightness": 75,
+"brightness": 100,
 "t3": {
 "r0c0": [
 135,
@@ -7418,7 +7418,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Lantern gold",
-"brightness": 75,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -7490,7 +7490,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Fern",
-"brightness": 75,
+"brightness": 100,
 "t3": {
 "r0c0": [
 205,
@@ -7562,7 +7562,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Peony",
-"brightness": 75,
+"brightness": 100,
 "t3": {
 "r0c0": [
 254,
@@ -7634,7 +7634,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Breeze sage",
-"brightness": 75,
+"brightness": 100,
 "t3": {
 "r0c0": [
 166,
@@ -7705,7 +7705,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Aqua",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 179,
@@ -7777,7 +7777,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Tidewater blue",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 64,
@@ -7853,7 +7853,7 @@
 "layout_words": "around one spot",
 "sample_at": "centre",
 "solid": "Harbor blue",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 248,
@@ -7925,7 +7925,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Ocean blue",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 185,
@@ -7997,7 +7997,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Pool aqua",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 100,
@@ -8069,7 +8069,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Night sea",
-"brightness": 85,
+"brightness": 100,
 "t3": {
 "r0c0": [
 179,
@@ -8147,7 +8147,7 @@
 "layout_words": "from one edge",
 "sample_at": "centre",
 "solid": "Sunset pink",
-"brightness": 95,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -8218,7 +8218,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Honey",
-"brightness": 95,
+"brightness": 100,
 "t3": {
 "r0c0": [
 249,
@@ -8290,7 +8290,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Burnt orange",
-"brightness": 95,
+"brightness": 100,
 "t3": {
 "r0c0": [
 244,
@@ -8362,7 +8362,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Sunrise peach",
-"brightness": 95,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -8434,7 +8434,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Amber glow",
-"brightness": 95,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -8506,7 +8506,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Marigold",
-"brightness": 95,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -8577,7 +8577,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Periwinkle",
-"brightness": 28,
+"brightness": 100,
 "t3": {
 "r0c0": [
 172,
@@ -8648,7 +8648,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Night blue",
-"brightness": 25,
+"brightness": 100,
 "t3": {
 "r0c0": [
 135,
@@ -8719,7 +8719,7 @@
 "layout_words": "from the centre out",
 "sample_at": "centre",
 "solid": "Candle amber",
-"brightness": 26,
+"brightness": 100,
 "t3": {
 "r0c0": [
 139,
@@ -8797,7 +8797,7 @@
 "layout_words": "from one edge",
 "sample_at": "centre",
 "solid": "Moonrise blue",
-"brightness": 28,
+"brightness": 100,
 "t3": {
 "r0c0": [
 211,
@@ -8869,7 +8869,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Star lilac",
-"brightness": 28,
+"brightness": 100,
 "t3": {
 "r0c0": [
 230,
@@ -8941,7 +8941,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Lavender haze",
-"brightness": 28,
+"brightness": 100,
 "t3": {
 "r0c0": [
 165,
@@ -9013,7 +9013,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Electric cyan",
-"brightness": 90,
+"brightness": 100,
 "t3": {
 "r0c0": [
 11,
@@ -9085,7 +9085,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Beacon amber",
-"brightness": 90,
+"brightness": 100,
 "t3": {
 "r0c0": [
 251,
@@ -9157,7 +9157,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Sunbeam",
-"brightness": 90,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -9229,7 +9229,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Ruby",
-"brightness": 90,
+"brightness": 100,
 "t3": {
 "r0c0": [
 255,
@@ -9301,7 +9301,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Firefly gold",
-"brightness": 90,
+"brightness": 100,
 "t3": {
 "r0c0": [
 239,
@@ -9373,7 +9373,7 @@
 "layout_words": "diagonally",
 "sample_at": "centre",
 "solid": "Hot magenta",
-"brightness": 90,
+"brightness": 100,
 "t3": {
 "r0c0": [
 234,

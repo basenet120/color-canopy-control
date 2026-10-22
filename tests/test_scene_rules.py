@@ -223,9 +223,9 @@ def test_the_new_d75_mutations_say_why():
     assert ladder.mode == "golden-hour" and "must sit just before [modules, strand]" in ladder.message
     scenes, modes, recipes = _mutated(MUTATIONS["breath-repeats-a-step"][1])
     (stepped,) = R.scene_mode_problems(scenes, modes, recipes, CANOPY, rules={"stepped"})
-    assert stepped.mode == "coastal-tides" and "steps 1 and 2 show the same picture" in stepped.message
+    assert stepped.mode == "coastal-tides" and "steps 0 and 1 show the same picture" in stepped.message
     levels = [p["r1c1"][1] for p in R.step_pictures(modes.mode("coastal-tides"), recipes, CANOPY)]
-    assert levels == [85, 86, 86, 85, 84, 85]
+    assert levels == [100, 100, 99, 100, 99, 99]  # at 100 % the breath dips (compile.breath_level)
 
 
 def test_a_shimmer_whose_modules_all_start_together_is_blamed_on_its_seed():
@@ -252,7 +252,7 @@ def test_a_breathe_variant_steps_its_brightness_and_keeps_its_colours():
     mode = modes.mode("coastal-tides")
     pictures = R.step_pictures(mode, recipes, CANOPY)
     colours = R.module_colours(mode, recipes, CANOPY)
-    assert [{p[1] for p in step.values()} for step in pictures] == [{85}, {88}, {91}, {85}, {79}, {82}]
+    assert [{p[1] for p in step.values()} for step in pictures] == [{100}, {98}, {97}, {100}, {94}, {97}]
     assert all({pos: rgb for pos, (rgb, _) in step.items()} == colours for step in pictures)
     assert R.step_frames(mode, recipes, CANOPY) == [
         {pos: rgb for pos, (rgb, _) in s.items()} for s in pictures

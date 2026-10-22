@@ -1004,6 +1004,15 @@ def _hex(rgb: Sequence[int]) -> str:
     return "#" + "".join(f"{c:02X}" for c in rgb)
 
 
+def breath_level(brightness: int, swing: int, w: float) -> int:
+    """A module's level at breath position `w` (−1…1). Around its brightness (± swing) when that fits under 100;
+    a breath too near the top (Oct 22: every look at 100 %) dips instead: half the swing on the way up, the full
+    swing on the way down, so it rests at its brightness, never passes 100 and no two steps in a row match."""
+    if brightness + swing <= 100:
+        return brightness + _half_up(swing * w)
+    return brightness - _half_up(swing * (w / 2 if w > 0 else -w))
+
+
 def breath_wave(k: int, n: int) -> float:
     """Where a module is in its breath of `n` steps at its own step `k` (D75): 0 at rest, up to +1, back through 0
     to −1 and back up, peaking on a whole step (p = ⌊n/4 + ½⌋ steps up). 0 before (k < 0) and after (k ≥ n) the
@@ -1073,7 +1082,7 @@ def step_looks(
             else:
                 w = breath_wave(n - lags[pos], tech.steps_per_cycle)
                 rgb = _sampled_rgb(sample, e, ctx, offset=sign * tech.shift * w)
-                level = tech.brightness + _half_up(tech.brightness_swing * w)
+                level = breath_level(tech.brightness, tech.brightness_swing, w)
             step[pos] = LookSpec(kind="rgb", rgb=rgb, brightness=level)
         out.append(step)
     return out

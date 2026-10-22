@@ -536,7 +536,7 @@ def test_every_option_has_a_stepped_rung_within_the_bounds(scene_id):
     tech = mode.techniques.stepped
     assert tech.mode in {"travel", "breathe", "shimmer"}
     assert (tech.seed is not None) == (tech.mode == "shimmer")
-    assert 1 <= tech.brightness - tech.brightness_swing and tech.brightness + tech.brightness_swing <= 100
+    assert 1 <= tech.brightness - tech.brightness_swing  # near the top a breath dips (compile.breath_level)
     assert tech.run_s <= SETTINGS.kiosk.idle_return_s
     sample = mode.techniques.modules.sample
     assert tech.canvas == sample.canvas and tech.brightness == sample.brightness  # the hold is module level

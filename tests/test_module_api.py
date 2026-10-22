@@ -357,7 +357,7 @@ def test_lowcountry_preview_shows_a_modes_slice_for_a_canopy_position(app_client
     top_row = [h["paint"] for h in heads]
     assert top_row == [e.to_json() for e in expected_frame("rainbow-row-sunset", "r0c1")]
     view = {row.key: row.value for row in _services(app_client).sim.cloud_view(f"sim-{BENCH}")}
-    assert view[("color-individual", "custom")] == "custom-3" and view[("brightness", None)] == 85
+    assert view[("color-individual", "custom")] == "custom-3" and view[("brightness", None)] == 100
     _wait(lambda: [h["reported"] for h in heads] == _ground_truth(app_client))  # the lights show it too
     # the right-hand column of the canopy is a different slice of the same gradient (it runs across the canopy)
     right = _post(

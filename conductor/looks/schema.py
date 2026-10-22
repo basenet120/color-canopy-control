@@ -463,10 +463,10 @@ class SteppedTechnique(_Strict):
                 "mode: shimmer needs lag_steps of at least 1 (how far apart the modules' rhythms start); with 0 "
                 "every module breathes together, which is mode: breathe"
             )
-        if b - swing < 1 or b + swing > 100:
+        if b - swing < 1:  # near the top a breath dips instead of passing 100 (compile.breath_level)
             raise ValueError(
-                f"brightness {b} ± brightness_swing {swing} would run {b - swing}–{b + swing}, outside 1–100; "
-                "lower the swing or the brightness"
+                f"brightness {b} − brightness_swing {swing} would dip to {b - swing}, below 1; "
+                "lower the swing or raise the brightness"
             )
         copy = self.moving_feature.lower()
         if swing > 0 and not any(p in copy for p in BREATHE_LEVEL_PHRASES):

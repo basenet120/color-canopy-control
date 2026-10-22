@@ -1061,12 +1061,12 @@ test("the motion kind and the breathe controls: bounds, valid defaults, travel k
   const travel = M.steppedControls(SCENE_GOLDEN, golden(), CATALOG_D75);
   assert.deepEqual([travel.mode, travel.breathes, travel.shimmer, travel.modes], ["travel", false, false, ["travel", "breathe", "shimmer"]]);
   assert.deepEqual(travel.shift, { min: 0, max: 0.5, step: 0.05, value: 0 });
-  assert.deepEqual(travel.swing, { min: 0, max: 5, step: 1, value: 0 }, "min(20, 100 − 95, 95 − 1)");
+  assert.deepEqual(travel.swing, { min: 0, max: 20, step: 1, value: 0 }, "min(20, 95 − 1)");
   assert.deepEqual(travel.lag, { min: 0, max: 6, step: 1, value: 0 });
   assert.equal(travel.seed, null);
   assert.equal(travel.note, "");
-  for (const [b, top] of [[95, 5], [85, 15], [50, 20], [10, 9], [1, 0], [100, 0]]) assert.equal(M.maxSwing(b), top, `b = ${b}`);
-  assert.equal(M.steppedControls(SCENE_GOLDEN, golden({ brightness: 85 }), CATALOG_D75).swing.max, 15);
+  for (const [b, top] of [[95, 20], [85, 20], [50, 20], [10, 9], [1, 0], [100, 20]]) assert.equal(M.maxSwing(b), top, `b = ${b}`);
+  assert.equal(M.steppedControls(SCENE_GOLDEN, golden({ brightness: 85 }), CATALOG_D75).swing.max, 20);
   // the catalog says nothing: the schema's own bounds
   assert.deepEqual(M.steppedControls(SCENE_GOLDEN, golden(), CATALOG_LIMITS).lag, { min: 0, max: 6, step: 1, value: 0 });
   // an idle look with a rung shows the server's note
@@ -1076,15 +1076,16 @@ test("the motion kind and the breathe controls: bounds, valid defaults, travel k
   const a = golden();
   const before = JSON.stringify(a);
   const breathe = M.setStepped(a, { mode: "breathe" }, CATALOG_D75).stepped;
-  assert.deepEqual([breathe.mode, breathe.brightness_swing, breathe.shift, breathe.lag_steps, breathe.seed], ["breathe", 5, 0, 0, null], "95 + 5 = 100");
+  assert.deepEqual([breathe.mode, breathe.brightness_swing, breathe.shift, breathe.lag_steps, breathe.seed], ["breathe", 6, 0, 0, null], "the default ±6: near the top it dips instead");
   assert.equal(M.setStepped(golden({ brightness: 85 }), { mode: "breathe" }, CATALOG_D75).stepped.brightness_swing, 6);
   assert.equal(M.steppedControls(SCENE_GOLDEN, { ...a, stepped: breathe }, CATALOG_D75).breathes, true);
-  // the brightness moves the swing's top: 97 leaves room for ±3
+  // near the top a breath dips instead (Oct 22), so 97 keeps the swing; only the bottom (b − 1) caps it
   const brighter = M.setField({ ...a, stepped: breathe }, "brightness", 97);
-  assert.equal(brighter.stepped.brightness_swing, 3);
+  assert.equal(brighter.stepped.brightness_swing, 6);
+  assert.equal(M.setField({ ...a, stepped: breathe }, "brightness", 4).stepped.brightness_swing, 3);
   assert.deepEqual(M.setField(a, "brightness", 97).stepped, a.stepped, "a travel draft's timing is untouched");
   const shimmer = M.setStepped(a, { mode: "shimmer" }, CATALOG_D75).stepped;
-  assert.ok(shimmer.lag_steps >= 1 && shimmer.seed === 1 && shimmer.brightness_swing === 5, JSON.stringify(shimmer));
+  assert.ok(shimmer.lag_steps >= 1 && shimmer.seed === 1 && shimmer.brightness_swing === 6, JSON.stringify(shimmer));
   const sc = M.steppedControls(SCENE_GOLDEN, { ...a, stepped: shimmer }, CATALOG_D75);
   assert.deepEqual([sc.mode, sc.breathes, sc.shimmer, sc.seed], ["shimmer", true, true, 1]);
   assert.equal(M.setStepped({ ...a, stepped: shimmer }, { seed: 41.6 }, CATALOG_D75).stepped.seed, 42);
@@ -1094,7 +1095,7 @@ test("the motion kind and the breathe controls: bounds, valid defaults, travel k
   assert.ok(M.draftEquals({ ...a, stepped: back }, a), "travel again equals the approved travel draft");
   assert.equal(M.setStepped({ ...a, stepped: breathe }, { shift: 0.33 }, CATALOG_D75).stepped.shift, 0.35);
   assert.equal(M.setStepped({ ...a, stepped: breathe }, { shift: 0.9 }, CATALOG_D75).stepped.shift, 0.5);
-  assert.equal(M.setStepped({ ...a, stepped: breathe }, { brightness_swing: 25 }, CATALOG_D75).stepped.brightness_swing, 5);
+  assert.equal(M.setStepped({ ...a, stepped: breathe }, { brightness_swing: 25 }, CATALOG_D75).stepped.brightness_swing, 20);
   assert.equal(M.setStepped({ ...a, stepped: breathe }, { lag_steps: 9 }, CATALOG_D75).stepped.lag_steps, 6);
   assert.equal(M.setStepped(a, { mode: "sparkle" }, CATALOG_D75).stepped.mode, "travel");
   assert.equal(JSON.stringify(a), before, "the input is never changed");

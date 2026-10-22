@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-22 morning (`claude/effect-sweep`: the bench's effect sweep for on-device animation, deployed `408f11a`; see its block). Also 2026-10-22 (#59 `claude/soak-per-light`: the soak for per-light looks, two idle fixes; see its block). Before that 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
+_Last updated: 2026-10-22 midday (`claude/full-brightness`: every look at 100 %, deployed `abff13f`; see its block). Before that 2026-10-22 morning (`claude/effect-sweep`: the bench's effect sweep for on-device animation, deployed `408f11a`; see its block). Also 2026-10-22 (#59 `claude/soak-per-light`: the soak for per-light looks, two idle fixes; see its block). Before that 2026-10-21 afternoon (PR `claude/panel-own-orientation`: the guest panel draws each kit as it hangs; the venue calibration; see its block). Also afternoon (PR `claude/stale-readback`: a readback that won't move is "stale", re-sent slowly, re-sends capped, D82; see its block). Before that 2026-10-21 (Charleston: nine kits online and commissioned for per-light, rate tests 0 × 429 at 540/min, per-light every 3 s, D81; see its block). Before that 2026-10-20 midday (String light 1 has Gate C + a map: ready for per-light; `9e31dbe` deployed; see its block). Before that 2026-10-20 early (PR `claude/per-light-motion`: per-light motion, the rate test, 18 per-light options, D80; see its block). Before that 2026-10-19 night (PR `claude/gate-r-one-kit`: Gate R passed on String light 1, a strand's colour change fades, `live_enabled` on, D79; `14c2932` deployed on the show box; see its block). Before that 2026-10-19 (the preset-options stack, **to merge in this order: A, B, C, D**, merge commits, each
 targeting `main`; A, B and C are merged as #38, #39 and #40 (and PR F as #41), and D is #42; see their blocks at the top. PR A
 `claude/fin-visualizer` (D74: fins data, the `fins` field, the fin-lit iPad picture); PR B `claude/motion-every-scene`
 (D75: motion on every scene — breathe and shimmer beside travel, a guest's choice runs first then settles on the best
@@ -25,6 +25,22 @@ account (logical account `bench`): **the Oct 19 undo is cancelled** (Alon, Oct 1
 adds canopy-wide 2-D designs (D63), a true 270-light iPad preview, the ripple arrival (D64, off) and stepped waves
 across the 3×3 panels (D65, sim-first, off on hardware until Gate R). Before that (Oct 7): Paris's VWBD field work is
 canon (D54); Kingston is commissioned for per-head frames on VWBD's laptop; D57/D58 maps._
+
+## Every look at 100 %, `claude/full-brightness` → `main` (Oct 22 midday; no PR yet; deployed)
+Alon: "default all the animations and presets to start at 100% brightness so that it reads better during the day."
+- Every scene's `brightness_draft` and every tier's brightness in `config/modes.yaml` (canvas, slot, modules,
+  stepped, per-light, strand) is 100 — Goodnight Glow included. Scene pins regenerated.
+- A module-level breath (the stepped fallback; guests see the per-light versions on the canopy) can't swing above
+  100, so near the top it **dips**: `compile.breath_level` rests at the brightness, half the swing on the way up,
+  the full swing on the way down (first step = the still look, no two steps in a row equal for 3/4/6-step cycles).
+  Schema and the Lab's `maxSwing` allow a swing up to brightness − 1.
+- **Verified:** full suite on `local/deploy-oct22` (`abff13f`): 3622 passed, 1 failed (`test_soak` short soak —
+  fails on the deployed base too); 16 tests that pinned the old levels updated; `lab-model.test.mjs` 95 pass.
+- **Deployed** Oct 22 12:56 (Alon: "local work and deploy"): the box runs `abff13f` = `local/deploy-oct22` =
+  `claude/effect-sweep` (sweep fixes, speed mode, band, research note) + `claude/full-brightness`. rc 0, preflight
+  ok; recovery re-sent Lowcountry Calm, applied on every module. Not deployed: another session's idle-reset commits
+  on `local/deploy-47-48`.
+- **Needs eyes:** that daylight reads better; Goodnight Glow at 100 % is no longer a dim look.
 
 ## Packaged animations: the effect sweep, `claude/effect-sweep` → `main` (Oct 22 morning; no PR yet; deployed)
 Alon: is there a format that sends animations faster than a frame per step? Streaming is bounded by the cloud

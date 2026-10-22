@@ -17,7 +17,7 @@ scenes:
     mood: "Settle in"
     description: "Soft ivory with a pale sea-glass heart for a calm, airy setting."
     transform: mirror
-    brightness_draft: 70
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Soft ivory", hex: "#F7F2E7"}
@@ -28,7 +28,7 @@ scenes:
     mood: "Settle in"
     description: "Haint blue, Charleston's porch-ceiling color, around a warm porch-light glow."
     transform: linear
-    brightness_draft: 70
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Porch light", hex: "#FFF3DC"}
@@ -40,7 +40,7 @@ scenes:
     mood: "Settle in"
     description: "Oyster shell, spartina green and mist blue, like morning on the marsh."
     transform: linear
-    brightness_draft: 70
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Oyster shell", hex: "#EEE6DA"}
@@ -52,7 +52,7 @@ scenes:
     mood: "Settle in"
     description: "Pearl and sea foam with pale aqua at the edges, like light on a quiet tide pool."
     transform: linear
-    brightness_draft: 70
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Pearl", hex: "#F6F1E6"}
@@ -64,7 +64,7 @@ scenes:
     mood: "Settle in"
     description: "A warm lantern glow at the heart of cream and dusk blue, like a porch light at evening."
     transform: linear
-    brightness_draft: 70
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Lantern glow", hex: "#FFE7BF"}
@@ -76,7 +76,7 @@ scenes:
     mood: "Settle in"
     description: "Moss grey, sage mist and linen, soft as Spanish moss in a live oak."
     transform: linear
-    brightness_draft: 70
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Moss grey", hex: "#D9DDCF"}
@@ -87,7 +87,7 @@ scenes:
     mood: "Stay a little longer"
     description: "Pastel coral, blush pink and lilac, inspired by Charleston’s colorful facades."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Pastel coral", hex: "#FF9E96"}
@@ -99,7 +99,7 @@ scenes:
     mood: "Stay a little longer"
     description: "Six Rainbow Row facade colors: pink, butter, mint, sky, lavender and apricot."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Facade pink", hex: "#F6B8C8"}
@@ -114,7 +114,7 @@ scenes:
     mood: "Stay a little longer"
     description: "Apricot glow, coral, rose and dusk violet, like dusk over the harbor."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Apricot glow", hex: "#FFB98A"}
@@ -127,7 +127,7 @@ scenes:
     mood: "Stay a little longer"
     description: "Coral, peach, rose and lilac, a row of pastel facades in the late sun."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Facade coral", hex: "#FF8F85"}
@@ -140,7 +140,7 @@ scenes:
     mood: "Stay a little longer"
     description: "Butter yellow, apricot and rose, the glow of a painted front door at dusk."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Butter yellow", hex: "#FFE3A3"}
@@ -152,7 +152,7 @@ scenes:
     mood: "Stay a little longer"
     description: "Mint, lavender and blush turning around the centre like a pinwheel on a porch rail."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Porch mint", hex: "#B9E8D2"}
@@ -163,7 +163,7 @@ scenes:
     mood: "Bring everyone together"
     description: "Sage green softens into pale lime and ivory for a fresh garden glow."
     transform: linear
-    brightness_draft: 75
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Sage green", hex: "#8FBF9D"}
@@ -175,7 +175,7 @@ scenes:
     mood: "Bring everyone together"
     description: "Magnolia cream and blossom pink with leaf and moss greens."
     transform: linear
-    brightness_draft: 75
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Magnolia cream", hex: "#FBF3E1"}
@@ -188,7 +188,7 @@ scenes:
     mood: "Bring everyone together"
     description: "Edison amber and lantern gold over fern green, like supper under string lights."
     transform: linear
-    brightness_draft: 75
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Edison amber", hex: "#FFC37F"}
@@ -201,7 +201,7 @@ scenes:
     mood: "Bring everyone together"
     description: "Firefly yellow over fern and deep leaf green, a garden at the first dark of evening."
     transform: linear
-    brightness_draft: 75
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Firefly", hex: "#F4F1A0"}
@@ -213,7 +213,7 @@ scenes:
     mood: "Bring everyone together"
     description: "A peony-pink heart opening into blossom white and leaf green."
     transform: linear
-    brightness_draft: 75
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Peony", hex: "#F7B6C8"}
@@ -225,7 +225,7 @@ scenes:
     mood: "Bring everyone together"
     description: "Lime, sage and olive, leaves turning in a light breeze."
     transform: linear
-    brightness_draft: 75
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Breeze lime", hex: "#D4EE9B"}
@@ -236,7 +236,7 @@ scenes:
     mood: "Find your coast"
     description: "Ocean blue, aqua, seafoam and foam white, inspired by the Lowcountry coastline."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Ocean blue", hex: "#659BD5"}
@@ -249,7 +249,7 @@ scenes:
     mood: "Find your coast"
     description: "Deep teal and marsh green with tidewater blue and oyster white, like a tidal channel in the marsh."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Deep teal", hex: "#2F8F9D"}
@@ -262,7 +262,7 @@ scenes:
     mood: "Find your coast"
     description: "Night-sea blues with a beam of white and lamp gold, a nod to the Morris Island Lighthouse."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Night sea", hex: "#34548F"}
@@ -275,7 +275,7 @@ scenes:
     mood: "Find your coast"
     description: "Surf white over ocean blue and deep sea, the shore at high tide."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Surf white", hex: "#EEF8FA"}
@@ -287,7 +287,7 @@ scenes:
     mood: "Find your coast"
     description: "Aqua and teal over sand, rings spreading where a drop lands in a tide pool."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Pool aqua", hex: "#7FD6D0"}
@@ -299,7 +299,7 @@ scenes:
     mood: "Find your coast"
     description: "A beacon gold beam over night sea blue and sea foam."
     transform: linear
-    brightness_draft: 85
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Beacon gold", hex: "#FFE29A"}
@@ -310,7 +310,7 @@ scenes:
     mood: "Let the evening glow"
     description: "Soft gold, peach, sunset pink, rose and lavender. Pinks lead the sunset."
     transform: linear
-    brightness_draft: 95
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Soft gold", hex: "#FFDB9B"}
@@ -324,7 +324,7 @@ scenes:
     mood: "Let the evening glow"
     description: "Warm white, honey, Home Depot orange and amber, with orange on the corner strands for a golden evening glow."
     transform: linear
-    brightness_draft: 95
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Warm white", hex: "#FFF1DA"}
@@ -337,7 +337,7 @@ scenes:
     mood: "Let the evening glow"
     description: "Deep amber, burnt orange, dusty rose and smoky violet, like a sunset over the marsh."
     transform: linear
-    brightness_draft: 95
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Deep amber", hex: "#FFA040"}
@@ -350,7 +350,7 @@ scenes:
     mood: "Let the evening glow"
     description: "Gold, peach, rose and lavender, the sun coming up over the water."
     transform: linear
-    brightness_draft: 95
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Sunrise gold", hex: "#FFD27D"}
@@ -363,7 +363,7 @@ scenes:
     mood: "Let the evening glow"
     description: "Honey, amber and coral, warm air rising off the marsh at the end of the day."
     transform: linear
-    brightness_draft: 95
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Honey", hex: "#FFC870"}
@@ -375,7 +375,7 @@ scenes:
     mood: "Let the evening glow"
     description: "Champagne, marigold and persimmon, low sun rays fanning across the room."
     transform: linear
-    brightness_draft: 95
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Champagne", hex: "#FFEFCF"}
@@ -386,7 +386,7 @@ scenes:
     mood: "Slow the night down"
     description: "Dim periwinkle, lavender and moonlight blue for a restful evening mood."
     transform: linear
-    brightness_draft: 28
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Periwinkle", hex: "#8B8BD1"}
@@ -398,7 +398,7 @@ scenes:
     mood: "Slow the night down"
     description: "Night blue and deep moss with soft firefly glints."
     transform: linear
-    brightness_draft: 25
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Night blue", hex: "#4A5DA6"}
@@ -410,7 +410,7 @@ scenes:
     mood: "Slow the night down"
     description: "A warm candle-amber heart with dusky mauve and night blue around it."
     transform: linear
-    brightness_draft: 26
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Candle amber", hex: "#FFBF73"}
@@ -422,7 +422,7 @@ scenes:
     mood: "Slow the night down"
     description: "Moonlight blue and silver over night blue, the moon lifting over the water."
     transform: linear
-    brightness_draft: 28
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Moonrise silver", hex: "#E6E9F2"}
@@ -434,7 +434,7 @@ scenes:
     mood: "Slow the night down"
     description: "Star white and pale lilac over deep indigo, a clear night sky."
     transform: linear
-    brightness_draft: 28
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Star white", hex: "#F1F3FF"}
@@ -446,7 +446,7 @@ scenes:
     mood: "Slow the night down"
     description: "Lavender haze, periwinkle and dusk rose, the room breathing slowly toward sleep."
     transform: linear
-    brightness_draft: 28
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Lavender haze", hex: "#BFB3E6"}
@@ -457,7 +457,7 @@ scenes:
     mood: "Feel the beat"
     description: "Electric cyan, cobalt and ultraviolet, bold and bright."
     transform: linear
-    brightness_draft: 90
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Electric cyan", hex: "#00E5FF"}
@@ -469,7 +469,7 @@ scenes:
     mood: "Feel the beat"
     description: "Beacon amber, flame orange and signal red, bold and bright."
     transform: linear
-    brightness_draft: 90
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Beacon amber", hex: "#FFB000"}
@@ -481,7 +481,7 @@ scenes:
     mood: "Feel the beat"
     description: "Hot pink, coral and sunbeam yellow, bold and bright."
     transform: linear
-    brightness_draft: 90
+    brightness_draft: 100
     default_solid: 2
     palette:
       - {name: "Hot pink", hex: "#FF2D95"}
@@ -493,7 +493,7 @@ scenes:
     mood: "Feel the beat"
     description: "Ruby, tangerine, lemon, emerald, sapphire and violet, a full rainbow."
     transform: linear
-    brightness_draft: 90
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Ruby", hex: "#FF1744"}
@@ -508,7 +508,7 @@ scenes:
     mood: "Feel the beat"
     description: "Lime, firefly gold and amber, bright sparks on a dark ceiling."
     transform: linear
-    brightness_draft: 90
+    brightness_draft: 100
     default_solid: 1
     palette:
       - {name: "Spark lime", hex: "#A6FF00"}
@@ -520,7 +520,7 @@ scenes:
     mood: "Feel the beat"
     description: "Hot magenta, orchid and royal purple, bold and bright."
     transform: linear
-    brightness_draft: 90
+    brightness_draft: 100
     default_solid: 0
     palette:
       - {name: "Hot magenta", hex: "#FF1493"}
