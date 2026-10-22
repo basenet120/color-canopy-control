@@ -1102,7 +1102,15 @@ async def effect_probe(ctx: JobContext, params: dict[str, Any]) -> JobResult:
 
 
 def _effect_test_entries(pattern: str, length: int) -> list[R.FrameEntry]:
-    """The static picture an effect test animates: a hue ramp, or 3-head red/green/blue blocks with dark gaps."""
+    """The static picture an effect test animates: a hue ramp, 3-head red/green/blue blocks with dark gaps, or a
+    band — Light Show #4's six colours on the first six entries, the rest dark (the rolling band, if a code
+    travels)."""
+    if pattern == "band":
+        palette = [(255, 23, 68), (255, 143, 0), (255, 224, 0), (0, 200, 83), (41, 98, 255), (170, 0, 255)]
+        return [
+            R.FrameEntry(*palette[i]) if i < len(palette) else R.FrameEntry(0, 0, 0, 0, 0, 0)
+            for i in range(length)
+        ]
     if pattern == "blocks":
         colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
         return [
@@ -1115,11 +1123,23 @@ def _effect_test_entries(pattern: str, length: int) -> list[R.FrameEntry]:
 EFFECT_SWEEP_MAX_CODES = 32  # one run stays under ~15 min at the longest hold
 
 
+def _sweep_speeds(text: str) -> list[int] | None:
+    """`speeds` as a list of 0–100 values ("10, 40,100"), or None when it isn't one."""
+    try:
+        speeds = [int(part) for part in text.replace(" ", "").split(",") if part]
+    except ValueError:
+        return None
+    if not speeds or len(speeds) > EFFECT_SWEEP_MAX_CODES or not all(0 <= v <= 100 for v in speeds):
+        return None
+    return speeds
+
+
 async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
-    """Walk a range of unverified effect codes on one kit in one run, each held for a fixed time.
+    """Walk a range of unverified effect codes on one kit in one run, each held for a fixed time — or, with
+    `vary` "speed", hold `first_code` and walk the `speeds` list (how fast does the controller step at each?).
 
     The packaged-animation question: does a code make the controller animate the slot on its own, with no further
-    writes? Each code is announced as a live step (with its send time) so the observer can match what they see,
+    writes? Each candidate is announced as a live step (with its send time) so the observer can match what they see,
     or a video, to the code. The kit leaves the slot before each code by default, since some controllers may load
     effect headers only on entering individual mode. Nothing is enabled or named; the original slot is restored.
     """
@@ -1129,11 +1149,15 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     pattern = str(params.get("pattern", "rainbow"))
     first, last, speed = int(params["first_code"]), int(params["last_code"]), int(params["speed"])
     hold, reselect = float(params["hold_s"]), bool(params["reselect"])
+    vary = str(params.get("vary", "code"))
+    speeds = _sweep_speeds(str(params.get("speeds", ""))) if vary == "speed" else [speed]
     if (
-        pattern not in ("rainbow", "blocks")
+        vary not in ("code", "speed")
+        or speeds is None
+        or pattern not in ("rainbow", "blocks", "band")
         or field not in ("motionEffect", "brightnessEffect")
-        or not 1 <= first <= last <= 255
-        or last - first + 1 > EFFECT_SWEEP_MAX_CODES
+        or not 1 <= first <= 255
+        or (vary == "code" and (not first <= last <= 255 or last - first + 1 > EFFECT_SWEEP_MAX_CODES))
         or not 0 <= speed <= 100
         or not math.isfinite(hold)
         or not 2 <= hold <= 20
@@ -1141,8 +1165,10 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         return JobResult(
             Verdict.ERROR,
             f"Choose one effect field, codes 1–255 (first ≤ last, at most {EFFECT_SWEEP_MAX_CODES} codes), "
-            "speed 0–100 and a hold of 2–20 s.",
+            "speed 0–100 and a hold of 2–20 s; to vary the speed, list up to "
+            f"{EFFECT_SWEEP_MAX_CODES} speeds 0–100 (e.g. 10,40,70,100).",
         )
+    pairs = [(first, v) for v in speeds] if vary == "speed" else [(c, speed) for c in range(first, last + 1)]
     info = await ctx.profile()
     caps = _caps(info)
     _check_slot(caps, slot)
@@ -1162,7 +1188,7 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
     )
     speed_field = "motionSpeed" if field == "motionEffect" else "brightnessSpeed"
 
-    def candidate(code: int) -> dict[str, Any]:
+    def candidate(code: int, speed: int) -> dict[str, Any]:
         return R.frame_value(
             static,
             R.frame_entries(static),
@@ -1175,7 +1201,7 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         return [R.slot_write(slot, value), *R.slot_select(slot), R.power(True), R.brightness(30)]
 
     leave_rows = _only_declared(ctx, info, R.full_state_vector(before[1], cct_range=caps.cct_range))
-    if not {r.key for r in slot_rows(candidate(first))}.issubset(_declared(info)):
+    if not {r.key for r in slot_rows(candidate(*pairs[0]))}.issubset(_declared(info)):
         return JobResult(Verdict.ERROR, "The device does not declare all required effect controls.")
     ctx.artifacts["effect_sweep_before"] = {"slot": slot, "value": copy.deepcopy(original)}
     spacing = max(LOOK_SPACING_S, ctx.budget_s)
@@ -1186,6 +1212,8 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         "first_code": first,
         "last_code": last,
         "speed": speed,
+        "vary": vary,
+        "speeds": speeds,
         "hold_s": hold,
         "reselect": reselect,
         "length": len(entries),
@@ -1206,7 +1234,7 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
                 f"Static {pattern} (no effect) for {hold:g} s: the baseline every code is compared with."
             )
             await ctx.sleep(hold)
-        for code in range(first, last + 1):
+        for n, (code, speed) in enumerate(pairs, 1):
             if result is not None:
                 break
             if reselect:
@@ -1218,12 +1246,13 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
                     result = left
                     break
                 await ctx.sleep(spacing)
-            value = candidate(code)
+            value = candidate(code, speed)
             sent_at = ctx.now()
-            res = await ctx.write(slot_rows(value), label=f"effect_sweep: {field} {code}")
+            res = await ctx.write(slot_rows(value), label=f"effect_sweep: {field} {code} speed {speed}")
             codes.append(
                 {
                     "code": code,
+                    "speed": speed,
                     "leave_problem": left.summary if reselect and left is not None else None,
                     "sent_at": sent_at,
                     "write": write_facts(res),
@@ -1236,9 +1265,10 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
             if problem := _write_problem(res, f"{field} {code}"):
                 codes[-1]["problem"] = problem.summary
             ctx.step(
-                f"Now showing {field} {code} at speed {speed} ({code - first + 1} of {last - first + 1}) "
-                f"for {hold:g} s. What is it doing?",
+                f"Now showing {field} {code} at speed {speed} ({n} of {len(pairs)}) for {hold:g} s. "
+                + ("How fast is it stepping?" if vary == "speed" else "What is it doing?"),
                 code=code,
+                speed=speed,
                 sent_at=sent_at,
             )
             await ctx.sleep(hold)
@@ -1257,10 +1287,14 @@ async def effect_sweep(ctx: JobContext, params: dict[str, Any]) -> JobResult:
         result.observations.update(obs)
         result.ask_human = ["What changed during the codes that did run, if anything?"]
         return result
+    swept = (
+        f"{field} {first} at speeds {', '.join(map(str, speeds))}"
+        if vary == "speed"
+        else f"{field} {first}–{last} at speed {speed}"
+    )
     return JobResult(
         Verdict.NEEDS_EYES,
-        f"Swept {field} {first}–{last} at speed {speed}, {hold:g} s each; original slot restored. "
-        "No code is enabled or named by this run.",
+        f"Swept {swept}, {hold:g} s each; original slot restored. No code is enabled or named by this run.",
         obs,
         [
             (
@@ -2012,7 +2046,8 @@ JOBS: dict[str, Job] = {
                 "seconds with no further writes, then restores the original slot.",
                 writes=True,
                 look_for="Watch the static baseline, then each code as the live steps announce it. Note which codes "
-                "move on their own and how smoothly; film it if you can (each step carries its send time).",
+                "move on their own and how smoothly; film it if you can (each step carries its send time). "
+                'Vary "speed" holds first_code and walks the speeds list: count steps per second at each.',
                 params={
                     "slot": "custom-3",
                     "field": "motionEffect",
@@ -2022,6 +2057,8 @@ JOBS: dict[str, Job] = {
                     "hold_s": 8.0,
                     "pattern": "rainbow",
                     "reselect": True,
+                    "vary": "code",
+                    "speeds": "10,25,40,55,70,85,100",
                 },
             ),
             effect_sweep,

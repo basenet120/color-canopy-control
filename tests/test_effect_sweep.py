@@ -162,3 +162,41 @@ class EffectSweepTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(ValueError):
                 params(**values)
+
+
+class EffectSpeedSweepTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vary_speed_holds_the_code_and_walks_the_speeds(self):
+        ctx = Context()
+        result = await effect_sweep(ctx, params(vary="speed", first_code=4, speeds="10, 55,100", hold_s=5.0))
+        self.assertEqual(result.verdict, Verdict.NEEDS_EYES)
+        candidates = [frame_of(rows)[R.FRAME_CLASS] for rows in ctx.writes[3:-1:2]]
+        self.assertEqual(
+            [(f["motionEffect"], f["motionSpeed"]) for f in candidates], [(4, 10), (4, 55), (4, 100)]
+        )
+        self.assertEqual(
+            [(c["code"], c["speed"]) for c in result.observations["codes"]], [(4, 10), (4, 55), (4, 100)]
+        )
+        self.assertEqual([d["speed"] for _, d in ctx.steps if "speed" in d], [10, 55, 100])
+        self.assertIn("speeds 10, 55, 100", result.summary)
+        self.assertEqual(frame_of(ctx.writes[-1]), ctx.header)
+
+    async def test_vary_speed_ignores_last_code_and_refuses_bad_speed_lists(self):
+        ctx = Context()
+        ok = await effect_sweep(ctx, params(vary="speed", first_code=20, last_code=3, speeds="50"))
+        self.assertEqual(ok.verdict, Verdict.NEEDS_EYES)
+        sent = len(ctx.writes)
+        for speeds in ("", "fast", "10,101", ",".join(["5"] * (EFFECT_SWEEP_MAX_CODES + 1))):
+            self.assertEqual(
+                (await effect_sweep(ctx, params(vary="speed", speeds=speeds))).verdict, Verdict.ERROR
+            )
+        self.assertEqual((await effect_sweep(ctx, params(vary="sideways"))).verdict, Verdict.ERROR)
+        self.assertEqual(len(ctx.writes), sent)
+
+    async def test_band_is_light_show_4s_six_colours_then_dark(self):
+        ctx = Context()
+        result = await effect_sweep(ctx, params(pattern="band", vary="speed", speeds="50"))
+        self.assertEqual(result.verdict, Verdict.NEEDS_EYES)
+        frame = R.frame_entries(frame_of(ctx.writes[1]))
+        self.assertEqual(frame[0], R.FrameEntry(255, 23, 68))
+        self.assertEqual(frame[5], R.FrameEntry(170, 0, 255))
+        self.assertTrue(all(e.colorBrightness == 0 for e in frame[6:]))
